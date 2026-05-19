@@ -4,18 +4,18 @@ package ctxmgr
 import (
 	"fmt"
 	"strings"
+
+	"nekocode/bot/ctxmgr/compact"
+	"nekocode/bot/ctxmgr/token"
 )
 
-// ContextReport holds a breakdown of context window usage.
 type ContextReport struct {
 	Budget         int
 	SystemPrompt   int
-	Anchor         int
 	TodoText       int
 	SkillList      int
 	ToolDefTokens  int
 	SkillTokens    []SkillToken
-	Summary        int
 	Messages       int
 	Archived       int
 	ClearedMarkers int
@@ -26,6 +26,9 @@ type ContextReport struct {
 	SysInjections  int
 	AssistantMsgs  int
 	ToolResults    int
+	CacheHitTokens int
+	CacheMissTokens int
+	CacheHitRatio  float64
 }
 
 type SkillToken struct {
@@ -33,24 +36,19 @@ type SkillToken struct {
 	Tokens int
 }
 
-// Report returns a context usage report.
 func (m *Manager) Report() ContextReport {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	r := ContextReport{}
-	r.SystemPrompt = estimateString(m.systemPrompt)
-	if m.anchor != nil {
-		r.Anchor = estimateString(m.anchor.estimate())
-	}
-	r.TodoText = estimateString(m.todoText)
-	r.SkillList = estimateString(m.skillList)
-	r.SkillTokens = estimateSkills(m.skillList)
-	r.Summary = estimateString(m.summary)
+	r.SystemPrompt = token.EstimateString(m.ctx.SystemPrompt)
+	r.TodoText = token.EstimateString(m.ctx.Todo)
+	r.SkillList = token.EstimateString(m.ctx.Skills)
+	r.SkillTokens = estimateSkills(m.ctx.Skills)
 
-	for i := m.compactBoundary; i < len(m.messages); i++ {
-		msg := m.messages[i]
-		if msg.Content == clearedMarker {
+	for i := m.ctx.CompactBoundary; i < len(m.ctx.Messages); i++ {
+		msg := m.ctx.Messages[i]
+		if msg.Content == compact.ClearedMarker {
 			r.ClearedMarkers++
 			continue
 		}
@@ -67,11 +65,13 @@ func (m *Manager) Report() ContextReport {
 			r.ToolResults++
 		}
 	}
-	r.Messages = estimateTokens(m.messages[m.compactBoundary:])
-	r.Archived = m.compactBoundary
-	r.CompactCount = m.compactCount
-	r.TrimCount = m.trimCount
-	r.Budget = m.tokenBudget
+	r.Messages = token.EstimateTokens(m.ctx.Messages[m.ctx.CompactBoundary:])
+	r.Archived = m.ctx.CompactBoundary
+	r.CompactCount = m.tok.CompactCount
+	r.TrimCount = m.tok.TrimCount
+	r.Budget = m.tok.TokenBudget
+	r.CacheHitTokens, r.CacheMissTokens = m.tok.Tracker.CacheStats()
+	r.CacheHitRatio = m.tok.Tracker.CacheHitRatio()
 	return r
 }
 
@@ -92,7 +92,7 @@ func estimateSkills(skillList string) []SkillToken {
 		}
 		if idx := strings.Index(content, ":"); idx > 0 {
 			name := content[:idx]
-			tokens := estimateString(line)
+			tokens := token.EstimateString(line)
 			skills = append(skills, SkillToken{Name: strings.TrimSpace(name), Tokens: tokens})
 		}
 	}
@@ -100,15 +100,12 @@ func estimateSkills(skillList string) []SkillToken {
 }
 
 // FormatContextReport renders a context report as a styled string.
-// Uses unicode box-drawing characters for visual hierarchy.
-// nbsp is a non-breaking space used for indentation — stripLeadingSpaces
-// in the TUI would otherwise remove regular spaces.
-const nbsp = "\u00a0"
+const nbsp = " "
 
 func indent(n int) string { return strings.Repeat(nbsp, n) }
 
 func FormatContextReport(r ContextReport) string {
-	used := r.SystemPrompt + r.Anchor + r.ToolDefTokens + r.TodoText + r.SkillList + r.Summary + r.Messages
+	used := r.SystemPrompt  + r.ToolDefTokens + r.TodoText + r.SkillList + r.Messages
 	free := r.Budget - used
 	if free < 0 {
 		free = 0
@@ -122,64 +119,46 @@ func FormatContextReport(r ContextReport) string {
 
 	var b strings.Builder
 
-	// Header with horizontal bar
 	b.WriteString("Context Report\n")
 	bar := buildBar(r.Budget, []barSegment{
 		{size: r.SystemPrompt, label: "", kind: "sys"},
 		{size: r.ToolDefTokens, label: "", kind: "tools"},
+		{size: r.TodoText, label: "", kind: "todo"},
 		{size: r.SkillList, label: "", kind: "skills"},
-		{size: r.Summary, label: "", kind: "summary"},
 		{size: r.Messages, label: "", kind: "msgs"},
 		{size: free, label: "", kind: "free"},
 	}, 40)
 	b.WriteString(bar + "\n")
 	fmt.Fprintf(&b, "%s / %s (%s)\n\n", formatTokens(used), formatTokens(r.Budget), pct(used))
 
-	// System section
 	b.WriteString(indent(0) + "▸ System\n")
-	fmt.Fprintf(&b, indent(2) + "%-20s %s (%s)\n", "Prompt", formatTokens(r.SystemPrompt), pct(r.SystemPrompt))
-	fmt.Fprintf(&b, indent(2) + "%-20s %s (%s) · %d tools\n", "Tool definitions", formatTokens(r.ToolDefTokens), pct(r.ToolDefTokens), r.ToolDefCount)
-	if r.Anchor > 0 {
-		fmt.Fprintf(&b, indent(2) + "%-20s %s (%s)\n", "Anchor", formatTokens(r.Anchor), pct(r.Anchor))
-	}
-	if r.TodoText > 0 {
-		fmt.Fprintf(&b, indent(2) + "%-20s %s (%s)\n", "Todo", formatTokens(r.TodoText), pct(r.TodoText))
-	}
-
-	// Skills
-	if len(r.SkillTokens) > 0 {
-		fmt.Fprintf(&b, indent(2) + "%-20s %s (%s)\n", "Skills", formatTokens(r.SkillList), pct(r.SkillList))
-		for i, s := range r.SkillTokens {
-			prefix := "├"
-			if i == len(r.SkillTokens)-1 {
-				prefix = "└"
-			}
-			fmt.Fprintf(&b, indent(4)+"%s %-30s %s\n", prefix, s.Name, formatTokens(s.Tokens))
-		}
-	}
-	if r.Summary > 0 {
-		fmt.Fprintf(&b, indent(2) + "%-20s %s (%s)\n", "Summary", formatTokens(r.Summary), pct(r.Summary))
+	fmt.Fprintf(&b, indent(2)+"%-20s %s (%s)\n", "Prompt", formatTokens(r.SystemPrompt), pct(r.SystemPrompt))
+	fmt.Fprintf(&b, indent(2)+"%-20s %s (%s) · %d tools\n", "Tool definitions", formatTokens(r.ToolDefTokens), pct(r.ToolDefTokens), r.ToolDefCount)
+	if r.CacheHitTokens > 0 || r.CacheMissTokens > 0 {
+		b.WriteString("\n" + indent(0) + "▸ Cache\n")
+		fmt.Fprintf(&b, indent(2)+"%-20s %s\n", "Hit tokens", formatTokens(r.CacheHitTokens))
+		fmt.Fprintf(&b, indent(2)+"%-20s %s\n", "Miss tokens", formatTokens(r.CacheMissTokens))
+		fmt.Fprintf(&b, indent(2)+"%-20s %.1f%%\n", "Hit ratio", r.CacheHitRatio*100)
 	}
 
-	// Messages
 	total := r.UserMessages + r.AssistantMsgs + r.ToolResults + r.SysInjections
 	if total > 0 || r.Archived > 0 || r.ClearedMarkers > 0 {
 		b.WriteString("\n" + indent(0) + "▸ Messages\n")
-		fmt.Fprintf(&b, indent(2) + "%-20s %s (%s)\n", "Total", formatTokens(r.Messages), pct(r.Messages))
-		fmt.Fprintf(&b, indent(2) + "%-20s %d\n", "User messages", r.UserMessages)
-		fmt.Fprintf(&b, indent(2) + "%-20s %d\n", "Assistant", r.AssistantMsgs)
-		fmt.Fprintf(&b, indent(2) + "%-20s %d\n", "Tool results", r.ToolResults)
+		fmt.Fprintf(&b, indent(2)+"%-20s %s (%s)\n", "Total", formatTokens(r.Messages), pct(r.Messages))
+		fmt.Fprintf(&b, indent(2)+"%-20s %d\n", "User messages", r.UserMessages)
+		fmt.Fprintf(&b, indent(2)+"%-20s %d\n", "Assistant", r.AssistantMsgs)
+		fmt.Fprintf(&b, indent(2)+"%-20s %d\n", "Tool results", r.ToolResults)
 		if r.SysInjections > 0 {
-			fmt.Fprintf(&b, indent(2) + "%-20s %d\n", "[System] hints", r.SysInjections)
+			fmt.Fprintf(&b, indent(2)+"%-20s %d\n", "[System] hints", r.SysInjections)
 		}
 		if r.Archived > 0 {
-			fmt.Fprintf(&b, indent(2) + "%-20s %d messages\n", "Archived", r.Archived)
+			fmt.Fprintf(&b, indent(2)+"%-20s %d messages\n", "Archived", r.Archived)
 			if r.TrimCount > 0 {
-				fmt.Fprintf(&b, indent(2) + "%-20s %d messages\n", "Trimmed", r.TrimCount)
+				fmt.Fprintf(&b, indent(2)+"%-20s %d messages\n", "Trimmed", r.TrimCount)
 			}
 		}
 		if r.ClearedMarkers > 0 {
-			fmt.Fprintf(&b, indent(2) + "%-20s %d (total %d)\n", "Compacted", r.ClearedMarkers, r.CompactCount)
+			fmt.Fprintf(&b, indent(2)+"%-20s %d (total %d)\n", "Compacted", r.ClearedMarkers, r.CompactCount)
 		}
 	}
 
@@ -189,14 +168,13 @@ func FormatContextReport(r ContextReport) string {
 type barSegment struct {
 	size  int
 	label string
-	kind  string // sys, tools, skills, summary, msgs, free
+	kind  string
 }
 
 func buildBar(total int, segments []barSegment, width int) string {
 	if total <= 0 {
 		return ""
 	}
-	// Allocate width proportionally, minimum 1 char per non-empty segment.
 	allocated := make([]int, len(segments))
 	remaining := width
 	for i, s := range segments {
@@ -209,7 +187,6 @@ func buildBar(total int, segments []barSegment, width int) string {
 			remaining -= w
 		}
 	}
-	// Distribute any remaining width to the last non-empty segment.
 	for i := len(segments) - 1; i >= 0 && remaining > 0; i-- {
 		if segments[i].size > 0 {
 			allocated[i] += remaining
@@ -218,12 +195,8 @@ func buildBar(total int, segments []barSegment, width int) string {
 	}
 
 	chars := map[string]string{
-		"sys":     "▨",
-		"tools":   "▩",
-		"skills":  "◆",
-		"summary": "◇",
-		"msgs":    "▣",
-		"free":    "·",
+		"sys": "▨", "tools": "▩", "anchor": "◈", "todo": "○",
+		"skills": "◆", "msgs": "▣", "free": "·",
 	}
 
 	var b strings.Builder

@@ -76,16 +76,27 @@ func (p *ProcessingItem) AddDiffBlock(content string) {
 	for i := len(p.blocks) - 1; i >= 0; i-- {
 		if p.blocks[i].Type == block.BlockTool && p.blocks[i].ToolName == "edit" {
 			p.blocks[i].Content = content
+			p.blocks[i].Collapsed = true
 			p.invalidate()
 			return
 		}
 	}
 }
+
 func (p *ProcessingItem) AddTaskOutput(output string) {
+	p.setLastToolContent("task", output)
+}
+
+func (p *ProcessingItem) AddToolOutput(toolName, output string) {
+	p.setLastToolContent(toolName, output)
+}
+
+// setLastToolContent 反向查找第一个匹配 toolName 且尚无内容的工具块。
+func (p *ProcessingItem) setLastToolContent(toolName, output string) {
 	for i := len(p.blocks) - 1; i >= 0; i-- {
-		if p.blocks[i].Type == block.BlockTool && p.blocks[i].ToolName == "task" {
-			p.blocks[i].Content = output
-			p.blocks[i].Collapsed = false
+		b := &p.blocks[i]
+		if b.Type == block.BlockTool && b.ToolName == toolName && b.Content == "" {
+			b.Content = output
 			p.invalidate()
 			return
 		}

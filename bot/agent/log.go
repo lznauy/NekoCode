@@ -8,11 +8,11 @@ import (
 )
 
 var (
-	logMu  sync.Mutex
+	logMu   sync.Mutex
 	logFile *os.File
 )
 
-func writeAgentLog(format string, args ...interface{}) {
+func writeAgentLog(format string, args ...any) {
 	logMu.Lock()
 	defer logMu.Unlock()
 	if logFile == nil {

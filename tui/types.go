@@ -2,27 +2,24 @@
 package tui
 
 import (
-	"nekocode/bot/tools"
+	"nekocode/common"
 )
 
 // BotInterface is the contract any bot implementation must satisfy for the TUI.
 type BotInterface interface {
-	RunAgent(input string, onStep func(step int, thought, action, toolName, toolArgs, output string, batchIdx, batchTotal int)) (string, error)
+	RunAgent(input string, onStep func(action, toolName, toolArgs, output string)) (string, error)
 	ExecuteCommand(input string) (string, bool)
 	SkillHint() (string, bool)
 	TokenUsage() (prompt, completion int)
+	TurnTokenUsage() (prompt, completion int)
 	ContextTokens() int
 	CompactCount() int
 	Duration() string
 	CommandNames() []string
-	SetConfirmFn(tools.ConfirmFunc)
-	SetPhaseFn(tools.PhaseFunc)
+	Configure(confirmFn common.ConfirmFunc, phaseFn common.PhaseFunc, todoFn common.TodoFunc)
+	SetCallbacks(textFn, reasonFn func(string))
 	Steer(msg string)
 	Abort()
-	SetStreamFn(fn func(delta string))
-	SetReasoningStreamFn(fn func(delta string))
-	WireTodoWrite(fn tools.TodoFunc)
-	SetCtxTodos(text string)
 	Provider() string
 	Model() string
 }
@@ -43,5 +40,5 @@ type doneMsg struct {
 }
 
 type confirmMsg struct {
-	req tools.ConfirmRequest
+	req common.ConfirmRequest
 }

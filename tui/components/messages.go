@@ -150,6 +150,15 @@ func (m *Messages) AddTaskOutput(output string) {
 	m.mu.Unlock()
 }
 
+func (m *Messages) AddToolOutput(toolName, output string) {
+	m.mu.Lock()
+	if m.processingItem != nil {
+		m.processingItem.AddToolOutput(toolName, output)
+		m.invalidateProcessing()
+	}
+	m.mu.Unlock()
+}
+
 func (m *Messages) AddThinkBlock(content string) {
 	m.mu.Lock()
 	if m.processingItem != nil {
@@ -242,77 +251,17 @@ func (m *Messages) GotoBottom() {
 	m.SetFollow(true)
 }
 
+// ToggleLastAssistant 展开/折叠最后一个助手消息的工具块。
 func (m *Messages) ToggleLastAssistant() {
 	items := m.Items()
 	for i := len(items) - 1; i >= 0; i-- {
-		a, ok := items[i].(*message.AssistantMessageItem)
-		if !ok || len(a.Blocks()) == 0 {
-			continue
-		}
-		blks := a.Blocks()
-		if toggled := m.toggleBlocks(blks); toggled {
-			a.SetBlocks(blks)
-			m.Invalidate()
-			return
-		}
-	}
-}
-
-// toggleBlocks toggles collapsed state for edit blocks (with content)
-// and tool groups (consecutive same-name blocks). Returns true if any toggle occurred.
-func (m *Messages) toggleBlocks(blks []block.ContentBlock) bool {
-	// Detect groups: iterate, track whether any group is currently collapsed.
-	collapsed := false
-	hasToggleable := false
-	for i := 0; i < len(blks); i++ {
-		b := blks[i]
-		if b.Type != block.BlockTool {
-			continue
-		}
-		// Count consecutive same-name blocks starting at i.
-		count := 1
-		for j := i + 1; j < len(blks) && blks[j].Type == block.BlockTool && blks[j].ToolName == b.ToolName; j++ {
-			count++
-		}
-		if count > 1 {
-			hasToggleable = true
-			if blks[i].Collapsed {
-				collapsed = true
+		if a, ok := items[i].(*message.AssistantMessageItem); ok {
+			if a.ToggleAny() {
+				m.InvalidateItem(i)
+				return
 			}
 		}
-		if count == 1 && (b.ToolName == "edit" || b.ToolName == "task") && b.Content != "" {
-			hasToggleable = true
-			if b.Collapsed {
-				collapsed = true
-			}
-		}
-		i += count - 1 // skip to end of group
 	}
-
-	if !hasToggleable {
-		return false
-	}
-
-	// Toggle: collapse if expanded, expand if collapsed.
-	target := !collapsed
-	for i := 0; i < len(blks); i++ {
-		b := blks[i]
-		if b.Type != block.BlockTool {
-			continue
-		}
-		count := 1
-		for j := i + 1; j < len(blks) && blks[j].Type == block.BlockTool && blks[j].ToolName == b.ToolName; j++ {
-			count++
-		}
-		if count > 1 {
-			blks[i].Collapsed = target
-		}
-		if count == 1 && (b.ToolName == "edit" || b.ToolName == "task") && b.Content != "" {
-			blks[i].Collapsed = target
-		}
-		i += count - 1
-	}
-	return true
 }
 
 
@@ -332,7 +281,8 @@ func (m *Messages) Update(msg tea.Msg) (*Messages, tea.Cmd) {
 			m.ScrollBy(m.Height())
 		}
 	case tea.MouseMsg:
-		switch mev := msg.Mouse(); mev.Button {
+		mev := msg.Mouse()
+		switch mev.Button {
 		case tea.MouseWheelUp:
 			m.ScrollBy(-3)
 			if m.Processing { m.SetFollow(false) }

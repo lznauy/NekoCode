@@ -4,50 +4,69 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-// frontmatter is the YAML header of a SKILL.md file.
-type frontmatter struct {
-	Name                   string   `yaml:"name"`
-	Description            string   `yaml:"description"`
-	WhenToUse              string   `yaml:"when_to_use"`
-	AllowedTools           []string `yaml:"allowed-tools"`
-	Context                string   `yaml:"context"` // "inline" or "fork"
-	Agent                  string   `yaml:"agent"`
-	MaxSteps               int      `yaml:"max_steps"`
-	TokenBudget            int      `yaml:"token_budget"`
-	Paths                  []string `yaml:"paths"`
-	DisableModelInvocation bool     `yaml:"disable-model-invocation"`
-	UserInvocable          bool     `yaml:"user-invocable"`
-	ArgumentHint           string   `yaml:"argument-hint"`
+// DefaultDirs returns the default skill directories (project + user).
+func DefaultDirs() []string {
+	var dirs []string
+	if cwd, err := os.Getwd(); err == nil {
+		dirs = append(dirs, filepath.Join(cwd, ".nekocode", "skills"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, ".nekocode", "skills"))
+	}
+	return dirs
 }
 
-// LoadFromContent parses raw SKILL.md content into a Skill.
-// Used for bundled/embedded skills that have no file-system directory.
+// discoverSkills scans directories for skill.md / SKILL.md files.
+func discoverSkills(dirs []string) []string {
+	seen := make(map[string]bool)
+	var paths []string
+	for _, dir := range dirs {
+		absDir, err := filepath.Abs(dir)
+		if err != nil {
+			continue
+		}
+		filepath.Walk(absDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return nil
+			}
+			if strings.EqualFold(info.Name(), "skill.md") {
+				abs, _ := filepath.Abs(path)
+				if !seen[abs] {
+					seen[abs] = true
+					paths = append(paths, abs)
+				}
+				return filepath.SkipDir
+			}
+			return nil
+		})
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+// LoadFromContent parses raw SKILL.md content into a Skill (for bundled skills).
 func LoadFromContent(content string) (*Skill, error) {
 	return parseSkillContent(content)
 }
 
-// loadSkill parses a SKILL.md file and returns a Skill with its file listing.
+// loadSkill parses a SKILL.md file with its directory listing.
 func loadSkill(path string) (*Skill, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read: %w", err)
 	}
-
 	sk, err := parseSkillContent(string(data))
 	if err != nil {
 		return nil, err
 	}
 
 	dir := filepath.Dir(path)
-
-	// Walk recursively from the real (resolved) directory so symlinks to
-	// subdirectories are followed. On NixOS, skill files are often symlink
-	// farms where every entry points into /nix/store.
 	walkRoot := dir
 	if realPath, err := filepath.EvalSymlinks(path); err == nil {
 		walkRoot = filepath.Dir(realPath)
@@ -59,15 +78,10 @@ func loadSkill(path string) (*Skill, error) {
 			return nil
 		}
 		name := d.Name()
-		if strings.EqualFold(name, "skill.md") {
+		if strings.EqualFold(name, "skill.md") || name == ".gitignore" || name == "README.md" || name == "LICENSE" {
 			return nil
 		}
-		switch name {
-		case ".gitignore", "README.md", "LICENSE":
-			return nil
-		}
-		userPath := strings.Replace(p, walkRoot, dir, 1)
-		files = append(files, userPath)
+		files = append(files, strings.Replace(p, walkRoot, dir, 1))
 		return nil
 	})
 
@@ -76,20 +90,26 @@ func loadSkill(path string) (*Skill, error) {
 	return sk, nil
 }
 
-// parseSkillContent parses raw markdown content into a Skill.
+type frontmatter struct {
+	Name                   string   `yaml:"name"`
+	Description            string   `yaml:"description"`
+	WhenToUse              string   `yaml:"when_to_use"`
+	AllowedTools           []string `yaml:"allowed-tools"`
+	Context                string   `yaml:"context"`
+	Agent                  string   `yaml:"agent"`
+	MaxSteps               int      `yaml:"max_steps"`
+	TokenBudget            int      `yaml:"token_budget"`
+	DisableModelInvocation bool     `yaml:"disable-model-invocation"`
+}
+
 func parseSkillContent(content string) (*Skill, error) {
 	fm, body, err := parseFrontmatter(content)
 	if err != nil {
 		return nil, fmt.Errorf("parse: %w", err)
 	}
-
-	if fm.Name == "" {
-		return nil, fmt.Errorf("missing required field: name")
+	if fm.Name == "" || fm.Description == "" {
+		return nil, fmt.Errorf("missing required field: name or description")
 	}
-	if fm.Description == "" {
-		return nil, fmt.Errorf("missing required field: description")
-	}
-
 	return &Skill{
 		Name:                   fm.Name,
 		Description:            fm.Description,
@@ -104,21 +124,17 @@ func parseSkillContent(content string) (*Skill, error) {
 	}, nil
 }
 
-// parseFrontmatter splits SKILL.md into YAML frontmatter and markdown body.
 func parseFrontmatter(content string) (*frontmatter, string, error) {
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	content = strings.TrimSpace(content)
-
 	if !strings.HasPrefix(content, "---") {
 		return nil, "", fmt.Errorf("frontmatter must start with ---")
 	}
-
 	rest := content[3:]
 	end := strings.Index(rest, "\n---")
 	if end == -1 {
 		return nil, "", fmt.Errorf("unclosed frontmatter (missing closing ---)")
 	}
-
 	yamlText := rest[:end]
 	body := rest[end+4:]
 
@@ -126,6 +142,5 @@ func parseFrontmatter(content string) (*frontmatter, string, error) {
 	if err := yaml.Unmarshal([]byte(yamlText), &fm); err != nil {
 		return nil, "", fmt.Errorf("invalid YAML: %w", err)
 	}
-
 	return &fm, body, nil
 }

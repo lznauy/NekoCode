@@ -51,8 +51,10 @@ func (m *Model) startAgent(value string) tea.Cmd {
 		m.Messages.SetSkill(m.activeSkill)
 	}
 
-	m.Bot.SetStreamFn(func(delta string) { m.Messages.ProcessStreamText(delta) })
-	m.Bot.SetReasoningStreamFn(func(delta string) { m.Messages.ProcessReasoningText(delta) })
+	m.Bot.SetCallbacks(
+		func(delta string) { m.Messages.ProcessStreamText(delta) },
+		func(delta string) { m.Messages.ProcessReasoningText(delta) },
+	)
 
 	return tea.Batch(
 		spinnerTick(),
@@ -89,8 +91,8 @@ func (m *Model) runAgent(value string) func() tea.Msg {
 	}
 }
 
-func (m *Model) onAgentStep(finalResponse *string) func(int, string, string, string, string, string, int, int) {
-	return func(step int, thought, action, toolName, toolArgs, output string, batchIdx, batchTotal int) {
+func (m *Model) onAgentStep(finalResponse *string) func(string, string, string, string) {
+	return func(action, toolName, toolArgs, output string) {
 		switch {
 		case action == "think":
 		case action == "chat":
@@ -98,19 +100,14 @@ func (m *Model) onAgentStep(finalResponse *string) func(int, string, string, str
 			m.Messages.AddThinkBlock(output)
 		case action == "tool_start":
 			m.Messages.ProcessToolBlock(block.ContentBlock{
-				Type:       block.BlockTool,
-				ToolName:   toolName,
-				ToolArgs:   formatBriefArgs(toolName, toolArgs),
-				Collapsed:  true,
-				BatchIdx:   batchIdx,
-				BatchTotal: batchTotal,
+				Type:      block.BlockTool,
+				ToolName:  toolName,
+				ToolArgs:  formatBriefArgs(toolName, toolArgs),
+				Collapsed: true,
 			})
 		case toolName != "":
-			if toolName == "edit" && output != "" {
-				m.Messages.AddDiffBlock(extractDiffContent(output))
-			}
-			if toolName == "task" && output != "" {
-				m.Messages.AddTaskOutput(output)
+			if output != "" {
+				m.Messages.AddToolOutput(toolName, output)
 			}
 		}
 	}

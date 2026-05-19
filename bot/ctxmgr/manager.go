@@ -1,294 +1,248 @@
 package ctxmgr
 
 import (
+	"encoding/json"
+	"nekocode/common"
+	"os"
 	"sync"
 
+	"nekocode/bot/ctxmgr/compact"
+	"nekocode/bot/ctxmgr/context"
+	"nekocode/bot/ctxmgr/memory"
+	"nekocode/bot/ctxmgr/token"
 	"nekocode/llm"
 )
 
-type Summarizer func(msgs []llm.Message, prevSummary string) (string, error)
+type TokenStats struct {
+	TokenBudget  int
+	Tracker      *token.Tracker
+	CompactCount int
+	TrimCount    int
+}
 
 type Manager struct {
-	mu              sync.RWMutex
-	systemPrompt    string
-	todoText        string // current todo list, injected into every LLM call
-	skillList       string // available skills, injected into every LLM call
-	messages        []llm.Message
-	summary         string
-	compactBoundary int            // messages before this index are behind the summary
-	windowSize      int
-	tokenBudget     int
-	summarizer      Summarizer
-	compactCount    int            // cumulative tool results cleared by microCompact
-	trimCount       int            // cumulative messages permanently discarded by trim
-	tokenTracker    *TokenTracker   // accurate token tracking from API responses
-	autoCompactCfg  AutoCompactConfig
-	anchor          *Anchor        // immutable critical constraints + goal, never compressed
+	mu          sync.RWMutex
+	ctx         context.Content
+	tok         TokenStats
+	mem         *memory.File
+	cm          *compact.Compactor
+	mergeClient llm.LLM // for independent merge sessions
 }
 
-const (
-	defaultWindowSize  = 20
-	defaultTokenBudget = 64000
-)
-
-func New(systemPrompt string) *Manager {
-	return &Manager{
-		systemPrompt:   systemPrompt,
-		messages:       make([]llm.Message, 0),
-		windowSize:     defaultWindowSize,
-		tokenBudget:    defaultTokenBudget,
-		tokenTracker:   &TokenTracker{},
-		autoCompactCfg: DefaultAutoCompactConfig,
-		anchor:         &Anchor{},
+func New(systemPrompt string, mem *memory.File) *Manager {
+	ctx := context.New(systemPrompt)
+	if mem != nil {
+		ctx.Memory = mem.Build()
 	}
+	m := &Manager{
+		ctx: ctx,
+		tok: TokenStats{Tracker: &token.Tracker{}},
+		mem: mem,
+	}
+	m.cm = &compact.Compactor{
+		Ctx:          &m.ctx,
+		TokenBudget:  &m.tok.TokenBudget,
+		Tracker:      m.tok.Tracker,
+		CompactCount: &m.tok.CompactCount,
+		TrimCount:    &m.tok.TrimCount,
+		Cfg:          compact.DefaultConfig,
+	}
+	return m
 }
 
-func (m *Manager) SetSummarizer(fn Summarizer)       { m.summarizer = fn }
-func (m *Manager) SetSystemPrompt(s string)          { m.mu.Lock(); defer m.mu.Unlock(); m.systemPrompt = s }
-func (m *Manager) SetSummary(s string)               { m.summary = s }
-func (m *Manager) SetSkillList(s string)             { m.skillList = s }
-func (m *Manager) SetAutoCompactConfig(cfg AutoCompactConfig) { m.autoCompactCfg = cfg }
-func (m *Manager) GetAutoCompactConfig() AutoCompactConfig  { return m.autoCompactCfg }
-func (m *Manager) RecordUsage(prompt, completion int)        { m.tokenTracker.RecordUsage(prompt, completion) }
-func (m *Manager) Anchor() *Anchor                            { return m.anchor }
+// -- delegation --------------------------------------------------------
 
-// AccurateTokens returns token count calibrated against last API usage.
-func (m *Manager) AccurateTokens() int {
+func (m *Manager) SetSummarizer(fn compact.Summarizer) { m.cm.SetSummarizer(fn) }
+func (m *Manager) SetMergeClient(client llm.LLM)       { m.mergeClient = client }
+
+// MergeArchive runs an independent LLM session to merge new summaries into the archive.
+func (m *Manager) MergeArchive(oldSummary, newSummary string) string {
+	if m.mergeClient == nil {
+		return oldSummary + "\n\n" + newSummary
+	}
+	return compact.MergeSummaries(m.mergeClient, oldSummary, newSummary)
+}
+func (m *Manager) SetSystemPrompt(s string) { m.mu.Lock(); defer m.mu.Unlock(); m.ctx.SystemPrompt = s }
+func (m *Manager) SetSkillList(s string)    { m.ctx.Skills = s }
+func (m *Manager) SetArchive(s string)      { m.ctx.Archive = s }
+func (m *Manager) SetTodos(items []common.TodoItem) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ctx.LoadTodos(items)
+}
+func (m *Manager) SetHints(s string) { m.mu.Lock(); defer m.mu.Unlock(); m.ctx.Hints = s }
+func (m *Manager) AllTasksDone() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	// Use tracker if it has real data, otherwise fall back to heuristic.
-	if t := m.tokenTracker.Total(); t > 0 {
-		return t
-	}
-	return m.estimatedTokens()
+	return m.ctx.AllTasksDone()
 }
 
+func (m *Manager) RecordUsage(prompt, completion int) { m.tok.Tracker.RecordUsage(prompt, completion) }
+func (m *Manager) RecordCache(hit, miss int)          { m.tok.Tracker.RecordCache(hit, miss) }
+func (m *Manager) CacheStats() (hit, miss int)        { return m.tok.Tracker.CacheStats() }
+func (m *Manager) CacheHitRatio() float64             { return m.tok.Tracker.CacheHitRatio() }
+func (m *Manager) Memory() *memory.File               { return m.mem }
 func (m *Manager) SetTokenBudget(budget int) {
 	if budget > 0 {
-		m.tokenBudget = budget
+		m.tok.TokenBudget = budget
 	}
 }
 
-func (m *Manager) Len() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return len(m.messages)
+func (m *Manager) CompactCount() int    { m.mu.RLock(); defer m.mu.RUnlock(); return m.tok.CompactCount }
+func (m *Manager) TrimCount() int       { m.mu.RLock(); defer m.mu.RUnlock(); return m.tok.TrimCount }
+func (m *Manager) CompactBoundary() int { return m.ctx.CompactBoundary }
+
+func (m *Manager) AutoCompactIfNeeded() (compact.Level, error) {
+	return m.cm.AutoCompactIfNeeded()
+}
+func (m *Manager) MicroCompactIfNeeded() int { return m.cm.MicroCompactIfNeeded() }
+func (m *Manager) ForceCompact()             { m.cm.ForceCompact() }
+func (m *Manager) NeedsSummarization() bool  { return m.cm.NeedsSummarization() }
+func (m *Manager) Summarize() error {
+	prevArchive := m.ctx.Archive
+	if err := m.cm.FullCompact(); err != nil {
+		return err
+	}
+	// Merge new archive with previous using independent merge session.
+	if prevArchive != "" && m.ctx.Archive != "" && m.mergeClient != nil {
+		m.ctx.Archive = compact.MergeSummaries(m.mergeClient, prevArchive, m.ctx.Archive)
+	}
+	return nil
 }
 
-// Stats returns (messageCount, estimatedTokens, hasSummary).
-// Token count reflects only messages that would be sent to the LLM (after
-// compactBoundary), not the total archived message count.
+// -- query ------------------------------------------------------------
+
+func (m *Manager) Len() int { m.mu.RLock(); defer m.mu.RUnlock(); return len(m.ctx.Messages) }
 func (m *Manager) Stats() (int, int, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return len(m.messages), m.visibleEstimatedTokens(), m.summary != ""
+	return len(m.ctx.Messages), m.visibleEstimatedTokens(), m.ctx.Archive != ""
 }
-
-// visibleEstimatedTokens estimates tokens for the context that Build() would
-// actually send — excludes messages archived behind compactBoundary.
-// Must be called with the lock held.
-func (m *Manager) visibleEstimatedTokens() int {
-	visible := m.messages
-	if m.compactBoundary > 0 && m.summary != "" && m.compactBoundary < len(m.messages) {
-		visible = m.messages[m.compactBoundary:]
-	}
-	if len(visible) > m.windowSize {
-		visible = visible[len(visible)-m.windowSize:]
-	}
-	return estimateTokens(visible) + estimateTokensSystem(m.systemPrompt, m.summary)
-}
-
-// TokenUsage returns (estimatedTokens, budget) for the visible context.
 func (m *Manager) TokenUsage() (int, int) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.visibleEstimatedTokens(), m.tokenBudget
+	return m.totalEstimatedTokens(), m.tok.TokenBudget
 }
 
-// CompactCount returns cumulative tool results cleared by microCompact.
-func (m *Manager) CompactCount() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.compactCount
+func (m *Manager) visibleEstimatedTokens() int {
+	visible := m.ctx.Messages
+	if m.ctx.CompactBoundary > 0 && m.ctx.Archive != "" && m.ctx.CompactBoundary < len(visible) {
+		visible = visible[m.ctx.CompactBoundary:]
+	}
+	return token.EstimateTokens(visible) + token.EstimateString(m.ctx.Archive)
 }
 
-// TrimCount returns cumulative messages permanently discarded by trim.
-func (m *Manager) TrimCount() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.trimCount
+// totalEstimatedTokens estimates ALL messages, not just the visible window.
+// Used for quota computation — must reflect real context pressure.
+func (m *Manager) totalEstimatedTokens() int {
+	return token.EstimateTokens(m.ctx.Messages) + token.EstimateString(m.ctx.Archive)
 }
 
-// MicroCompactIfNeeded performs micro-compaction when context is under pressure.
-// Only clears when tokens exceed half the budget to avoid losing useful results
-// during active exploration (especially list/glob/read that the model depends on).
-// Returns the number of tool results cleared.
-func (m *Manager) MicroCompactIfNeeded() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	est := m.visibleEstimatedTokens()
-	if t := m.tokenTracker.Total(); t > est {
-		est = t
-	}
-	if est < m.tokenBudget/2 {
-		return 0
-	}
-	return m.microCompact()
-}
+// -- Build ------------------------------------------------------------
 
-// ForceCompact aggressively compacts context for emergency use (e.g., when the
-// primary LLM call has already failed and we need a last-resort summary).
-// Clears ALL compactable tool results and forces summarization.
-func (m *Manager) ForceCompact() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	// Clear all compactable tool results (no minimum keep).
-	var compacted int
-	for i, msg := range m.messages {
-		if msg.Role == "tool" && msg.Content != clearedMarker && m.isCompactableResult(i) {
-			m.messages[i].Content = clearedMarker
-			compacted++
-		}
-	}
-	m.compactCount += compacted
-}
-
-// BuildMinimal builds a minimal context for emergency synthesis.
-// Only includes system prompt, anchor, and the last few user/assistant turns.
-func (m *Manager) BuildMinimal() []llm.Message {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	out := make([]llm.Message, 0, 6)
-
-	if m.systemPrompt != "" {
-		out = append(out, llm.Message{Role: "system", Content: m.systemPrompt})
-	}
-	if m.anchor != nil {
-		if at := m.anchor.BuildAnchor(); at != "" {
-			out = append(out, llm.Message{Role: "system", Content: at})
-		}
-	}
-
-	// Take only the last 3 user messages and their assistant/tool responses.
-	targetUsers := 3
-	userCount := 0
-	tailStart := len(m.messages)
-	boundary := m.compactBoundary
-	if boundary > 0 && m.summary != "" && boundary < len(m.messages) {
-		// Skip archived messages, but include the summary.
-		out = append(out, llm.Message{Role: "system", Content: "[Summary]\n" + m.summary})
-	} else {
-		boundary = 0
-	}
-	for i := len(m.messages) - 1; i >= boundary; i-- {
-		if m.messages[i].Role == "user" {
-			userCount++
-			if userCount >= targetUsers {
-				tailStart = i
-				break
-			}
-		}
-	}
-	if tailStart < boundary {
-		tailStart = boundary
-	}
-	// Collect messages from tailStart onward, filtering both orphaned tool
-	// results AND assistant messages whose tool results are missing (Anthropic
-	// rejects assistant(tool_use) blocks without matching tool_result blocks).
-	msgs := m.messages[tailStart:]
-
-	for _, msg := range m.filterValidMessages(msgs) {
-		if msg.Content != clearedMarker {
-			out = append(out, msg)
-		}
-	}
-	return out
-}
-
-// RemoveMessages removes a range of messages by index.
-// Used for internal cleanup (e.g., clearing stale skill context).
-func (m *Manager) RemoveMessages(startIdx, endIdx int) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if startIdx < 0 || endIdx >= len(m.messages) || startIdx > endIdx {
-		return
-	}
-	n := endIdx - startIdx + 1
-	m.messages = append(m.messages[:startIdx], m.messages[endIdx+1:]...)
-	if m.compactBoundary > startIdx {
-		if m.compactBoundary <= endIdx {
-			m.compactBoundary = startIdx
-		} else {
-			m.compactBoundary -= n
-		}
-	}
-}
-
-// FreshStart clears all messages but preserves the summary and system prompt.
-func (m *Manager) FreshStart() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.messages = make([]llm.Message, 0)
-	m.compactBoundary = 0
-	m.todoText = ""
-	m.tokenTracker = &TokenTracker{}
-	m.anchor = &Anchor{}
-}
-
-// Build assembles messages for an LLM call.
-//
-// Message ordering is designed for prefix caching (server-side KV cache reuse).
-// Static content comes first (system prompt, anchor), then message history
-// (stable prefix between turns), then dynamic content (todo, skills, summary)
-// which may change between turns. This maximizes the cacheable prefix.
 func (m *Manager) Build(withTools bool) []llm.Message {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-
-	out := m.buildStaticPrefix()
-
-	// Phase 2: message history — trim, filter orphans, apply token budget.
+	out := m.ctx.BuildLayer0()
+	out = append(out, m.ctx.BuildLayer0Mem()...)
+	out = append(out, m.ctx.BuildLayer05()...)
 	kept := m.applyWindowAndBudget(out, withTools)
-	filtered := m.filterValidMessages(kept)
-	out = append(out, filtered...)
-
-	// Phase 3: dynamic suffix — placed after history to preserve cacheable prefix.
-	out = append(out, m.buildDynamicSuffix(withTools)...)
+	out = append(out, m.filterValidMessages(kept)...)
+	out = append(out, m.ctx.BuildLayer2()...)
 	return out
 }
 
-// buildStaticPrefix returns the static prefix messages (system prompt + anchor).
-func (m *Manager) buildStaticPrefix() []llm.Message {
-	out := make([]llm.Message, 0, 2)
-	if m.systemPrompt != "" {
-		out = append(out, llm.Message{Role: "system", Content: m.systemPrompt})
+// TruncateTo removes all messages from index n onward.
+func (m *Manager) TruncateTo(n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if n < 0 {
+		n = 0
 	}
-	if m.anchor != nil {
-		if anchorText := m.anchor.BuildAnchor(); anchorText != "" {
-			out = append(out, llm.Message{Role: "system", Content: anchorText})
+	if n < len(m.ctx.Messages) {
+		compact.Log("truncate_to: dropped %d messages (kept %d, was %d)", len(m.ctx.Messages)-n, n, len(m.ctx.Messages))
+		m.ctx.Messages = m.ctx.Messages[:n]
+	}
+	if m.ctx.CompactBoundary > n {
+		m.ctx.CompactBoundary = n
+	}
+}
+
+func (m *Manager) RemoveMessages(startIdx, endIdx int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if startIdx < 0 || endIdx >= len(m.ctx.Messages) || startIdx > endIdx {
+		return
+	}
+	n := endIdx - startIdx + 1
+	m.ctx.Messages = append(m.ctx.Messages[:startIdx], m.ctx.Messages[endIdx+1:]...)
+		compact.Log("remove_messages: dropped %d messages [%d:%d] (total now %d)", n, startIdx, endIdx, len(m.ctx.Messages)-n)
+	if m.ctx.CompactBoundary > startIdx {
+		if m.ctx.CompactBoundary <= endIdx {
+			m.ctx.CompactBoundary = startIdx
+		} else {
+			m.ctx.CompactBoundary -= n
 		}
 	}
-	return out
 }
 
-// applyWindowAndBudget applies the sliding window and token budget to message history.
-// Returns the trimmed messages slice.
+func (m *Manager) FreshStart() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ctx.Messages = make([]llm.Message, 0)
+		compact.Log("fresh_start: clearing all %d messages", len(m.ctx.Messages))
+	m.ctx.CompactBoundary = 0
+	m.ctx.Todo = ""
+	m.ctx.TodoItems = nil
+	m.ctx.Hints = ""
+	m.tok.Tracker = &token.Tracker{}
+}
+
+	// Snapshot captures the full context state for session persistence.
+	func (m *Manager) Snapshot() (sysPrompt, skills, archive, memory string, compactBoundary int, messages []llm.Message, budget int) {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		return m.ctx.SystemPrompt, m.ctx.Skills, m.ctx.Archive, m.ctx.Memory,
+			m.ctx.CompactBoundary, m.ctx.Messages, m.tok.TokenBudget
+	}
+
+	// Restore reconstructs context state from a session snapshot.
+	func (m *Manager) Restore(sysPrompt, skills, archive, memory string, compactBoundary int, messages []llm.Message, budget int) {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		m.ctx.SystemPrompt = sysPrompt
+		m.ctx.Skills = skills
+		m.ctx.Archive = archive
+		m.ctx.Memory = memory
+		m.ctx.CompactBoundary = compactBoundary
+		m.ctx.Messages = messages
+		m.tok.TokenBudget = budget
+		m.tok.Tracker = &token.Tracker{}
+	}
+
+// ExportToFile writes the exact messages sent to the LLM API to a JSON file.
+func (m *Manager) ExportToFile(path string) error {
+	data, err := json.MarshalIndent(m.Build(true), "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+// -- helpers ----------------------------------------------------------
+
 func (m *Manager) applyWindowAndBudget(staticPrefix []llm.Message, withTools bool) []llm.Message {
-	kept := m.messages
-	if m.compactBoundary > 0 && m.summary != "" && m.compactBoundary < len(m.messages) {
-		kept = m.messages[m.compactBoundary:]
+	kept := m.ctx.Messages
+	if m.ctx.CompactBoundary > 0 && m.ctx.Archive != "" && m.ctx.CompactBoundary < len(kept) {
+		compact.Log("build_boundary: sliced off %d messages before boundary=%d (keeping %d)", m.ctx.CompactBoundary, m.ctx.CompactBoundary, len(kept)-m.ctx.CompactBoundary)
 	}
-	if len(kept) > m.windowSize {
-		kept = kept[len(kept)-m.windowSize:]
+	reserved := token.EstimateTokens(staticPrefix) + m.ctx.DynamicSuffixTokens()
+	budget := m.tok.TokenBudget - reserved - token.Overhead(withTools)
+	if token.EstimateTokens(kept) > budget {
+		compact.Log("build_trim: estimated %d tokens exceed budget %d, trimming oldest messages (currently %d msgs)", token.EstimateTokens(kept), budget, len(kept))
 	}
-
-	// Reserve budget for static prefix + dynamic suffix.
-	reserved := estimateTokens(staticPrefix) + m.dynamicSuffixTokens(withTools)
-	budget := m.tokenBudget - reserved - tokenOverhead(withTools)
-
 	for len(kept) > 2 {
-		if estimateTokens(kept) <= budget {
+		if token.EstimateTokens(kept) <= budget {
 			break
 		}
 		drop := 2
@@ -297,22 +251,19 @@ func (m *Manager) applyWindowAndBudget(staticPrefix []llm.Message, withTools boo
 		}
 		kept = kept[drop:]
 	}
-
-	// Drop orphaned tool messages at the head.
 	for len(kept) > 0 && kept[0].Role == "tool" {
 		kept = kept[1:]
+	}
+	if len(m.ctx.Messages) > 0 && len(kept) < len(m.ctx.Messages) {
+		compact.Log("build_trim_result: %d -> %d messages after budget trimming", len(m.ctx.Messages), len(kept))
 	}
 	return kept
 }
 
-// filterValidMessages removes orphaned tool results and assistant messages with
-// missing tool results. Anthropic API rejects assistant(tool_use) blocks without
-// matching tool_result blocks.
 func (m *Manager) filterValidMessages(kept []llm.Message) []llm.Message {
-	// Pass 1: identify which assistant messages have all tool results present.
 	hasToolResult := make(map[string]bool)
 	for _, msg := range kept {
-		if msg.Role == "tool" && msg.ToolCallID != "" && msg.Content != clearedMarker {
+		if msg.Role == "tool" && msg.ToolCallID != "" && msg.Content != compact.ClearedMarker {
 			hasToolResult[msg.ToolCallID] = true
 		}
 	}
@@ -331,63 +282,32 @@ func (m *Manager) filterValidMessages(kept []llm.Message) []llm.Message {
 			}
 		}
 	}
-
 	validIDs := make(map[string]bool)
 	filtered := make([]llm.Message, 0, len(kept))
 	for i, msg := range kept {
-		m := msg
-		if m.Content == "" && m.Role != "system" {
-			m.Content = "."
+		mm := msg
+		if mm.Content == "" && mm.Role != "system" {
+			mm.Content = "."
 		}
-		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+		if mm.Role == "assistant" && len(mm.ToolCalls) > 0 {
 			if !validAssistantIdx[i] {
 				continue
 			}
-			for _, tc := range m.ToolCalls {
+			for _, tc := range mm.ToolCalls {
 				if tc.ID != "" {
 					validIDs[tc.ID] = true
 				}
 			}
 		}
-		if m.Role == "tool" {
-			if m.ToolCallID == "" || !validIDs[m.ToolCallID] {
+		if mm.Role == "tool" {
+			if mm.ToolCallID == "" || !validIDs[mm.ToolCallID] {
 				continue
 			}
 		}
-		filtered = append(filtered, m)
+		filtered = append(filtered, mm)
+	}
+	if len(filtered) < len(kept) {
+		compact.Log("filter_orphans: dropped %d orphaned messages (%d kept of %d)", len(kept)-len(filtered), len(filtered), len(kept))
 	}
 	return filtered
-}
-
-// dynamicSuffixTokens estimates tokens consumed by the dynamic suffix.
-func (m *Manager) dynamicSuffixTokens(withTools bool) int {
-	n := 0
-	if withTools {
-		n += 200 // closing instruction
-	}
-	if m.todoText != "" {
-		n += estimateString(m.todoText) + 20
-	}
-	return n
-}
-
-// buildDynamicSuffix returns the dynamic suffix messages (todo, skills, summary, tool hint).
-func (m *Manager) buildDynamicSuffix(withTools bool) []llm.Message {
-	var out []llm.Message
-	if m.todoText != "" {
-		out = append(out, llm.Message{Role: "system", Content: "[Task progress]\n" + m.todoText})
-	}
-	if m.skillList != "" {
-		out = append(out, llm.Message{Role: "system", Content: m.skillList})
-	}
-	if m.summary != "" {
-		out = append(out, llm.Message{Role: "system", Content: "[Summary]\n" + m.summary})
-	}
-	if withTools {
-		out = append(out, llm.Message{
-			Role:    "system",
-			Content: "When the user asks you to perform actions, select the right tool: edit to modify files, grep to search content, glob to find files, read to read files, write to create files, list to list directories, todo_write to track tasks, bash to run commands, task to delegate complex work to sub-agents. You MUST actually invoke tools — don't just describe what to do. If the user is just chatting, reply directly.",
-		})
-	}
-	return out
 }

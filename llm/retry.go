@@ -118,10 +118,7 @@ func Retry(ctx context.Context, cfg RetryConfig, fn func() error) error {
 		if i == cfg.MaxAttempts-1 {
 			break
 		}
-		delay := cfg.BaseDelay * time.Duration(1<<i)
-		if delay > cfg.MaxDelay {
-			delay = cfg.MaxDelay
-		}
+		delay := min(cfg.BaseDelay*time.Duration(1<<i), cfg.MaxDelay)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

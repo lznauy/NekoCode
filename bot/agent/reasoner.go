@@ -10,6 +10,8 @@ import (
 
 	"nekocode/bot/tools"
 	"nekocode/llm"
+
+	"nekocode/common"
 )
 
 type ActionType int
@@ -19,69 +21,55 @@ const (
 	ActionExecuteTool
 )
 
-const maxTokensCeiling = 64000 // max_tokens limit for finish_reason=length escalation
+const (
+	synthesizePrompt  = "Based on the information collected above, provide a final answer. Do NOT call any more tools. Output your conclusion directly."
+)
 
 type ToolCallItem struct {
 	ID   string
 	Name string
-	Args map[string]interface{}
+	Args map[string]any
 }
 
 type ReasoningResult struct {
-	Thought     string
-	Action      ActionType
-	ActionInput string
-	ToolCalls   []ToolCallItem
-	TextContent string
-	Interrupted bool // context was canceled mid-stream (steer, not abort)
+	Thought         string
+	Action          ActionType
+	ActionInput     string
+	ToolCalls       []ToolCallItem
+	TextContent     string
+	Interrupted     bool
+	GarbledToolCall bool
 }
 
 func (a *Agent) Reason(state *stepState) *ReasoningResult {
-	// Drain any BTW steering messages that arrived since the last loop-top drain,
-	// minimizing the race window between drainSteering and the LLM call.
 	a.drainSteering()
-
-	if a.phaseFn != nil {
-		a.phaseFn(tools.PhaseThinking)
+	if a.phase != nil {
+		a.phase(common.PhaseThinking)
 	}
-		// Skip pure slash commands (no arguments), but let commands with
-		// content through — e.g., /kami generate a resume is a skill invocation.
 	if strings.HasPrefix(state.Input, "/") && !strings.Contains(state.Input, " ") {
-		return &ReasoningResult{
-			Thought: "User entered a command", Action: ActionChat,
-		}
+		return &ReasoningResult{Thought: "User entered a command", Action: ActionChat}
 	}
 
 	toolCalls, textContent, err := a.callLLMForTool()
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			return &ReasoningResult{
-				Thought: "User interrupted", Action: ActionChat,
-				Interrupted: true,
-			}
+			return &ReasoningResult{Thought: "User interrupted", Action: ActionChat, Interrupted: true}
 		}
-		// If we have partial text, surface it so the user isn't left with
-		// nothing — but mark it clearly as truncated.
 		if textContent != "" && !isGarbledToolCall(textContent) {
-			return &ReasoningResult{
-				Thought: "Truncated reply", Action: ActionChat,
-				ActionInput: textContent,
-			}
+			return &ReasoningResult{Thought: "Truncated reply", Action: ActionChat, ActionInput: textContent}
 		}
-		return &ReasoningResult{
-			Thought: "LLM call failed", Action: ActionChat,
-			ActionInput: fmt.Sprintf("调用失败了，原因：%v。可以再试一次吗？", err),
-		}
+		return &ReasoningResult{Thought: "LLM call failed", Action: ActionChat, ActionInput: fmt.Sprintf("调用失败: %v", err)}
 	}
 
 	if len(toolCalls) == 0 {
+		if isGarbledToolCall(textContent) {
+			writeAgentLog("GarbledToolCall: XML leaked (len=%d)", len(textContent))
+			return &ReasoningResult{Thought: "Format correction", Action: ActionChat, GarbledToolCall: true}
+		}
 		if textContent == "" {
 			textContent = "Sorry, I couldn't determine what to do"
 		}
-		return &ReasoningResult{
-			Thought: "Direct reply", Action: ActionChat,
-			ActionInput: textContent,
-		}
+		return &ReasoningResult{Thought: "Direct reply", Action: ActionChat, ActionInput: textContent}
 	}
 
 	if len(toolCalls) == 1 {
@@ -109,7 +97,6 @@ func (a ActionType) String() string {
 		return "chat"
 	case ActionExecuteTool:
 		return "execute_tool"
-
 	default:
 		return "unknown"
 	}
@@ -117,132 +104,31 @@ func (a ActionType) String() string {
 
 func (a *Agent) callLLMForTool() ([]ToolCallItem, string, error) {
 	toolDefs := tools.ToToolDefs(a.toolRegistry.Descriptors())
-
 	var items []ToolCallItem
 	var textContent string
 
-	firstAttempt := true
-	savedMaxTokens := a.llmClient.MaxTokens()
-	thinkingDisabled := false
 	err := withRetry(a.getCtx(), func() error {
-		// Proactive auto-compact before every LLM call.
-		a.ctxMgr.AutoCompactIfNeeded(a.ctxMgr.GetAutoCompactConfig(), nil)
 		messages := a.ctxMgr.Build(true)
-		if a.transformContext != nil {
-			messages = a.transformContext(messages)
+		if a.transform != nil {
+			messages = a.transform(messages)
 		}
 
 		tokenCh, errCh := a.llmClient.ChatStream(a.getCtx(), messages, toolDefs)
 		if tokenCh == nil {
-			select {
-			case err := <-errCh:
+			if err, ok := <-errCh; ok {
 				return err
-			default:
-				return fmt.Errorf("chat stream failed")
 			}
+			return fmt.Errorf("chat stream failed")
 		}
 
-		var textBuf strings.Builder
-		var reasoningBuf strings.Builder
-		tcAccum := make(map[int]*toolAccum)
+		a.AddTokens(estimatePrompt(messages), 0)
 
-		ctxChars := 0
-		for _, m := range messages {
-			ctxChars += len(m.Content) + len(m.Role)
-		}
-		estPrompt := ctxChars / 4
-		estCompl := 0
-		if firstAttempt {
-			a.AddTokens(estPrompt, 0)
-			firstAttempt = false
-		}
+		stream := streamResult{}
+		a.consumeStream(tokenCh, &stream)
 
-		finishReason := ""
-		phaseThink := true
-		firstReasoning := true
-		for token := range tokenCh {
-			if firstReasoning && token.ReasoningContent != "" {
-				firstReasoning = false
-				if a.phaseFn != nil {
-					a.phaseFn(tools.PhaseThinking)
-				}
-			}
-			if phaseThink && token.Content != "" {
-				phaseThink = false
-				if a.phaseFn != nil {
-					a.phaseFn(tools.PhaseReasoning)
-				}
-			}
-			if token.Content != "" {
-				textBuf.WriteString(token.Content)
-				if a.streamFn != nil {
-					a.streamFn(token.Content, false)
-				}
-				estCompl++
-				a.AddTokens(0, 1)
-			}
-			if token.Usage != nil && (token.Usage.PromptTokens > 0 || token.Usage.CompletionTokens > 0) {
-				a.AddTokens(token.Usage.PromptTokens-estPrompt, token.Usage.CompletionTokens-estCompl)
-				a.ctxMgr.RecordUsage(token.Usage.PromptTokens, token.Usage.CompletionTokens)
-			}
-			if token.FinishReason != "" {
-				finishReason = token.FinishReason
-			}
-			if token.ReasoningContent != "" {
-				reasoningBuf.WriteString(token.ReasoningContent)
-				if a.reasoningFn != nil {
-					a.reasoningFn(token.ReasoningContent)
-				}
-				estCompl++
-				a.AddTokens(0, 1)
-				writeAgentLog("ReasoningContent[%d]: %q", len(token.ReasoningContent), token.ReasoningContent)
-			}
-			if token.ToolCallDelta != nil {
-				// Switch to Reasoning on first tool call (text-less
-				// streams like write-only would otherwise stay stuck).
-				if phaseThink {
-					phaseThink = false
-					if a.phaseFn != nil {
-						a.phaseFn(tools.PhaseReasoning)
-					}
-				}
-				idx := token.ToolCallDelta.Index
-				acc := tcAccum[idx]
-				if acc == nil {
-					acc = &toolAccum{}
-					tcAccum[idx] = acc
-				}
-				if token.ToolCallDelta.ID != "" {
-					acc.id = token.ToolCallDelta.ID
-				}
-				if token.ToolCallDelta.Name != "" {
-					acc.name = token.ToolCallDelta.Name
-				}
-				acc.args.WriteString(token.ToolCallDelta.Arguments)
-				// Tool call arguments are completion tokens.
-				estCompl++
-				a.AddTokens(0, 1)
-			}
+		if ctxErr := a.getCtx().Err(); ctxErr != nil {
+			return ctxErr
 		}
-
-		// Two-tier escalation for finish_reason=length:
-		//   Tier 1: double max_tokens to maxTokensCeiling and retry.
-		//   Tier 2: if already at maxTokensCeiling, disable thinking to stop
-		//            reasoning from eating the output budget.
-		//   After both tiers exhausted, return partial text + error
-		//   so callers can surface a non-garbled summary to the user.
-		if finishReason == "length" && len(tcAccum) == 0 {
-			if a.llmClient.MaxTokens() < maxTokensCeiling {
-				writeAgentLog("callLLM: finish_reason=length, escalating max_tokens %d→%d", a.llmClient.MaxTokens(), maxTokensCeiling)
-				a.llmClient.SetMaxTokens(maxTokensCeiling)
-				return fmt.Errorf("output token limit hit, retrying with higher limit")
-			}
-			writeAgentLog("callLLM: finish_reason=length at max_tokens=%d, disabling thinking", maxTokensCeiling)
-			a.llmClient.SetDisableThinking(true)
-			thinkingDisabled = true
-			return fmt.Errorf("output limit still hit at %d, retrying with thinking disabled", maxTokensCeiling)
-		}
-
 		select {
 		case err := <-errCh:
 			if err != nil {
@@ -251,74 +137,128 @@ func (a *Agent) callLLMForTool() ([]ToolCallItem, string, error) {
 		default:
 		}
 
-		textContent = tools.StripAnsi(textBuf.String())
-		if reasoningBuf.Len() > 0 {
-			a.lastReasoningContent = reasoningBuf.String()
+		textContent = tools.StripAnsi(stream.textBuf.String())
+		if stream.reasoningBuf.Len() > 0 {
+			a.lastReason = stream.reasoningBuf.String()
 		}
-
-		if len(tcAccum) == 0 {
+		if len(stream.tcAccum) == 0 {
 			return nil
 		}
 
-		var toolCalls []llm.ToolCall
-		for i := 0; i < len(tcAccum); i++ {
-			acc := tcAccum[i]
-			if acc == nil {
-				continue
-			}
-			toolCalls = append(toolCalls, llm.ToolCall{
-				ID:   acc.id,
-				Type: "function",
-				Function: llm.FunctionCall{
-					Name:      acc.name,
-					Arguments: acc.args.String(),
-				},
-			})
-		}
-
-		items = make([]ToolCallItem, 0, len(toolCalls))
-		for _, tc := range toolCalls {
-			var args map[string]interface{}
-			if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-				return fmt.Errorf("failed to parse tool arguments: %v", err)
-			}
-			items = append(items, ToolCallItem{
-				ID: tc.ID, Name: tc.Function.Name, Args: args,
-			})
-		}
-
-		a.ctxMgr.AddAssistantToolCall(textContent, a.lastReasoningContent, toolCalls)
+		items = stream.toolCalls()
+		a.ctxMgr.AddAssistantToolCall(textContent, a.lastReason, stream.llmToolCalls())
 		return nil
 	})
-	// Restore original state — escalations are per-call tactics, not permanent.
-	a.llmClient.SetMaxTokens(savedMaxTokens)
-	if thinkingDisabled {
-		a.llmClient.SetDisableThinking(false)
-	}
-	if err != nil {
-		return nil, textContent, err
-	}
-	return items, textContent, nil
+
+	return items, textContent, err
 }
 
-// isGarbledToolCall detects raw XML/JSON tool-call fragments that leak
-// into text output when the model's function-calling output was truncated.
-func isGarbledToolCall(text string) bool {
-	t := strings.TrimSpace(text)
-	if t == "" {
-		return false
+// streamResult holds the output of consuming a ChatStream.
+type streamResult struct {
+	textBuf      strings.Builder
+	reasoningBuf strings.Builder
+	tcAccum      map[int]*toolAccum
+	finishReason string
+}
+
+func (a *Agent) consumeStream(tokenCh <-chan llm.StreamToken, s *streamResult) {
+	firstContent := true
+	firstReasoning := true
+	for token := range tokenCh {
+		if token.ReasoningContent != "" && firstReasoning {
+			firstReasoning = false
+			if a.phase != nil {
+				a.phase(common.PhaseThinking)
+			}
+		}
+		if token.Content != "" {
+			if firstContent {
+				firstContent = false
+				if a.phase != nil {
+					a.phase(common.PhaseReasoning)
+				}
+			}
+			s.textBuf.WriteString(token.Content)
+			if a.textFn != nil {
+				a.textFn(token.Content, false)
+			}
+			a.AddTokens(0, 1)
+		}
+		if token.ReasoningContent != "" {
+			s.reasoningBuf.WriteString(token.ReasoningContent)
+			if a.reasonFn != nil {
+				a.reasonFn(token.ReasoningContent)
+			}
+			a.AddTokens(0, 1)
+		}
+			if token.Usage != nil {
+				if token.Usage.PromptTokens > 0 || token.Usage.CompletionTokens > 0 {
+					a.ctxMgr.RecordUsage(token.Usage.PromptTokens, token.Usage.CompletionTokens)
+				}
+				if token.Usage.CacheHitTokens > 0 || token.Usage.CacheMissTokens > 0 {
+					a.ctxMgr.RecordCache(token.Usage.CacheHitTokens, token.Usage.CacheMissTokens)
+				}
+			}
+		if token.FinishReason != "" {
+			s.finishReason = token.FinishReason
+		}
+		if token.ToolCallDelta != nil {
+			if firstContent {
+				firstContent = false
+				if a.phase != nil {
+					a.phase(common.PhaseReasoning)
+				}
+			}
+			if s.tcAccum == nil {
+				s.tcAccum = make(map[int]*toolAccum)
+			}
+			idx := token.ToolCallDelta.Index
+			acc := s.tcAccum[idx]
+			if acc == nil {
+				acc = &toolAccum{}
+				s.tcAccum[idx] = acc
+			}
+			if token.ToolCallDelta.ID != "" {
+				acc.id = token.ToolCallDelta.ID
+			}
+			if token.ToolCallDelta.Name != "" {
+				acc.name = token.ToolCallDelta.Name
+			}
+			acc.args.WriteString(token.ToolCallDelta.Arguments)
+			a.AddTokens(0, 1)
+		}
 	}
-	// Raw XML invoke/tool_call pattern leaked into text output.
-	if strings.Contains(t, "<invoke") || strings.Contains(t, "</invoke") ||
-		strings.Contains(t, "<parameter") || strings.Contains(t, "</parameter") ||
-		strings.Contains(t, "<tool_call") || strings.Contains(t, "</tool_call") {
-		return true
+}
+
+func (s *streamResult) toolCalls() []ToolCallItem {
+	var items []ToolCallItem
+	for i := 0; i < len(s.tcAccum); i++ {
+		acc := s.tcAccum[i]
+		if acc == nil {
+			continue
+		}
+		var args map[string]any
+		if err := json.Unmarshal([]byte(acc.args.String()), &args); err != nil {
+			continue
+		}
+		items = append(items, ToolCallItem{ID: acc.id, Name: acc.name, Args: args})
 	}
-	// Raw JSON tool_call pattern.
-	if strings.Contains(t, `"tool_calls"`) || strings.Contains(t, `"tool_use"`) {
-		return true
+	return items
+}
+
+func (s *streamResult) llmToolCalls() []llm.ToolCall {
+	var calls []llm.ToolCall
+	for i := 0; i < len(s.tcAccum); i++ {
+		acc := s.tcAccum[i]
+		if acc == nil {
+			continue
+		}
+		calls = append(calls, llm.ToolCall{
+			ID: acc.id, Type: "function",
+			Function: llm.FunctionCall{Name: acc.name, Arguments: acc.args.String()},
+		})
 	}
-	return false
+	return calls
 }
 
 type toolAccum struct {
@@ -327,86 +267,46 @@ type toolAccum struct {
 	args strings.Builder
 }
 
+func estimatePrompt(messages []llm.Message) int {
+	n := 0
+	for _, m := range messages {
+		n += len(m.Content) + len(m.Role)
+	}
+	return n / 4
+}
+
+// -- synthesize --
+
 func (a *Agent) forceSynthesize() string {
-	text := a.trySynthesize()
-	if text != "" {
+	if text := a.trySynthesize(); text != "" {
 		return text
 	}
-	// Emergency fallback: all retries exhausted with no output.
-	// Try one last time with aggressively compacted context.
 	writeAgentLog("forceSynthesize: primary path failed, attempting emergency fallback")
 	if fb := a.emergencySynthesize(); fb != "" {
 		return fb
 	}
-	return "Task completed but the model was unable to produce a final summary — the context may be too full or the API may have timed out. You can try asking a follow-up question or running the task again."
+	return "Task completed but the model was unable to produce a final summary."
 }
 
-// trySynthesize attempts to get a final summary from the LLM with full context.
-// Returns empty string on failure after all retries.
 func (a *Agent) trySynthesize() string {
 	var text string
-	firstAttempt := true
-	savedMaxTokens := a.llmClient.MaxTokens()
-	thinkingDisabled := false
+
 	err := withRetry(a.getCtx(), func() error {
-		a.ctxMgr.AutoCompactIfNeeded(a.ctxMgr.GetAutoCompactConfig(), nil)
 		messages := a.ctxMgr.Build(false)
-		messages = append(messages, llm.Message{
-			Role: "user", Content: a.synthesizePrompt,
-		})
+		messages = append(messages, llm.Message{Role: "user", Content: synthesizePrompt})
+
 		tokenCh, errCh := a.llmClient.ChatStream(a.getCtx(), messages, nil)
 		if tokenCh == nil {
-			select {
-			case err := <-errCh:
+			if err, ok := <-errCh; ok {
 				return err
-			default:
-				return fmt.Errorf("chat stream failed")
 			}
+			return fmt.Errorf("chat stream failed")
 		}
 
-		var textBuf strings.Builder
-		ctxChars := 0
-		for _, m := range messages {
-			ctxChars += len(m.Content) + len(m.Role)
-		}
-		estPrompt := ctxChars / 4
-		estCompl := 0
-		if firstAttempt {
-			a.AddTokens(estPrompt, 0)
-			firstAttempt = false
-		}
+		a.AddTokens(estimatePrompt(messages), 0)
 
-		finishReason := ""
-		for token := range tokenCh {
-			if token.Content != "" {
-				textBuf.WriteString(token.Content)
-				if a.streamFn != nil {
-					a.streamFn(token.Content, false)
-				}
-				estCompl++
-				a.AddTokens(0, 1)
-			}
-			if token.Usage != nil && (token.Usage.PromptTokens > 0 || token.Usage.CompletionTokens > 0) {
-				a.AddTokens(token.Usage.PromptTokens-estPrompt, token.Usage.CompletionTokens-estCompl)
-				a.ctxMgr.RecordUsage(token.Usage.PromptTokens, token.Usage.CompletionTokens)
-			}
-			if token.FinishReason != "" {
-				finishReason = token.FinishReason
-			}
-		}
-
-		// Two-tier escalation for finish_reason=length.
-		if finishReason == "length" {
-			if a.llmClient.MaxTokens() < maxTokensCeiling {
-				writeAgentLog("forceSynthesize: finish_reason=length, escalating max_tokens %d→%d", a.llmClient.MaxTokens(), maxTokensCeiling)
-				a.llmClient.SetMaxTokens(maxTokensCeiling)
-				return fmt.Errorf("output token limit hit, retrying with higher limit")
-			}
-			writeAgentLog("forceSynthesize: finish_reason=length at max_tokens=%d, disabling thinking", maxTokensCeiling)
-			a.llmClient.SetDisableThinking(true)
-			thinkingDisabled = true
-			return fmt.Errorf("output limit still hit at %d, retrying with thinking disabled", maxTokensCeiling)
-		}
+		stream := streamResult{}
+		a.consumeStream(tokenCh, &stream)
 
 		select {
 		case err := <-errCh:
@@ -415,61 +315,48 @@ func (a *Agent) trySynthesize() string {
 			}
 		default:
 		}
-		text = tools.StripAnsi(textBuf.String())
+		text = tools.StripAnsi(stream.textBuf.String())
 		return nil
 	})
-	a.llmClient.SetMaxTokens(savedMaxTokens)
-	if thinkingDisabled {
-		a.llmClient.SetDisableThinking(false)
+
+	if err != nil && !errors.Is(err, context.Canceled) && text != "" && !isGarbledToolCall(text) {
+		return text
 	}
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return ""
-		}
-		if text != "" && !isGarbledToolCall(text) {
-			return text
-		}
+	return text
+}
+
+func (a *Agent) emergencySynthesize() string {
+	a.ctxMgr.AutoCompactIfNeeded()
+	msgs := a.ctxMgr.Build(false)
+	msgs = append(msgs, llm.Message{Role: "user", Content: synthesizePrompt})
+
+	ctx, cancel := context.WithTimeout(a.getCtx(), 30*time.Second)
+	defer cancel()
+
+	tokenCh, _ := a.llmClient.ChatStream(ctx, msgs, nil)
+	if tokenCh == nil {
+		return ""
+	}
+	stream := streamResult{}
+	a.consumeStream(tokenCh, &stream)
+	text := tools.StripAnsi(stream.textBuf.String())
+	if isGarbledToolCall(text) {
 		return ""
 	}
 	return text
 }
 
-// emergencySynthesize is a last-resort attempt with minimal context.
-// No retries — if this fails, we surface the error to the user.
-func (a *Agent) emergencySynthesize() string {
-	// Aggressively compact: clear ALL old tool results, force summarize.
-	a.ctxMgr.MicroCompactIfNeeded()
-	a.ctxMgr.ForceCompact()
-	// Build minimal context: system prompt + anchor + last 3 user turns + prompt.
-	msgs := a.ctxMgr.BuildMinimal()
-	msgs = append(msgs, llm.Message{
-		Role: "user", Content: a.synthesizePrompt,
-	})
+// -- helpers --
 
-	ctx, cancel := context.WithTimeout(a.getCtx(), 30*time.Second)
-	defer cancel()
-
-	tokenCh, errCh := a.llmClient.ChatStream(ctx, msgs, nil)
-	if tokenCh == nil {
-		return ""
+func isGarbledToolCall(text string) bool {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return false
 	}
-
-	var textBuf strings.Builder
-	for token := range tokenCh {
-		if token.Content != "" {
-			textBuf.WriteString(token.Content)
-			if a.streamFn != nil {
-				a.streamFn(token.Content, false)
-			}
-		}
+	if strings.Contains(t, "<invoke") || strings.Contains(t, "</invoke") ||
+		strings.Contains(t, "<parameter") || strings.Contains(t, "</parameter") ||
+		strings.Contains(t, "<tool_call") || strings.Contains(t, "</tool_call") {
+		return true
 	}
-	select {
-	case <-errCh:
-	default:
-	}
-	text := tools.StripAnsi(textBuf.String())
-	if isGarbledToolCall(text) {
-		return ""
-	}
-	return text
+	return strings.Contains(t, `"tool_calls"`) || strings.Contains(t, `"tool_use"`)
 }

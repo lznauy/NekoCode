@@ -1,84 +1,86 @@
-// file_cache.go — FileStateCache with mtime-based invalidation for ReadTool.
-// Caches file read results to avoid redundant disk I/O. Cache entries are
-// invalidated when the file's mtime or size changes.
-
 package tools
 
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 )
 
-const (
-	maxCacheEntries = 100
-	maxCacheBytes   = 25 << 20 // 25 MB
-)
+const maxCacheEntries = 100
 
-// FileState represents a cached file read result.
-type FileState struct {
-	Content string
-	Mtime   int64 // from stat
-	Size    int64
-	Offset  int // 1-based start line
-	Limit   int // lines read
+// lineRange is a 1-based, inclusive interval of lines.
+type lineRange struct{ Start, End int }
+
+// fileState holds the full file content and the set of line ranges already returned.
+type fileState struct {
+	Lines  []string    // full file content, one string per line
+	Mtime  int64
+	Size   int64
+	Ranges []lineRange // merged, non-overlapping, sorted by Start
 }
 
-// FileStateCache is an LRU cache of file read results keyed by normalized path.
-// Safe for concurrent use.
+// FileStateCache caches file content and tracks which line ranges have been read.
 type FileStateCache struct {
-	mu        sync.RWMutex
-	entries   map[string]*cacheEntry
-	order     []string // LRU order, most recent at end
-	totalSize int
+	mu      sync.RWMutex
+	entries map[string]*fileState
+	order   []string // LRU, most recent at end
 }
 
-type cacheEntry struct {
-	state FileState
-}
-
-// Global cache instance shared across the session. Set from bot.New().
 var GlobalFileCache *FileStateCache
 
 func NewFileStateCache() *FileStateCache {
-	return &FileStateCache{
-		entries: make(map[string]*cacheEntry),
-	}
+	return &FileStateCache{entries: make(map[string]*fileState)}
 }
 
-// Get checks if a file is cached with matching mtime and read range.
-// Returns (content, true) on cache hit, ("", false) on miss.
-func (c *FileStateCache) Get(path string, offset, limit int) (string, bool) {
+// Get returns a hint string if [startLine, endLine] is fully covered by the cache.
+// Returns ("", false) when the range is not covered, the file changed, or not cached.
+func (c *FileStateCache) Get(path string, startLine, endLine int) (string, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	normPath := normalizePath(path)
-	e, ok := c.entries[normPath]
+	key := normalizePath(path)
+	e, ok := c.entries[key]
 	if !ok {
 		return "", false
 	}
-
 	info, err := os.Stat(path)
-	if err != nil {
+	if err != nil || info.ModTime().UnixNano() != e.Mtime || info.Size() != e.Size {
 		return "", false
 	}
-
-	if info.ModTime().UnixNano() != e.state.Mtime || info.Size() != e.state.Size {
-		// File changed — evict stale entry.
+	if e.Lines == nil {
 		return "", false
 	}
-
-	// Matching range check: same offset, cached limit covers requested limit.
-	// Partial reads are valid hits when offset/limit match exactly.
-	if offset != e.state.Offset || limit > e.state.Limit {
-		return "", false
+	if endLine > len(e.Lines) {
+		endLine = len(e.Lines)
 	}
-
-	return e.state.Content, true
+	for _, r := range e.Ranges {
+		if r.Start <= startLine && endLine <= r.End {
+			return "[content already read — see earlier Read output for this file]", true
+		}
+	}
+	return "", false
 }
 
-// Put stores a file read result.
-func (c *FileStateCache) Put(path string, content string, offset, limit int) {
+// Lines returns the cached full-file content if the file hasn't changed.
+func (c *FileStateCache) Lines(path string) ([]string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	key := normalizePath(path)
+	e, ok := c.entries[key]
+	if !ok || e.Lines == nil {
+		return nil, false
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.ModTime().UnixNano() != e.Mtime || info.Size() != e.Size {
+		return nil, false
+	}
+	return e.Lines, true
+}
+
+// Put stores the full file content and marks [startLine, endLine] as read.
+func (c *FileStateCache) Put(path string, lines []string, startLine, endLine int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -86,44 +88,29 @@ func (c *FileStateCache) Put(path string, content string, offset, limit int) {
 	if err != nil {
 		return
 	}
-
-	normPath := normalizePath(path)
-	state := FileState{
-		Content: content,
-		Mtime:   info.ModTime().UnixNano(),
-		Size:    info.Size(),
-		Offset:  offset,
-		Limit:   limit,
+	key := normalizePath(path)
+	e, ok := c.entries[key]
+	if !ok || info.ModTime().UnixNano() != e.Mtime || info.Size() != e.Size {
+		// Fresh or changed: replace.
+		e = &fileState{
+			Lines: lines,
+			Mtime: info.ModTime().UnixNano(),
+			Size:  info.Size(),
+		}
+		c.entries[key] = e
+		c.order = append(c.order, key)
 	}
-
-	// Update or insert.
-	if old, ok := c.entries[normPath]; ok {
-		c.totalSize -= len(old.state.Content)
-		c.removeFromOrder(normPath)
-	}
-	c.entries[normPath] = &cacheEntry{state: state}
-	c.order = append(c.order, normPath)
-	c.totalSize += len(content)
-
-	// Evict oldest entries until within limits.
-	for (len(c.entries) > maxCacheEntries || c.totalSize > maxCacheBytes) && len(c.order) > 0 {
-		c.evictOldest()
-	}
+	// Merge the new range.
+	e.Ranges = mergeRanges(e.Ranges, lineRange{startLine, endLine})
+	c.evictIfNeeded()
 }
 
-// Invalidate removes a file from the cache. Called when a file is modified.
 func (c *FileStateCache) Invalidate(path string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	normPath := normalizePath(path)
-	if e, ok := c.entries[normPath]; ok {
-		c.totalSize -= len(e.state.Content)
-		delete(c.entries, normPath)
-		c.removeFromOrder(normPath)
-	}
+	c.remove(normalizePath(path))
 }
 
-// Merge combines another cache's entries into this one, keeping newer timestamps.
 func (c *FileStateCache) Merge(other *FileStateCache) {
 	if other == nil {
 		return
@@ -133,38 +120,20 @@ func (c *FileStateCache) Merge(other *FileStateCache) {
 	defer c.mu.Unlock()
 	defer other.mu.RUnlock()
 
-	for path, e := range other.entries {
-		if existing, ok := c.entries[path]; !ok || e.state.Mtime > existing.state.Mtime {
-			if existing != nil {
-				c.totalSize -= len(existing.state.Content)
-				c.removeFromOrder(path)
+	for p, e := range other.entries {
+		if existing, ok := c.entries[p]; !ok || e.Mtime > existing.Mtime {
+			if ok {
+				c.remove(p)
 			}
-			c.entries[path] = &cacheEntry{state: e.state}
-			c.order = append(c.order, path)
-			c.totalSize += len(e.state.Content)
+			c.entries[p] = e
+			c.order = append(c.order, p)
 		}
 	}
-
-	for len(c.entries) > maxCacheEntries || c.totalSize > maxCacheBytes {
-		c.evictOldest()
-	}
+	c.evictIfNeeded()
 }
 
-// Clone returns a shallow copy safe for use by sub-agents.
-func (c *FileStateCache) Clone() *FileStateCache {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	clone := NewFileStateCache()
-	for path, e := range c.entries {
-		clone.entries[path] = &cacheEntry{state: e.state}
-		clone.order = append(clone.order, path)
-		clone.totalSize += len(e.state.Content)
-	}
-	return clone
-}
-
-func (c *FileStateCache) removeFromOrder(path string) {
+func (c *FileStateCache) remove(path string) {
+	delete(c.entries, path)
 	for i, p := range c.order {
 		if p == path {
 			c.order = append(c.order[:i], c.order[i+1:]...)
@@ -173,22 +142,32 @@ func (c *FileStateCache) removeFromOrder(path string) {
 	}
 }
 
-func (c *FileStateCache) evictOldest() {
-	if len(c.order) == 0 {
-		return
+func (c *FileStateCache) evictIfNeeded() {
+	for len(c.entries) > maxCacheEntries && len(c.order) > 0 {
+		delete(c.entries, c.order[0])
+		c.order = c.order[1:]
 	}
-	oldest := c.order[0]
-	if e, ok := c.entries[oldest]; ok {
-		c.totalSize -= len(e.state.Content)
+}
+
+// mergeRanges inserts r into a sorted, non-overlapping slice of ranges.
+func mergeRanges(ranges []lineRange, r lineRange) []lineRange {
+	ranges = append(ranges, r)
+	sort.Slice(ranges, func(i, j int) bool { return ranges[i].Start < ranges[j].Start })
+
+	merged := ranges[:0]
+	for _, rg := range ranges {
+		if len(merged) == 0 || merged[len(merged)-1].End < rg.Start-1 {
+			merged = append(merged, rg)
+		} else if rg.End > merged[len(merged)-1].End {
+			merged[len(merged)-1].End = rg.End
+		}
 	}
-	delete(c.entries, oldest)
-	c.order = c.order[1:]
+	return merged
 }
 
 func normalizePath(p string) string {
-	resolved, err := resolvePath(p)
-	if err != nil {
-		return filepath.Clean(p)
+	if resolved, err := filepath.EvalSymlinks(filepath.Clean(p)); err == nil {
+		return resolved
 	}
-	return filepath.Clean(resolved)
+	return filepath.Clean(p)
 }

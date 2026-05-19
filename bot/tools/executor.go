@@ -1,4 +1,3 @@
-// executor.go — 工具执行器：并行/串行调度、危险分级检查、用户确认。
 package tools
 
 import (
@@ -6,106 +5,67 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+
+	"nekocode/common"
 )
 
 type Executor struct {
-	registry   *Registry
-	confirmFn  ConfirmFunc
-	phaseFn    PhaseFunc
-	maxWorkers int
-	planMode   bool // when true, reject write/edit/destructive tools
-
-	readFiles map[string]bool // absolute paths that were successfully read
+	registry  *Registry
+	confirmFn common.ConfirmFunc
+	phaseFn   common.PhaseFunc
+	planMode  bool
+	readFiles map[string]bool
 	readMu    sync.RWMutex
-
 }
 
 func NewExecutor(r *Registry) *Executor {
-	return &Executor{
-		registry:   r,
-		maxWorkers: 10,
-		readFiles:  make(map[string]bool),
-	}
+	return &Executor{registry: r, readFiles: make(map[string]bool)}
 }
 
-func (e *Executor) SetConfirmFn(fn ConfirmFunc) { e.confirmFn = fn }
-func (e *Executor) SetPhaseFn(fn PhaseFunc)     { e.phaseFn = fn }
-func (e *Executor) SetPlanMode(on bool)         { e.planMode = on }
-func (e *Executor) InPlanMode() bool            { return e.planMode }
+func (e *Executor) SetConfirmFn(fn common.ConfirmFunc) { e.confirmFn = fn }
+func (e *Executor) SetPhaseFn(fn common.PhaseFunc)     { e.phaseFn = fn }
+func (e *Executor) SetPlanMode(on bool)                { e.planMode = on }
 
-// MarkRead records that a file was successfully read. Called after read tool executes.
-func (e *Executor) MarkRead(path string) {
-	e.readMu.Lock()
-	defer e.readMu.Unlock()
-	e.readFiles[path] = true
-}
-
-// WasRead checks whether a file was successfully read this session.
-func (e *Executor) WasRead(path string) bool {
-	e.readMu.RLock()
-	defer e.readMu.RUnlock()
-	return e.readFiles[path]
-}
-
-// ExecuteBatch partitions tools into read-only (parallel) and mutable (sequential)
-// groups, then runs read-only concurrently first, then mutable in order.
 func (e *Executor) ExecuteBatch(ctx context.Context, calls []ToolCallItem) []ToolCallResult {
-	if len(calls) == 0 {
-		return nil
-	}
-	ro, mw := e.partition(calls)
-	results := make([]ToolCallResult, 0, len(calls))
-	if len(ro) > 0 {
-		results = append(results, e.runParallel(ctx, ro)...)
-	}
-	if len(mw) > 0 {
-		results = append(results, e.runSequential(ctx, mw)...)
-	}
-	return results
-}
-
-func (e *Executor) partition(calls []ToolCallItem) (readOnly, mutable []ToolCallItem) {
+	var ro, mw []ToolCallItem
 	for _, c := range calls {
-		t, err := e.registry.Get(c.Name)
-		if err != nil || t.ExecutionMode(c.Args) == ModeSequential {
-			mutable = append(mutable, c)
+		if t, err := e.registry.Get(c.Name); err == nil && t.ExecutionMode(c.Args) == ModeParallel {
+			ro = append(ro, c)
 		} else {
-			readOnly = append(readOnly, c)
+			mw = append(mw, c)
 		}
 	}
-	return
-}
 
-func (e *Executor) runSequential(ctx context.Context, calls []ToolCallItem) []ToolCallResult {
 	results := make([]ToolCallResult, len(calls))
-	for i, c := range calls {
-		results[i] = e.executeOne(ctx, c)
-	}
-	return results
-}
+	n := 0
 
-func (e *Executor) runParallel(ctx context.Context, calls []ToolCallItem) []ToolCallResult {
-	results := make([]ToolCallResult, len(calls))
-	sem := make(chan struct{}, e.maxWorkers)
-	var wg sync.WaitGroup
-
-	for i, call := range calls {
-		select {
-		case <-ctx.Done():
-			results[i] = ToolCallResult{ID: call.ID, Name: call.Name, Error: ctx.Err().Error()}
-			continue
-		default:
+	// Read-only: parallel.
+	if len(ro) > 0 {
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, 10)
+		for i, c := range ro {
+			if ctx.Err() != nil {
+				results[n+i] = ToolCallResult{ID: c.ID, Name: c.Name, Error: ctx.Err().Error()}
+				continue
+			}
+			wg.Add(1)
+			go func(idx int, tc ToolCallItem) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				results[n+idx] = e.executeOne(ctx, tc)
+			}(i, c)
 		}
-		wg.Add(1)
-		go func(idx int, tc ToolCallItem) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			results[idx] = e.executeOne(ctx, tc)
-		}(i, call)
+		wg.Wait()
+		n += len(ro)
 	}
-	wg.Wait()
+
+	// Mutable: sequential.
+	for i, c := range mw {
+		results[n+i] = e.executeOne(ctx, c)
+	}
 	return results
 }
 
@@ -116,79 +76,54 @@ func (e *Executor) executeOne(ctx context.Context, tc ToolCallItem) ToolCallResu
 	}
 
 	level := tool.DangerLevel(tc.Args)
-	if level == LevelForbidden {
-		return ToolCallResult{
-			ID: tc.ID, Name: tc.Name,
-			Error: fmt.Sprintf("operation rejected: %s is forbidden", tc.Name),
-		}
+	if level == common.LevelForbidden {
+		return ToolCallResult{ID: tc.ID, Name: tc.Name, Error: "forbidden: " + tc.Name}
 	}
-
 	if e.phaseFn != nil {
-		e.phaseFn(PhaseRunning + " " + tc.Name)
+		e.phaseFn(common.PhaseRunning + " " + tc.Name)
 	}
-	if e.planMode && level >= LevelWrite {
-		return ToolCallResult{
-			ID: tc.ID, Name: tc.Name,
-			Error: fmt.Sprintf("plan mode: %s is write/destructive — only read, grep, glob, list, web_search, web_fetch allowed. Present your plan first, then user will approve execution.", tc.Name),
-		}
+	if e.planMode && level >= common.LevelWrite {
+		return ToolCallResult{ID: tc.ID, Name: tc.Name, Error: "plan mode: blocked"}
 	}
-
-	if level >= LevelWrite && e.confirmFn != nil {
-		if !e.confirmFn(ConfirmRequest{
-			ToolName: tc.Name, Args: tc.Args, Level: level,
-			Response: make(chan bool, 1),
-		}) {
-			return ToolCallResult{
-				ID: tc.ID, Name: tc.Name,
-				Error: "operation cancelled by user",
-			}
-		}
+	if level >= common.LevelWrite && e.confirmFn != nil && !e.confirmFn(common.ConfirmRequest{
+		ToolName: tc.Name, Args: tc.Args, Level: level, Response: make(chan bool, 1),
+	}) {
+		return ToolCallResult{ID: tc.ID, Name: tc.Name, Error: "cancelled"}
 	}
 
-	// Enforce read-before-write/edit: if the target file already exists, the
-	// model must have read it first to avoid hallucinating file contents.
 	if tc.Name == "write" || tc.Name == "edit" {
-		if path, ok := tc.Args["path"].(string); ok && path != "" {
-			if resolved, err := resolvePath(path); err == nil {
-				if _, statErr := os.Stat(resolved); statErr == nil {
-					if !e.WasRead(resolved) {
-						return ToolCallResult{
-							ID: tc.ID, Name: tc.Name,
-							Error: fmt.Sprintf(
-								"file %s has not been read yet. Read it first to understand existing content before modifying.",
-								filepath.Base(resolved),
-							),
-						}
-					}
+		if p, _ := tc.Args["path"].(string); p != "" {
+			if resolved, err := resolvePath(p); err == nil {
+				if _, err := os.Stat(resolved); err == nil && !e.wasRead(resolved) {
+					return ToolCallResult{ID: tc.ID, Name: tc.Name,
+						Error: "file " + filepath.Base(resolved) + " has not been read yet"}
 				}
 			}
 		}
 	}
 
-	output, err := tool.Execute(ctx, tc.Args)
-	if err != nil {
-		return ToolCallResult{ID: tc.ID, Name: tc.Name, Error: err.Error()}
-	}
+	var output string
+		var execErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					execErr = fmt.Errorf("panic: %v", r)
+				}
+			}()
+			output, execErr = tool.Execute(ctx, tc.Args)
+		}()
+		if execErr != nil {
+			return ToolCallResult{ID: tc.ID, Name: tc.Name, Error: execErr.Error()}
+		}
 	output = TruncateOutput(output)
 
-	// Defense-in-depth: wrap tool output with boundary markers so the model
-	// can visually distinguish tool results from conversation and system prompts.
-	// Then scan for instruction-like patterns that could cause prompt injection.
-	output = WrapToolOutput(tc.Name, tc.ID, output)
-
-	// Track successful reads for read-before-write enforcement.
-	if tc.Name == "read" {
-		if path, ok := tc.Args["path"].(string); ok && path != "" {
-			if resolved, err := resolvePath(path); err == nil {
-				e.MarkRead(resolved)
-			}
-		}
-	}
-
-	// Invalidate file cache entries for modified files.
-	if tc.Name == "edit" || tc.Name == "write" {
-		if path, ok := tc.Args["path"].(string); ok && path != "" {
-			if resolved, err := resolvePath(path); err == nil {
+	// Track reads + invalidate cache.
+	if p, _ := tc.Args["path"].(string); p != "" {
+		if resolved, err := resolvePath(p); err == nil {
+			switch tc.Name {
+			case "read":
+				e.markRead(resolved)
+			case "edit", "write":
 				if GlobalFileCache != nil {
 					GlobalFileCache.Invalidate(resolved)
 				}
@@ -199,11 +134,49 @@ func (e *Executor) executeOne(ctx context.Context, tc ToolCallItem) ToolCallResu
 	return ToolCallResult{ID: tc.ID, Name: tc.Name, Output: output}
 }
 
-// resolvePath resolves a path to its absolute form, following symlinks.
+func (e *Executor) markRead(path string) {
+	e.readMu.Lock()
+	e.readFiles[path] = true
+	e.readMu.Unlock()
+}
+
+func (e *Executor) wasRead(path string) bool {
+	e.readMu.RLock()
+	defer e.readMu.RUnlock()
+	return e.readFiles[path]
+}
+
 func resolvePath(p string) (string, error) {
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		return "", err
 	}
 	return filepath.EvalSymlinks(abs)
+}
+
+const (
+	maxLines = 2000
+	headLen  = 40
+	tailLen  = 20
+)
+
+func TruncateOutput(output string) string {
+	lines := strings.Split(output, "\n")
+	if len(lines) <= maxLines {
+		return output
+	}
+
+	tailStart := max(len(lines)-tailLen, headLen)
+
+	var b strings.Builder
+	for i := range headLen {
+		b.WriteString(lines[i])
+		b.WriteByte('\n')
+	}
+	fmt.Fprintf(&b, "\n[... %d lines truncated ...]\n\n", tailStart-headLen)
+	for i := range len(lines) - tailStart {
+		b.WriteString(lines[tailStart+i])
+		b.WriteByte('\n')
+	}
+	return b.String()
 }

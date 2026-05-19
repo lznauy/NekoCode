@@ -9,6 +9,8 @@ require (
 	github.com/charmbracelet/glamour v0.8.0
 	github.com/mattn/go-runewidth v0.0.23
 	golang.org/x/net v0.53.0
+	golang.org/x/sync v0.20.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -37,8 +39,6 @@ require (
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yuin/goldmark v1.7.13 // indirect
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
-	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/term v0.42.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

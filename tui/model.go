@@ -6,13 +6,13 @@ import (
 	"strings"
 	"time"
 
-	"nekocode/bot/tools"
 	"nekocode/tui/components"
 	"nekocode/tui/styles"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
-)
+
+	"nekocode/common")
 
 type Model struct {
 	Bot      BotInterface
@@ -32,7 +32,7 @@ type Model struct {
 	Suggestions     *components.Suggestions
 	ConfirmBar      *components.ConfirmBar
 	Scrollbar       *components.Scrollbar
-	confirmCh       chan tools.ConfirmRequest
+	confirmCh       chan common.ConfirmRequest
 }
 
 const version = "0.2.0"
@@ -55,22 +55,21 @@ func NewModel(b BotInterface) *Model {
 		Width:       80,
 		Height:      24,
 		state:       stateReady,
-		confirmCh:   make(chan tools.ConfirmRequest),
+		confirmCh:   make(chan common.ConfirmRequest),
 	}
 
-	b.SetConfirmFn(func(req tools.ConfirmRequest) bool {
-		m.confirmCh <- req
-		return <-req.Response
-	})
-
-	b.SetPhaseFn(func(phase string) {
-		m.setPhase(phase)
-	})
-
-	b.WireTodoWrite(func(items []tools.TodoItem) {
-		m.Messages.SetTodos(todoItemsText(items))
-		b.SetCtxTodos(todoItemsText(items))
-	})
+	b.Configure(
+		func(req common.ConfirmRequest) bool {
+			m.confirmCh <- req
+			return <-req.Response
+		},
+		func(phase string) {
+			m.setPhase(phase)
+		},
+		func(items []common.TodoItem) {
+			m.Messages.SetTodos(todoItemsText(items))
+		},
+	)
 
 	return m
 }
@@ -110,7 +109,7 @@ func (m *Model) transitionTo(state chatState) {
 	m.resizeMessages()
 }
 
-func listenConfirm(ch <-chan tools.ConfirmRequest) tea.Cmd {
+func listenConfirm(ch <-chan common.ConfirmRequest) tea.Cmd {
 	return func() tea.Msg {
 		req, ok := <-ch
 		if !ok {
@@ -123,11 +122,11 @@ func listenConfirm(ch <-chan tools.ConfirmRequest) tea.Cmd {
 // Processing phases displayed in the status line during agent execution.
 const (
 	phaseSteer     = "Processing new input..."
-	PhaseReady     = tools.PhaseReady
-	PhaseWaiting   = tools.PhaseWaiting
-	PhaseThinking  = tools.PhaseThinking
-	PhaseReasoning = tools.PhaseReasoning
-	PhaseRunning   = tools.PhaseRunning
+	PhaseReady     = common.PhaseReady
+	PhaseWaiting   = common.PhaseWaiting
+	PhaseThinking  = common.PhaseThinking
+	PhaseReasoning = common.PhaseReasoning
+	PhaseRunning   = common.PhaseRunning
 )
 
 func (m *Model) setPhase(p string) {
@@ -137,7 +136,7 @@ func (m *Model) setPhase(p string) {
 	m.processingPhase = p
 }
 
-func todoItemsText(items []tools.TodoItem) string {
+func todoItemsText(items []common.TodoItem) string {
 	if len(items) == 0 {
 		return ""
 	}

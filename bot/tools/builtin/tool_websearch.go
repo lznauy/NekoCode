@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"nekocode/bot/tools"
 	"net/http"
 	"os"
 	"strings"
 	"time"
-	"nekocode/bot/tools"
+
+	"nekocode/common"
 )
 
 type WebSearchTool struct {
@@ -22,22 +24,16 @@ func NewWebSearchTool() *WebSearchTool {
 	return &WebSearchTool{client: tools.NewToolHTTPClient(30 * time.Second)}
 }
 
-func (t *WebSearchTool) Name() string                                       { return "web_search" }
-func (t *WebSearchTool) ExecutionMode(map[string]interface{}) tools.ExecutionMode { return tools.ModeParallel }
-func (t *WebSearchTool) DangerLevel(map[string]interface{}) tools.DangerLevel     { return tools.LevelSafe }
+func (t *WebSearchTool) Name() string { return "web_search" }
+func (t *WebSearchTool) ExecutionMode(map[string]interface{}) tools.ExecutionMode {
+	return tools.ModeParallel
+}
+func (t *WebSearchTool) DangerLevel(map[string]interface{}) common.DangerLevel {
+	return common.LevelSafe
+}
 
 func (t *WebSearchTool) Description() string {
-	return fmt.Sprintf(
-		`Search the web for latest information. Set result count (default 8, max 15).
-
-CRITICAL REQUIREMENT — you MUST follow this:
-- After answering the user, include a "Sources:" section at the end of your response.
-- In the Sources section, list all relevant URLs from the search results as markdown hyperlinks: [Title](URL).
-- This is MANDATORY — never skip including sources in your response.
-
-Tip: include the current year (%d) in your query for more accurate results.`,
-		time.Now().Year(),
-	)
+	return "Search the web. Include a \"Sources:\" section with [Title](URL) links after answering."
 }
 
 func (t *WebSearchTool) Parameters() []tools.Parameter {
@@ -92,7 +88,7 @@ func searchExa(ctx context.Context, query string, n int) (string, error) {
 		req.Header.Set("X-Api-Key", k)
 	}
 
-	resp, err := tools.NewToolHTTPClient(30*time.Second).Do(req)
+	resp, err := tools.NewToolHTTPClient(30 * time.Second).Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -123,7 +119,7 @@ func parseExaSSE(r io.Reader) (string, error) {
 			continue
 		}
 		if len(v.Result.Content) > 0 && v.Result.Content[0].Text != "" {
-			return tools.TruncateByRune(v.Result.Content[0].Text, 6000), nil
+			return common.TruncateByRune(v.Result.Content[0].Text, 6000), nil
 		}
 	}
 	return "", scan.Err()

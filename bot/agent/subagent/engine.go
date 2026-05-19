@@ -8,8 +8,12 @@ import (
 	"time"
 
 	"nekocode/bot/ctxmgr"
+	ctxfmt "nekocode/bot/ctxmgr/context"
+	"nekocode/bot/ctxmgr/compact"
 	"nekocode/bot/tools"
 	"nekocode/llm"
+
+	"nekocode/common"
 )
 
 const (
@@ -29,8 +33,8 @@ func NewEngine(llmClient llm.LLM, registry *tools.Registry) *Engine {
 	// Auto-approve write-level tools for subagents — the main agent already
 	// obtained user approval for the delegated task. Destructive tools (LevelDestructive,
 	// LevelForbidden) are still blocked by the executor's level check.
-	e.SetConfirmFn(func(req tools.ConfirmRequest) bool {
-		return req.Level <= tools.LevelWrite
+	e.SetConfirmFn(func(req common.ConfirmRequest) bool {
+		return req.Level <= common.LevelWrite
 	})
 	return &Engine{llmClient: llmClient, toolRegistry: registry, executor: e}
 }
@@ -49,44 +53,52 @@ type toolCallItem struct {
 //   - Structured output parsing after completion
 //   - Safety classification before handoff
 //   - Partial result recovery on error/interrupt
+//   - Metadata tracking (tokens, tool calls, duration) for main agent assessment
 func (e *Engine) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
+	startTime := time.Now()
+	var toolUseCount int
+	var totalTokens int
+
 	// Apply thoroughness-based overrides for the explore agent.
-	maxSteps := cfg.AgentType.MaxSteps
-	tokenBudget := cfg.AgentType.TokenBudget
+	tokenBudget := cfg.TokenBudget / 10
+	if tokenBudget < 8000 {
+		tokenBudget = 8000
+	}
 	systemPrompt := cfg.AgentType.SystemPrompt
 	if cfg.AgentType.Name == "explore" {
 		switch cfg.Thoroughness {
-		case thoroughQuick:
-			maxSteps = 1
-			tokenBudget = 4000
 		case thoroughDeep:
-			maxSteps = 4
-			tokenBudget = 16000
 			systemPrompt = strings.Replace(systemPrompt,
-				"Focus on the specific question, no exhaustive searches",
-				"Search across multiple directories and naming conventions. Be thorough.", 1)
+				"Focus on the specific question. For \"very thorough\": search across multiple directories and naming conventions.",
+				"Search across ALL packages, naming conventions, and locations. Read at least 5 files. Be exhaustive.", 1)
 		}
 	}
 
 	// Sub-agents have isolated contexts — they can't reference file content
 	// from the main agent's conversation. Swap in a fresh cache so their
 	// first read of any file returns full content, not a stub.
+	// Merge subagent cache back on completion so the main agent benefits
+	// from files the subagent discovered.
 	savedCache := tools.GlobalFileCache
-	tools.GlobalFileCache = tools.NewFileStateCache()
-	defer func() { tools.GlobalFileCache = savedCache }()
+	subCache := tools.NewFileStateCache()
+	tools.GlobalFileCache = subCache
+	defer func() {
+		savedCache.Merge(subCache)
+		tools.GlobalFileCache = savedCache
+	}()
 
-	ctxMgr := ctxmgr.New(systemPrompt)
+	ctxMgr := ctxmgr.New(systemPrompt, nil)
 	ctxMgr.SetTokenBudget(tokenBudget)
 	ctxMgr.SetSummarizer(e.makeSummarizer(ctx))
 
 	if cfg.Cwd != "" {
-		ctxMgr.Add("system", "Working directory: "+cfg.Cwd)
+		ctxMgr.Add("system", ctxfmt.FormatCwd(cfg.Cwd))
 	}
 	if cfg.ProjectContext != "" && !cfg.AgentType.OmitProjectContext {
 		ctxMgr.Add("system", cfg.ProjectContext)
 	}
 	if cfg.DisableThinking {
-		ctxMgr.Add("system", "Stop when done. Don't over-analyze — just execute. Keep output short (≤100 chars).")
+		e.llmClient.SetDisableThinking(true)
 	}
 	ctxMgr.Add("user", cfg.Prompt)
 
@@ -100,24 +112,31 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
 	var readOnlyStreak int
 	var lastText string // last assistant text content (for partial result recovery)
 
-	localAddTokens := cfg.AddTokens
+	// Wrap AddTokens to track total tokens for metadata reporting.
+	localAddTokens := func(prompt, compl int) {
+		totalTokens += prompt + compl
+		if cfg.AddTokens != nil {
+			cfg.AddTokens(prompt, compl)
+		}
+	}
 
-	for step := 0; step < maxSteps; step++ {
+	for step := 0; ; step++ {
 		select {
 		case <-ctx.Done():
-			return buildPartialResult(lastText), ctx.Err()
+			meta := runMeta{totalTokens: totalTokens, toolUseCount: toolUseCount, durationMs: time.Since(startTime).Milliseconds()}
+			return buildPartialResult(lastText, meta, cfg.AgentType.Name), ctx.Err()
 		default:
 		}
 
-		// Proactive auto-compact before each LLM call.
-		ctxMgr.AutoCompactIfNeeded(ctxMgr.GetAutoCompactConfig(), nil)
-
+		
 		calls, text, err := e.reason(ctx, ctxMgr, cfg.AgentType.Tools, localAddTokens, phase)
 		if err != nil {
 			if lastText != "" {
-				return buildPartialResult(lastText), nil
+				meta := runMeta{totalTokens: totalTokens, toolUseCount: toolUseCount, durationMs: time.Since(startTime).Milliseconds()}
+				return buildPartialResult(lastText, meta, cfg.AgentType.Name), nil
 			}
-			return buildFailedResult(err.Error()), err
+			meta := runMeta{totalTokens: totalTokens, toolUseCount: toolUseCount, durationMs: time.Since(startTime).Milliseconds()}
+			return buildFailedResult(err.Error(), meta), err
 		}
 
 		if text != "" {
@@ -126,8 +145,11 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
 
 		if len(calls) == 0 {
 			phase("done")
-			return buildResult(text), nil
+			meta := runMeta{totalTokens: totalTokens, toolUseCount: toolUseCount, durationMs: time.Since(startTime).Milliseconds()}
+			return buildResult(text, meta, cfg.AgentType.Name), nil
 		}
+
+		toolUseCount += len(calls)
 
 		for _, c := range calls {
 			phase("Running " + c.Name)
@@ -137,15 +159,18 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
 			items[i] = tools.ToolCallItem{ID: c.ID, Name: c.Name, Args: c.Args}
 		}
 		results := e.executor.ExecuteBatch(ctx, items)
-		msgs := make([]llm.Message, len(results))
+		batch := make([]ctxmgr.ToolResultMsg, len(results))
 		for i, r := range results {
 			content := r.Output
 			if r.Error != "" {
 				content = r.Error
 			}
-			msgs[i] = llm.Message{Content: content, ToolCallID: r.ID}
+			batch[i] = ctxmgr.ToolResultMsg{
+				Message:  llm.Message{Content: content, ToolCallID: r.ID},
+				ToolName: calls[i].Name,
+			}
 		}
-		ctxMgr.AddToolResultsBatch(msgs)
+		ctxMgr.AddToolResultsBatch(batch)
 
 		// Read-only spiral check — inject AFTER tool results so the
 		// assistant→tool message chain stays contiguous.
@@ -162,13 +187,17 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
 		phase("Waiting")
 	}
 
-	// Max steps reached — force synthesize.
-	lastText = e.forceSynthesize(ctx, ctxMgr)
-	return buildResult(lastText), nil
+}
+
+// runMeta carries execution statistics through the result builders.
+type runMeta struct {
+	totalTokens  int
+	toolUseCount int
+	durationMs   int64
 }
 
 // buildResult constructs a Result from a completed subagent run.
-func buildResult(rawOutput string) *Result {
+func buildResult(rawOutput string, meta runMeta, agentType string) *Result {
 	content, keyFiles, filesChanged, issues := parseStructuredOutput(rawOutput)
 
 	if content == "" {
@@ -176,10 +205,14 @@ func buildResult(rawOutput string) *Result {
 	}
 
 	r := &Result{
-		Status:   StatusCompleted,
-		Content:  content,
-		KeyFiles: keyFiles,
-		Issues:   issues,
+		Status:       StatusCompleted,
+		Content:      content,
+		KeyFiles:     keyFiles,
+		FilesChanged: filesChanged,
+		Issues:       issues,
+		TotalTokens:  meta.totalTokens,
+		ToolUseCount: meta.toolUseCount,
+		DurationMs:   meta.durationMs,
 	}
 
 	r.classification = classifyHandoff(rawOutput, filesChanged, keyFiles)
@@ -188,16 +221,20 @@ func buildResult(rawOutput string) *Result {
 }
 
 // buildPartialResult creates a Result for interrupted/killed subagents.
-func buildPartialResult(lastText string) *Result {
+func buildPartialResult(lastText string, meta runMeta, agentType string) *Result {
 	content, keyFiles, filesChanged, issues := parseStructuredOutput(lastText)
 	if content == "" {
 		content = lastText
 	}
 	r := &Result{
-		Status:   StatusPartial,
-		Content:  content,
-		KeyFiles: keyFiles,
-		Issues:   append(issues, "subagent was interrupted before completion"),
+		Status:       StatusPartial,
+		Content:      content,
+		KeyFiles:     keyFiles,
+		FilesChanged: filesChanged,
+		Issues:       append(issues, "subagent was interrupted before completion"),
+		TotalTokens:  meta.totalTokens,
+		ToolUseCount: meta.toolUseCount,
+		DurationMs:   meta.durationMs,
 	}
 
 	r.classification = classifyHandoff(lastText, filesChanged, keyFiles)
@@ -206,18 +243,21 @@ func buildPartialResult(lastText string) *Result {
 }
 
 // buildFailedResult creates a Result for subagents that produced no output.
-func buildFailedResult(errMsg string) *Result {
+func buildFailedResult(errMsg string, meta runMeta) *Result {
 	return &Result{
 		Status:         StatusFailed,
 		Content:        errMsg,
 		Issues:         []string{errMsg},
+		TotalTokens:    meta.totalTokens,
+		ToolUseCount:   meta.toolUseCount,
+		DurationMs:     meta.durationMs,
 		classification: classUnavailable,
 	}
 }
 
-func (e *Engine) makeSummarizer(ctx context.Context) ctxmgr.Summarizer {
+func (e *Engine) makeSummarizer(ctx context.Context) compact.Summarizer {
 	return func(msgs []llm.Message, prevSummary string) (string, error) {
-		prompt := ctxmgr.BuildPrompt(msgs, prevSummary)
+		prompt := compact.BuildPrompt(msgs, prevSummary)
 		resp, err := e.llmClient.Chat(ctx, []llm.Message{{Role: "user", Content: prompt}}, nil)
 		if err != nil {
 			return "", err
@@ -236,7 +276,6 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 
 	firstAttempt := true
 	err := llm.Retry(ctx, llm.DefaultRetryConfig, func() error {
-		mgr.AutoCompactIfNeeded(mgr.GetAutoCompactConfig(), nil)
 		messages := mgr.Build(true)
 		toolDefs := e.filteredToolDefs(allowed)
 
@@ -254,14 +293,18 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 		var reasoningBuf strings.Builder
 		tcAccum := make(map[int]*toolAccum)
 
+		estPrompt := 0
 		promptChars := 0
 		for _, m := range messages {
 			promptChars += len(m.Content) + len(m.Role)
 		}
+		estPrompt = promptChars / 4
 		if firstAttempt && addTokens != nil {
-			addTokens(promptChars/4, 0)
+			addTokens(estPrompt, 0)
 			firstAttempt = false
 		}
+		estCompl := 0
+		var lastUsage *llm.StreamUsage
 
 		firstReasoning := true
 		phaseThink := true
@@ -269,29 +312,33 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 			if firstReasoning && token.ReasoningContent != "" {
 				firstReasoning = false
 				if phase != nil {
-					phase(tools.PhaseThinking)
+					phase(common.PhaseThinking)
 				}
 			}
 			if token.Content != "" {
 				if phaseThink {
 					phaseThink = false
 					if phase != nil {
-						phase(tools.PhaseReasoning)
+						phase(common.PhaseReasoning)
 					}
 				}
 				textBuf.WriteString(token.Content)
 				if addTokens != nil {
 					addTokens(0, 1)
 				}
+				estCompl++
 			}
 			if token.ReasoningContent != "" {
 				reasoningBuf.WriteString(token.ReasoningContent)
+			}
+			if token.Usage != nil {
+				lastUsage = token.Usage
 			}
 			if token.ToolCallDelta != nil {
 				if phaseThink {
 					phaseThink = false
 					if phase != nil {
-						phase(tools.PhaseReasoning)
+						phase(common.PhaseReasoning)
 					}
 				}
 				idx := token.ToolCallDelta.Index
@@ -310,6 +357,20 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 				if addTokens != nil {
 					addTokens(0, 1)
 				}
+				estCompl++
+			}
+		}
+
+		// Record actual API usage to calibrate heuristic estimates.
+		if lastUsage != nil {
+			if lastUsage.PromptTokens > 0 || lastUsage.CompletionTokens > 0 {
+				if addTokens != nil {
+					addTokens(lastUsage.PromptTokens-estPrompt, lastUsage.CompletionTokens-estCompl)
+				}
+				mgr.RecordUsage(lastUsage.PromptTokens, lastUsage.CompletionTokens)
+			}
+			if lastUsage.CacheHitTokens > 0 || lastUsage.CacheMissTokens > 0 {
+				mgr.RecordCache(lastUsage.CacheHitTokens, lastUsage.CacheMissTokens)
 			}
 		}
 
@@ -350,67 +411,6 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 		mgr.AddAssistantToolCall(textContent, reasoningContent, toLLMToolCalls(calls))
 	}
 	return calls, textContent, nil
-}
-
-func (e *Engine) forceSynthesize(ctx context.Context, mgr *ctxmgr.Manager) string {
-	// Primary path: full context with retries.
-	var text string
-	_ = llm.Retry(ctx, llm.DefaultRetryConfig, func() error {
-		mgr.AutoCompactIfNeeded(mgr.GetAutoCompactConfig(), nil)
-		messages := mgr.Build(false)
-		messages = append(messages, llm.Message{
-			Role:    "user",
-			Content: "Based on the information collected above, provide your final conclusion using the required output format (Scope/Result/Key files/Issues). Do NOT call any more tools. Keep it concise, under 300 chars.",
-		})
-		tokenCh, errCh := e.llmClient.ChatStream(ctx, messages, nil)
-		if tokenCh == nil {
-			return fmt.Errorf("chat stream failed")
-		}
-		var textBuf strings.Builder
-		for token := range tokenCh {
-			if token.Content != "" {
-				textBuf.WriteString(token.Content)
-			}
-		}
-		select {
-		case err := <-errCh:
-			if err != nil {
-				return err
-			}
-		default:
-		}
-		text = tools.StripAnsi(textBuf.String())
-		return nil
-	})
-	if text != "" {
-		return text
-	}
-	// Emergency fallback: one last attempt with minimal context.
-	mgr.ForceCompact()
-	msgs := mgr.BuildMinimal()
-	msgs = append(msgs, llm.Message{
-		Role:    "user",
-		Content: "Provide your final conclusion based on the context above. Keep it concise, under 300 chars.",
-	})
-	ctx2, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	tokenCh, errCh := e.llmClient.ChatStream(ctx2, msgs, nil)
-	if tokenCh != nil {
-		var buf strings.Builder
-		for token := range tokenCh {
-			if token.Content != "" {
-				buf.WriteString(token.Content)
-			}
-		}
-		select {
-		case <-errCh:
-		default:
-		}
-		if t := tools.StripAnsi(buf.String()); t != "" {
-			return t
-		}
-	}
-	return "Subagent completed but was unable to produce a final summary — the context may be too full or the API may have timed out."
 }
 
 func (e *Engine) filteredToolDefs(allowed []string) []llm.ToolDef {

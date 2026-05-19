@@ -404,6 +404,16 @@ func (a *Anthropic) ChatStream(ctx context.Context, messages []Message, tools []
 		}
 		defer func() { _ = resp.Body.Close() }()
 
+		// Force-close body on context cancellation so scanner.Scan() unblocks.
+		done := make(chan struct{})
+		go func() {
+			select {
+			case <-ctx.Done():
+				resp.Body.Close()
+			case <-done:
+			}
+		}()
+
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
 			errChan <- fmt.Errorf("API error (HTTP %d): %s", resp.StatusCode, string(body))
@@ -492,9 +502,14 @@ func (a *Anthropic) ChatStream(ctx context.Context, messages []Message, tools []
 				}
 			}
 		}
-		if err := scanner.Err(); err != nil {
-			errChan <- err
-		}
+		close(done)
+			if err := scanner.Err(); err != nil {
+				if ctx.Err() != nil {
+					errChan <- ctx.Err()
+				} else {
+					errChan <- err
+				}
+			}
 	}()
 
 	return tokenChan, errChan

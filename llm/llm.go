@@ -12,8 +12,6 @@ var sharedTransport = &http.Transport{
 	DisableCompression:  false,
 }
 
-var SharedHTTPClient = &http.Client{Transport: sharedTransport}
-
 var SharedHTTPClientTimeout = &http.Client{
 	Transport: sharedTransport,
 	Timeout:   120 * time.Second,
@@ -97,10 +95,14 @@ type ToolCallDelta struct {
 }
 
 type StreamUsage struct {
-	PromptTokens            int
-	CompletionTokens        int
-	CacheCreationInputTokens int // tokens written to prompt cache (new entries)
-	CacheReadInputTokens    int // tokens read from prompt cache (cache hits)
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	// Anthropic prompt cache
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	// DeepSeek disk KV cache (enabled by default, no config needed)
+	CacheHitTokens  int `json:"prompt_cache_hit_tokens"`
+	CacheMissTokens int `json:"prompt_cache_miss_tokens"`
 }
 
 type ToolDef struct {

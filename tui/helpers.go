@@ -6,14 +6,14 @@ import (
 	"fmt"
 	"strings"
 
-	"nekocode/bot/tools"
 	"nekocode/tui/styles"
-)
+
+	"nekocode/common")
 
 func formatBriefArgs(toolName, toolArgs string) string {
 	parse := func(s string) map[string]string {
 		m := make(map[string]string)
-		for _, pair := range tools.SplitPairs(s) {
+		for _, pair := range common.SplitPairs(s) {
 			kv := strings.SplitN(pair, "=", 2)
 			if len(kv) == 2 {
 				m[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
@@ -24,7 +24,7 @@ func formatBriefArgs(toolName, toolArgs string) string {
 	args := parse(toolArgs)
 
 	switch toolName {
-	case "read", "write", "list":
+	case "read", "write", "list", "tree":
 		return args["path"]
 	case "edit":
 		return args["path"]
@@ -36,7 +36,7 @@ func formatBriefArgs(toolName, toolArgs string) string {
 			cmd = cmd[:idx] + "…"
 		}
 		if len(cmd) > 60 {
-			cmd = tools.TruncateByRune(cmd, 57) + "…"
+			cmd = common.TruncateByRune(cmd, 57) + "…"
 		}
 		return cmd
 	case "glob":
@@ -52,7 +52,7 @@ func formatBriefArgs(toolName, toolArgs string) string {
 		if q == "" {
 			q = args["url"]
 		}
-		return tools.TruncateByRune(q, 60)
+		return common.TruncateByRune(q, 60)
 	case "todo_write":
 		return formatTodos(args["todos"])
 	case "task":
@@ -65,26 +65,17 @@ func formatBriefArgs(toolName, toolArgs string) string {
 		}
 		p := strings.SplitN(args["prompt"], "\n", 2)[0]
 		p = strings.Trim(p, " \"")
-		return t + " \u00b7 " + tools.TruncateByRune(p, 30)
+		return t + " \u00b7 " + common.TruncateByRune(p, 30)
 	default:
 		for _, v := range args {
-			return tools.TruncateByRune(v, 50)
+			return common.TruncateByRune(v, 50)
 		}
 		return ""
 	}
 }
 
-// extractDiffContent strips the edit tool's header line, leaving only -/+/context lines.
-func extractDiffContent(output string) string {
-	idx := strings.Index(output, "\n")
-	if idx < 0 {
-		return output
-	}
-	return output[idx+1:]
-}
-
 func tokensSummary(b BotInterface) string {
-	p, c := b.TokenUsage()
+	p, c := b.TurnTokenUsage()
 	return "↑" + styles.FmtTokens(p) + " ↓" + styles.FmtTokens(c)
 }
 

@@ -1,33 +1,37 @@
-// GlobTool — file pattern matching, always tools.LevelSafe auto-approve.
+// GlobTool — file pattern matching, always common.LevelSafe auto-approve.
 package builtin
 
 import (
 	"context"
 	"fmt"
+	"nekocode/bot/tools"
 	"os"
 	"path/filepath"
 	"strings"
-	"nekocode/bot/tools"
+
+	"nekocode/common"
 )
 
 type GlobTool struct{}
 
-func (t *GlobTool) Name() string                                       { return "glob" }
-func (t *GlobTool) ExecutionMode(map[string]interface{}) tools.ExecutionMode { return tools.ModeParallel }
+func (t *GlobTool) Name() string { return "glob" }
+func (t *GlobTool) ExecutionMode(map[string]interface{}) tools.ExecutionMode {
+	return tools.ModeParallel
+}
 
 func (t *GlobTool) Description() string {
-	return "File pattern matching. ALWAYS use Glob — NEVER invoke find/ls as Bash. Supports ** recursive matching. Returns file paths sorted by modification time."
+	return "Find files matching a glob pattern. Supports ** for recursive directory search (e.g. \"src/**/*.go\"). Returns newline-separated file paths."
 }
 
 func (t *GlobTool) Parameters() []tools.Parameter {
 	return []tools.Parameter{
-		{Name: "pattern", Type: "string", Required: true, Description: "File matching pattern"},
-		{Name: "path", Type: "string", Required: false, Description: "Search directory, default: current directory"},
+		{Name: "pattern", Type: "string", Required: true, Description: "Glob pattern, e.g. \"*.go\" or \"src/**/*.md\". ** matches zero or more directories."},
+		{Name: "path", Type: "string", Required: false, Description: "Base directory for the search (default: current working directory)"},
 	}
 }
 
-func (t *GlobTool) DangerLevel(args map[string]interface{}) tools.DangerLevel {
-	return tools.LevelSafe
+func (t *GlobTool) DangerLevel(args map[string]interface{}) common.DangerLevel {
+	return common.LevelSafe
 }
 
 func (t *GlobTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
@@ -70,7 +74,7 @@ func (t *GlobTool) Execute(ctx context.Context, args map[string]interface{}) (st
 
 func globRecursive(basePath, pattern string) ([]string, error) {
 	var matches []string
-	prefix, rest, _ := strings.Cut(pattern, "**")
+	parts := strings.Split(pattern, "**")
 
 	err := filepath.Walk(basePath, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -83,12 +87,62 @@ func globRecursive(basePath, pattern string) ([]string, error) {
 		if rel == "." {
 			return nil
 		}
-		matchPattern := filepath.Join(prefix, "**", rest)
-		matched, _ := filepath.Match(matchPattern, rel)
-		if matched {
+		// Match each segment between ** anchors. A segment may be empty.
+		if matchGlobParts(rel, parts) {
 			matches = append(matches, p)
 		}
 		return nil
 	})
 	return matches, err
+}
+
+// matchGlobParts matches a path against pattern segments separated by **.
+// e.g. pattern "docs/**/*.md" → parts ["docs/", "/*.md"]
+// The ** matches zero or more directory levels.
+func matchGlobParts(path string, parts []string) bool {
+	if len(parts) == 1 {
+		// No ** in pattern — use standard Match.
+		ok, _ := filepath.Match(parts[0], path)
+		return ok
+	}
+	// Must start with first part.
+	if !strings.HasPrefix(path, parts[0]) {
+		return false
+	}
+	// Must end with last part.
+	if !hasSuffixMatch(path, parts[len(parts)-1]) {
+		return false
+	}
+	// Middle segments must appear in order (if non-empty).
+	remaining := path[len(parts[0]):]
+	for _, seg := range parts[1 : len(parts)-1] {
+		if seg == "" {
+			continue
+		}
+		idx := strings.Index(remaining, seg)
+		if idx < 0 {
+			return false
+		}
+		remaining = remaining[idx+len(seg):]
+	}
+	return true
+}
+
+func hasSuffixMatch(path, suffix string) bool {
+	if suffix == "" {
+		return true
+	}
+	// filepath.Match semantics: suffix like "/*.md" should match "/ARCHITECTURE.md".
+	ok, _ := filepath.Match("*"+suffix, path)
+	if ok {
+		return true
+	}
+	// Also try matching from a path separator boundary.
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i] == '/' {
+			ok, _ = filepath.Match("*"+suffix, path[i:])
+			return ok
+		}
+	}
+	return false
 }

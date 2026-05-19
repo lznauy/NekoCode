@@ -1,6 +1,7 @@
 package skill
 
 import (
+	"nekocode/common"
 	"context"
 	"fmt"
 
@@ -39,8 +40,8 @@ func (t *SkillTool) ExecutionMode(args map[string]interface{}) tools.ExecutionMo
 	return tools.ModeSequential
 }
 
-func (t *SkillTool) DangerLevel(args map[string]interface{}) tools.DangerLevel {
-	return tools.LevelSafe
+func (t *SkillTool) DangerLevel(args map[string]interface{}) common.DangerLevel {
+	return common.LevelSafe
 }
 
 func (t *SkillTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
@@ -51,7 +52,7 @@ func (t *SkillTool) Execute(ctx context.Context, args map[string]interface{}) (s
 
 	sk, ok := t.registry.Get(name)
 	if !ok {
-		return "", fmt.Errorf("skill not found: %s (available: %s)", name, t.registry.NamesString())
+		return "", fmt.Errorf("skill not found: %s (available: %s)", name, t.registry.namesString())
 	}
 
 	// If already loaded, tell the model to use the existing content.

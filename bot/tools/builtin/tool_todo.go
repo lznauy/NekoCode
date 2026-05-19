@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"nekocode/common"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,15 +13,15 @@ import (
 
 type TodoWriteTool struct {
 	mu       sync.Mutex
-	onUpdate tools.TodoFunc
-	items    []tools.TodoItem
+	onUpdate common.TodoFunc
+	items    []common.TodoItem
 }
 
 func NewTodoWriteTool() *TodoWriteTool {
 	return &TodoWriteTool{}
 }
 
-func (t *TodoWriteTool) SetUpdateFn(fn tools.TodoFunc) {
+func (t *TodoWriteTool) SetUpdateFn(fn common.TodoFunc) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.onUpdate = fn
@@ -28,7 +29,7 @@ func (t *TodoWriteTool) SetUpdateFn(fn tools.TodoFunc) {
 
 func (t *TodoWriteTool) Name() string                                            { return "todo_write" }
 func (t *TodoWriteTool) ExecutionMode(map[string]interface{}) tools.ExecutionMode { return tools.ModeSequential }
-func (t *TodoWriteTool) DangerLevel(map[string]interface{}) tools.DangerLevel     { return tools.LevelSafe }
+func (t *TodoWriteTool) DangerLevel(map[string]interface{}) common.DangerLevel     { return common.LevelSafe }
 func (t *TodoWriteTool) Description() string {
 	return "Update the task list (record only, not for planning). Each call fully replaces the list. Write the complete list in one call — never append. Format: [{\"content\":\"...\",\"status\":\"pending|in_progress|completed\"}]"
 }
@@ -40,7 +41,7 @@ func (t *TodoWriteTool) Parameters() []tools.Parameter {
 }
 
 func (t *TodoWriteTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
-	var items []tools.TodoItem
+	var items []common.TodoItem
 	switch v := args["todos"].(type) {
 	case string:
 		if v == "" {

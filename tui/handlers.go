@@ -3,7 +3,6 @@ package tui
 
 import (
 	"fmt"
-	"os"
 	"time"
 
 	"nekocode/tui/components/block"
@@ -15,20 +14,8 @@ import (
 )
 
 const (
-	debugLogPath   = "/tmp/nekocode-debug.log"
 	contentMarginV = 2
 )
-
-// --- debug ---
-
-func tuiLog(format string, args ...interface{}) {
-	f, err := os.OpenFile(debugLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	fmt.Fprintf(f, "TUI: "+format+"\n", args...)
-}
 
 // --- done ---
 
@@ -142,7 +129,6 @@ func (m *Model) handleProcessingKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
 		value := m.Input.Value()
-		tuiLog("BTW Enter: value=%q len=%d phase=%q", value, len(value), m.processingPhase)
 		if value != "" {
 			m.Suggestions.Hide()
 			m.resizeMessages()
@@ -155,9 +141,6 @@ func (m *Model) handleProcessingKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.processingPhase = phaseSteer
 			m.Messages.SetProcessingStatus(phaseSteer)
 			m.Bot.Steer(value)
-			tuiLog("BTW Enter: done, phase=%q", m.processingPhase)
-		} else {
-			tuiLog("BTW Enter: value empty, skipped")
 		}
 	case "esc":
 		m.Bot.Abort()

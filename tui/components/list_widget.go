@@ -322,6 +322,14 @@ func (l *List) TotalContentHeight() int {
 	return l.totalHeight
 }
 
+// ScrollY returns the current scroll offset in pixels (lines above viewport).
+func (l *List) ScrollY() int {
+	if l.pixelsAbove < 0 {
+		l.recomputePixelsAbove()
+	}
+	return l.pixelsAbove
+}
+
 // ScrollPercent returns the scroll position as a fraction [0, 1].
 func (l *List) ScrollPercent() float64 {
 	if len(l.items) == 0 {

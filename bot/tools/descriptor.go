@@ -1,4 +1,3 @@
-// descriptor.go — Descriptor 到 LLM ToolDef 的转换。
 package tools
 
 import "nekocode/llm"

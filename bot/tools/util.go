@@ -9,19 +9,10 @@ import (
 	"time"
 )
 
-var ansiRegex = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")
-
 // StripAnsi removes ANSI escape sequences from a string.
 func StripAnsi(s string) string {
+	var ansiRegex = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")
 	return ansiRegex.ReplaceAllString(s, "")
-}
-
-func TruncateByRune(s string, max int) string {
-	runes := []rune(s)
-	if len(runes) <= max {
-		return s
-	}
-	return string(runes[:max])
 }
 
 // ValidatePath resolves path against the current working directory.
@@ -46,38 +37,12 @@ func ValidatePath(path string) (string, error) {
 	return real, nil
 }
 
-var toolTransport = &http.Transport{
-	MaxIdleConns:    10,
-	IdleConnTimeout: 60 * time.Second,
-}
-
 func NewToolHTTPClient(timeout time.Duration) *http.Client {
 	return &http.Client{
-		Transport: toolTransport,
-		Timeout:   timeout,
+		Transport: &http.Transport{
+			MaxIdleConns:    10,
+			IdleConnTimeout: 60 * time.Second,
+		},
+		Timeout: timeout,
 	}
-}
-
-// SplitPairs splits on commas that are not inside double-quoted segments.
-func SplitPairs(s string) []string {
-	var pairs []string
-	start := 0
-	inQuote := false
-	for i := 0; i < len(s); i++ {
-		switch s[i] {
-		case '"':
-			inQuote = !inQuote
-		case '\\':
-			if inQuote && i+1 < len(s) {
-				i++ // skip escaped char
-			}
-		case ',':
-			if !inQuote {
-				pairs = append(pairs, s[start:i])
-				start = i + 1
-			}
-		}
-	}
-	pairs = append(pairs, s[start:])
-	return pairs
 }

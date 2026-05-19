@@ -9,51 +9,41 @@ import (
 	_ "image/png"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
 
 	"nekocode/bot/tools"
+
+	"nekocode/common"
 )
 
 type ReadTool struct{}
 
-func (t *ReadTool) Name() string                                              { return "read" }
-func (t *ReadTool) ExecutionMode(map[string]interface{}) tools.ExecutionMode   { return tools.ModeParallel }
-func (t *ReadTool) DangerLevel(map[string]interface{}) tools.DangerLevel       { return tools.LevelSafe }
+func (t *ReadTool) Name() string                                     { return "read" }
+func (t *ReadTool) ExecutionMode(map[string]any) tools.ExecutionMode { return tools.ModeParallel }
+func (t *ReadTool) DangerLevel(map[string]any) common.DangerLevel    { return common.LevelSafe }
 func (t *ReadTool) Description() string {
-	return `Read file contents (text, images, PDF). Path must be absolute.
-
-ALWAYS use Read — NEVER invoke cat/head/tail as Bash. Read provides:
-- FILE_UNCHANGED_STUB: re-reading an unchanged file returns a short stub (saves tokens)
-- Line numbering for precise Edit old_string selection
-- Image format + dimensions for PNG/JPG/GIF
-- PDF metadata (size, pages)
-
-TIPS:
-- Default max 2000 lines. For large files, use offset/limit to read in chunks.
-- If you only need to search content, use Grep instead — it's more token-efficient.
-- Before reading, check if you already have the content in context from earlier reads.`
+	return "Read file contents (text, images, PDF). Absolute path required. Use startLine/endLine for range, max 2000 lines."
 }
 
 func (t *ReadTool) Parameters() []tools.Parameter {
 	return []tools.Parameter{
 		{Name: "path", Type: "string", Required: true, Description: "File path (absolute)"},
-		{Name: "offset", Type: "integer", Required: false, Description: "Starting line number (1-based). Use for chunked reads on large files"},
-		{Name: "limit", Type: "integer", Required: false, Description: "Number of lines to read, default 2000"},
+		{Name: "startLine", Type: "integer", Required: true, Description: "First line to read (1-based)"},
+		{Name: "endLine", Type: "integer", Required: true, Description: "Last line to read (inclusive, >= startLine)"},
 	}
 }
 
 const maxReadLines = 2000
 
-func (t *ReadTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *ReadTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	path, ok := args["path"].(string)
 	if !ok || path == "" {
 		return "", fmt.Errorf("missing path parameter")
 	}
-
-	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
+	switch strings.ToLower(filepath.Ext(path)) {
 	case ".png", ".jpg", ".jpeg", ".gif":
 		return t.readImage(path)
 	case ".pdf":
@@ -63,135 +53,128 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]interface{}) (st
 	}
 }
 
-func (t *ReadTool) readTextCached(path string, args map[string]interface{}) (string, error) {
-	offset := 1
-	if v, ok := args["offset"].(float64); ok && v > 0 {
-		offset = int(v)
+func getIntArg(args map[string]any, key string) (int, bool) {
+	v, ok := args[key]
+	if !ok || v == nil {
+		return 0, false
 	}
-	limit := maxReadLines
-	if v, ok := args["limit"].(float64); ok && v > 0 {
-		limit = int(v)
+	f, ok := v.(float64)
+	if !ok {
+		return 0, false
+	}
+	return int(f), true
+}
+
+func (t *ReadTool) readTextCached(path string, args map[string]any) (string, error) {
+	startLine, ok := getIntArg(args, "startLine")
+	if !ok {
+		return "", fmt.Errorf("missing required parameter: startLine")
+	}
+	endLine, ok := getIntArg(args, "endLine")
+	if !ok {
+		return "", fmt.Errorf("missing required parameter: endLine")
 	}
 
-	if tools.GlobalFileCache != nil {
-		if cached, hit := tools.GlobalFileCache.Get(path, offset, limit); hit {
-			// Return first 800 chars so the LLM can recognize the file
-			// without needing to re-read the full content.
-			preview := cached
-			if len(preview) > 800 {
-				preview = preview[:800]
+	cache := tools.GlobalFileCache
+	if cache != nil {
+		// Cache hit: range already covered.
+		if hint, hit := cache.Get(path, startLine, endLine); hit {
+			return hint, nil
+		}
+		// Cache has file content but range not yet covered — format from cache.
+		if lines, ok := cache.Lines(path); ok {
+			result := formatReadOutput(path, lines, startLine, endLine)
+			end := startLine + min(endLine-startLine+1, maxReadLines) - 1
+			if end > len(lines) {
+				end = len(lines)
 			}
-			return fmt.Sprintf("[UNCHANGED %s \u2014 %d chars total]\n%s\n[END UNCHANGED]", path, len(cached), preview), nil
+			cache.Put(path, lines, startLine, end)
+			return result, nil
 		}
 	}
 
-	result, err := t.readText(path, offset, limit)
+	// First read: read full file into memory, cache it, format output.
+	fullLines, err := readFileLines(path)
 	if err != nil {
-		return result, err
+		return "", err
+	}
+	if fullLines == nil {
+		return "", nil // handled by readFileLines (binary, etc.)
 	}
 
-	if tools.GlobalFileCache != nil && !strings.HasPrefix(result, "[Binary") && !strings.HasPrefix(result, "[file is empty") {
-		tools.GlobalFileCache.Put(path, result, offset, limit)
+	result := formatReadOutput(path, fullLines, startLine, endLine)
+	if cache != nil {
+		end := startLine + min(endLine-startLine+1, maxReadLines) - 1
+		if end > len(fullLines) {
+			end = len(fullLines)
+		}
+		cache.Put(path, fullLines, startLine, end)
 	}
-
 	return result, nil
 }
 
-func (t *ReadTool) readText(path string, offset, limit int) (string, error) {
-	content, err := os.ReadFile(path)
+// readFileLines reads a text file and returns its lines, or nil if binary/empty.
+func readFileLines(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			msg := fmt.Sprintf("File not found: %s", filepath.Base(path))
-			if suggestions := suggestSimilar(path); len(suggestions) > 0 {
-				msg += "\nDid you mean one of these?"
-				for _, s := range suggestions {
-					msg += "\n  - " + s
-				}
+			if s := suggestSimilar(path); len(s) > 0 {
+				msg += "\nDid you mean one of these?\n  - " + strings.Join(s, "\n  - ")
 			}
-			return "", fmt.Errorf("%s", msg)
+			return nil, fmt.Errorf("%s", msg)
 		}
-		return "", fmt.Errorf("failed to read file: %v", err)
+		return nil, fmt.Errorf("failed to read file: %v", err)
 	}
-
-	if isBinary(content) {
-		return fmt.Sprintf("[Binary file: %s — cannot display. Use bash file or hexdump to inspect.]",
-			filepath.Base(path)), nil
+	if isBinary(data) {
+		return nil, fmt.Errorf("<tool_output name=\"read\">\n<path>%s</path>\n<error>binary file</error>\n</tool_output>", filepath.Base(path))
 	}
-
-	text := tools.StripAnsi(string(content))
+	text := tools.StripAnsi(string(data))
 	lines := strings.Split(text, "\n")
-	totalLines := len(lines)
-
-	if totalLines == 1 && lines[0] == "" {
-		return "[file is empty]", nil
+	if len(lines) == 1 && lines[0] == "" {
+		return nil, fmt.Errorf("[file is empty]")
 	}
+	return lines, nil
+}
 
-	if offset > totalLines {
-		return fmt.Sprintf("[File %s has %d lines, offset %d out of range]", filepath.Base(path), totalLines, offset), nil
+// formatReadOutput formats lines[startLine:endLine] as the read tool's XML output.
+func formatReadOutput(path string, lines []string, startLine, endLine int) string {
+	total := len(lines)
+	if startLine > total {
+		return fmt.Sprintf("<tool_output name=\"read\">\n<path>%s</path>\n<lines total=\"%d\"/>\n<error>startLine %d out of range</error>\n</tool_output>",
+			filepath.Base(path), total, startLine)
 	}
+	start := startLine - 1
+	count := min(endLine-startLine+1, maxReadLines)
+	end := min(start+count, total)
 
-	start := offset - 1
-	end := start + limit
-	if end > totalLines {
-		end = totalLines
+	var block strings.Builder
+	for i := range end - start {
+		block.WriteString(lines[start+i])
+		block.WriteByte('\n')
 	}
+	body := strings.TrimRight(block.String(), "\n")
+	safe := strings.ReplaceAll(body, "]]>", "]]]]><![CDATA[>")
 
 	var out strings.Builder
-	for i := start; i < end; i++ {
-		fmt.Fprintf(&out, "%d\t%s\n", i+1, lines[i])
+	fmt.Fprintf(&out, "<tool_output name=\"read\">\n<path>%s</path>\n<lines start=\"%d\" end=\"%d\" total=\"%d\"/>\n",
+		filepath.Base(path), startLine, end, total)
+	if end < total {
+		fmt.Fprintf(&out, "<next startLine=\"%d\"/>\n", end+1)
 	}
-
-	result := strings.TrimRight(out.String(), "\n")
-
-	if end < totalLines {
-		result += fmt.Sprintf("\n\n[File has %d lines, showing %d-%d. Use offset: %d to continue, or grep to search]",
-			totalLines, offset, end, end+1)
-	}
-
-	if result == "" {
-		return "[file is empty]", nil
-	}
-	return result, nil
+	fmt.Fprintf(&out, "<content>\n<![CDATA[\n%s\n]]>\n</content>\n</tool_output>", safe)
+	return out.String()
 }
+
 
 func isBinary(data []byte) bool {
 	if len(data) == 0 {
 		return false
 	}
-
-	nullCheck := 8192
-	if len(data) < nullCheck {
-		nullCheck = len(data)
+	if slices.Contains(data[:min(len(data), 8192)], byte(0)) {
+		return true
 	}
-	for _, b := range data[:nullCheck] {
-		if b == 0 {
-			return true
-		}
-	}
-
-	utf8Check := data
-	if len(utf8Check) >= 3 && utf8Check[0] == 0xEF && utf8Check[1] == 0xBB && utf8Check[2] == 0xBF {
-		utf8Check = utf8Check[3:]
-	}
-	maxUTF8 := 65536
-	if len(utf8Check) < maxUTF8 {
-		maxUTF8 = len(utf8Check)
-	}
-	if utf8.Valid(utf8Check[:maxUTF8]) {
-		return false
-	}
-
-	ratioCheck := 8192
-	if len(data) < ratioCheck {
-		ratioCheck = len(data)
-	}
-	nonPrintable := 0
-	for _, b := range data[:ratioCheck] {
-		if b != '\n' && b != '\r' && b != '\t' && (b < 32 || b > 126) {
-			nonPrintable++
-		}
-	}
-	return float64(nonPrintable)/float64(ratioCheck) > 0.3
+	return !utf8.Valid(data[:min(len(data), 65536)])
 }
 
 func (t *ReadTool) readImage(path string) (string, error) {
@@ -202,7 +185,7 @@ func (t *ReadTool) readImage(path string) (string, error) {
 	defer f.Close()
 	cfg, format, err := image.DecodeConfig(f)
 	if err != nil {
-		return "", fmt.Errorf("failed to decode image: %v", err)
+		return "", err
 	}
 	return fmt.Sprintf("[Image] %s — %s, %dx%d", filepath.Base(path), format, cfg.Width, cfg.Height), nil
 }
@@ -210,92 +193,74 @@ func (t *ReadTool) readImage(path string) (string, error) {
 func (t *ReadTool) readPDF(path string) (string, error) {
 	st, err := os.Stat(path)
 	if err != nil {
-		return "", fmt.Errorf("failed to read PDF: %v", err)
+		return "", err
 	}
-	size := st.Size()
-	sizeStr := ""
-	switch {
-	case size >= 1<<20:
-		sizeStr = fmt.Sprintf("%.1fMB", float64(size)/(1<<20))
-	case size >= 1<<10:
-		sizeStr = fmt.Sprintf("%.1fKB", float64(size)/(1<<10))
-	default:
-		sizeStr = fmt.Sprintf("%dB", size)
-	}
-	return fmt.Sprintf("[PDF] %s — %s, %d bytes. Use head or bash pdftotext to extract content.",
-		filepath.Base(path), sizeStr, size), nil
+	return fmt.Sprintf("[PDF] %s — %.1fKB. Use pdftotext to extract content.",
+		filepath.Base(path), float64(st.Size())/1024), nil
 }
 
 func suggestSimilar(path string) []string {
 	dir := filepath.Dir(path)
 	base := strings.ToLower(filepath.Base(path))
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var scored []struct {
+	entries, _ := os.ReadDir(dir)
+
+	type match struct {
 		path  string
 		score int
 	}
+	var matches []match
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
 		name := strings.ToLower(e.Name())
-		score := 0
 		if name == base {
 			continue
 		}
+		score := 0
 		if strings.Contains(name, base) || strings.Contains(base, name) {
 			score = 10
-		} else if strings.HasPrefix(name, base[:min(3, len(base))]) {
-			score = 5
-		}
-		d := levenshteinDist(name, base)
-		if d <= 3 {
-			score += 8 - d
+		} else if d := levenshtein(name, base); d <= 3 {
+			score = max(0, 8-d)
 		}
 		if score > 0 {
-			scored = append(scored, struct {
-				path  string
-				score int
-			}{filepath.Join(dir, e.Name()), score})
+			matches = append(matches, match{filepath.Join(dir, e.Name()), score})
 		}
 	}
-	sort.SliceStable(scored, func(i, j int) bool { return scored[i].score > scored[j].score })
-	if len(scored) > 3 {
-		scored = scored[:3]
+	sort.Slice(matches, func(i, j int) bool { return matches[i].score > matches[j].score })
+	if len(matches) > 3 {
+		matches = matches[:3]
 	}
-	out := make([]string, len(scored))
-	for i, s := range scored {
-		out[i] = s.path
+	out := make([]string, len(matches))
+	for i, m := range matches {
+		out[i] = m.path
 	}
 	return out
 }
 
-func levenshteinDist(a, b string) int {
-	if len(a) == 0 {
-		return len(b)
+func levenshtein(a, b string) int {
+	m, n := len(a), len(b)
+	if m == 0 {
+		return n
 	}
-	if len(b) == 0 {
-		return len(a)
+	if n == 0 {
+		return m
 	}
-	d := make([][]int, len(a)+1)
-	for i := range d {
-		d[i] = make([]int, len(b)+1)
-		d[i][0] = i
+	prev, cur := make([]int, n+1), make([]int, n+1)
+	for j := range cur {
+		prev[j] = j
 	}
-	for j := 0; j <= len(b); j++ {
-		d[0][j] = j
-	}
-	for i := 1; i <= len(a); i++ {
-		for j := 1; j <= len(b); j++ {
+	for i := 1; i <= m; i++ {
+		cur[0] = i
+		for j := 1; j <= n; j++ {
 			cost := 1
 			if a[i-1] == b[j-1] {
 				cost = 0
 			}
-			d[i][j] = min(d[i-1][j]+1, min(d[i][j-1]+1, d[i-1][j-1]+cost))
+			cur[j] = min(prev[j]+1, min(cur[j-1]+1, prev[j-1]+cost))
 		}
+		prev, cur = cur, prev
 	}
-	return d[len(a)][len(b)]
+	return prev[n]
 }
+

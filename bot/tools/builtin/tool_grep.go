@@ -9,15 +9,17 @@ import (
 	"strconv"
 	"strings"
 	"nekocode/bot/tools"
+
+	"nekocode/common"
 )
 
 type GrepTool struct{}
 
 func (t *GrepTool) Name() string                                       { return "grep" }
 func (t *GrepTool) ExecutionMode(map[string]interface{}) tools.ExecutionMode { return tools.ModeParallel }
-func (t *GrepTool) DangerLevel(map[string]interface{}) tools.DangerLevel     { return tools.LevelSafe }
+func (t *GrepTool) DangerLevel(map[string]interface{}) common.DangerLevel     { return common.LevelSafe }
 func (t *GrepTool) Description() string {
-	return "Content search via ripgrep. Returns matching lines with line numbers. ALWAYS use Grep — NEVER invoke grep/rg as Bash. Supports full regex syntax (literal braces need escaping). Supports glob filtering, -A/-B/-C context lines, multiline mode."
+	return "Search file contents with ripgrep. Returns matching lines with line numbers. Supports regex, glob filtering, and context lines (-A/-B/-C)."
 }
 
 func (t *GrepTool) Parameters() []tools.Parameter {

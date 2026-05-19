@@ -4,14 +4,14 @@ package components
 import (
 	"strings"
 
-	"nekocode/bot/tools"
 	"nekocode/tui/styles"
 
 	"charm.land/lipgloss/v2"
-)
+
+	"nekocode/common")
 
 type ConfirmBar struct {
-	req *tools.ConfirmRequest
+	req *common.ConfirmRequest
 	sty *styles.Styles
 }
 
@@ -19,7 +19,7 @@ func NewConfirmBar(sty *styles.Styles) *ConfirmBar {
 	return &ConfirmBar{sty: sty}
 }
 
-func (c *ConfirmBar) SetRequest(req *tools.ConfirmRequest) { c.req = req }
+func (c *ConfirmBar) SetRequest(req *common.ConfirmRequest) { c.req = req }
 func (c *ConfirmBar) Clear()                                { c.req = nil }
 func (c *ConfirmBar) Respond(ok bool)                       { c.req.Response <- ok; c.req = nil }
 
@@ -49,7 +49,7 @@ func (c *ConfirmBar) View(width int) string {
 	descLines := c.descLines(contentW)
 
 	level := c.sty.Yellow.Render(c.req.Level.String())
-	if c.req.Level == tools.LevelForbidden {
+	if c.req.Level == common.LevelForbidden {
 		level = c.sty.Red.Render(c.req.Level.String())
 	}
 

@@ -61,10 +61,10 @@ func (p *ProcessingItem) renderHeader() string {
 	}
 	tp := ""
 	if p.tokenPrompt > 0 || p.tokenCompl > 0 {
-		tp = "  " + p.sty.Subtle.Render("↑"+styles.FmtTokens(p.tokenPrompt)) + " " + p.sty.Teal.Render("↓"+styles.FmtTokens(p.tokenCompl))
+		tp = " " + p.sty.Subtle.Render("↑"+styles.FmtTokens(p.tokenPrompt)+" ↓"+styles.FmtTokens(p.tokenCompl))
 	}
 	if p.compactCount > 0 {
-		tp += "  " + p.sty.Subtle.Render(fmt.Sprintf("🧹%d", p.compactCount))
+		tp += " " + p.sty.Subtle.Render(fmt.Sprintf("🧹%d", p.compactCount))
 	}
 	return p.sty.Teal.Render(s) + " " + p.sty.Subtle.Render(l) + sk + tp
 }
@@ -127,59 +127,12 @@ func (p *ProcessingItem) renderToolSection(contentW, cw int) string {
 	return p.cachedTool
 }
 
-// renderToolBlocks groups consecutive same-name tool blocks using the
-// shared grouping logic from the block package.
+// renderToolBlocks 渲染处理中的工具块列表。
 func (p *ProcessingItem) renderToolBlocks(contentW int) string {
-	groups := block.BuildToolGroups(p.blocks)
-	if len(groups) == 0 {
+	if len(p.blocks) == 0 {
 		return ""
 	}
-	var sb strings.Builder
-	for _, g := range groups {
-		sb.WriteString("\n")
-		if g.Count <= 1 {
-			sb.WriteString(block.RenderBlock(g.First, contentW, p.sty))
-		} else {
-			sb.WriteString(p.renderToolGroup(g, contentW))
-		}
-	}
-	return sb.String()
-}
-
-func (p *ProcessingItem) renderToolGroup(g block.ToolGroupInfo, contentW int) string {
-	header := fmt.Sprintf("◆ %s ×%d", g.Name, g.Count)
-	collapsed := g.First.Collapsed
-
-	arrow := ""
-	if collapsed {
-		arrow = " " + p.sty.Subtle.Render("[+] 展开")
-	} else {
-		arrow = " " + p.sty.Subtle.Render("[-] 收起")
-	}
-	accentLine := "  " + block.ToolAccent().Render(header+arrow)
-
-	if collapsed {
-		return accentLine
-	}
-
-	// Edit groups: expand diffs inline (shared with block_render.go).
-	if g.Name == "edit" {
-		return block.RenderEditGroupExpanded(g, contentW, p.sty, accentLine)
-	}
-
-	indent := "  "
-	var sb strings.Builder
-	sb.WriteString(accentLine)
-	all := append([]block.ContentBlock{g.First}, g.Rest...)
-	for _, b := range all {
-		line := block.RenderBlock(b, contentW, p.sty)
-		for _, l := range strings.Split(line, "\n") {
-			if l != "" {
-				sb.WriteString("\n" + indent + l)
-			}
-		}
-	}
-	return sb.String()
+	return "\n" + block.RenderTools(p.blocks, contentW, p.sty)
 }
 
 func (p *ProcessingItem) renderOutputSection(contentW int) string {
