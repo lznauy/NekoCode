@@ -19,7 +19,7 @@ func (t *GrepTool) Name() string                                       { return 
 func (t *GrepTool) ExecutionMode(map[string]any) tools.ExecutionMode { return tools.ModeParallel }
 func (t *GrepTool) DangerLevel(map[string]any) common.DangerLevel     { return common.LevelSafe }
 func (t *GrepTool) Description() string {
-	return "Search file contents with ripgrep. Returns matching lines with line numbers. Supports regex, glob filtering, and context lines (-A/-B/-C)."
+	return "Search file contents (rg or grep). Returns matching lines with line numbers. Supports regex, glob filtering, and context lines (-A/-B/-C)."
 }
 
 func (t *GrepTool) Parameters() []tools.Parameter {
@@ -42,11 +42,21 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) (string, er
 		basePath = p
 	}
 
-	var grepArgs []string
-	grepArgs = append(grepArgs, "--no-heading", "-n")
+	bin := "rg"
+	grepArgs := []string{"-n"}
+	if _, err := exec.LookPath("rg"); err != nil {
+		bin = "grep"
+		grepArgs = append(grepArgs, "-r", "-I")
+	} else {
+		grepArgs = append(grepArgs, "--no-heading")
+	}
 
 	if glob, ok := args["glob"].(string); ok && glob != "" {
-		grepArgs = append(grepArgs, "--glob", glob)
+		if bin == "rg" {
+			grepArgs = append(grepArgs, "--glob", glob)
+		} else {
+			grepArgs = append(grepArgs, "--include="+glob)
+		}
 	}
 
 	if ctxLines, ok := args["context_lines"].(string); ok && ctxLines != "" {
@@ -60,7 +70,7 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) (string, er
 
 	grepArgs = append(grepArgs, "--", pattern, basePath)
 
-	cmd := exec.CommandContext(ctx, "rg", grepArgs...)
+	cmd := exec.CommandContext(ctx, bin, grepArgs...)
 	cmd.Dir, _ = os.Getwd()
 	output, err := cmd.CombinedOutput()
 

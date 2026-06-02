@@ -131,7 +131,7 @@ func TestEditHashline_SequentialEdits(t *testing.T) {
 }
 
 func TestEditHashline_TrailingSeparator(t *testing.T) {
-	// Regression: AI may pass "9:___|", "9:___│", or "9:[___]" (hash+separator/brackets)
+	// Regression: AI may pass "9:___|" or "9:[___]" (hash+separator/brackets)
 	// for empty lines. The code must strip brackets and legacy separators before lookup.
 	td := t.TempDir()
 	e := &EditTool{}
@@ -149,17 +149,6 @@ func TestEditHashline_TrailingSeparator(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("trailing | should not cause stale: %v", err)
-	}
-	os.WriteFile(p, []byte(content), 0644)
-
-	// Legacy separator │
-	_, err = e.Execute(context.Background(), map[string]any{
-		"path":   p,
-		"hashes": []any{"2:" + h + "│"},
-		"op":     "delete",
-	})
-	if err != nil {
-		t.Fatalf("trailing │ should not cause stale: %v", err)
 	}
 	os.WriteFile(p, []byte(content), 0644)
 

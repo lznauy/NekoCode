@@ -6,8 +6,19 @@ import (
 	"testing"
 )
 
+func setupPluginFixture(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, ".claude-plugin"), 0755)
+	os.MkdirAll(filepath.Join(dir, "skills", "test-skill"), 0755)
+	os.WriteFile(filepath.Join(dir, ".claude-plugin", "plugin.json"),
+		[]byte(`{"name": "test-plugin", "version": "0.1.0", "skills": ["./skills/test-skill"]}`), 0644)
+	return dir
+}
+
 func TestParseManifest(t *testing.T) {
-	m, err := ParseManifest("/tmp/test-plugin")
+	dir := setupPluginFixture(t)
+	m, err := ParseManifest(dir)
 	if err != nil {
 		t.Fatalf("ParseManifest: %v", err)
 	}
@@ -23,8 +34,9 @@ func TestParseManifest(t *testing.T) {
 }
 
 func TestHasManifest(t *testing.T) {
-	if !HasManifest("/tmp/test-plugin") {
-		t.Error("HasManifest should return true for test-plugin")
+	dir := setupPluginFixture(t)
+	if !HasManifest(dir) {
+		t.Error("HasManifest should return true for plugin dir")
 	}
 	if HasManifest("/tmp") {
 		t.Error("HasManifest should return false for /tmp")
@@ -32,16 +44,17 @@ func TestHasManifest(t *testing.T) {
 }
 
 func TestPluginSkillDirs(t *testing.T) {
-	m, err := ParseManifest("/tmp/test-plugin")
+	dir := setupPluginFixture(t)
+	m, err := ParseManifest(dir)
 	if err != nil {
 		t.Fatalf("ParseManifest: %v", err)
 	}
-	p := &Plugin{Manifest: *m, Dir: "/tmp/test-plugin"}
+	p := &Plugin{Manifest: *m, Dir: dir}
 	dirs := p.SkillDirs()
 	if len(dirs) != 1 {
 		t.Fatalf("SkillDirs len = %d, want 1", len(dirs))
 	}
-	expected := filepath.Join("/tmp/test-plugin", "skills", "test-skill")
+	expected := filepath.Join(dir, "skills", "test-skill")
 	if dirs[0] != expected {
 		t.Errorf("SkillDirs[0] = %q, want %q", dirs[0], expected)
 	}

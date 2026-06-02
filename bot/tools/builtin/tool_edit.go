@@ -234,9 +234,9 @@ func (t *EditTool) hashlineEdit(path string, hashes []string, args map[string]an
 // ---------------------------------------------------------------------------
 
 // cleanHash strips annotation syntax from a hash value: brackets [a3] → a3,
-// and legacy separators a3| or a3│ → a3.
+// and legacy | separator a3| → a3.
 func cleanHash(s string) string {
-	return strings.TrimRight(strings.TrimSuffix(strings.TrimPrefix(s, "["), "]"), "│|")
+	return strings.TrimRight(strings.TrimSuffix(strings.TrimPrefix(s, "["), "]"), "|")
 }
 
 // parseHashParam splits a hashline param "lineNo:hash" into its parts.
