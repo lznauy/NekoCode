@@ -207,7 +207,7 @@ go build -o nekocode .
 | `base_url` | API 端点地址 | 是 |
 | `protocol` | 协议类型：`openai`（默认）或 `anthropic` | 否 |
 | `context_window` | 上下文窗口大小（token） | 是 |
-| `flash_model` | 轻量模型，用于子 Agent 和摘要（仅 Anthropic） | 否 |
+| `flash_model` | 轻量模型，用于子 Agent 和摘要 | 否 |
 
 ### 项目约定
 
