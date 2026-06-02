@@ -1,6 +1,7 @@
 package compact
 
 import (
+	"nekocode/bot/debug"
 	"sort"
 
 )
@@ -38,45 +39,27 @@ func compactableToolPriority(toolName, content string) int {
 	}
 }
 
-func (m *Compactor) lookupToolName(resultIdx int) string {
+func (m *Compactor) lookupAssistantTool(resultIdx int) (assistantIdx int, toolName string) {
 	msgs := m.Ctx.Messages
 	targetID := msgs[resultIdx].ToolCallID
 	if targetID == "" {
-		return ""
+		return -1, ""
 	}
 	for i := resultIdx - 1; i >= 0; i-- {
 		if msgs[i].Role == "assistant" {
 			for _, tc := range msgs[i].ToolCalls {
 				if tc.ID == targetID {
-					return tc.Function.Name
+					return i, tc.Function.Name
 				}
 			}
 		}
 	}
-	return ""
+	return -1, ""
 }
 
 type compactable struct {
 	idx      int
 	priority int
-}
-
-func (m *Compactor) lookupAssistantIdx(resultIdx int) int {
-	msgs := m.Ctx.Messages
-	targetID := msgs[resultIdx].ToolCallID
-	if targetID == "" {
-		return -1
-	}
-	for i := resultIdx - 1; i >= 0; i-- {
-		if msgs[i].Role == "assistant" {
-			for _, tc := range msgs[i].ToolCalls {
-				if tc.ID == targetID {
-					return i
-				}
-			}
-		}
-	}
-	return -1
 }
 
 // microCompact clears old compactable tool results, keeping recent ones.
@@ -102,11 +85,10 @@ func (m *Compactor) microCompact() int {
 		if i >= recentBoundary {
 			continue
 		}
-		assistantIdx := m.lookupAssistantIdx(i)
+		assistantIdx, toolName := m.lookupAssistantTool(i)
 		if assistantIdx < 0 {
 			continue
 		}
-		toolName := m.lookupToolName(i)
 		pri := compactableToolPriority(toolName, msg.Content)
 		b := batches[assistantIdx]
 		if b == nil {
@@ -139,9 +121,9 @@ func (m *Compactor) microCompact() int {
 
 	keepResults := 3
 	switch {
-	case *m.TokenBudget >= 128000:
+	case *m.ContextWindow >= 128000:
 		keepResults = 8
-	case *m.TokenBudget >= 64000:
+	case *m.ContextWindow >= 64000:
 		keepResults = 5
 	}
 
@@ -166,7 +148,7 @@ func (m *Compactor) microCompact() int {
 		kept -= len(b.results)
 	}
 	*m.CompactCount += cleared
-	compactLog("micro_compact: cleared %d/%d tool results (%d kept, budget=%d)", cleared, total, keepResults, *m.TokenBudget)
+	debug.Log("micro_compact: cleared %d/%d tool results (%d kept, budget=%d)", cleared, total, keepResults, *m.ContextWindow)
 	return cleared
 }
 

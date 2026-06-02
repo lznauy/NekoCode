@@ -1,38 +1,45 @@
 package compact
 
-// Layer 1: Tool Result Budgeting.
-// Only grep results are truncated (can produce massive output).
+import (
+	"strings"
 
-const budgetNav = 2000
+	"nekocode/bot/debug"
+)
+
+const grepHeadLines = 50
+const grepTailLines = 50
 
 // BudgetResult truncates a tool result before storage.
+// For grep: keeps first 50 and last 50 lines, truncates middle.
 // Returns the (possibly truncated) content and whether truncation occurred.
 func BudgetResult(content string, toolName string) (string, bool) {
-	limit := budgetLimit(toolName)
-	if limit <= 0 || len(content) <= limit {
+	if toolName != "grep" {
 		return content, false
 	}
-	// Cut at a newline boundary when possible.
-	cut := limit
-	if nl := lastIndexByte(content[:cut], '\n'); nl > cut/2 {
-		cut = nl
+	lines := strings.Split(content, "\n")
+	if len(lines) <= grepHeadLines+grepTailLines {
+		return content, false
 	}
-	compactLog("budget_result: truncated %s result from %d to %d chars", toolName, len(content), cut)
-		return content[:cut] + "\n[... truncated]", true
+	head := lines[:grepHeadLines]
+	tail := lines[len(lines)-grepTailLines:]
+	truncated := strings.Join(head, "\n") + "\n... [" +
+		itoa(len(lines)-grepHeadLines-grepTailLines) + " lines truncated] ...\n" +
+		strings.Join(tail, "\n")
+	debug.Log("budget_result: truncated grep from %d lines (%d chars) to head=%d tail=%d",
+		len(lines), len(content), grepHeadLines, grepTailLines)
+	return truncated, true
 }
 
-func budgetLimit(toolName string) int {
-	if toolName == "grep" {
-		return budgetNav
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
 	}
-	return 0
-}
-
-func lastIndexByte(s string, c byte) int {
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] == c {
-			return i
-		}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
 	}
-	return -1
+	return string(buf[i:])
 }

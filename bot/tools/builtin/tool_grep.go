@@ -16,8 +16,8 @@ import (
 type GrepTool struct{}
 
 func (t *GrepTool) Name() string                                       { return "grep" }
-func (t *GrepTool) ExecutionMode(map[string]interface{}) tools.ExecutionMode { return tools.ModeParallel }
-func (t *GrepTool) DangerLevel(map[string]interface{}) common.DangerLevel     { return common.LevelSafe }
+func (t *GrepTool) ExecutionMode(map[string]any) tools.ExecutionMode { return tools.ModeParallel }
+func (t *GrepTool) DangerLevel(map[string]any) common.DangerLevel     { return common.LevelSafe }
 func (t *GrepTool) Description() string {
 	return "Search file contents with ripgrep. Returns matching lines with line numbers. Supports regex, glob filtering, and context lines (-A/-B/-C)."
 }
@@ -31,7 +31,7 @@ func (t *GrepTool) Parameters() []tools.Parameter {
 	}
 }
 
-func (t *GrepTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *GrepTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	pattern, ok := args["pattern"].(string)
 	if !ok || pattern == "" {
 		return "", fmt.Errorf("missing pattern parameter")

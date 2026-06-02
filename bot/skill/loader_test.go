@@ -21,7 +21,7 @@ allowed-tools:
 context: fork
 agent: executor
 max_steps: 4
-token_budget: 8000
+context_window: 8000
 ---
 
 # Test Skill
@@ -52,7 +52,7 @@ This is the test skill body.
 	if sk.Context != "fork" || sk.AgentType != "executor" {
 		t.Errorf("context/agent mismatch")
 	}
-	if len(sk.AllowedTools) != 2 || sk.MaxSteps != 4 || sk.TokenBudget != 8000 {
+	if len(sk.AllowedTools) != 2 || sk.MaxSteps != 4 || sk.ContextWindow != 8000 {
 		t.Errorf("execution fields wrong")
 	}
 	if sk.Content != "# Test Skill\n\nThis is the test skill body." {

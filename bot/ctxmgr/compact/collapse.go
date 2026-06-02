@@ -1,11 +1,12 @@
 package compact
 
 import (
+	"nekocode/bot/debug"
 	"fmt"
 	"strings"
 
 	"nekocode/bot/ctxmgr/token"
-	"nekocode/llm"
+	"nekocode/llm/types"
 )
 
 // Layer 4: Context Collapsing.
@@ -36,7 +37,7 @@ func (m *Compactor) CollapseContext() error {
 		return nil
 	}
 
-	toCollapse := make([]llm.Message, collapseCount)
+	toCollapse := make([]types.Message, collapseCount)
 	copy(toCollapse, visible[:collapseCount])
 
 	// Build the prompt: fuse existing Archive + new messages.
@@ -65,7 +66,7 @@ func (m *Compactor) CollapseContext() error {
 		fmt.Fprintf(&prompt, "[%s]: %s\n", msg.Role, truncateStr(content, limit))
 	}
 
-	rawSummary, err := m.Summarizer([]llm.Message{{Role: "user", Content: prompt.String()}}, "")
+	rawSummary, err := m.Summarizer([]types.Message{{Role: "user", Content: prompt.String()}}, "")
 	if err != nil {
 		return fmt.Errorf("collapse: %w", err)
 	}
@@ -84,7 +85,7 @@ func (m *Compactor) CollapseContext() error {
 
 	m.Ctx.Archive = archive
 	m.Ctx.CompactBoundary += collapseCount
-	compactLog("collapse: compressed %d msgs (%d tokens) into archive (%d tokens), boundary now %d",
+	debug.Log("collapse: compressed %d msgs (%d tokens) into archive (%d tokens), boundary now %d",
 		collapseCount, collapseTokens, archiveTokens, m.Ctx.CompactBoundary)
 	m.trimOldMessages()
 	return nil

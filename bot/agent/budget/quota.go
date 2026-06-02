@@ -25,13 +25,13 @@ type quotaSnapshot struct {
 
 // ComputeQuota calculates this turn's quota from the context watermark.
 // Uses percentage of budget, not absolute token count.
-func ComputeQuota(usedTokens, tokenBudget int) ToolQuota {
-	if tokenBudget <= 0 {
+func ComputeQuota(usedTokens, contextWindow int) ToolQuota {
+	if contextWindow <= 0 {
 		return ToolQuota{MaxReads: 5, MaxGreps: 5, Hard: false}
 	}
 	// Use the SMALLER of percentage and absolute thresholds.
 	// A 1M budget at 8% = 80K tokens — too generous. Cap at 64K green, 128K yellow.
-	ratio := float64(usedTokens) / float64(tokenBudget)
+	ratio := float64(usedTokens) / float64(contextWindow)
 	isGreen := ratio < 0.08 && usedTokens < 64000
 	isYellow := (ratio < 0.15 && usedTokens < 128000) && !isGreen
 	switch {

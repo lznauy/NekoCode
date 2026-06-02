@@ -36,15 +36,15 @@ func (t *SkillTool) Parameters() []tools.Parameter {
 	}
 }
 
-func (t *SkillTool) ExecutionMode(args map[string]interface{}) tools.ExecutionMode {
+func (t *SkillTool) ExecutionMode(args map[string]any) tools.ExecutionMode {
 	return tools.ModeSequential
 }
 
-func (t *SkillTool) DangerLevel(args map[string]interface{}) common.DangerLevel {
+func (t *SkillTool) DangerLevel(args map[string]any) common.DangerLevel {
 	return common.LevelSafe
 }
 
-func (t *SkillTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *SkillTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	name, ok := args["name"].(string)
 	if !ok || name == "" {
 		return "", fmt.Errorf("skill name is required")

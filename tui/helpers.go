@@ -56,7 +56,7 @@ func formatBriefArgs(toolName, toolArgs string) string {
 	case "todo_write":
 		return formatTodos(args["todos"])
 	case "task":
-		t := args["subagent_type"]
+		t := args["type"]
 		if t == "" {
 			t = "executor"
 		}
@@ -75,8 +75,8 @@ func formatBriefArgs(toolName, toolArgs string) string {
 }
 
 func tokensSummary(b BotInterface) string {
-	p, c := b.TurnTokenUsage()
-	return "↑" + styles.FmtTokens(p) + " ↓" + styles.FmtTokens(c)
+	st := b.Stats()
+	return "↑" + styles.FmtTokens(st.TurnPrompt) + " ↓" + styles.FmtTokens(st.TurnCompletion)
 }
 
 func formatTodos(raw string) string {

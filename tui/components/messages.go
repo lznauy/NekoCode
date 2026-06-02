@@ -132,24 +132,6 @@ func (m *Messages) ProcessToolBlock(b block.ContentBlock) {
 	m.mu.Unlock()
 }
 
-func (m *Messages) AddDiffBlock(content string) {
-	m.mu.Lock()
-	if m.processingItem != nil {
-		m.processingItem.AddDiffBlock(content)
-		m.invalidateProcessing()
-	}
-	m.mu.Unlock()
-}
-
-func (m *Messages) AddTaskOutput(output string) {
-	m.mu.Lock()
-	if m.processingItem != nil {
-		m.processingItem.AddTaskOutput(output)
-		m.invalidateProcessing()
-	}
-	m.mu.Unlock()
-}
-
 func (m *Messages) AddToolOutput(toolName, output string) {
 	m.mu.Lock()
 	if m.processingItem != nil {
@@ -157,6 +139,15 @@ func (m *Messages) AddToolOutput(toolName, output string) {
 		m.invalidateProcessing()
 	}
 	m.mu.Unlock()
+}
+
+func (m *Messages) AccumulatedText() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.processingItem != nil {
+		return m.processingItem.OutputText()
+	}
+	return ""
 }
 
 func (m *Messages) AddThinkBlock(content string) {

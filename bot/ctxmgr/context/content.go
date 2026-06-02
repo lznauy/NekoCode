@@ -1,12 +1,12 @@
 package context
 
 import (
-	"nekocode/common"
+	"fmt"
 	"strconv"
 	"strings"
 
-	"nekocode/bot/ctxmgr/token"
-	"nekocode/llm"
+	"nekocode/common"
+	"nekocode/llm/types"
 )
 
 // Content is the single source of truth for everything sent to the LLM
@@ -30,22 +30,20 @@ type Content struct {
 	Archive string
 
 	// Layer 1 — message history.
-	Messages       []llm.Message
+	Messages       []types.Message
 	CompactBoundary int
 
 	// Layer 2 — volatile suffix. ALL variable content goes HERE, after history.
-	Constraints string // <critical-constraints>
-	KeyFacts    string // <key-facts> (may grow after summarization)
-	Todo        string
-	TodoItems   []common.TodoItem // structured copy, kept in sync with Todo
-	Hints       string           // per-turn system hints (quota, exploration status, etc.)
+	Todo      string
+	TodoItems []common.TodoItem // structured copy, kept in sync with Todo
+	Hints     string           // per-turn system hints (quota, exploration status, etc.)
 
 }
 
 func New(systemPrompt string) Content {
 	return Content{
 		SystemPrompt: systemPrompt,
-		Messages:     make([]llm.Message, 0),
+		Messages:     make([]types.Message, 0),
 	}
 }
 
@@ -95,57 +93,51 @@ func formatTodoItems(items []common.TodoItem) string {
 // -- message assembly helpers ------------------------------------------
 
 // BuildLayer0Mem returns Memory if set. Injected after system prompt/skills.
-func (c *Content) BuildLayer0Mem() []llm.Message {
+func (c *Content) BuildLayer0Mem() []types.Message {
 	if c.Memory != "" {
-		return []llm.Message{{Role: "system", Content: c.Memory}}
+		return []types.Message{{Role: "system", Content: c.Memory}}
 	}
 	return nil
 }
 
-func (c *Content) BuildLayer0() []llm.Message {
-	out := make([]llm.Message, 0, 2)
+func (c *Content) BuildLayer0() []types.Message {
+	out := make([]types.Message, 0, 2)
 	if c.SystemPrompt != "" {
-		out = append(out, llm.Message{Role: "system", Content: c.SystemPrompt})
+		out = append(out, types.Message{Role: "system", Content: c.SystemPrompt})
 	}
 	if c.Skills != "" {
-		out = append(out, llm.Message{Role: "system", Content: c.Skills})
+		out = append(out, types.Message{Role: "system", Content: c.Skills})
 	}
 	return out
 }
 
 // BuildLayer05 returns the Archive message (Layer 0.5), if set.
-func (c *Content) BuildLayer05() []llm.Message {
+func (c *Content) BuildLayer05() []types.Message {
 	if c.Archive != "" {
-		return []llm.Message{{Role: "system", Content: "[Archive]\n" + c.Archive}}
+		return []types.Message{{Role: "system", Content: "[Archive]\n" + c.Archive}}
 	}
 	return nil
 }
 
-func (c *Content) BuildLayer2() []llm.Message {
-	var out []llm.Message
-	if c.Constraints != "" {
-		out = append(out, llm.Message{Role: "system", Content: c.Constraints})
-	}
-	if c.KeyFacts != "" {
-		out = append(out, llm.Message{Role: "system", Content: c.KeyFacts})
-	}
+func (c *Content) BuildLayer2() []types.Message {
+	var out []types.Message
 	if c.Todo != "" {
-		out = append(out, llm.Message{Role: "system", Content: FormatTodo(c.Todo)})
+		out = append(out, types.Message{Role: "system", Content: formatTodo(c.Todo)})
 	}
 	if c.Hints != "" {
-		out = append(out, llm.Message{Role: "system", Content: c.Hints})
+		out = append(out, types.Message{Role: "system", Content: c.Hints})
 	}
 	return out
 }
 
-// DynamicSuffixTokens estimates tokens consumed by the Layer 2 suffix.
-func (c *Content) DynamicSuffixTokens() int {
-	n := 0
-	if c.Todo != "" {
-		n += token.EstimateString(c.Todo) + 20
-	}
-	if c.Hints != "" {
-		n += token.EstimateString(c.Hints) + 20
-	}
-	return n
+func FormatCwd(cwd string) string {
+	return fmt.Sprintf("<cwd>%s</cwd>", cwd)
+}
+
+func FormatEnv(cwd, date string) string {
+	return fmt.Sprintf("<env>\n<cwd>%s</cwd>\n<date>%s</date>\n</env>", cwd, date)
+}
+
+func formatTodo(todo string) string {
+	return fmt.Sprintf("<todo>%s</todo>", todo)
 }

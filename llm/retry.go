@@ -24,10 +24,9 @@ var DefaultRetryConfig = RetryConfig{
 
 // ---- HTTP status extraction -------------------------------------------------
 
-// apiErrorRE matches both error formats used by Chat/ChatStream:
+// apiErrorRE matches error formats used by Chat/ChatStream:
 //
-//	"API error (HTTP 429): ..."   (OpenAI-compat & Anthropic ChatStream)
-//	"API error: 500 Internal ..." (Anthropic Chat)
+//	"API error (HTTP 429): ..."   (OpenAI-compat)
 var apiErrorRE = regexp.MustCompile(`API error(?: \(HTTP (\d+)\))?: (\d+)`)
 
 func extractHTTPStatus(err error) (int, bool) {

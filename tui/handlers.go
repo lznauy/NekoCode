@@ -3,6 +3,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"nekocode/tui/components/block"
@@ -32,7 +33,10 @@ func (m *Model) handleDone(msg doneMsg) tea.Cmd {
 			Content: fmt.Sprintf("Error: %v", msg.err),
 		})
 	} else {
-		content := msg.content
+		accumulated := strings.TrimSpace(m.Messages.AccumulatedText())
+		if accumulated == "" {
+			accumulated = msg.content
+		}
 		footer := ""
 		if msg.duration != "" || msg.tokens != "" {
 			footer = "Duration: " + msg.duration
@@ -41,15 +45,16 @@ func (m *Model) handleDone(msg doneMsg) tea.Cmd {
 			}
 		}
 		m.Messages.AddMessage(message.ChatMessage{
-			Role:    "assistant",
-			Content: content,
-			Footer:  footer,
-			Blocks:  finalBlocks,
+			Role:            "assistant",
+			Content:         msg.content,
+			RenderedContent: accumulated,
+			Footer:          footer,
+			Blocks:          finalBlocks,
 		})
 	}
 
-	prompt, compl := m.Bot.TokenUsage()
-	m.Header.SetTokens(prompt + compl)
+	st := m.Bot.Stats()
+	m.Header.SetTokens(st.PromptTokens + st.CompletionTokens)
 	if m.Messages.Follow {
 		m.Messages.GotoBottom()
 	}
@@ -67,9 +72,12 @@ func (m *Model) handleConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
-	m.state = stateProcessing
+	m.state = m.preConfirmState
 	m.resizeMessages()
-	return m, tea.Batch(listenConfirm(m.confirmCh), spinnerTick())
+	if m.state == stateProcessing {
+		return m, tea.Batch(listenConfirm(m.confirmCh), spinnerTick())
+	}
+	return m, nil
 }
 
 // --- keys: dispatch ---
@@ -137,6 +145,8 @@ func (m *Model) handleProcessingKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.Messages.AddMessage(message.ChatMessage{Role: "user", Content: value})
 			m.Messages.ClearProcessing()
 			m.Messages.SetBlocks(nil)
+			m.Messages.GotoBottom()
+			m.Input.SetFollow(true)
 			m.processingStart = time.Now()
 			m.processingPhase = phaseSteer
 			m.Messages.SetProcessingStatus(phaseSteer)
@@ -225,16 +235,16 @@ func (m *Model) handleSpinnerTick(msg spinner.TickMsg) tea.Cmd {
 	if m.state == stateProcessing {
 		elapsed := time.Since(m.processingStart)
 		statusText := fmt.Sprintf("%s (%.1fs)", m.processingPhase, elapsed.Seconds())
-		prompt, compl := m.Bot.TokenUsage()
-		if prompt == 0 {
-			prompt = m.Bot.ContextTokens()
+		st := m.Bot.Stats()
+		if st.PromptTokens == 0 {
+			st.PromptTokens = st.ContextTokens
 		}
 		spinnerView := m.Spinner.View()
 		m.Messages.UpdateProcessing(func(p *processing.ProcessingItem) {
 			p.SetSpinnerView(spinnerView)
 			p.SetStatusText(statusText)
-			p.SetTokens(prompt, compl)
-			p.SetCompactCount(m.Bot.CompactCount())
+			p.SetTokens(st.PromptTokens, st.CompletionTokens)
+			p.SetCompactCount(st.CompactCount)
 		})
 
 		return spinnerTick()

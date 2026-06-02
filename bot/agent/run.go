@@ -17,17 +17,8 @@ type RunResult struct {
 }
 
 type stepState struct {
-	Input             string
-	exploreCascade    int
-	filesModified     bool
-	verifyInjected    bool
-	needsVerification bool
-	quota             budget.ToolQuota
-	garbledCount      int
-	// Repeated tool call detection: signature -> consecutive turn count.
-	consecutiveCalls  map[string]int
-	repeatedCallCount int
-	repeatedCallName  string
+	Input string
+	quota budget.ToolQuota
 }
 
 type RunCallback func(action, toolName, toolArgs, output string)
@@ -55,12 +46,27 @@ func (a *Agent) Run(input string, callback RunCallback) *RunResult {
 func (a *Agent) runTurn(state *stepState, callback RunCallback) (finished bool) {
 	msgCountBefore := a.ctxMgr.Len()
 
-	// 每轮配额计算 + hook 提示注入。
 	a.ctxMgr.AutoCompactIfNeeded()
 	state.quota = budget.ComputeQuota(a.ctxMgr.TokenUsage())
-	a.injectPreTurnHints(state)
 
-	// 用户中止 / 上下文取消。
+	// —— PreTurn hooks ——
+	if a.hookMgr != nil {
+		a.hookMgr.Gauge(hooks.KeyQuotaHard, b2i(state.quota.Hard))
+		a.hookMgr.Gauge(hooks.KeyQuotaReads, int64(max(0, state.quota.MaxReads-state.quota.UsedReads)))
+		a.hookMgr.Gauge(hooks.KeyExploreScore, int64(a.exploration.Score))
+		a.hookMgr.Gauge(hooks.KeyTasksAllDone, b2i(a.ctxMgr.AllTasksDone()))
+		a.hookMgr.Value(hooks.KeyStepInput, state.Input)
+		a.hookMgr.ResetTurn()
+
+		var hints []hooks.Hint
+		for _, r := range a.hookMgr.Evaluate(hooks.PointPreTurn) {
+			if r.Hint != nil {
+				hints = append(hints, *r.Hint)
+			}
+		}
+		a.ctxMgr.SetHints(hooks.FormatHints(hints))
+	}
+
 	a.drainSteering()
 	if a.getCtx().Err() != nil {
 		a.stopReason = hooks.StopInterrupted
@@ -71,10 +77,8 @@ func (a *Agent) runTurn(state *stepState, callback RunCallback) (finished bool) 
 		return true
 	}
 
-	// LLM 推理（内含 AutoCompact）。
 	reasoning := a.Reason(state)
 
-	// 中断回滚：丢弃本轮消息，下轮重试。
 	if reasoning.Interrupted {
 		state.quota.Rollback(state.quota.Snapshot())
 		if a.finished {
@@ -86,7 +90,6 @@ func (a *Agent) runTurn(state *stepState, callback RunCallback) (finished bool) 
 		return false
 	}
 
-	// 工具调用路径。
 	calls := a.collectCalls(reasoning)
 	if len(calls) > 0 {
 		var stopReason hooks.StopReason
@@ -99,80 +102,34 @@ func (a *Agent) runTurn(state *stepState, callback RunCallback) (finished bool) 
 		return false
 	}
 
-	// 文本响应路径（无工具调用）。
 	return a.handleText(reasoning, state, callback)
 }
 
-func (a *Agent) injectPreTurnHints(state *stepState) {
-	if a.hooks == nil {
-		return
-	}
-	hs := &hooks.State{
-		NeedsVerification: state.needsVerification,
-		VerifyInjected:    state.verifyInjected,
-		AllTasksDone:      a.ctxMgr.AllTasksDone(),
-		QuotaHard:         state.quota.Hard,
-		QuotaReadsLeft:    max(0, state.quota.MaxReads-state.quota.UsedReads),
-		ExplorationScore:  a.exploration.Score,
-		ExploreCascade:    state.exploreCascade,
-		StepInput:         state.Input,
-	}
-	hints := a.hooks.EvaluateInject(hs)
-	a.ctxMgr.SetHints(hooks.FormatHints(hints))
-}
-
-// handleText runs guardrails on text-only responses. Returns true when the agent should stop.
 func (a *Agent) handleText(reasoning *ReasoningResult, state *stepState, callback RunCallback) (finished bool) {
-
-	// Track garbled tool calls.
-	if reasoning.GarbledToolCall {
-		state.garbledCount++
-		writeAgentLog("GarbledToolCall: count=%d", state.garbledCount)
-	}
-
-
-	// Evaluate stop hooks.
-	if a.hooks != nil {
-		hs := &hooks.State{
-			NeedsVerification: state.needsVerification,
-			VerifyInjected:    state.verifyInjected,
-			AllTasksDone:      a.ctxMgr.AllTasksDone(),
-			FilesModified:     state.filesModified,
-			ActionIsChat:      reasoning.Action == ActionChat,
-			GarbledToolCall:   reasoning.GarbledToolCall,
-			GarbledCount:      state.garbledCount,
-			ExplorationScore:  a.exploration.Score,
-			OnFirstTurn:       a.step == 0,
-			StepInput:         state.Input,
-			RepeatedCallCount: state.repeatedCallCount,
-			RepeatedCallName:  state.repeatedCallName,
+	if a.hookMgr != nil {
+		if reasoning.GarbledToolCall {
+			a.hookMgr.Counter(hooks.KeyRespGarbled)
+		}
+		if reasoning.Action == ActionChat {
+			a.hookMgr.Turn(hooks.KeyRespChat)
 		}
 
-		// Stop hooks: check if the agent should terminate.
-		if reason, stop := a.hooks.EvaluateStop(hs); stop {
-			a.stopReason = reason
-			return true
-		}
-
-		// Inject hooks: fire the first guardrail that triggers.
-		if hints := a.hooks.EvaluateInject(hs); len(hints) > 0 {
-			hint := hints[0]
-			if hint.Type == "verification" && hint.Severity != "critical" {
-				state.verifyInjected = true
+		// —— PostTurn hooks ——
+		results := a.hookMgr.Evaluate(hooks.PointPostTurn)
+		for _, r := range results {
+			if r.Stop != nil {
+				a.stopReason = *r.Stop
+				return true
 			}
-			a.ctxMgr.Add("user", "[System] "+hint.Content)
-			return false
-		}
-
-		// All clear.
-		if state.needsVerification && state.verifyInjected && reasoning.Action == ActionChat && a.ctxMgr.AllTasksDone() {
-			state.needsVerification = false
+			if r.Hint != nil {
+				a.ctxMgr.Add("user", "[System] "+r.Hint.Content)
+				return false
+			}
 		}
 	}
 
-	// Normal completion.
 	a.stopReason = hooks.StopCompleted
-		a.step++
+	a.step++
 	a.lastText = reasoning.ActionInput
 	if reasoning.Action == ActionChat {
 		a.ctxMgr.AddAssistantResponse(reasoning.ActionInput, a.lastReason)
@@ -181,16 +138,14 @@ func (a *Agent) handleText(reasoning *ReasoningResult, state *stepState, callbac
 	return true
 }
 
-// collectCalls 把 LLM 返回的 ToolCall 列表转成执行器需要的 ToolCallItem 列表。
+func b2i(b bool) int64 {
+	if b { return 1 }
+	return 0
+}
+
+// collectCalls returns tool calls for execution.
 func (a *Agent) collectCalls(reasoning *ReasoningResult) []tools.ToolCallItem {
-	if len(reasoning.ToolCalls) > 0 {
-		out := make([]tools.ToolCallItem, len(reasoning.ToolCalls))
-		for i, tc := range reasoning.ToolCalls {
-			out[i] = tools.ToolCallItem{ID: tc.ID, Name: tc.Name, Args: tc.Args}
-		}
-		return out
-	}
-	return nil
+	return reasoning.ToolCalls
 }
 
 // synthesizeAndReturn 额外调一次 LLM 生成总结，用于非正常结束的兜底输出。

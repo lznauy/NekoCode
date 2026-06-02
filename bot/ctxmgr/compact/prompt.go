@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"nekocode/llm"
+	"nekocode/llm/types"
 )
 
 // NO_TOOLS_PREAMBLE prevents the summarizer model from making tool calls.
@@ -14,7 +14,7 @@ const NO_TOOLS_PREAMBLE = `CRITICAL: Respond with TEXT ONLY. Do NOT call any too
 `
 
 // BuildPrompt assembles a structured summarization prompt from messages.
-func BuildPrompt(msgs []llm.Message, prevSummary string) string {
+func BuildPrompt(msgs []types.Message, prevSummary string) string {
 	var b strings.Builder
 	for _, m := range msgs {
 		content := strings.TrimSpace(m.Content)

@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func TestNewSaveLoadDelete(t *testing.T) {
+func TestNewSaveLoad(t *testing.T) {
 	td := t.TempDir()
 	t.Setenv("HOME", td) // override dir() to use temp dir
 
@@ -33,13 +33,6 @@ func TestNewSaveLoadDelete(t *testing.T) {
 		t.Errorf("loaded prompt = %q", loaded.SystemPrompt)
 	}
 
-	// Delete.
-	if err := Delete(s.ID); err != nil {
-		t.Fatalf("Delete: %v", err)
-	}
-	if _, err := Load(s.ID); err == nil {
-		t.Error("expected error after delete")
-	}
 }
 
 func TestList(t *testing.T) {

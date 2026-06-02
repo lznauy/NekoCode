@@ -2,6 +2,7 @@
 package tui
 import (
 	"nekocode/tui/components"
+	"nekocode/tui/components/message"
 
 	"charm.land/bubbles/v2/cursor"
 	"charm.land/bubbles/v2/spinner"
@@ -17,8 +18,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.Width = msg.Width
-		m.Height = msg.Height
+		m.Width = max(msg.Width, 10)
+		m.Height = max(msg.Height, 10)
 		m.Ready = true
 
 		m.Header.SetWidth(msg.Width)
@@ -35,8 +36,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case doneMsg:
 		return m, m.handleDone(msg)
 
+	case notifyMsg:
+		m.Messages.AddMessage(message.ChatMessage{
+			Role: "system", Content: msg.content, RenderedContent: msg.content,
+		})
+		return m, listenNotify(m.notifyCh)
+
 	case confirmMsg:
+		if msg.req.Response == nil {
+			m.state = stateReady
+			m.resizeMessages()
+			return m, nil
+		}
 		m.ConfirmBar.SetRequest(&msg.req)
+		m.preConfirmState = m.state
 		m.state = stateConfirming
 		m.resizeMessages()
 		return m, nil

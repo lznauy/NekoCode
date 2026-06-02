@@ -1,12 +1,12 @@
 package token
 
-import "nekocode/llm"
+import "nekocode/llm/types"
 
 const asciiCharsPerToken = 4
 
 // EstimateTokens uses a language-aware heuristic: ASCII ≈ 4 chars/token,
 // CJK ≈ 1.5 chars/token. Used when API-calibrated counts are unavailable.
-func EstimateTokens(msgs []llm.Message) int {
+func EstimateTokens(msgs []types.Message) int {
 	n := 0
 	for _, m := range msgs {
 		n += EstimateString(m.Role)
@@ -44,10 +44,3 @@ func EstimateString(s string) int {
 	return tokens
 }
 
-// Overhead returns the token overhead for a request with tools.
-func Overhead(withTools bool) int {
-	if withTools {
-		return 200
-	}
-	return 0
-}

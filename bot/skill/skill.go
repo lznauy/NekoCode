@@ -22,7 +22,7 @@ type Skill struct {
 	AgentType              string
 	AllowedTools           []string
 	MaxSteps               int
-	TokenBudget            int
+	ContextWindow            int
 	DisableModelInvocation bool
 }
 
@@ -127,11 +127,11 @@ func (r *Registry) namesString() string {
 }
 
 // BuildSkillListText generates the available-skills text injected into context.
-func BuildSkillListText(skills []*Skill, loaded map[string]bool, tokenBudget int) string {
+func BuildSkillListText(skills []*Skill, loaded map[string]bool, contextWindow int) string {
 	if len(skills) == 0 {
 		return ""
 	}
-	maxChars := tokenBudget / 100
+	maxChars := contextWindow / 100
 	if maxChars < 500 {
 		maxChars = 500
 	}
@@ -183,11 +183,11 @@ func BuildSkillListText(skills []*Skill, loaded map[string]bool, tokenBudget int
 // FormatForContext formats a skill's content for injection into conversation context.
 func FormatForContext(sk *Skill) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("<skill_content name=\"%s\">\n# Skill: %s\n\n", sk.Name, sk.Name))
-	sb.WriteString(fmt.Sprintf("**This skill is already loaded. Do NOT call the skill tool for %q.**\n\n", sk.Name))
+	fmt.Fprintf(&sb, "<skill_content name=\"%s\">\n# Skill: %s\n\n", sk.Name, sk.Name)
+	fmt.Fprintf(&sb, "**This skill is already loaded. Do NOT call the skill tool for %q.**\n\n", sk.Name)
 
 	if sk.Dir != "" {
-		sb.WriteString(fmt.Sprintf("**Skill files: `%s`** — Read input files using absolute paths. Do NOT glob or search.\n", sk.Dir))
+		fmt.Fprintf(&sb, "**Skill files: `%s`** — Read input files using absolute paths. Do NOT glob or search.\n", sk.Dir)
 		sb.WriteString("**Output files go to the current working directory**, NOT the skill directory.\n\n")
 	} else {
 		sb.WriteString("(This is a built-in skill with no file-system directory.)\n\n")

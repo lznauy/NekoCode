@@ -26,6 +26,23 @@ func (d DangerLevel) String() string {
 	}
 }
 
+// CmdResult tells the TUI what to do after a command is executed.
+type CmdResult int
+
+const (
+	CmdNone      CmdResult = iota // no command matched, start agent
+	CmdHandled                     // command handled, no further action
+	CmdConfirming                  // command handled, wait for confirmation
+)
+
+// BotStats carries runtime statistics from the bot to the TUI.
+type BotStats struct {
+	PromptTokens, CompletionTokens int
+	TurnPrompt, TurnCompletion     int
+	ContextTokens, CompactCount    int
+	Duration                       string
+}
+
 // TodoItem represents a single task in the todo list.
 type TodoItem struct {
 	Content string `json:"content"`

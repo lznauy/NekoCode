@@ -1,6 +1,9 @@
 package compact
 
-import "nekocode/llm"
+import (
+	"nekocode/bot/debug"
+	"nekocode/llm/types"
+)
 
 // Layer 2: History Sniping.
 // Wholesale removal of the oldest messages from the FRONT of the queue.
@@ -26,12 +29,12 @@ func (m *Compactor) SnipHistory() int {
 	m.Ctx.Messages = m.Ctx.Messages[snip:]
 	m.Ctx.CompactBoundary -= snip
 
-	compactLog("snipe: removed %d cold-history messages (boundary now %d, total %d)", snip, m.Ctx.CompactBoundary, len(m.Ctx.Messages))
+	debug.Log("snipe: removed %d cold-history messages (boundary now %d, total %d)", snip, m.Ctx.CompactBoundary, len(m.Ctx.Messages))
 
 	// Insert boundary marker at the cut point.
 	if m.Ctx.CompactBoundary > 0 && len(m.Ctx.Messages) > 0 {
 		m.Ctx.Messages = append(
-			[]llm.Message{{Role: "system", Content: snipeBoundaryMarker}},
+			[]types.Message{{Role: "system", Content: snipeBoundaryMarker}},
 			m.Ctx.Messages...,
 		)
 		m.Ctx.CompactBoundary++

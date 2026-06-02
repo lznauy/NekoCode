@@ -3,15 +3,45 @@ package tools
 
 import (
 	"fmt"
+	"hash/fnv"
 	"net/http"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 )
 
+const base62Chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+// HashLine returns a 3-character hash of the line content for hashline editing.
+// Empty lines return "___".
+func HashLine(s string) string {
+	if s == "" {
+		return "___"
+	}
+	h := fnv.New64a()
+	h.Write([]byte(s))
+	u := h.Sum64()
+	return string([]byte{base62Chars[u%62], base62Chars[(u/62)%62], base62Chars[(u/(62*62))%62]})
+}
+
+// AnnotateLines prefixes each line with "lineNo:[hash]" for hashline editing.
+func AnnotateLines(content string) string {
+	lines := strings.Split(content, "\n")
+	var b strings.Builder
+	for i, line := range lines {
+		b.WriteString(fmt.Sprintf("%d:[%s]%s", i+1, HashLine(line), line))
+		if i < len(lines)-1 {
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
+var ansiRegex = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")
+
 // StripAnsi removes ANSI escape sequences from a string.
 func StripAnsi(s string) string {
-	var ansiRegex = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")
 	return ansiRegex.ReplaceAllString(s, "")
 }
 

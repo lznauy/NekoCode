@@ -11,6 +11,8 @@ import (
 	"nekocode/tui"
 )
 
+const panicLogDir = "/tmp/nekocode"
+
 func main() {
 	defer recoverPanic()
 
@@ -30,7 +32,7 @@ func runNonInteractive() {
 
 	output, err := b.RunAgent(input, nil)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println(output)
@@ -38,10 +40,15 @@ func runNonInteractive() {
 
 func recoverPanic() {
 	if r := recover(); r != nil {
-		stack := debug.Stack()
-		logPath := fmt.Sprintf("nekocode-panic-%d.log", time.Now().Unix())
-		msg := fmt.Sprintf("PANIC: %v\n\nStack:\n%s", r, string(stack))
-		_ = os.WriteFile(logPath, []byte(msg), 0644)
+		stack := string(debug.Stack())
+		if err := os.MkdirAll(panicLogDir, 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to create panic log dir: %v\n\nPANIC: %v\nStack:\n%s\n", err, r, stack)
+			return
+		}
+		logPath := fmt.Sprintf("%s/nekocode-panic-%d.log", panicLogDir, time.Now().Unix())
+		if err := os.WriteFile(logPath, fmt.Appendf(nil, "PANIC: %v\n\nStack:\n%s", r, stack), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to write panic log: %v\n", err)
+		}
 		fmt.Fprintf(os.Stderr, "\nPANIC: %v\nStack saved to %s\n", r, logPath)
 	}
 }

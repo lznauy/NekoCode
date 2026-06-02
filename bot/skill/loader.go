@@ -98,7 +98,7 @@ type frontmatter struct {
 	Context                string   `yaml:"context"`
 	Agent                  string   `yaml:"agent"`
 	MaxSteps               int      `yaml:"max_steps"`
-	TokenBudget            int      `yaml:"token_budget"`
+	ContextWindow            int      `yaml:"context_window"`
 	DisableModelInvocation bool     `yaml:"disable-model-invocation"`
 }
 
@@ -119,7 +119,7 @@ func parseSkillContent(content string) (*Skill, error) {
 		AgentType:              fm.Agent,
 		AllowedTools:           fm.AllowedTools,
 		MaxSteps:               fm.MaxSteps,
-		TokenBudget:            fm.TokenBudget,
+		ContextWindow:            fm.ContextWindow,
 		DisableModelInvocation: fm.DisableModelInvocation,
 	}, nil
 }
@@ -131,12 +131,10 @@ func parseFrontmatter(content string) (*frontmatter, string, error) {
 		return nil, "", fmt.Errorf("frontmatter must start with ---")
 	}
 	rest := content[3:]
-	end := strings.Index(rest, "\n---")
-	if end == -1 {
+	yamlText, body, found := strings.Cut(rest, "\n---")
+	if !found {
 		return nil, "", fmt.Errorf("unclosed frontmatter (missing closing ---)")
 	}
-	yamlText := rest[:end]
-	body := rest[end+4:]
 
 	var fm frontmatter
 	if err := yaml.Unmarshal([]byte(yamlText), &fm); err != nil {

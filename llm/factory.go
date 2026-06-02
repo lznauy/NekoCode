@@ -1,28 +1,25 @@
 package llm
 
-func NewClient(provider, apiKey, baseURL, model string, thinkingBudget int) LLM {
-	return newClient(provider, apiKey, baseURL, model, thinkingBudget)
+import (
+	"nekocode/llm/anthropic"
+	"nekocode/llm/openai"
+	"nekocode/llm/types"
+)
+
+// NewClient creates an LLM client using the OpenAI-compatible protocol.
+func NewClient(provider, apiKey, baseURL, model string) types.LLM {
+	return NewClientWithProtocol(provider, apiKey, baseURL, model, "openai")
 }
 
-func Clone(provider, apiKey, baseURL, model string, thinkingBudget int) LLM {
-	return newClient(provider, apiKey, baseURL, model, thinkingBudget)
-}
-
-func newClient(provider, apiKey, baseURL, model string, thinkingBudget int) LLM {
-	switch provider {
+// NewClientWithProtocol creates an LLM client with explicit protocol selection.
+// protocol: "openai" or "anthropic".
+func NewClientWithProtocol(provider, apiKey, baseURL, model, protocol string) types.LLM {
+	switch protocol {
 	case "anthropic":
-		c := NewAnthropic(apiKey, baseURL, model)
-		c.SetThinkingBudget(thinkingBudget)
-		return c
-	case "deepseek":
-		c := NewDeepSeek(apiKey, baseURL, model)
-		if thinkingBudget < 0 {
-			c.SetDisableThinking(true)
-		} else if thinkingBudget > 0 {
-			c.SetThinkingBudget(thinkingBudget)
-		}
-		return c
+		return anthropic.New(apiKey, baseURL, model)
 	default:
-		return nil
+		c := openai.New(apiKey, baseURL, model)
+		c.SetDisableThinking(true)
+		return c
 	}
 }

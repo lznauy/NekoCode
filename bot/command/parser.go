@@ -79,7 +79,8 @@ func RegisterDefaults(p *Parser, callbacks *Callbacks) {
   /summarize   Force context compression now
   /context     Show detailed context window breakdown
   /config      Show current provider and model
-  /skill       Load a skill's workflow (see Available Skills in context)
+  /plugin      Manage plugins (install, list, uninstall, etc.)
+  /sessions    Manage saved sessions
 `, true
 	})
 

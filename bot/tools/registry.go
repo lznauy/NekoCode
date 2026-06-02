@@ -21,6 +21,12 @@ func (r *Registry) Register(tool Tool) {
 	r.tools[tool.Name()] = tool
 }
 
+func (r *Registry) Unregister(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.tools, name)
+}
+
 func (r *Registry) Get(name string) (Tool, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -31,14 +37,19 @@ func (r *Registry) Get(name string) (Tool, error) {
 	return t, nil
 }
 
-func (r *Registry) List() []Tool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+func (r *Registry) sortedNames() []string {
 	names := make([]string, 0, len(r.tools))
 	for n := range r.tools {
 		names = append(names, n)
 	}
 	sort.Strings(names)
+	return names
+}
+
+func (r *Registry) List() []Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	names := r.sortedNames()
 	tools := make([]Tool, len(names))
 	for i, n := range names {
 		tools[i] = r.tools[n]
@@ -49,11 +60,7 @@ func (r *Registry) List() []Tool {
 func (r *Registry) Descriptors() []Descriptor {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	names := make([]string, 0, len(r.tools))
-	for n := range r.tools {
-		names = append(names, n)
-	}
-	sort.Strings(names)
+	names := r.sortedNames()
 	descs := make([]Descriptor, len(names))
 	for i, n := range names {
 		t := r.tools[n]

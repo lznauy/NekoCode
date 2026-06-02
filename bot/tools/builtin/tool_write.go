@@ -13,8 +13,8 @@ import (
 type WriteTool struct{}
 
 func (t *WriteTool) Name() string                                       { return "write" }
-func (t *WriteTool) ExecutionMode(map[string]interface{}) tools.ExecutionMode { return tools.ModeSequential }
-func (t *WriteTool) DangerLevel(map[string]interface{}) common.DangerLevel     { return common.LevelWrite }
+func (t *WriteTool) ExecutionMode(map[string]any) tools.ExecutionMode { return tools.ModeSequential }
+func (t *WriteTool) DangerLevel(map[string]any) common.DangerLevel     { return common.LevelWrite }
 func (t *WriteTool) Description() string {
 	return "Create or overwrite a file. Auto-creates parent dirs. Must Read existing files first (enforced). Use Edit for partial changes. Content: use \\n \\\" \\\\ for newlines/quotes/backslashes."
 }
@@ -26,7 +26,7 @@ func (t *WriteTool) Parameters() []tools.Parameter {
 	}
 }
 
-func (t *WriteTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *WriteTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	path, _ := args["path"].(string)
 	content, _ := args["content"].(string)
 	if path == "" {

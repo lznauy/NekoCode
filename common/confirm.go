@@ -3,7 +3,7 @@ package common
 // ConfirmRequest is sent to the TUI when a tool requires user approval.
 type ConfirmRequest struct {
 	ToolName string
-	Args     map[string]interface{}
+	Args     map[string]any
 	Level    DangerLevel
 	Response chan bool
 }

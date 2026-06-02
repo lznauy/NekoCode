@@ -8,20 +8,19 @@ import (
 // BotInterface is the contract any bot implementation must satisfy for the TUI.
 type BotInterface interface {
 	RunAgent(input string, onStep func(action, toolName, toolArgs, output string)) (string, error)
-	ExecuteCommand(input string) (string, bool)
+	ExecuteCommand(input string) (string, common.CmdResult)
 	SkillHint() (string, bool)
-	TokenUsage() (prompt, completion int)
-	TurnTokenUsage() (prompt, completion int)
-	ContextTokens() int
-	CompactCount() int
-	Duration() string
+	Stats() common.BotStats
 	CommandNames() []string
-	Configure(confirmFn common.ConfirmFunc, phaseFn common.PhaseFunc, todoFn common.TodoFunc)
+	Configure(confirmFn common.ConfirmFunc, phaseFn common.PhaseFunc, todoFn common.TodoFunc, notifyFn func(string), confirmCh chan common.ConfirmRequest)
 	SetCallbacks(textFn, reasonFn func(string))
 	Steer(msg string)
 	Abort()
-	Provider() string
-	Model() string
+	ProviderModel() (provider, model string)
+}
+
+type notifyMsg struct {
+	content string
 }
 
 type chatState int

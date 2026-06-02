@@ -15,7 +15,7 @@ import (
 type GlobTool struct{}
 
 func (t *GlobTool) Name() string { return "glob" }
-func (t *GlobTool) ExecutionMode(map[string]interface{}) tools.ExecutionMode {
+func (t *GlobTool) ExecutionMode(map[string]any) tools.ExecutionMode {
 	return tools.ModeParallel
 }
 
@@ -30,11 +30,11 @@ func (t *GlobTool) Parameters() []tools.Parameter {
 	}
 }
 
-func (t *GlobTool) DangerLevel(args map[string]interface{}) common.DangerLevel {
+func (t *GlobTool) DangerLevel(args map[string]any) common.DangerLevel {
 	return common.LevelSafe
 }
 
-func (t *GlobTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *GlobTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	pattern, ok := args["pattern"].(string)
 	if !ok || pattern == "" {
 		return "", fmt.Errorf("missing pattern parameter")

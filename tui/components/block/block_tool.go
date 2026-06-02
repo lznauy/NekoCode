@@ -1,4 +1,3 @@
-// block_tool.go — 工具调用行渲染。
 package block
 
 import (
@@ -11,31 +10,28 @@ import (
 )
 
 func renderToolLine(b ContentBlock, width int, sty *styles.Styles) string {
-	icon := "◆"
-	running := b.Content == "" && (b.ToolName == "edit" || b.ToolName == "task" || b.ToolName == "bash")
+	running := !b.Done && b.Content == ""
 
-	// 摘要：折叠时显示一行关键信息，展开后显示完整内容。
 	summary := b.ToolArgs
 	if b.Content != "" && b.Collapsed {
 		summary = toolSummary(b)
 	}
 
 	arrow := ""
-	if b.Content != "" || running {
+	if running {
+		arrow = " " + sty.Subtle.Render("…")
+	} else if b.Content != "" {
 		if b.Collapsed {
 			arrow = " " + sty.Subtle.Render("[+]")
 		} else {
 			arrow = " " + sty.Subtle.Render("[-]")
 		}
 	}
-	if running {
-		arrow = " " + sty.Subtle.Render("…")
-	}
 
-	header := fmt.Sprintf("%s %s %s%s", icon, b.ToolName, summary, arrow)
+	header := fmt.Sprintf("◉ %s %s%s", b.ToolName, summary, arrow)
 	accentLine := "  " + toolAccent.Render(header)
 
-	if b.Content == "" || b.Collapsed {
+	if running || b.Collapsed {
 		return accentLine
 	}
 
@@ -48,13 +44,10 @@ func renderToolLine(b ContentBlock, width int, sty *styles.Styles) string {
 	return lipgloss.JoinVertical(lipgloss.Left, accentLine, indented)
 }
 
-// toolSummary 折叠行摘要。
 func toolSummary(b ContentBlock) string {
 	switch b.ToolName {
 	case "read":
 		return extractReadSummary(b.Content)
-	case "edit":
-		return extractEditSummary(b.Content)
 	default:
 		return b.ToolArgs
 	}
@@ -62,9 +55,7 @@ func toolSummary(b ContentBlock) string {
 
 func extractReadSummary(c string) string {
 	err := extractTag(c, "<error>", "</error>")
-	if err != "" {
-		return err
-	}
+	if err != "" { return err }
 	path := extractTag(c, "<path>", "</path>")
 	start := extractTag(c, `start="`, `"`)
 	end := extractTag(c, `end="`, `"`)
@@ -72,45 +63,92 @@ func extractReadSummary(c string) string {
 	if path != "" && start != "" && end != "" {
 		return fmt.Sprintf("%s  L%s-%s/%s", path, start, end, total)
 	}
-	if path != "" {
-		return path
-	}
-	// 纯文本错误（如 File not found），取首行。
-	if idx := strings.IndexByte(c, '\n'); idx >= 0 {
-		return c[:idx]
-	}
+	if path != "" { return path }
+	if idx := strings.IndexByte(c, '\n'); idx >= 0 { return c[:idx] }
 	return c
 }
 
-func extractEditSummary(c string) string {
-	path := extractTag(c, "<path>", "</path>")
-	occ := extractTag(c, "<occurrences>", "</occurrences>")
-	if path != "" {
-		return fmt.Sprintf("%s  ×%s", path, occ)
+func renderEditPreview(content string, width int, sty *styles.Styles) string {
+	green := lipgloss.NewStyle().Foreground(lipgloss.Color("#98c379"))
+	red := lipgloss.NewStyle().Foreground(lipgloss.Color("#e06c75"))
+	subtle := lipgloss.NewStyle().Foreground(lipgloss.Color("#5c6370"))
+	numStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#666"))
+
+	var out strings.Builder
+	for _, line := range strings.Split(content, "\n") {
+		prefix := byte(' ')
+		if len(line) > 0 && (line[0] == '-' || line[0] == '+' || line[0] == ' ') {
+			prefix = line[0]
+			line = line[1:]
+		}
+		lineNo := 0
+		text := line
+		if colon := strings.IndexByte(line, ':'); colon > 0 {
+			fmt.Sscanf(line[:colon], "%d", &lineNo)
+			rest := line[colon+1:]
+			if rb := strings.IndexByte(rest, ']'); rb > 0 {
+				text = rest[rb+1:]
+			}
+		}
+		if lineNo > 0 {
+			out.WriteString(numStyle.Render(pad4(lineNo)))
+			switch prefix {
+			case '-':
+				out.WriteString(red.Render("- "))
+			case '+':
+				out.WriteString(green.Render("+ "))
+			default:
+				out.WriteString(subtle.Render("  "))
+			}
+		}
+		switch prefix {
+		case '-':
+			out.WriteString(red.Render(text))
+		case '+':
+			out.WriteString(green.Render(text))
+		default:
+			out.WriteString(subtle.Render(text))
+		}
+		out.WriteByte('\n')
 	}
-	return ""
+	return strings.TrimRight(out.String(), "\n")
+}
+
+func pad4(n int) string {
+	s := fmt.Sprintf("%d", n)
+	for len(s) < 4 {
+		s += " "
+	}
+	return s + " "
 }
 
 func extractTag(s, open, close string) string {
 	start := strings.Index(s, open)
-	if start == -1 {
-		return ""
-	}
+	if start == -1 { return "" }
 	start += len(open)
 	end := strings.Index(s[start:], close)
-	if end == -1 {
-		return ""
-	}
+	if end == -1 { return "" }
 	return s[start : start+end]
 }
 
-// renderToolContent 根据工具类型渲染内容。
 func renderToolContent(b ContentBlock, contentW int, sty *styles.Styles) string {
 	switch b.ToolName {
 	case "read":
 		return sty.Muted.MaxWidth(contentW).Render(ParseReadOutput(b.Content))
 	case "edit":
-		return renderBlockDiff(ContentBlock{Content: ParseEditOutput(b.Content)}, sty)
+		return renderEditPreview(b.Content, contentW, sty)
+	case "bash":
+		c := strings.TrimSpace(b.Content)
+		if c == "" {
+			return sty.Subtle.Render("(No output)")
+		}
+		lines := strings.Split(c, "\n")
+		if len(lines) <= 3 {
+			return sty.Muted.MaxWidth(contentW).Render(c)
+		}
+		head := strings.Join(lines[:3], "\n")
+		tail := sty.Subtle.Render(fmt.Sprintf("\n... (%d more lines)", len(lines)-3))
+		return sty.Muted.MaxWidth(contentW).Render(head) + tail
 	default:
 		return sty.Muted.MaxWidth(contentW).Render(b.Content)
 	}

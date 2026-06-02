@@ -13,8 +13,8 @@ import (
 type ListTool struct{}
 
 func (t *ListTool) Name() string                                       { return "list" }
-func (t *ListTool) ExecutionMode(map[string]interface{}) tools.ExecutionMode { return tools.ModeParallel }
-func (t *ListTool) DangerLevel(map[string]interface{}) common.DangerLevel     { return common.LevelSafe }
+func (t *ListTool) ExecutionMode(map[string]any) tools.ExecutionMode { return tools.ModeParallel }
+func (t *ListTool) DangerLevel(map[string]any) common.DangerLevel     { return common.LevelSafe }
 func (t *ListTool) Description() string {
 	return "List directory contents. ALWAYS use List — NEVER invoke ls as Bash. Returns files and subdirectories sorted by name."
 }
@@ -25,7 +25,7 @@ func (t *ListTool) Parameters() []tools.Parameter {
 	}
 }
 
-func (t *ListTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *ListTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	path, _ := args["path"].(string)
 	if path == "" {
 		return "", fmt.Errorf("missing path parameter")

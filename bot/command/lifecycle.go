@@ -25,7 +25,7 @@ type Deps struct {
 	Ag            *agent.Agent
 	SkillReg      *skill.Registry
 	ToolRegistry  *tools.Registry
-	TokenBudget   int
+	ContextWindow   int
 	Provider      string
 	Model         string
 	PromptBuilder *prompt.Builder
@@ -67,7 +67,7 @@ func RegisterAll(p *Parser, deps Deps, st *SkillState) {
 			st.MsgStart = deps.CtxMgr.Len()
 			deps.CtxMgr.Add("user", skill.FormatForContext(sk))
 			deps.SkillReg.MarkLoaded(name)
-			deps.CtxMgr.SetSkillList(skill.BuildSkillListText(deps.SkillReg.List(), deps.SkillReg.LoadedSet(), deps.TokenBudget))
+			deps.CtxMgr.SetSkillList(skill.BuildSkillListText(deps.SkillReg.List(), deps.SkillReg.LoadedSet(), deps.ContextWindow))
 			if len(cmd.Args) == 0 {
 				st.MsgStart = -1
 				return fmt.Sprintf("Loaded skill %q.", name), true
@@ -84,7 +84,7 @@ func RegisterAll(p *Parser, deps Deps, st *SkillState) {
 	if t, err := deps.ToolRegistry.Get("skill"); err == nil {
 		t.(*skill.SkillTool).SetOnLoad(func(name string) {
 			deps.SkillReg.MarkLoaded(name)
-			deps.CtxMgr.SetSkillList(skill.BuildSkillListText(deps.SkillReg.List(), deps.SkillReg.LoadedSet(), deps.TokenBudget))
+			deps.CtxMgr.SetSkillList(skill.BuildSkillListText(deps.SkillReg.List(), deps.SkillReg.LoadedSet(), deps.ContextWindow))
 		})
 	}
 }
@@ -119,14 +119,23 @@ func ForceSummarize(ctxMgr *ctxmgr.Manager) (string, error) {
 	return fmt.Sprintf("%s: %d messages, ~%d → ~%d tokens", action, count, tokens, newTokens), nil
 }
 
-// ContextStats returns a one-line conversation size summary.
+// ContextStats returns a one-line conversation size summary with a colored bar.
 func ContextStats(ctxMgr *ctxmgr.Manager) string {
-	count, tokens, hasSummary := ctxMgr.Stats()
-	s := "none"
-	if hasSummary {
-		s = "yes"
+	r := ctxMgr.Report()
+	used := r.SystemPrompt + r.ToolDefTokens + r.TodoText + r.SkillList + r.Messages
+	free := r.Budget - used
+	if free < 0 {
+		free = 0
 	}
-	return fmt.Sprintf("Messages: %d, ~%d tokens, summary: %s", count, tokens, s)
+	bar := ctxmgr.BuildBar(r.Budget, []ctxmgr.BarSegment{
+		{Size: r.SystemPrompt, Kind: "sys"},
+		{Size: r.ToolDefTokens, Kind: "tools"},
+		{Size: r.TodoText, Kind: "todo"},
+		{Size: r.SkillList, Kind: "skills"},
+		{Size: r.Messages, Kind: "msgs"},
+		{Size: free, Kind: "free"},
+	}, 20)
+	return fmt.Sprintf("%s  %s / %s", bar, ctxmgr.FormatTokens(used), ctxmgr.FormatTokens(r.Budget))
 }
 
 // ContextReport returns a detailed context window breakdown.
@@ -134,15 +143,14 @@ func ContextReport(ctxMgr *ctxmgr.Manager, toolDescs []tools.Descriptor) string 
 	r := ctxMgr.Report()
 	r.ToolDefCount = len(toolDescs)
 	r.ToolDefTokens = estimateToolDefTokens(toolDescs)
-	_ = ctxMgr.ExportToFile("/tmp/nekocode-context.json")
 	return ctxmgr.FormatContextReport(r)
 }
 
 // ForceFreshStart archives current conversation and starts a new session.
-func ForceFreshStart(ctxMgr *ctxmgr.Manager, skillReg *skill.Registry, tokenBudget int) (string, error) {
+func ForceFreshStart(ctxMgr *ctxmgr.Manager, skillReg *skill.Registry, contextWindow int) (string, error) {
 	count, oldTokens, _ := ctxMgr.Stats()
 	skillReg.ClearLoaded()
-	ctxMgr.SetSkillList(skill.BuildSkillListText(skillReg.List(), nil, tokenBudget))
+	ctxMgr.SetSkillList(skill.BuildSkillListText(skillReg.List(), nil, contextWindow))
 	if count <= 2 {
 		ctxMgr.FreshStart()
 		return "New session started.", nil

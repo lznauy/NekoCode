@@ -7,6 +7,8 @@ import (
 
 	"nekocode/bot/ctxmgr/compact"
 	"nekocode/bot/ctxmgr/token"
+
+	"charm.land/lipgloss/v2"
 )
 
 type ContextReport struct {
@@ -26,9 +28,13 @@ type ContextReport struct {
 	SysInjections  int
 	AssistantMsgs  int
 	ToolResults    int
-	CacheHitTokens int
+	CacheHitTokens  int
 	CacheMissTokens int
-	CacheHitRatio  float64
+	CacheHitRatio   float64
+	SubCount        int
+	SubTokens       int
+	SubCacheHit     int
+	SubCacheMiss    int
 }
 
 type SkillToken struct {
@@ -67,11 +73,16 @@ func (m *Manager) Report() ContextReport {
 	}
 	r.Messages = token.EstimateTokens(m.ctx.Messages[m.ctx.CompactBoundary:])
 	r.Archived = m.ctx.CompactBoundary
-	r.CompactCount = m.tok.CompactCount
-	r.TrimCount = m.tok.TrimCount
-	r.Budget = m.tok.TokenBudget
-	r.CacheHitTokens, r.CacheMissTokens = m.tok.Tracker.CacheStats()
-	r.CacheHitRatio = m.tok.Tracker.CacheHitRatio()
+	r.CompactCount = m.CompactCount
+	r.TrimCount = m.TrimCount
+	r.Budget = m.ContextWindow
+	r.CacheHitTokens, r.CacheMissTokens = m.Tracker.CacheStats()
+	r.CacheHitRatio = m.Tracker.CacheHitRatio()
+	sub := m.Tracker.SubStats()
+	r.SubCount = sub.Count
+	r.SubTokens = sub.TotalTokens
+	r.SubCacheHit = sub.CacheHitTokens
+	r.SubCacheMiss = sub.CacheMissTokens
 	return r
 }
 
@@ -100,86 +111,104 @@ func estimateSkills(skillList string) []SkillToken {
 }
 
 // FormatContextReport renders a context report as a styled string.
-const nbsp = " "
-
-func indent(n int) string { return strings.Repeat(nbsp, n) }
-
 func FormatContextReport(r ContextReport) string {
-	used := r.SystemPrompt  + r.ToolDefTokens + r.TodoText + r.SkillList + r.Messages
+	used := r.SystemPrompt + r.ToolDefTokens + r.TodoText + r.SkillList + r.Messages
 	free := r.Budget - used
 	if free < 0 {
 		free = 0
 	}
 	pct := func(n int) string {
 		if r.Budget == 0 {
-			return "—"
+			return ""
 		}
-		return fmt.Sprintf("%.1f%%", float64(n)/float64(r.Budget)*100)
+		return fmt.Sprintf("(%.0f%%)", float64(n)/float64(r.Budget)*100)
+	}
+	item := func(ch, label string, n int) string {
+		return barColors[ch].Render(barChars[ch]) + " " + label + ": " + FormatTokens(n) + " " + barColors["free"].Render(pct(n))
 	}
 
-	var b strings.Builder
+	bar := BuildBar(r.Budget, []BarSegment{
+		{Size: r.SystemPrompt, Kind: "sys"},
+		{Size: r.ToolDefTokens + r.TodoText, Kind: "tools"},
+		{Size: r.SkillList, Kind: "skills"},
+		{Size: r.Messages, Kind: "msgs"},
+		{Size: free, Kind: "free"},
+	}, 20)
 
-	b.WriteString("Context Report\n")
-	bar := buildBar(r.Budget, []barSegment{
-		{size: r.SystemPrompt, label: "", kind: "sys"},
-		{size: r.ToolDefTokens, label: "", kind: "tools"},
-		{size: r.TodoText, label: "", kind: "todo"},
-		{size: r.SkillList, label: "", kind: "skills"},
-		{size: r.Messages, label: "", kind: "msgs"},
-		{size: free, label: "", kind: "free"},
-	}, 40)
-	b.WriteString(bar + "\n")
-	fmt.Fprintf(&b, "%s / %s (%s)\n\n", formatTokens(used), formatTokens(r.Budget), pct(used))
+	s := fmt.Sprintf("%s  %s / %s\n\n%s  %s\n%s  %s\n\n%s",
+		bar, FormatTokens(used), FormatTokens(r.Budget),
+		item("sys", "System", r.SystemPrompt),
+		item("tools", "Tools", r.ToolDefTokens),
+		item("msgs", "Messages", r.Messages),
+		item("skills", "Skills", r.SkillList),
+		barColors["free"].Render(fmt.Sprintf("%d tools · %d msgs · %d archived  %s Free: %s",
+			r.ToolDefCount, r.UserMessages+r.AssistantMsgs+r.ToolResults, r.Archived,
+			FormatTokens(free), pct(free))),
+	)
 
-	b.WriteString(indent(0) + "▸ System\n")
-	fmt.Fprintf(&b, indent(2)+"%-20s %s (%s)\n", "Prompt", formatTokens(r.SystemPrompt), pct(r.SystemPrompt))
-	fmt.Fprintf(&b, indent(2)+"%-20s %s (%s) · %d tools\n", "Tool definitions", formatTokens(r.ToolDefTokens), pct(r.ToolDefTokens), r.ToolDefCount)
 	if r.CacheHitTokens > 0 || r.CacheMissTokens > 0 {
-		b.WriteString("\n" + indent(0) + "▸ Cache\n")
-		fmt.Fprintf(&b, indent(2)+"%-20s %s\n", "Hit tokens", formatTokens(r.CacheHitTokens))
-		fmt.Fprintf(&b, indent(2)+"%-20s %s\n", "Miss tokens", formatTokens(r.CacheMissTokens))
-		fmt.Fprintf(&b, indent(2)+"%-20s %.1f%%\n", "Hit ratio", r.CacheHitRatio*100)
+		hit := FormatTokens(r.CacheHitTokens)
+		miss := FormatTokens(r.CacheMissTokens)
+		ratio := fmt.Sprintf("%.0f%%", r.CacheHitRatio*100)
+		s += fmt.Sprintf("\n%s Cache: hit %s / miss %s · %s",
+			barColors["cache"].Render(barChars["cache"]), hit, miss, ratio)
 	}
 
-	total := r.UserMessages + r.AssistantMsgs + r.ToolResults + r.SysInjections
-	if total > 0 || r.Archived > 0 || r.ClearedMarkers > 0 {
-		b.WriteString("\n" + indent(0) + "▸ Messages\n")
-		fmt.Fprintf(&b, indent(2)+"%-20s %s (%s)\n", "Total", formatTokens(r.Messages), pct(r.Messages))
-		fmt.Fprintf(&b, indent(2)+"%-20s %d\n", "User messages", r.UserMessages)
-		fmt.Fprintf(&b, indent(2)+"%-20s %d\n", "Assistant", r.AssistantMsgs)
-		fmt.Fprintf(&b, indent(2)+"%-20s %d\n", "Tool results", r.ToolResults)
-		if r.SysInjections > 0 {
-			fmt.Fprintf(&b, indent(2)+"%-20s %d\n", "[System] hints", r.SysInjections)
+	if r.SubCount > 0 {
+		subTok := FormatTokens(r.SubTokens)
+		subHit := FormatTokens(r.SubCacheHit)
+		subMiss := FormatTokens(r.SubCacheMiss)
+		var subRatio string
+		if total := r.SubCacheHit + r.SubCacheMiss; total > 0 {
+			subRatio = fmt.Sprintf(" · hit %.0f%%", float64(r.SubCacheHit)/float64(total)*100)
 		}
-		if r.Archived > 0 {
-			fmt.Fprintf(&b, indent(2)+"%-20s %d messages\n", "Archived", r.Archived)
-			if r.TrimCount > 0 {
-				fmt.Fprintf(&b, indent(2)+"%-20s %d messages\n", "Trimmed", r.TrimCount)
-			}
-		}
-		if r.ClearedMarkers > 0 {
-			fmt.Fprintf(&b, indent(2)+"%-20s %d (total %d)\n", "Compacted", r.ClearedMarkers, r.CompactCount)
-		}
+		s += fmt.Sprintf("\n%s Subagents: %d runs · %s tokens · hit %s / miss %s%s",
+			barColors["sub"].Render(barChars["sub"]), r.SubCount, subTok, subHit, subMiss, subRatio)
 	}
-
-	return b.String()
+	return s
 }
 
-type barSegment struct {
-	size  int
-	label string
-	kind  string
+func FormatTokens(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fm", float64(n)/1_000_000)
+	case n >= 1000:
+		return fmt.Sprintf("%.1fk", float64(n)/1000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
 }
 
-func buildBar(total int, segments []barSegment, width int) string {
+type BarSegment struct {
+	Size int
+	Kind string
+}
+
+var barColors= map[string]lipgloss.Style{
+	"sys":    lipgloss.NewStyle().Foreground(lipgloss.Color("#888")),
+	"tools":  lipgloss.NewStyle().Foreground(lipgloss.Color("#999")),
+	"todo":   lipgloss.NewStyle().Foreground(lipgloss.Color("#d47757")),
+	"skills": lipgloss.NewStyle().Foreground(lipgloss.Color("#ffc107")),
+	"msgs":   lipgloss.NewStyle().Foreground(lipgloss.Color("#9334ea")),
+	"free":   lipgloss.NewStyle().Foreground(lipgloss.Color("#666")),
+	"cache":  lipgloss.NewStyle().Foreground(lipgloss.Color("#6ab")),
+	"sub":    lipgloss.NewStyle().Foreground(lipgloss.Color("#6ab")),
+}
+
+var barChars = map[string]string{
+	"sys": "⛁", "tools": "⛁", "todo": "⛀", "skills": "⛀", "msgs": "⛁", "free": "⛶",
+	"cache": "⛂", "sub": "⛃",
+}
+
+func BuildBar(total int, segments []BarSegment, width int) string {
 	if total <= 0 {
 		return ""
 	}
 	allocated := make([]int, len(segments))
 	remaining := width
 	for i, s := range segments {
-		if s.size > 0 {
-			w := s.size * width / total
+		if s.Size > 0 {
+			w := s.Size * width / total
 			if w < 1 {
 				w = 1
 			}
@@ -188,15 +217,10 @@ func buildBar(total int, segments []barSegment, width int) string {
 		}
 	}
 	for i := len(segments) - 1; i >= 0 && remaining > 0; i-- {
-		if segments[i].size > 0 {
+		if segments[i].Size > 0 {
 			allocated[i] += remaining
 			break
 		}
-	}
-
-	chars := map[string]string{
-		"sys": "▨", "tools": "▩", "anchor": "◈", "todo": "○",
-		"skills": "◆", "msgs": "▣", "free": "·",
 	}
 
 	var b strings.Builder
@@ -204,18 +228,14 @@ func buildBar(total int, segments []barSegment, width int) string {
 		if allocated[i] <= 0 {
 			continue
 		}
-		ch := chars[s.kind]
+		ch := barChars[s.Kind]
 		if ch == "" {
 			ch = " "
 		}
-		b.WriteString(strings.Repeat(ch, allocated[i]))
+		sty := barColors[s.Kind]
+		for range allocated[i] {
+			b.WriteString(sty.Render(ch) + " ")
+		}
 	}
 	return b.String()
-}
-
-func formatTokens(n int) string {
-	if n >= 1000 {
-		return fmt.Sprintf("%.1fk", float64(n)/1000)
-	}
-	return fmt.Sprintf("%d", n)
 }

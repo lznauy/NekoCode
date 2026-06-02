@@ -46,3 +46,42 @@ func TestRegistry(t *testing.T) {
 		t.Errorf("Descriptors: got %d, want 2", len(descs))
 	}
 }
+
+func TestUnregister(t *testing.T) {
+	r := NewRegistry()
+	r.Register(&testTool{name: "x"})
+	r.Register(&testTool{name: "y"})
+
+	if _, err := r.Get("x"); err != nil {
+		t.Error("x should exist before unregister")
+	}
+
+	r.Unregister("x")
+
+	if _, err := r.Get("x"); err == nil {
+		t.Error("x should be gone after unregister")
+	}
+	if _, err := r.Get("y"); err != nil {
+		t.Error("y should still exist")
+	}
+
+	// List should only have y.
+	if list := r.List(); len(list) != 1 || list[0].Name() != "y" {
+		t.Errorf("List after unregister: got %d tools, want 1 (y)", len(list))
+	}
+
+	// Unregister non-existent — should be a no-op (no panic).
+	r.Unregister("nonexistent")
+}
+
+func TestUnregisterThenReRegister(t *testing.T) {
+	r := NewRegistry()
+	r.Register(&testTool{name: "z"})
+	r.Unregister("z")
+	r.Register(&testTool{name: "z"}) // re-register same name
+
+	tool, err := r.Get("z")
+	if err != nil || tool.Name() != "z" {
+		t.Error("z should exist after re-register")
+	}
+}

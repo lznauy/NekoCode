@@ -197,33 +197,25 @@ func (f *File) resolveSection(name string) string {
 	}
 }
 
+func (f *File) fieldPtrs() map[string]*string {
+	return map[string]*string{
+		"TechStack":     &f.TechStack,
+		"ActiveGoals":   &f.ActiveGoals,
+		"CompletedTasks": &f.CompletedTasks,
+		"ArchMap":       &f.ArchMap,
+		"Preferences":   &f.Preferences,
+	}
+}
+
 func (f *File) getField(key string) string {
-	switch key {
-	case "TechStack":
-		return f.TechStack
-	case "ActiveGoals":
-		return f.ActiveGoals
-	case "CompletedTasks":
-		return f.CompletedTasks
-	case "ArchMap":
-		return f.ArchMap
-	case "Preferences":
-		return f.Preferences
+	if p, ok := f.fieldPtrs()[key]; ok {
+		return *p
 	}
 	return ""
 }
 
 func (f *File) setField(key, value string) {
-	switch key {
-	case "TechStack":
-		f.TechStack = value
-	case "ActiveGoals":
-		f.ActiveGoals = value
-	case "CompletedTasks":
-		f.CompletedTasks = value
-	case "ArchMap":
-		f.ArchMap = value
-	case "Preferences":
-		f.Preferences = value
+	if p, ok := f.fieldPtrs()[key]; ok {
+		*p = value
 	}
 }

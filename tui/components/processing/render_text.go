@@ -55,12 +55,12 @@ func WrapPlain(text string, width int) string {
 	return strings.Join(result, "\n")
 }
 
-// isEmptyOrNoise returns true if a line is empty, whitespace-only, or
-// contains only non-content characters (dots, dashes, etc.).
+// isEmptyOrNoise returns true if a line contains only non-content characters
+// (dots, dashes, etc.). Empty lines (paragraph breaks) are NOT noise.
 func isEmptyOrNoise(s string) bool {
 	trimmed := strings.TrimSpace(s)
 	if trimmed == "" {
-		return true
+		return false // paragraph break, keep it
 	}
 	for _, r := range trimmed {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) || r > 127 {

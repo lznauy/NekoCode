@@ -25,6 +25,7 @@ func NewExecutor(r *Registry) *Executor {
 }
 
 func (e *Executor) SetConfirmFn(fn common.ConfirmFunc) { e.confirmFn = fn }
+func (e *Executor) ConfirmFn() common.ConfirmFunc    { return e.confirmFn }
 func (e *Executor) SetPhaseFn(fn common.PhaseFunc)     { e.phaseFn = fn }
 func (e *Executor) SetPlanMode(on bool)                { e.planMode = on }
 
@@ -115,7 +116,7 @@ func (e *Executor) executeOne(ctx context.Context, tc ToolCallItem) ToolCallResu
 		if execErr != nil {
 			return ToolCallResult{ID: tc.ID, Name: tc.Name, Error: execErr.Error()}
 		}
-	output = TruncateOutput(output)
+	output = truncateOutput(output)
 
 	// Track reads + invalidate cache.
 	if p, _ := tc.Args["path"].(string); p != "" {
@@ -160,7 +161,7 @@ const (
 	tailLen  = 20
 )
 
-func TruncateOutput(output string) string {
+func truncateOutput(output string) string {
 	lines := strings.Split(output, "\n")
 	if len(lines) <= maxLines {
 		return output

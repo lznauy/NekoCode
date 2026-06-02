@@ -15,41 +15,32 @@ import (
 type SubAgentFunc func(ctx context.Context, prompt, agentType, thoroughness string) (*subagent.Result, error)
 
 type TaskTool struct {
-	run   SubAgentFunc
-	types map[string]subagent.AgentType
+	run SubAgentFunc
 }
 
-func NewTaskTool() *TaskTool {
-	return &TaskTool{}
-}
+func NewTaskTool() *TaskTool { return &TaskTool{} }
 
-func (t *TaskTool) Wire(run SubAgentFunc, types map[string]subagent.AgentType) {
+func (t *TaskTool) Wire(run SubAgentFunc) {
 	t.run = run
-	t.types = types
 }
 
-func (t *TaskTool) lookupType(name string) (subagent.AgentType, bool) {
-	at, ok := t.types[name]
-	return at, ok
-}
-
-func (t *TaskTool) Name() string                                          { return "task" }
-func (t *TaskTool) ExecutionMode(map[string]interface{}) tools.ExecutionMode { return tools.ModeParallel }
-func (t *TaskTool) DangerLevel(map[string]interface{}) common.DangerLevel     { return common.LevelSafe }
+func (t *TaskTool) Name() string { return "task" }
+func (t *TaskTool) ExecutionMode(map[string]any) tools.ExecutionMode { return tools.ModeParallel }
+func (t *TaskTool) DangerLevel(map[string]any) common.DangerLevel     { return common.LevelSafe }
 func (t *TaskTool) Description() string {
-	return "Delegate multi-step work to an isolated sub-agent. Subagent cannot see your conversation — include full context in prompt. Types: explore (search/verify), verify (validate edits), executor (write/edit), plan (architecture). For simple tasks (single file, one grep), use direct tools instead."
+	return "Delegate multi-step work to an isolated sub-agent. Subagent cannot see your conversation — include full context in prompt. Types: researcher (search/analyze), executor (write/edit), verify (validate changes). For simple tasks (single file, one grep), use direct tools instead."
 }
 
 func (t *TaskTool) Parameters() []tools.Parameter {
 	return []tools.Parameter{
 		{Name: "type", Type: "string", Required: true,
-			Description: "explore | verify | executor | plan"},
+			Description: "researcher | executor | verify"},
 		{Name: "prompt", Type: "string", Required: true,
 			Description: "Self-contained task description with exact file paths and expected output."},
 	}
 }
 
-func (t *TaskTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *TaskTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	if t.run == nil {
 		return "", fmt.Errorf("task tool: not wired")
 	}
@@ -79,13 +70,9 @@ func (t *TaskTool) Execute(ctx context.Context, args map[string]interface{}) (st
 		return "", fmt.Errorf("task tool: subagent returned nil result")
 	}
 
-	at, _ := t.lookupType(typeName)
-	var xmlResult string
-		xmlResult = subagent.FormatResult(result, at.ReadOnly)
-
+	out := subagent.FormatResult(result)
 	if err != nil && result.Status == subagent.StatusPartial {
-		return xmlResult + fmt.Sprintf("\n\nNote: subagent was interrupted before completion: %v", err), nil
+		out += fmt.Sprintf("\n\nNote: subagent was interrupted before completion: %v", err)
 	}
-
-	return xmlResult, nil
+	return out, nil
 }

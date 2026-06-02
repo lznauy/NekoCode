@@ -1,8 +1,9 @@
 package ctxmgr
 
 import (
+	"nekocode/bot/debug"
 	"nekocode/bot/ctxmgr/compact"
-	"nekocode/llm"
+	"nekocode/llm/types"
 )
 
 func summary(s string) string {
@@ -14,61 +15,44 @@ func summary(s string) string {
 }
 
 func (m *Manager) Add(role, content string) {
-	compact.Log("add_msg: role=%s len=%d content=%q", role, len(content), summary(content))
+	debug.Log("add_msg: role=%s len=%d content=%q", role, len(content), summary(content))
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.ctx.Messages = append(m.ctx.Messages, llm.Message{Role: role, Content: content})
-	m.tok.Tracker.AddNew(len(role) + len(content))
+	m.ctx.Messages = append(m.ctx.Messages, types.Message{Role: role, Content: content})
+	m.Tracker.AddNew(len(role) + len(content))
 }
 
 func (m *Manager) AddAssistantResponse(content, reasoning string) {
-	compact.Log("add_assistant: len=%d reasoning=%d", len(content), len(reasoning))
+	debug.Log("add_assistant: len=%d reasoning=%d", len(content), len(reasoning))
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.ctx.Messages = append(m.ctx.Messages, llm.Message{
+	m.ctx.Messages = append(m.ctx.Messages, types.Message{
 		Role:             "assistant",
 		Content:          content,
 		ReasoningContent: reasoning,
 	})
-	m.tok.Tracker.AddNew(len("assistant") + len(content) + len(reasoning))
+	m.Tracker.AddNew(len("assistant") + len(content) + len(reasoning))
 }
 
-func (m *Manager) AddAssistantToolCall(content, reasoning string, toolCalls []llm.ToolCall) {
+func (m *Manager) AddAssistantToolCall(content, reasoning string, toolCalls []types.ToolCall) {
 	var names []string
 	for _, tc := range toolCalls {
 		names = append(names, tc.Function.Name)
 	}
-	compact.Log("add_assistant_tool: len=%d tools=%v", len(content), names)
+	debug.Log("add_assistant_tool: len=%d tools=%v", len(content), names)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.ctx.Messages = append(m.ctx.Messages, llm.Message{
+	m.ctx.Messages = append(m.ctx.Messages, types.Message{
 		Role:             "assistant",
 		Content:          content,
 		ReasoningContent: reasoning,
 		ToolCalls:        toolCalls,
 	})
-	m.tok.Tracker.AddNew(len("assistant") + len(content) + len(reasoning))
-}
-
-func (m *Manager) AddToolResult(toolCallID, content, toolName string) {
-	compact.Log("add_tool_result: tool=%s len=%d", toolName, len(content))
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	role := "tool"
-	if toolCallID == "" {
-		role = "user"
-	}
-	content, _ = compact.BudgetResult(content, toolName)
-	m.ctx.Messages = append(m.ctx.Messages, llm.Message{
-		Role:       role,
-		Content:    content,
-		ToolCallID: toolCallID,
-	})
-	m.tok.Tracker.AddNew(len(role) + len(content) + len(toolCallID))
+	m.Tracker.AddNew(len("assistant") + len(content) + len(reasoning))
 }
 
 type ToolResultMsg struct {
-	Message  llm.Message
+	Message  types.Message
 	ToolName string
 }
 
@@ -77,7 +61,7 @@ func (m *Manager) AddToolResultsBatch(results []ToolResultMsg) {
 	for _, r := range results {
 		names = append(names, r.ToolName)
 	}
-	compact.Log("add_tool_results_batch: tools=%v count=%d", names, len(results))
+	debug.Log("add_tool_results_batch: tools=%v count=%d", names, len(results))
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, r := range results {
@@ -86,19 +70,19 @@ func (m *Manager) AddToolResultsBatch(results []ToolResultMsg) {
 			role = "user"
 		}
 		content, _ := compact.BudgetResult(r.Message.Content, r.ToolName)
-		m.ctx.Messages = append(m.ctx.Messages, llm.Message{
+		m.ctx.Messages = append(m.ctx.Messages, types.Message{
 			Role:       role,
 			Content:    content,
 			ToolCallID: r.Message.ToolCallID,
 		})
-		m.tok.Tracker.AddNew(len(role) + len(content) + len(r.Message.ToolCallID))
+		m.Tracker.AddNew(len(role) + len(content) + len(r.Message.ToolCallID))
 	}
 }
 
 func (m *Manager) Clear() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.ctx.Messages = make([]llm.Message, 0)
+	m.ctx.Messages = make([]types.Message, 0)
 	m.ctx.CompactBoundary = 0
 	m.ctx.Todo = ""
 	m.ctx.TodoItems = nil

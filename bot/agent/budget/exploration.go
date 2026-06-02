@@ -25,11 +25,6 @@ func NewExplorationTracker() *ExplorationTracker {
 	}
 }
 
-// IsExhausted returns true when the exploration budget is depleted.
-func (t *ExplorationTracker) IsExhausted() bool {
-	return t.Score <= 0
-}
-
 // Reset fully restores the exploration budget, clearing read-file history.
 func (t *ExplorationTracker) Reset() {
 	t.Score = 200
@@ -42,24 +37,18 @@ func (t *ExplorationTracker) Reset() {
 // recording
 // ---------------------------------------------------------------------------
 
-// Record updates the score based on a tool call and its result.
-// toolName: the tool that was called.
-// filePath: for read/edit/write, the target file path.
-// args: tool arguments (for detecting GenDecl vs trivial changes).
+var toolCosts = map[string]int{
+	"list": 2, "glob": 2, "grep": 3,
+	"web_search": 3, "web_fetch": 8, "task": 12,
+}
+
+// Record updates the explore budget based on the tool called.
 func (t *ExplorationTracker) Record(toolName string, filePath string) {
+	if cost, ok := toolCosts[toolName]; ok {
+		t.deduct(cost, toolName)
+		return
+	}
 	switch toolName {
-	case "list":
-		t.deduct(2, "list")
-	case "glob":
-		t.deduct(2, "glob")
-	case "grep":
-		t.deduct(3, "grep")
-	case "web_search":
-		t.deduct(3, "web_search")
-	case "web_fetch":
-		t.deduct(8, "web_fetch")
-	case "task":
-		t.deduct(12, "task(explore)")
 	case "read":
 		t.recordRead(filePath)
 	case "edit", "write":

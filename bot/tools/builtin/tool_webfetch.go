@@ -30,10 +30,10 @@ func NewWebFetchTool() *WebFetchTool {
 }
 
 func (t *WebFetchTool) Name() string { return "web_fetch" }
-func (t *WebFetchTool) ExecutionMode(map[string]interface{}) tools.ExecutionMode {
+func (t *WebFetchTool) ExecutionMode(map[string]any) tools.ExecutionMode {
 	return tools.ModeParallel
 }
-func (t *WebFetchTool) DangerLevel(map[string]interface{}) common.DangerLevel {
+func (t *WebFetchTool) DangerLevel(map[string]any) common.DangerLevel {
 	return common.LevelSafe
 }
 
@@ -48,7 +48,7 @@ func (t *WebFetchTool) Parameters() []tools.Parameter {
 	}
 }
 
-func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	rawURL, ok := args["url"].(string)
 	if !ok || strings.TrimSpace(rawURL) == "" {
 		return "", fmt.Errorf("missing url parameter")
@@ -60,7 +60,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{})
 
 	prompt, _ := args["prompt"].(string)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to build request: %v", err)
 	}

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"nekocode/llm"
+	"nekocode/llm/types"
 )
 
 const (
@@ -19,7 +19,7 @@ const (
 // MergeSummaries runs an independent LLM session to merge old and new summaries.
 // Uses a clean context (no history) with thinking disabled — fast and focused.
 // Returns the merged summary, or falls back to raw append on failure.
-func MergeSummaries(llmClient llm.LLM, oldSummary, newSummary string) string {
+func MergeSummaries(llmClient types.LLM, oldSummary, newSummary string) string {
 	if oldSummary == "" {
 		return newSummary
 	}
@@ -37,7 +37,7 @@ func MergeSummaries(llmClient llm.LLM, oldSummary, newSummary string) string {
 	return merged
 }
 
-func tryMerge(client llm.LLM, oldSummary, newSummary string) (string, error) {
+func tryMerge(client types.LLM, oldSummary, newSummary string) (string, error) {
 	client.SetMaxTokens(mergeMaxTokens)
 	client.SetDisableThinking(true)
 
@@ -56,12 +56,12 @@ func tryMerge(client llm.LLM, oldSummary, newSummary string) (string, error) {
 	return "", fmt.Errorf("merge failed after %d retries: %w", mergeMaxRetries, lastErr)
 }
 
-func callMerge(client llm.LLM, oldSummary, newSummary string) (string, error) {
+func callMerge(client types.LLM, oldSummary, newSummary string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	prompt := buildMergePrompt(oldSummary, newSummary)
-	resp, err := client.Chat(ctx, []llm.Message{{Role: "user", Content: prompt}}, nil)
+	resp, err := client.Chat(ctx, []types.Message{{Role: "user", Content: prompt}}, nil)
 	if err != nil {
 		return "", err
 	}

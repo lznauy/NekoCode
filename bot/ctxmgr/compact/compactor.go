@@ -1,15 +1,16 @@
 package compact
 
 import (
+	"nekocode/bot/debug"
 	"fmt"
 
 	"nekocode/bot/ctxmgr/context"
 	"nekocode/bot/ctxmgr/token"
-	"nekocode/llm"
+	"nekocode/llm/types"
 )
 
 // Summarizer is the function signature for LLM summarization.
-type Summarizer func(msgs []llm.Message, prevSummary string) (string, error)
+type Summarizer func(msgs []types.Message, prevSummary string) (string, error)
 
 // Tracker provides token estimates for compaction decisions.
 type Tracker interface {
@@ -20,7 +21,7 @@ type Tracker interface {
 // Compactor holds references to the parent's state for compaction.
 type Compactor struct {
 	Ctx         *context.Content
-	TokenBudget *int
+	ContextWindow *int
 	Tracker     Tracker
 
 	CompactCount *int
@@ -29,12 +30,6 @@ type Compactor struct {
 	Summarizer Summarizer
 	Cfg        Config
 }
-
-// SetSummarizer wires the LLM summarization function.
-func (m *Compactor) SetSummarizer(fn Summarizer) { m.Summarizer = fn }
-
-// Boundary returns the current compact boundary index.
-func (m *Compactor) Boundary() int { return m.Ctx.CompactBoundary }
 
 // -- 5-layer compaction pipeline ---------------------------------------
 
@@ -59,7 +54,7 @@ func (m *Compactor) AutoCompactIfNeeded() (Level, error) {
 	if level == LevelNormal || level == LevelWarning {
 		return level, nil
 	}
-	compactLog("auto_compact: level=%s est=%d budget=%d remaining=%d msgs=%d",
+	debug.Log("auto_compact: level=%s est=%d budget=%d remaining=%d msgs=%d",
 		level.String(), estTokens, effectiveBudget, remaining, len(m.Ctx.Messages))
 	if level == LevelBlocking {
 		return level, fmt.Errorf("context full: %d tokens used of %d budget (only %d remaining)",
@@ -156,20 +151,20 @@ func (m *Compactor) ForceCompact() {
 		}
 	}
 	*m.CompactCount += compacted
-	compactLog("force_compact: cleared %d tool results out of %d messages (%d total compactions)", compacted, len(m.Ctx.Messages), *m.CompactCount)
+	debug.Log("force_compact: cleared %d tool results out of %d messages (%d total compactions)", compacted, len(m.Ctx.Messages), *m.CompactCount)
 }
 
 // effectiveBudget returns the token budget, defaulting to 64000 if unset.
 func (m *Compactor) effectiveBudget() int {
-	if *m.TokenBudget > 0 {
-		return *m.TokenBudget
+	if *m.ContextWindow > 0 {
+		return *m.ContextWindow
 	}
 	return 64000
 }
 
 // effectiveConfig scales thresholds for the actual budget.
 func (m *Compactor) effectiveConfig() Config {
-	budget := *m.TokenBudget
+	budget := *m.ContextWindow
 	if budget <= 0 {
 		budget = 64000
 	}

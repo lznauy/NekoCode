@@ -1,4 +1,4 @@
-// processing_render.go — Render 编排器 + 5 个 section 渲染方法。
+// processing_render.go — Render 编排器 + 6 个 section 渲染方法。
 package processing
 
 import (
@@ -15,26 +15,27 @@ func (p *ProcessingItem) Render(width int) string {
 	if p.cachedRenderW == width && p.cachedRender != "" {
 		return p.cachedRender
 	}
-	cw := p.contentWidth
-	if cw <= 0 {
-		cw = width - 4
-	}
+	cw := width - 4
 	contentW := cw - 4
 
 	var sections []string
+	sections = append(sections, p.renderSummary())
+	if s := p.renderActivitySection(contentW, contentW); s != "" {
+		sections = append(sections, s)
+	}
+	if s := p.renderChangesSection(contentW, contentW); s != "" {
+		sections = append(sections, s)
+	}
+	if s := p.renderTodos(contentW, contentW); s != "" {
+		sections = append(sections, s)
+	}
+	if s := p.renderOutputSection(contentW, contentW); s != "" {
+		sections = append(sections, s)
+	}
+	if s := p.renderReasoningSection(contentW, contentW); s != "" {
+		sections = append(sections, s)
+	}
 	sections = append(sections, p.renderHeader())
-	if s := p.renderTodos(cw); s != "" {
-		sections = append(sections, s)
-	}
-	if s := p.renderToolSection(contentW, cw); s != "" {
-		sections = append(sections, s)
-	}
-	if s := p.renderOutputSection(contentW); s != "" {
-		sections = append(sections, s)
-	}
-	if s := p.renderReasoningSection(contentW); s != "" {
-		sections = append(sections, s)
-	}
 
 	body := strings.Join(sections, "\n")
 	card := lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color(styles.Primary)).
@@ -66,76 +67,154 @@ func (p *ProcessingItem) renderHeader() string {
 	if p.compactCount > 0 {
 		tp += " " + p.sty.Subtle.Render(fmt.Sprintf("🧹%d", p.compactCount))
 	}
-	return p.sty.Teal.Render(s) + " " + p.sty.Subtle.Render(l) + sk + tp
+	return "\n" + p.sty.Teal.Render(s) + " " + p.sty.Subtle.Render(l) + sk + tp
 }
 
-func (p *ProcessingItem) renderTodos(cw int) string {
+// -- summary ---------------------------------------------------------------
+
+func (p *ProcessingItem) renderSummary() string {
+	actN, chgN := 0, 0
+	for _, b := range p.blocks {
+		if b.Type != block.BlockTool {
+			continue
+		}
+		if isActivityTool(b.ToolName) {
+			actN++
+		} else {
+			chgN++
+		}
+	}
+	var parts []string
+	if p.skill != "" {
+		parts = append(parts, "skill: "+p.skill)
+	}
+	if actN > 0 {
+		parts = append(parts, fmt.Sprintf("%d tools", actN))
+	}
+	if chgN > 0 {
+		parts = append(parts, fmt.Sprintf("%d changes", chgN))
+	}
+	if len(parts) == 0 {
+		return p.sty.Subtle.Render("(=^.^=)")
+	}
+	return p.sty.Subtle.Render("(=^.^=) · " + strings.Join(parts, " · "))
+}
+
+// -- activity section -------------------------------------------------------
+
+func (p *ProcessingItem) renderActivitySection(contentW, sepW int) string {
+	var items []block.ContentBlock
+	for _, b := range p.blocks {
+		if b.Type == block.BlockTool && isActivityTool(b.ToolName) {
+			items = append(items, b)
+		}
+	}
+	if len(items) == 0 {
+		return ""
+	}
+	total := len(items)
+	if p.cachedActivityW == sepW && p.cachedActivityN == total && p.cachedActivity != "" {
+		return p.cachedActivity
+	}
+
+	start := 0
+	if total > maxActivity {
+		start = total - maxActivity
+	}
+	items = items[start:]
+
+	var sb strings.Builder
+	sb.WriteString("\n")
+	sep := p.sty.Subtle.Render("── activity " + strings.Repeat("─", sepW-lipgloss.Width("── activity ")))
+	sb.WriteString(sep)
+	sb.WriteString("\n")
+	for _, b := range items {
+		sb.WriteString("  ◉ " + b.ToolName)
+		if b.ToolArgs != "" {
+			sb.WriteString(" ")
+			sb.WriteString(b.ToolArgs)
+		}
+		if !b.Done && b.Content == "" {
+			sb.WriteString(" " + p.sty.Subtle.Render("…"))
+		}
+		sb.WriteString("\n")
+	}
+
+	p.cachedActivity = sb.String()
+	p.cachedActivityW = sepW
+	p.cachedActivityN = total
+	return p.cachedActivity
+}
+
+// -- changes section --------------------------------------------------------
+
+func (p *ProcessingItem) renderChangesSection(contentW, sepW int) string {
+	var items []block.ContentBlock
+	for _, b := range p.blocks {
+		if b.Type == block.BlockTool && !isActivityTool(b.ToolName) {
+			items = append(items, b)
+		}
+	}
+	if len(items) == 0 {
+		return ""
+	}
+	total := len(items)
+	if p.cachedChangesW == sepW && p.cachedChangesN == total && p.cachedChanges != "" {
+		return p.cachedChanges
+	}
+
+	var sb strings.Builder
+	sb.WriteString("\n")
+	sep := p.sty.Subtle.Render("── changes " + strings.Repeat("─", sepW-lipgloss.Width("── changes ")))
+	sb.WriteString(sep)
+	sb.WriteString("\n")
+	sb.WriteString(block.RenderTools(items, contentW, p.sty))
+
+	p.cachedChanges = sb.String()
+	p.cachedChangesW = sepW
+	p.cachedChangesN = total
+	return p.cachedChanges
+}
+
+// -- tasks section ----------------------------------------------------------
+
+func (p *ProcessingItem) renderTodos(contentW, sepW int) string {
 	if p.todos == "" {
 		return ""
 	}
-	if p.cachedTodosW < 0 || cw != p.cachedTodosW {
+	if p.cachedTodosW < 0 || sepW != p.cachedTodosW {
 		green := lipgloss.NewStyle().Foreground(lipgloss.Color(styles.DiffGreen))
 		var sb strings.Builder
+		sb.WriteString("\n")
+		sep := p.sty.Yellow.Render("── tasks " + strings.Repeat("─", sepW-lipgloss.Width("── tasks ")))
+		sb.WriteString(sep)
+		sb.WriteString("\n\n")
 		for _, line := range strings.Split(p.todos, "\n") {
-			sb.WriteString("\n  ")
 			switch {
 			case strings.HasPrefix(line, "✓ All"):
-				// All-complete summary in green.
 				sb.WriteString(green.Render(line))
 			case strings.HasPrefix(line, "Tasks "):
-				// Header line: dim counter.
 				sb.WriteString(p.sty.Subtle.Render(line))
 			case strings.HasPrefix(line, "·"):
-				// Pending: muted.
 				sb.WriteString(p.sty.Subtle.Render(line))
 			case strings.HasPrefix(line, "▸"):
-				// In progress: teal accent.
 				sb.WriteString(p.sty.Teal.Render(line))
 			case strings.HasPrefix(line, "✓"):
-				// Completed: green.
 				sb.WriteString(green.Render(line))
 			default:
 				sb.WriteString(line)
 			}
+			sb.WriteString("\n")
 		}
 		p.cachedTodos = sb.String()
-		p.cachedTodosW = cw
+		p.cachedTodosW = sepW
 	}
 	return p.cachedTodos
 }
 
-func (p *ProcessingItem) renderToolSection(contentW, cw int) string {
-	// Fast path: if the tool cache is valid and count hasn't changed, reuse it.
-	// invalidateLight preserves cachedToolN; invalidate resets it to 0.
-	blockCount := len(p.blocks)
-	if blockCount == p.cachedToolN && cw == p.cachedToolW && p.cachedTool != "" {
-		return p.cachedTool
-	}
-	// Rebuild: count tool blocks and render if any exist.
-	toolN := 0
-	for _, b := range p.blocks {
-		if b.Type == block.BlockTool {
-			toolN++
-		}
-	}
-	p.cachedTool = ""
-	if toolN > 0 {
-		p.cachedTool = p.renderToolBlocks(contentW)
-	}
-	p.cachedToolN = blockCount
-	p.cachedToolW = cw
-	return p.cachedTool
-}
+// -- output section ---------------------------------------------------------
 
-// renderToolBlocks 渲染处理中的工具块列表。
-func (p *ProcessingItem) renderToolBlocks(contentW int) string {
-	if len(p.blocks) == 0 {
-		return ""
-	}
-	return "\n" + block.RenderTools(p.blocks, contentW, p.sty)
-}
-
-func (p *ProcessingItem) renderOutputSection(contentW int) string {
+func (p *ProcessingItem) renderOutputSection(contentW, sepW int) string {
 	text := strings.TrimSpace(p.OutputText())
 	if text == "" {
 		return ""
@@ -145,23 +224,23 @@ func (p *ProcessingItem) renderOutputSection(contentW int) string {
 		return ""
 	}
 	var sb strings.Builder
-	if p.cachedTool != "" {
-		sb.WriteString("\n")
-	}
-	sep := p.sty.Teal.Render("▍ output " + strings.Repeat("─", contentW-lipgloss.Width("▍ output ")))
+	sb.WriteString("\n")
+	sep := p.sty.Teal.Render("── output " + strings.Repeat("─", sepW-lipgloss.Width("── output ")))
 	sb.WriteString(sep)
 	sb.WriteString("\n\n")
 	sb.WriteString(content)
 	return sb.String()
 }
 
-func (p *ProcessingItem) renderReasoningSection(contentW int) string {
+// -- reasoning section ------------------------------------------------------
+
+func (p *ProcessingItem) renderReasoningSection(contentW, sepW int) string {
 	if p.ReasoningText() == "" {
 		return ""
 	}
 	var sb strings.Builder
 	sb.WriteString("\n")
-	sep := p.sty.Blue.Render("▍ reasoning " + strings.Repeat("─", contentW-lipgloss.Width("▍ reasoning ")))
+	sep := p.sty.Blue.Render("── reasoning " + strings.Repeat("─", sepW-lipgloss.Width("── reasoning ")))
 	sb.WriteString(sep)
 	sb.WriteString("\n\n")
 	sb.WriteString(RenderFixed(WrapPlain(p.ReasoningText(), contentW), reasonLines, false, p.sty.Muted))

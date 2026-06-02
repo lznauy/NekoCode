@@ -42,6 +42,9 @@ func NewList(items ...Item) *List {
 
 func (l *List) SetSize(width, height int) {
 	l.width = width
+	if height < 0 {
+		height = 0
+	}
 	l.height = height
 }
 
@@ -300,6 +303,9 @@ func (l *List) Render() string {
 		currentOffset = 0
 	}
 
+	if l.height <= 0 {
+		return ""
+	}
 	if len(lines) > l.height {
 		lines = lines[:l.height]
 	}

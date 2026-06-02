@@ -2,6 +2,7 @@
 package components
 
 import (
+	"fmt"
 	"strings"
 
 	"nekocode/tui/styles"
@@ -23,38 +24,53 @@ func (c *ConfirmBar) SetRequest(req *common.ConfirmRequest) { c.req = req }
 func (c *ConfirmBar) Clear()                                { c.req = nil }
 func (c *ConfirmBar) Respond(ok bool)                       { c.req.Response <- ok; c.req = nil }
 
-func (c *ConfirmBar) Height(width int) int {
+func confirmMaxLines(termHeight int) int {
+	n := termHeight / 3
+	if n < 6 {
+		n = 6
+	}
+	return n
+}
+
+func (c *ConfirmBar) Height(width, termHeight int) int {
 	if c.req == nil {
 		return 0
 	}
 	contentW := max(40, width-6)
-	lines := c.descLines(contentW)
-	// title (1) + desc lines + level (1) + prompt (1) + border (1).
-	return len(lines) + 4
+	maxLines := confirmMaxLines(termHeight)
+	n := len(c.descLines(contentW))
+	if n > maxLines {
+		n = maxLines + 1 // +1 for truncated indicator
+	}
+	return n + 4 // title (1) + desc lines + level (1) + prompt (1) + border (1)
 }
 
-func (c *ConfirmBar) View(width int) string {
+func (c *ConfirmBar) View(width, termHeight int) string {
 	if c.req == nil {
 		return ""
 	}
-	// Leave room for padding and borders.
-	contentW := max(40, width-6)
-
-	title := c.sty.Primary.Bold(true).Render("Confirm")
-	topBorder := c.sty.Border.Render(styles.Horizontal)
 	barW := max(40, width-4)
-	titleBar := topBorder + " " + title + " " + strings.Repeat(styles.Horizontal, max(0, barW-lipgloss.Width(title)-2))
+	contentW := max(40, width-6)
+	maxLines := confirmMaxLines(termHeight)
 
-	// Show the full command, line-wrapped.
-	descLines := c.descLines(contentW)
+	title := c.sty.Primary.Bold(true).Render("  Confirm")
+	prefix := c.sty.Border.Render(styles.Horizontal + " ")
+	titleBar := prefix + title + " " + strings.Repeat(styles.Horizontal, max(0, barW-lipgloss.Width(prefix+title)))
 
-	level := c.sty.Yellow.Render(c.req.Level.String())
+	desc := c.formatDesc()
+	descLines := wrapText("  "+desc, contentW)
+	truncated := len(descLines) > maxLines
+	if truncated {
+		descLines = descLines[:maxLines]
+	}
+
+	levelTag := "  " + c.sty.Yellow.Render("["+c.req.Level.String()+"]")
 	if c.req.Level == common.LevelForbidden {
-		level = c.sty.Red.Render(c.req.Level.String())
+		levelTag = "  " + c.sty.Red.Render("["+c.req.Level.String()+"]")
 	}
 
 	hint := c.sty.Primary.Bold(true).Render("[enter] yes") + "  " + c.sty.Muted.Render("[esc] no")
-	prompt := c.sty.Base.Render("  Proceed?  ") + hint
+	prompt := "  " + c.sty.Base.Render("Proceed?  ") + hint
 	promptW := lipgloss.Width(prompt)
 
 	bottomBorder := c.sty.Border.Render(strings.Repeat(styles.Horizontal, barW))
@@ -62,10 +78,13 @@ func (c *ConfirmBar) View(width int) string {
 	var b strings.Builder
 	b.WriteString(titleBar + "\n")
 	for _, line := range descLines {
-		lineW := lipgloss.Width(line)
-		b.WriteString(c.sty.Base.Render(line) + strings.Repeat(" ", max(0, barW-lineW)) + "\n")
+		pad := max(0, barW-lipgloss.Width(line))
+		b.WriteString(c.sty.Base.Render(line) + strings.Repeat(" ", pad) + "\n")
 	}
-	b.WriteString("  [" + level + "]\n")
+	if truncated {
+		b.WriteString(c.sty.Muted.Render("  ... (truncated)") + "\n")
+	}
+	b.WriteString(levelTag + "\n")
 	b.WriteString(prompt + strings.Repeat(" ", max(0, barW-promptW)) + "\n")
 	b.WriteString(bottomBorder)
 
@@ -86,12 +105,21 @@ func (c *ConfirmBar) formatDesc() string {
 	switch c.req.ToolName {
 	case "bash":
 		if cmd, ok := c.req.Args["command"].(string); ok && cmd != "" {
-			return c.req.ToolName + " " + cmd
+			return cmd
 		}
-	case "write", "edit":
+	case "write":
 		if p, ok := c.req.Args["path"].(string); ok && p != "" {
-			return c.req.ToolName + " " + p
+			return "write " + p
 		}
+	case "edit":
+		if p, ok := c.req.Args["path"].(string); ok && p != "" {
+			return "edit " + p
+		}
+	case "/plugin install":
+		if summary, ok := c.req.Args["summary"].(string); ok && summary != "" {
+			return summary
+		}
+		return "Install plugin from " + fmt.Sprint(c.req.Args["source"])
 	}
 	if p, ok := c.req.Args["path"].(string); ok && p != "" {
 		return c.req.ToolName + " " + p

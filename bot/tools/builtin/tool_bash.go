@@ -8,13 +8,17 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"nekocode/bot/tools"
 
 	"nekocode/common"
 )
+
+const defaultBashTimeout = 120 * time.Second
 
 type BashTool struct{}
 
@@ -22,12 +26,13 @@ func (t *BashTool) Name() string                                     { return "b
 func (t *BashTool) ExecutionMode(map[string]any) tools.ExecutionMode { return tools.ModeSequential }
 
 func (t *BashTool) Description() string {
-	return "Execute shell commands. 120s timeout. Shell state NOT preserved between calls (use && to chain, absolute paths instead of cd). Prefer dedicated tools: Read, Edit, Write, Grep, Glob. Never git push --force or skip hooks."
+	return "Execute shell commands. " + strconv.Itoa(int(defaultBashTimeout.Seconds())) + "s timeout by default, configurable via timeout_ms parameter (max 600s). Shell state NOT preserved between calls (use && to chain, absolute paths instead of cd). Prefer dedicated tools: Read, Edit, Write, Grep, Glob. Never git push --force or skip hooks."
 }
 
 func (t *BashTool) Parameters() []tools.Parameter {
 	return []tools.Parameter{
 		{Name: "command", Type: "string", Required: true, Description: "The command to execute"},
+		{Name: "timeout_ms", Type: "number", Required: false, Description: "Timeout in milliseconds (default 120000, max 600000)"},
 	}
 }
 
@@ -106,13 +111,26 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) (string, er
 
 	cmdStr = strings.TrimSpace(cmdStr)
 
-	cmd := exec.Command("bash", "-c", cmdStr)
+	// Parse timeout from args, default 120s, max 600s.
+	timeout := defaultBashTimeout
+	if timeoutMs, ok := args["timeout_ms"].(float64); ok && timeoutMs > 0 {
+		timeout = time.Duration(timeoutMs) * time.Millisecond
+		if timeout > 600*time.Second {
+			timeout = 600 * time.Second
+		}
+	}
+
+	// Create a context with the configured timeout, inheriting from parent ctx.
+	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, "bash", "-c", cmdStr)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Dir, _ = os.Getwd()
 
 	// Kill the entire process group on context cancellation.
 	// exec.CommandContext only kills the direct child (bash), not grandchildren.
-	stop := context.AfterFunc(ctx, func() {
+	stop := context.AfterFunc(cmdCtx, func() {
 		if cmd.Process != nil {
 			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}
@@ -123,6 +141,9 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) (string, er
 	cleaned := tools.StripAnsi(string(output))
 
 	if err != nil {
+		if cmdCtx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("command timed out after %v: %v\nOutput: %s", timeout, err, cleaned)
+		}
 		return "", fmt.Errorf("command failed: %v\nOutput: %s", err, cleaned)
 	}
 

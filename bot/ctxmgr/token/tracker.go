@@ -11,6 +11,7 @@ type Tracker struct {
 	cacheHitTokens   int // cumulative (free — already cached)
 	cacheMissTokens  int // cumulative (charged as input)
 	newMessageTokens int // estimated tokens in messages added since last API call
+	sub              SubStats
 }
 
 // RecordUsage records token usage from an API response.
@@ -73,6 +74,28 @@ func (t *Tracker) PromptEstimate() int {
 		return 0
 	}
 	return t.lastPromptTokens + t.newMessageTokens
+}
+
+type SubStats struct {
+	Count            int
+	TotalTokens      int
+	CacheHitTokens   int
+	CacheMissTokens  int
+}
+
+func (t *Tracker) RecordSubagent(tokens, hit, miss int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.sub.Count++
+	t.sub.TotalTokens += tokens
+	t.sub.CacheHitTokens += hit
+	t.sub.CacheMissTokens += miss
+}
+
+func (t *Tracker) SubStats() SubStats {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.sub
 }
 
 // AddNew estimates tokens for messages added since the last API call.

@@ -111,6 +111,25 @@ func (c *FileStateCache) Invalidate(path string) {
 	c.remove(normalizePath(path))
 }
 
+// Seed copies entries from src into this cache. Used to warm a subagent cache
+// with the main agent's previously read files, avoiding cold-start disk reads.
+func (c *FileStateCache) Seed(src *FileStateCache) {
+	if src == nil {
+		return
+	}
+	src.mu.RLock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	defer src.mu.RUnlock()
+
+	for p, e := range src.entries {
+		if _, ok := c.entries[p]; !ok {
+			c.entries[p] = e
+			c.order = append(c.order, p)
+		}
+	}
+}
+
 func (c *FileStateCache) Merge(other *FileStateCache) {
 	if other == nil {
 		return

@@ -27,11 +27,11 @@ func TestSkillState(t *testing.T) {
 
 func TestDeps(t *testing.T) {
 	d := Deps{
-		TokenBudget: 100000,
+		ContextWindow: 100000,
 		Provider:    "anthropic",
 		Model:       "claude-sonnet-4-6",
 	}
-	if d.TokenBudget != 100000 {
-		t.Error("bad TokenBudget")
+	if d.ContextWindow != 100000 {
+		t.Error("bad ContextWindow")
 	}
 }

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"nekocode/bot/debug"
 	"context"
 	"sync"
 	"sync/atomic"
@@ -11,12 +12,12 @@ import (
 	"nekocode/bot/hooks"
 	"nekocode/bot/tools"
 	"nekocode/bot/tools/builtin"
-	"nekocode/llm"
+	"nekocode/llm/types"
 
 	"nekocode/common"
 )
 
-type ContextTransform func(messages []llm.Message) []llm.Message
+type ContextTransform func(messages []types.Message) []types.Message
 type StreamCallback func(delta string, isToolCall bool)
 type ReasoningCallback func(delta string)
 
@@ -30,7 +31,7 @@ type Agent struct {
 	steering  chan string
 
 	ctxMgr       *ctxmgr.Manager
-	llmClient    llm.LLM
+	llmClient    types.LLM
 	toolRegistry *tools.Registry
 	executor     *tools.Executor
 
@@ -50,12 +51,13 @@ type Agent struct {
 	exploration       *budget.ExplorationTracker
 	lastText          string
 
-	transform ContextTransform
-	hooks     *hooks.Registry
-	startTime time.Time
+	transform    ContextTransform
+	hookMgr      *hooks.Manager
+	declHooks    *hooks.DeclarativeRegistry
+	startTime    time.Time
 }
 
-func New(ctx context.Context, ctxMgr *ctxmgr.Manager, llmClient llm.LLM, toolRegistry *tools.Registry) *Agent {
+func New(ctx context.Context, ctxMgr *ctxmgr.Manager, llmClient types.LLM, toolRegistry *tools.Registry) *Agent {
 	agentCtx, cancel := context.WithCancel(ctx)
 	return &Agent{
 		parentCtx:    ctx,
@@ -69,9 +71,11 @@ func New(ctx context.Context, ctxMgr *ctxmgr.Manager, llmClient llm.LLM, toolReg
 	}
 }
 
-func (a *Agent) SetHookRegistry(r *hooks.Registry) { a.hooks = r; r.Logf = writeAgentLog }
+func (a *Agent) SetHookManager(m *hooks.Manager) { a.hookMgr = m }
+func (a *Agent) SetDeclarativeHooks(d *hooks.DeclarativeRegistry) { a.declHooks = d }
 
 func (a *Agent) SetConfirmFn(fn common.ConfirmFunc) { a.executor.SetConfirmFn(fn) }
+func (a *Agent) ConfirmFn() common.ConfirmFunc       { return a.executor.ConfirmFn() }
 func (a *Agent) SetPhaseFn(fn common.PhaseFunc)     { a.phase = fn; a.executor.SetPhaseFn(fn) }
 func (a *Agent) PhaseFn() common.PhaseFunc          { return a.phase }
 func (a *Agent) SetPlanMode(on bool)                { a.executor.SetPlanMode(on) }
@@ -98,16 +102,16 @@ func (a *Agent) replaceCtx() {
 }
 
 func (a *Agent) Steer(msg string) {
-	writeAgentLog("Steer: msg=%q", msg)
+	debug.Log("Steer: msg=%q", msg)
 	select {
 	case a.steering <- msg:
 	default:
 	}
 	a.replaceCtx()
-	writeAgentLog("Steer: context replaced")
+	debug.Log("Steer: context replaced")
 }
 func (a *Agent) Abort() {
-	writeAgentLog("Abort: user interrupt requested")
+	debug.Log("Abort: user interrupt requested")
 	a.finished = true
 	a.liveMu.Lock()
 	a.cancelFn()

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"nekocode/bot/debug"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"nekocode/bot/tools"
+	"nekocode/llm/types"
 	"nekocode/llm"
 
 	"nekocode/common"
@@ -22,20 +24,14 @@ const (
 )
 
 const (
-	synthesizePrompt  = "Based on the information collected above, provide a final answer. Do NOT call any more tools. Output your conclusion directly."
+	synthesizePrompt = "Based on the information collected above, provide a final answer. Do NOT call any more tools. Output your conclusion directly."
 )
-
-type ToolCallItem struct {
-	ID   string
-	Name string
-	Args map[string]any
-}
 
 type ReasoningResult struct {
 	Thought         string
 	Action          ActionType
 	ActionInput     string
-	ToolCalls       []ToolCallItem
+	ToolCalls       []tools.ToolCallItem
 	TextContent     string
 	Interrupted     bool
 	GarbledToolCall bool
@@ -63,7 +59,7 @@ func (a *Agent) Reason(state *stepState) *ReasoningResult {
 
 	if len(toolCalls) == 0 {
 		if isGarbledToolCall(textContent) {
-			writeAgentLog("GarbledToolCall: XML leaked (len=%d)", len(textContent))
+			debug.Log("GarbledToolCall: XML leaked (len=%d)", len(textContent))
 			return &ReasoningResult{Thought: "Format correction", Action: ActionChat, GarbledToolCall: true}
 		}
 		if textContent == "" {
@@ -77,7 +73,7 @@ func (a *Agent) Reason(state *stepState) *ReasoningResult {
 		return &ReasoningResult{
 			Thought: "Call tool: " + tc.Name, Action: ActionExecuteTool,
 			ActionInput: tc.Name + ":" + formatArgs(tc.Args),
-			ToolCalls: toolCalls, TextContent: textContent,
+			ToolCalls:   toolCalls, TextContent: textContent,
 		}
 	}
 
@@ -102,9 +98,9 @@ func (a ActionType) String() string {
 	}
 }
 
-func (a *Agent) callLLMForTool() ([]ToolCallItem, string, error) {
+func (a *Agent) callLLMForTool() ([]tools.ToolCallItem, string, error) {
 	toolDefs := tools.ToToolDefs(a.toolRegistry.Descriptors())
-	var items []ToolCallItem
+	var items []tools.ToolCallItem
 	var textContent string
 
 	err := withRetry(a.getCtx(), func() error {
@@ -158,10 +154,9 @@ type streamResult struct {
 	textBuf      strings.Builder
 	reasoningBuf strings.Builder
 	tcAccum      map[int]*toolAccum
-	finishReason string
 }
 
-func (a *Agent) consumeStream(tokenCh <-chan llm.StreamToken, s *streamResult) {
+func (a *Agent) consumeStream(tokenCh <-chan types.StreamToken, s *streamResult) {
 	firstContent := true
 	firstReasoning := true
 	for token := range tokenCh {
@@ -191,16 +186,13 @@ func (a *Agent) consumeStream(tokenCh <-chan llm.StreamToken, s *streamResult) {
 			}
 			a.AddTokens(0, 1)
 		}
-			if token.Usage != nil {
-				if token.Usage.PromptTokens > 0 || token.Usage.CompletionTokens > 0 {
-					a.ctxMgr.RecordUsage(token.Usage.PromptTokens, token.Usage.CompletionTokens)
-				}
-				if token.Usage.CacheHitTokens > 0 || token.Usage.CacheMissTokens > 0 {
-					a.ctxMgr.RecordCache(token.Usage.CacheHitTokens, token.Usage.CacheMissTokens)
-				}
+		if token.Usage != nil {
+			if token.Usage.PromptTokens > 0 || token.Usage.CompletionTokens > 0 {
+				a.ctxMgr.RecordUsage(token.Usage.PromptTokens, token.Usage.CompletionTokens)
 			}
-		if token.FinishReason != "" {
-			s.finishReason = token.FinishReason
+			if token.Usage.CacheHitTokens > 0 || token.Usage.CacheMissTokens > 0 {
+				a.ctxMgr.RecordCache(token.Usage.CacheHitTokens, token.Usage.CacheMissTokens)
+			}
 		}
 		if token.ToolCallDelta != nil {
 			if firstContent {
@@ -230,8 +222,8 @@ func (a *Agent) consumeStream(tokenCh <-chan llm.StreamToken, s *streamResult) {
 	}
 }
 
-func (s *streamResult) toolCalls() []ToolCallItem {
-	var items []ToolCallItem
+func (s *streamResult) toolCalls() []tools.ToolCallItem {
+	var items []tools.ToolCallItem
 	for i := 0; i < len(s.tcAccum); i++ {
 		acc := s.tcAccum[i]
 		if acc == nil {
@@ -241,21 +233,21 @@ func (s *streamResult) toolCalls() []ToolCallItem {
 		if err := json.Unmarshal([]byte(acc.args.String()), &args); err != nil {
 			continue
 		}
-		items = append(items, ToolCallItem{ID: acc.id, Name: acc.name, Args: args})
+		items = append(items, tools.ToolCallItem{ID: acc.id, Name: acc.name, Args: args})
 	}
 	return items
 }
 
-func (s *streamResult) llmToolCalls() []llm.ToolCall {
-	var calls []llm.ToolCall
+func (s *streamResult) llmToolCalls() []types.ToolCall {
+	var calls []types.ToolCall
 	for i := 0; i < len(s.tcAccum); i++ {
 		acc := s.tcAccum[i]
 		if acc == nil {
 			continue
 		}
-		calls = append(calls, llm.ToolCall{
+		calls = append(calls, types.ToolCall{
 			ID: acc.id, Type: "function",
-			Function: llm.FunctionCall{Name: acc.name, Arguments: acc.args.String()},
+			Function: types.FunctionCall{Name: acc.name, Arguments: acc.args.String()},
 		})
 	}
 	return calls
@@ -267,7 +259,7 @@ type toolAccum struct {
 	args strings.Builder
 }
 
-func estimatePrompt(messages []llm.Message) int {
+func estimatePrompt(messages []types.Message) int {
 	n := 0
 	for _, m := range messages {
 		n += len(m.Content) + len(m.Role)
@@ -281,7 +273,7 @@ func (a *Agent) forceSynthesize() string {
 	if text := a.trySynthesize(); text != "" {
 		return text
 	}
-	writeAgentLog("forceSynthesize: primary path failed, attempting emergency fallback")
+	debug.Log("forceSynthesize: primary path failed, attempting emergency fallback")
 	if fb := a.emergencySynthesize(); fb != "" {
 		return fb
 	}
@@ -293,7 +285,7 @@ func (a *Agent) trySynthesize() string {
 
 	err := withRetry(a.getCtx(), func() error {
 		messages := a.ctxMgr.Build(false)
-		messages = append(messages, llm.Message{Role: "user", Content: synthesizePrompt})
+		messages = append(messages, types.Message{Role: "user", Content: synthesizePrompt})
 
 		tokenCh, errCh := a.llmClient.ChatStream(a.getCtx(), messages, nil)
 		if tokenCh == nil {
@@ -328,7 +320,7 @@ func (a *Agent) trySynthesize() string {
 func (a *Agent) emergencySynthesize() string {
 	a.ctxMgr.AutoCompactIfNeeded()
 	msgs := a.ctxMgr.Build(false)
-	msgs = append(msgs, llm.Message{Role: "user", Content: synthesizePrompt})
+	msgs = append(msgs, types.Message{Role: "user", Content: synthesizePrompt})
 
 	ctx, cancel := context.WithTimeout(a.getCtx(), 30*time.Second)
 	defer cancel()
@@ -359,4 +351,17 @@ func isGarbledToolCall(text string) bool {
 		return true
 	}
 	return strings.Contains(t, `"tool_calls"`) || strings.Contains(t, `"tool_use"`)
+}
+
+// withRetry executes fn with exponential backoff, logging retries to the debug log.
+func withRetry(ctx context.Context, fn func() error) error {
+	var attempt int
+	return llm.Retry(ctx, llm.DefaultRetryConfig, func() error {
+		err := fn()
+		if err != nil && llm.IsRetryable(err) {
+			attempt++
+			debug.Log("retry %d: %v", attempt, err)
+		}
+		return err
+	})
 }

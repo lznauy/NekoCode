@@ -1,5 +1,3 @@
-// Input 消息输入框：封装 Bubble Tea textarea，含发送历史翻阅（historyActive 状态机）、
-// 发送过渡态（sending prompt）、光标管理。支持多行输入（Alt+Enter 换行）。
 package components
 
 import (
@@ -17,6 +15,7 @@ import (
 const (
 	charLimit     = 32768
 	maxInputLines = 8
+	promptCols    = 2
 )
 
 type Input struct {
@@ -35,13 +34,10 @@ func NewInput(width int) *Input {
 	ta.Placeholder = "Type a message..."
 	ta.SetVirtualCursor(false)
 	ta.Focus()
-	ta.Prompt = styles.CatEyeStyle.Bold(true).Render(styles.HeavyVert + " ")
 	ta.CharLimit = charLimit
-	ta.SetWidth(width)
 	ta.MaxHeight = maxInputLines
-	ta.SetHeight(1)
+	ta.SetHeight(maxInputLines)
 	ta.ShowLineNumbers = false
-	// Enter = submit (intercepted in Update), Alt+Enter = newline.
 	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter"))
 
 	s := ta.Styles()
@@ -50,41 +46,24 @@ func NewInput(width int) *Input {
 	s.Blurred.Placeholder = styles.MutedStyle
 	ta.SetStyles(s)
 
-	return &Input{
-		textarea: ta,
-		width:    width,
-		follow:   true,
-	}
+	prompt := styles.CatEyeStyle.Bold(true).Render("┃ ")
+	ta.SetPromptFunc(promptCols, func(info textarea.PromptInfo) string { return prompt })
+	ta.SetWidth(width)
+
+	return &Input{textarea: ta, width: width, follow: true}
 }
 
-func (i *Input) SetWidth(width int) {
-	i.width = width
-	i.textarea.SetWidth(width)
-}
+func (i *Input) SetWidth(width int) { i.width = width; i.textarea.SetWidth(width) }
+func (i *Input) Width() int         { return i.width }
 
-func (i *Input) Width() int {
-	return i.width
-}
-
-func (i *Input) Value() string {
-	return strings.TrimRight(i.textarea.Value(), "\n\t\r ")
-}
-
-func (i *Input) SetValue(value string) {
-	i.textarea.SetValue(value)
-	i.adjustHeight()
-}
-
-func (i *Input) SetCursorEnd() {
-	i.textarea.MoveToEnd()
-}
+func (i *Input) Value() string { return strings.TrimRight(i.textarea.Value(), "\n\t\r ") }
+func (i *Input) SetValue(v string) { i.textarea.SetValue(v) }
+func (i *Input) SetCursorEnd()     { i.textarea.MoveToEnd() }
 
 func (i *Input) Reset() {
 	i.textarea.Reset()
 	i.sending = false
 	i.historyActive = false
-	i.textarea.Prompt = styles.CatEyeStyle.Bold(true).Render(styles.HeavyVert + " ")
-	i.adjustHeight()
 }
 
 func (i *Input) AddHistory(entry string) {
@@ -127,46 +106,46 @@ func (i *Input) HistoryDown() {
 
 func (i *Input) SetSending(sending bool) {
 	i.sending = sending
+	var text string
 	if sending {
-		i.textarea.Prompt = styles.MutedStyle.Render("⋯ ")
+		text = styles.MutedStyle.Render("⋯ ")
 	} else {
-		i.textarea.Prompt = styles.CatEyeStyle.Bold(true).Render(styles.HeavyVert + " ")
+		text = styles.CatEyeStyle.Bold(true).Render("┃ ")
 	}
+	i.textarea.SetPromptFunc(promptCols, func(info textarea.PromptInfo) string { return text })
 }
 
-func (i *Input) SetFollow(follow bool) {
-	i.follow = follow
-}
+func (i *Input) SetFollow(follow bool) { i.follow = follow }
 
-// CanCursorUp returns true if the cursor is not on the first line.
 func (i *Input) CanCursorUp() bool {
-	return i.textarea.Line() > 0
+	return i.textarea.Line() > 0 || i.textarea.LineInfo().RowOffset > 0
 }
 
-// CanCursorDown returns true if the cursor is not on the last line.
 func (i *Input) CanCursorDown() bool {
-	return i.textarea.Line() < i.textarea.LineCount()-1
+	info := i.textarea.LineInfo()
+	return i.textarea.Line() < i.textarea.LineCount()-1 || info.RowOffset < info.Height-1
 }
 
-func (i *Input) adjustHeight() {
-	lines := i.textarea.LineCount()
-	if lines < 1 {
-		lines = 1
+func (i *Input) visualLines() int {
+	text := i.textarea.Value()
+	tw := i.width - promptCols
+	if tw < 1 {
+		tw = 1
 	}
-	if lines > maxInputLines {
-		lines = maxInputLines
+	n := 0
+	for _, line := range strings.Split(text, "\n") {
+		rl := len([]rune(line))
+		if rl == 0 {
+			n++
+		} else {
+			n += (rl + tw - 1) / tw
+		}
 	}
-	i.textarea.SetHeight(lines)
+	return n
 }
 
-func (i *Input) Height() int {
-	h := i.textarea.Height()
-	return 4 + h // separator + textarea + spacer + footer + separator
-}
+func (i *Input) Height() int { return 4 + min(max(i.visualLines(), 1), maxInputLines) }
 
-// Cursor returns the cursor position adjusted to be relative to the top of
-// the Input's rendered view (not relative to the internal textarea).
-// Callers only need to add the Input's absolute Y position in the full layout.
 func (i *Input) Cursor() *tea.Cursor {
 	c := i.textarea.Cursor()
 	if c == nil {
@@ -179,59 +158,47 @@ func (i *Input) Update(msg tea.Msg) (*Input, tea.Cmd) {
 	switch m := msg.(type) {
 	case tea.KeyPressMsg:
 		if m.String() == "enter" {
-			return i, nil // submit
+			return i, nil
 		}
-		// Pre-expand height before newline so the textarea's viewport
-		// doesn't scroll internally and hide earlier lines.
-		if m.String() == "alt+enter" {
-			if cur := i.textarea.LineCount(); cur < maxInputLines {
-				i.textarea.SetHeight(cur + 1)
-			}
-		}
-	case tea.PasteMsg:
-		// Pasted text may contain newlines — pre-expand to avoid scroll flicker.
-		i.textarea.SetHeight(maxInputLines)
 	}
 	var cmd tea.Cmd
 	i.textarea, cmd = i.textarea.Update(msg)
-	i.adjustHeight()
 	return i, cmd
 }
 
 func (i *Input) View() string {
 	w := max(20, i.width)
-	line := strings.Repeat(styles.Horizontal, w)
+	line := styles.BorderStyle.Render(strings.Repeat(styles.Horizontal, w))
 
-	followText := "Auto"
-	if !i.follow {
-		followText = "Manual"
+	tv := i.textarea.View()
+	if n := min(max(i.visualLines(), 1), maxInputLines); n < maxInputLines {
+		lines := strings.Split(tv, "\n")
+		if len(lines) > n {
+			tv = strings.Join(lines[:n], "\n")
+		}
 	}
 
+	txt := "Auto"
+	if !i.follow {
+		txt = "Manual"
+	}
 	footer := styles.BorderStyle.Render(styles.Vertical+" ") +
 		styles.SubtleStyle.Render("Follow:") + " " +
-		styles.TealStyle.Render(followText)
-	footerW := lipgloss.Width(footer)
-	end := styles.BorderStyle.Render(styles.Vertical)
-	pad := max(0, w-footerW-lipgloss.Width(end))
+		styles.TealStyle.Render(txt)
+	pad := max(0, w-lipgloss.Width(footer)-1)
 
 	var b strings.Builder
-	b.WriteString(styles.BorderStyle.Render(line) + "\n")
-	b.WriteString(i.textarea.View() + "\n")
-	b.WriteString("\n")
-	b.WriteString(footer + strings.Repeat(" ", pad) + end + "\n")
-	b.WriteString(styles.BorderStyle.Render(line))
-
+	b.WriteString(line + "\n")
+	b.WriteString(tv + "\n\n")
+	b.WriteString(footer + strings.Repeat(" ", pad) + styles.BorderStyle.Render(styles.Vertical) + "\n")
+	b.WriteString(line)
 	return b.String()
 }
 
 type TickMsg struct{}
 
-func (i *Input) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, BlinkTick())
-}
+func (i *Input) Init() tea.Cmd { return tea.Batch(textarea.Blink, BlinkTick()) }
 
 func BlinkTick() tea.Cmd {
-	return tea.Every(time.Millisecond*500, func(t time.Time) tea.Msg {
-		return TickMsg{}
-	})
+	return tea.Every(time.Millisecond*500, func(t time.Time) tea.Msg { return TickMsg{} })
 }

@@ -25,7 +25,7 @@ func (t *ReadTool) Name() string                                     { return "r
 func (t *ReadTool) ExecutionMode(map[string]any) tools.ExecutionMode { return tools.ModeParallel }
 func (t *ReadTool) DangerLevel(map[string]any) common.DangerLevel    { return common.LevelSafe }
 func (t *ReadTool) Description() string {
-	return "Read file contents (text, images, PDF). Absolute path required. Use startLine/endLine for range, max 2000 lines."
+	return "Read file contents (text, images, PDF). Absolute path required. Use startLine/endLine for range, max 2000 lines. Lines are annotated as lineNo:[hash]content — the [hash] is a 3-char line identifier for the edit tool, NOT part of the file content."
 }
 
 func (t *ReadTool) Parameters() []tools.Parameter {
@@ -77,11 +77,9 @@ func (t *ReadTool) readTextCached(path string, args map[string]any) (string, err
 
 	cache := tools.GlobalFileCache
 	if cache != nil {
-		// Cache hit: range already covered.
-		if hint, hit := cache.Get(path, startLine, endLine); hit {
-			return hint, nil
-		}
-		// Cache has file content but range not yet covered — format from cache.
+		// Cache has file content — format from cache regardless of whether
+		// the range was already covered. Re-formatting is cheap and avoids the
+		// stale hint problem when earlier output has been compacted away.
 		if lines, ok := cache.Lines(path); ok {
 			result := formatReadOutput(path, lines, startLine, endLine)
 			end := startLine + min(endLine-startLine+1, maxReadLines) - 1
@@ -130,6 +128,7 @@ func readFileLines(path string) ([]string, error) {
 		return nil, fmt.Errorf("<tool_output name=\"read\">\n<path>%s</path>\n<error>binary file</error>\n</tool_output>", filepath.Base(path))
 	}
 	text := tools.StripAnsi(string(data))
+	text = strings.ReplaceAll(text, "\r\n", "\n")
 	lines := strings.Split(text, "\n")
 	if len(lines) == 1 && lines[0] == "" {
 		return nil, fmt.Errorf("[file is empty]")
@@ -150,7 +149,9 @@ func formatReadOutput(path string, lines []string, startLine, endLine int) strin
 
 	var block strings.Builder
 	for i := range end - start {
-		block.WriteString(lines[start+i])
+		idx := start + i
+		lineNo := startLine + i
+		block.WriteString(fmt.Sprintf("%d:[%s]%s", lineNo, tools.HashLine(lines[idx]), lines[idx]))
 		block.WriteByte('\n')
 	}
 	body := strings.TrimRight(block.String(), "\n")
@@ -162,7 +163,7 @@ func formatReadOutput(path string, lines []string, startLine, endLine int) strin
 	if end < total {
 		fmt.Fprintf(&out, "<next startLine=\"%d\"/>\n", end+1)
 	}
-	fmt.Fprintf(&out, "<content>\n<![CDATA[\n%s\n]]>\n</content>\n</tool_output>", safe)
+	fmt.Fprintf(&out, "<content>\n<format>lineNo:[hash]content — [hash] is NOT file content</format>\n<![CDATA[\n%s\n]]>\n</content>\n</tool_output>", safe)
 	return out.String()
 }
 

@@ -23,8 +23,8 @@ func NewProjectInfoTool(idx *projctx.ProjectIndex) *ProjectInfoTool {
 }
 
 func (t *ProjectInfoTool) Name() string        { return "project_info" }
-func (t *ProjectInfoTool) DangerLevel(args map[string]interface{}) common.DangerLevel { return common.LevelSafe }
-func (t *ProjectInfoTool) ExecutionMode(args map[string]interface{}) tools.ExecutionMode {
+func (t *ProjectInfoTool) DangerLevel(args map[string]any) common.DangerLevel { return common.LevelSafe }
+func (t *ProjectInfoTool) ExecutionMode(args map[string]any) tools.ExecutionMode {
 	return tools.ModeParallel
 }
 
@@ -43,7 +43,7 @@ func (t *ProjectInfoTool) Parameters() []tools.Parameter {
 	}
 }
 
-func (t *ProjectInfoTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *ProjectInfoTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	if t.idx == nil {
 		return "Project index not available for this workspace.", nil
 	}

@@ -98,7 +98,7 @@ func IndexProject(cwd string) (*ProjectIndex, error) {
 	cacheFile := filepath.Join(cacheDir, cacheKey+".json")
 
 	// Single-flight: if another goroutine is already building this index, wait for it.
-	v, err, _ := buildGroup.Do(cacheFile, func() (interface{}, error) {
+	v, err, _ := buildGroup.Do(cacheFile, func() (any, error) {
 		// Try cache first.
 		if idx := loadCachedIndex(cacheFile); idx != nil {
 			return idx, nil

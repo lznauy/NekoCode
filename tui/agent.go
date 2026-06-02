@@ -7,6 +7,7 @@ import (
 	"runtime/debug"
 	"time"
 
+	"nekocode/common"
 	"nekocode/tui/components/block"
 	"nekocode/tui/components/message"
 
@@ -15,26 +16,27 @@ import (
 
 func logPanic(r any) {
 	stack := debug.Stack()
-	path := fmt.Sprintf("nekocode-panic-%d.log", time.Now().Unix())
+	path := fmt.Sprintf("/tmp/nekocode/nekocode-panic-%d.log", time.Now().Unix())
 	msg := fmt.Sprintf("PANIC: %v\n\nStack:\n%s", r, string(stack))
 	_ = os.WriteFile(path, []byte(msg), 0644)
 }
 
 func (m *Model) startChat(value string) tea.Cmd {
-	resp, ok := m.Bot.ExecuteCommand(value)
-	if ok && resp != "" {
+	resp, cr := m.Bot.ExecuteCommand(value)
+	if cr != common.CmdNone && resp != "" {
 		m.Messages.AddMessage(message.ChatMessage{
 			Role: "system", Title: value, Content: resp, RenderedContent: resp,
 		})
 	}
-	// Skill indicator: show only when the current turn activated a skill.
 	if hint, wantsAgent := m.Bot.SkillHint(); wantsAgent {
 		m.activeSkill = hint
 		return m.startAgent(value)
 	}
-	// Clear from previous turn — only the activating turn shows the indicator.
 	m.activeSkill = ""
-	if ok && resp != "" {
+	switch cr {
+	case common.CmdConfirming:
+		return listenConfirm(m.confirmCh)
+	case common.CmdHandled:
 		return nil
 	}
 	return m.startAgent(value)
@@ -84,7 +86,7 @@ func (m *Model) runAgent(value string) func() tea.Msg {
 
 		return doneMsg{
 			content:  finalResponse,
-			duration: m.Bot.Duration(),
+			duration: m.Bot.Stats().Duration,
 			tokens:   tokensSummary(m.Bot),
 			err:      err,
 		}
@@ -103,12 +105,11 @@ func (m *Model) onAgentStep(finalResponse *string) func(string, string, string, 
 				Type:      block.BlockTool,
 				ToolName:  toolName,
 				ToolArgs:  formatBriefArgs(toolName, toolArgs),
-				Collapsed: true,
+				Content:   output,
+				Collapsed: toolName != "edit" && toolName != "write" && toolName != "bash",
 			})
 		case toolName != "":
-			if output != "" {
-				m.Messages.AddToolOutput(toolName, output)
-			}
+			m.Messages.AddToolOutput(toolName, output)
 		}
 	}
 }

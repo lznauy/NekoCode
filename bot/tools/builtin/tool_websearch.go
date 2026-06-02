@@ -25,10 +25,10 @@ func NewWebSearchTool() *WebSearchTool {
 }
 
 func (t *WebSearchTool) Name() string { return "web_search" }
-func (t *WebSearchTool) ExecutionMode(map[string]interface{}) tools.ExecutionMode {
+func (t *WebSearchTool) ExecutionMode(map[string]any) tools.ExecutionMode {
 	return tools.ModeParallel
 }
-func (t *WebSearchTool) DangerLevel(map[string]interface{}) common.DangerLevel {
+func (t *WebSearchTool) DangerLevel(map[string]any) common.DangerLevel {
 	return common.LevelSafe
 }
 
@@ -43,7 +43,7 @@ func (t *WebSearchTool) Parameters() []tools.Parameter {
 	}
 }
 
-func (t *WebSearchTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	query, ok := args["query"].(string)
 	if !ok || strings.TrimSpace(query) == "" {
 		return "", fmt.Errorf("missing query parameter")
@@ -65,13 +65,13 @@ func exaEndpoint() string {
 }
 
 func searchExa(ctx context.Context, query string, n int) (string, error) {
-	body, _ := json.Marshal(map[string]interface{}{
+	body, _ := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
 		"method":  "tools/call",
-		"params": map[string]interface{}{
+		"params": map[string]any{
 			"name": "web_search_exa",
-			"arguments": map[string]interface{}{
+			"arguments": map[string]any{
 				"query":                query,
 				"numResults":           n,
 				"livecrawl":            "fallback",
@@ -81,7 +81,7 @@ func searchExa(ctx context.Context, query string, n int) (string, error) {
 		},
 	})
 
-	req, _ := http.NewRequestWithContext(ctx, "POST", exaEndpoint(), bytes.NewReader(body))
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, exaEndpoint(), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	if k := os.Getenv("EXA_API_KEY"); k != "" {

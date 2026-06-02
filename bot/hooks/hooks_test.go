@@ -5,13 +5,10 @@ import (
 	"testing"
 )
 
-func TestEmptyRegistry(t *testing.T) {
-	r := NewRegistry()
-	if len(r.EvaluateInject(&State{})) != 0 {
-		t.Error("expected empty inject")
-	}
-	if _, ok := r.EvaluateStop(&State{}); ok {
-		t.Error("expected no stop")
+func TestEmptyManager(t *testing.T) {
+	m := NewManager()
+	if len(m.Evaluate(PointPreTurn)) != 0 {
+		t.Error("empty manager should produce no results")
 	}
 	if FormatHints(nil) != "" || FormatHints([]Hint{}) != "" {
 		t.Error("expected empty for nil/empty")
@@ -26,47 +23,87 @@ func TestFormatHints(t *testing.T) {
 }
 
 func TestQuotaHook(t *testing.T) {
-	h := QuotaHint()
-	if hint := h(&State{QuotaHard: false}); hint != nil {
-		t.Error("green silent")
+	hk := QuotaHook()
+
+	// Silent when quota not hard.
+	snap := makeSnap()
+	if r := hk.On(snap); r != nil {
+		t.Error("quota not hard -> silent")
 	}
-	if hint := h(&State{QuotaHard: true, QuotaReadsLeft: 3}); hint == nil {
-		t.Error("yellow fire")
+
+	// Fire when hard.
+	snap = makeSnap()
+	snap.store.SetGauge(KeyQuotaHard, 1)
+	snap.store.SetGauge(KeyQuotaReads, 3)
+	r := hk.On(snap)
+	if r == nil || r.Hint == nil {
+		t.Fatal("quota hard -> fire")
 	}
-	if hint := h(&State{QuotaHard: true, QuotaReadsLeft: 1}); hint == nil || hint.Severity != "critical" {
-		t.Error("red critical")
+	if r.Hint.Severity != "warning" {
+		t.Errorf("expected warning, got %s", r.Hint.Severity)
+	}
+
+	// Critical at 1.
+	snap = makeSnap()
+	snap.store.SetGauge(KeyQuotaHard, 1)
+	snap.store.SetGauge(KeyQuotaReads, 1)
+	r = hk.On(snap)
+	if r == nil || r.Hint == nil || r.Hint.Severity != "critical" {
+		t.Error("reads=1 -> critical")
 	}
 }
 
 func TestVerificationHook(t *testing.T) {
-	h := VerificationHint()
-	if hint := h(&State{}); hint != nil {
-		t.Error("silent")
-	}
-	if hint := h(&State{NeedsVerification: true}); hint == nil {
-		t.Error("should fire")
-	}
-	if hint := h(&State{NeedsVerification: true, VerifyInjected: true}); hint != nil {
-		t.Error("already done")
-	}
-}
+	hk := VerificationHook()
 
-func TestUnfinishedWorkHook(t *testing.T) {
-	h := UnfinishedWorkHint()
-	if hint := h(&State{NeedsVerification: true, VerifyInjected: true, ActionIsChat: true}); hint == nil {
-		t.Error("should fire")
+	// No file modified -> silent.
+	snap := makeSnap()
+	if r := hk.On(snap); r != nil {
+		t.Error("no file modified -> silent")
 	}
-	if hint := h(&State{NeedsVerification: true, VerifyInjected: true, ActionIsChat: true, AllTasksDone: true}); hint != nil {
-		t.Error("tasks done, silent")
+
+	// File modified -> fire once.
+	snap = makeSnap()
+	snap.store.SetFlag(KeyFileModified, true)
+	r := hk.On(snap)
+	if r == nil || r.Hint == nil {
+		t.Fatal("file modified -> fire")
+	}
+
+	// Second call -> silent (already injected).
+	r = hk.On(snap)
+	if r != nil {
+		t.Error("already injected -> silent")
+	}
+
+	// Flag cleared (unset) -> reset state, then fire again.
+	snap = makeSnap()
+	hk.On(snap)       // reset injected
+	snap.store.SetFlag(KeyFileModified, true)
+	r = hk.On(snap)
+	if r == nil || r.Hint == nil {
+		t.Error("after reset -> should fire again")
 	}
 }
 
 func TestGarbledCircuitBreaker(t *testing.T) {
-	h := GarbledCircuitBreaker()
-	if _, ok := h(&State{GarbledCount: 2}); ok {
-		t.Error("should not stop at 2")
+	hk := GarbledCircuitBreaker()
+	snap := makeSnap()
+	if r := hk.On(snap); r != nil {
+		t.Error("no garbled -> silent")
 	}
-	if reason, ok := h(&State{GarbledCount: 3}); !ok || reason != StopFormatError {
-		t.Error("should stop at 3")
+	snap.store.IncCounter(KeyRespGarbled)
+	snap.store.IncCounter(KeyRespGarbled)
+	if r := hk.On(snap); r != nil {
+		t.Error("garbled=2 -> silent")
 	}
+	snap.store.IncCounter(KeyRespGarbled)
+	r := hk.On(snap)
+	if r == nil || r.Stop == nil || *r.Stop != StopFormatError {
+		t.Error("garbled=3 -> stop")
+	}
+}
+
+func makeSnap() *Snapshot {
+	return &Snapshot{store: &Store{}}
 }

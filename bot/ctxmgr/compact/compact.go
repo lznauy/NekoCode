@@ -1,11 +1,12 @@
 package compact
 
 import (
+	"nekocode/bot/debug"
 	"fmt"
 	"strings"
 
 	"nekocode/bot/ctxmgr/token"
-	"nekocode/llm"
+	"nekocode/llm/types"
 )
 
 // Layer 5: Auto-Compaction.
@@ -22,10 +23,6 @@ import (
 
 // FullCompact performs Head-Tail-Summary Reconstruction.
 func (m *Compactor) FullCompact() error {
-	return m.fullCompactInternal()
-}
-
-func (m *Compactor) fullCompactInternal() error {
 	if m.Summarizer == nil {
 		return nil
 	}
@@ -53,7 +50,7 @@ func (m *Compactor) fullCompactInternal() error {
 	}
 
 	// Forking call: snapshot, release, LLM, reapply.
-	toSummarize := make([]llm.Message, split-start)
+	toSummarize := make([]types.Message, split-start)
 	copy(toSummarize, msgs[start:split])
 	prevArchive := m.Ctx.Archive
 
@@ -82,7 +79,7 @@ func (m *Compactor) fullCompactInternal() error {
 	// Facts preserved in Memory by caller.
 
 	if archiveTokens < minArchive {
-		keep = keep * 2
+		keep *= 2
 		if keep > len(m.Ctx.Messages)-1 {
 			keep = len(m.Ctx.Messages) - 1
 		}
@@ -90,7 +87,7 @@ func (m *Compactor) fullCompactInternal() error {
 	}
 
 	m.Ctx.CompactBoundary = split
-	compactLog("full_compact: summarized %d msgs (%d tokens) into archive (%d tokens), boundary=%d, kept=%d",
+	debug.Log("full_compact: summarized %d msgs (%d tokens) into archive (%d tokens), boundary=%d, kept=%d",
 		len(toSummarize), inputTokens, archiveTokens, split, keep)
 	m.trimOldMessages()
 	return nil
@@ -103,7 +100,7 @@ func (m *Compactor) trimOldMessages() {
 		m.Ctx.Messages = (m.Ctx.Messages)[trim:]
 		m.Ctx.CompactBoundary -= trim
 		*m.TrimCount += trim
-			compactLog("trim_old: removed %d messages before boundary (total trimmed: %d)", trim, *m.TrimCount)
+			debug.Log("trim_old: removed %d messages before boundary (total trimmed: %d)", trim, *m.TrimCount)
 	}
 }
 

@@ -8,20 +8,20 @@ import (
 )
 
 func TestDefaultConfig(t *testing.T) {
-	if Default.Provider != "openai" {
-		t.Errorf("expected Provider 'openai', got '%s'", Default.Provider)
+	if Default.Provider != "deepseek" {
+		t.Errorf("expected Provider 'deepseek', got '%s'", Default.Provider)
 	}
-	if Default.Model != "gpt-4" {
-		t.Errorf("expected Model 'gpt-4', got '%s'", Default.Model)
+	if Default.Model != "deepseek-chat" {
+		t.Errorf("expected Model 'deepseek-chat', got '%s'", Default.Model)
 	}
-	if Default.BaseURL != "https://api.openai.com/v1" {
-		t.Errorf("expected BaseURL 'https://api.openai.com/v1', got '%s'", Default.BaseURL)
+	if Default.BaseURL != "https://api.deepseek.com/v1" {
+		t.Errorf("expected BaseURL 'https://api.deepseek.com/v1', got '%s'", Default.BaseURL)
 	}
-	if Default.TokenBudget != 128000 {
-		t.Errorf("expected TokenBudget 128000, got %d", Default.TokenBudget)
+	if Default.ContextWindow != 128000 {
+		t.Errorf("expected ContextWindow 128000, got %d", Default.ContextWindow)
 	}
-	if Default.ThinkingBudget != -1 {
-		t.Errorf("expected ThinkingBudget -1, got %d", Default.ThinkingBudget)
+	if Default.FlashModel != "" {
+		t.Errorf("expected FlashModel empty, got %s", Default.FlashModel)
 	}
 }
 
@@ -59,8 +59,8 @@ func TestLoad_ValidConfigFile(t *testing.T) {
 		APIKey:         "sk-test-key",
 		Model:          "claude-3-opus",
 		BaseURL:        "https://api.anthropic.com",
-		TokenBudget:    200000,
-		ThinkingBudget: 16000,
+		ContextWindow:    200000,
+		FlashModel: "deepseek-flash",
 	}
 
 	data, err := json.Marshal(customCfg)
@@ -93,11 +93,11 @@ func TestLoad_ValidConfigFile(t *testing.T) {
 	if cfg.BaseURL != customCfg.BaseURL {
 		t.Errorf("expected BaseURL '%s', got '%s'", customCfg.BaseURL, cfg.BaseURL)
 	}
-	if cfg.TokenBudget != customCfg.TokenBudget {
-		t.Errorf("expected TokenBudget %d, got %d", customCfg.TokenBudget, cfg.TokenBudget)
+	if cfg.ContextWindow != customCfg.ContextWindow {
+		t.Errorf("expected ContextWindow %d, got %d", customCfg.ContextWindow, cfg.ContextWindow)
 	}
-	if cfg.ThinkingBudget != customCfg.ThinkingBudget {
-		t.Errorf("expected ThinkingBudget %d, got %d", customCfg.ThinkingBudget, cfg.ThinkingBudget)
+	if cfg.FlashModel != customCfg.FlashModel {
+		t.Errorf("expected FlashModel %s, got %s", customCfg.FlashModel, cfg.FlashModel)
 	}
 }
 
@@ -160,8 +160,8 @@ func TestLoad_PartialConfig(t *testing.T) {
 	if cfg.BaseURL != Default.BaseURL {
 		t.Errorf("expected BaseURL '%s', got '%s'", Default.BaseURL, cfg.BaseURL)
 	}
-	if cfg.TokenBudget != Default.TokenBudget {
-		t.Errorf("expected TokenBudget %d, got %d", Default.TokenBudget, cfg.TokenBudget)
+	if cfg.ContextWindow != Default.ContextWindow {
+		t.Errorf("expected ContextWindow %d, got %d", Default.ContextWindow, cfg.ContextWindow)
 	}
 }
 
@@ -171,8 +171,8 @@ func TestConfig_JSONRoundTrip(t *testing.T) {
 		APIKey:         "sk-abc123",
 		Model:          "gpt-4-turbo",
 		BaseURL:        "https://custom.api.com/v1",
-		TokenBudget:    64000,
-		ThinkingBudget: 0,
+		ContextWindow:    64000,
+		FlashModel: "flash",
 	}
 
 	data, err := json.Marshal(original)

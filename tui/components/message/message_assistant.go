@@ -110,6 +110,9 @@ func (m *AssistantMessageItem) Render(width int) string {
 	}
 	body := strings.TrimSpace(RenderMarkdown(strings.TrimSpace(raw), contentW))
 	if body != "" {
+		if len(m.blocks) > 0 {
+			msgParts = append(msgParts, "")
+		}
 		msgParts = append(msgParts, body)
 	}
 	if m.footer != "" {

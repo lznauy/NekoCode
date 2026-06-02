@@ -42,7 +42,7 @@ allowed-tools: [bash, read, write]  # if fork mode
 context: inline|fork
 agent: executor                      # if fork mode
 max_steps: N                         # if fork mode, default 4
-token_budget: N                      # if fork mode, default 16000
+context_window: N                      # if fork mode, default 16000
 ---
 
 # <Title>
@@ -85,7 +85,7 @@ Check each item:
 - [ ] File references use relative paths (skill dir is the base)
 - [ ] Under 5K characters (reference material goes in auxiliary files)
 - [ ] One task per skill (no mixed concerns)
-- [ ] If fork mode: `allowed-tools`, `max_steps`, `token_budget` are set
+- [ ] If fork mode: `allowed-tools`, `max_steps`, `context_window` are set
 
 ### Step 3: Report
 
@@ -179,7 +179,7 @@ Use `context: fork` when the skill:
 |---------------|------|
 | Skill created but model never invokes it | `description` has no trigger keywords the user actually types |
 | Model follows steps literally but output is wrong | Steps are too abstract; add exact commands and output examples |
-| Fork mode skill hangs or times out | `max_steps` too low or `token_budget` too small for the workload |
+| Fork mode skill hangs or times out | `max_steps` too low or `context_window` too small for the workload |
 | Auxiliary files not found | Model doesn't know skill dir; add explicit `read path/to/file` step |
 | Skill contradicts system prompt | System prompt rules always win; don't try to override core behavior |
 | Template written to skill dir instead of cwd | Say "write to `<name>` in the current directory", not "write to `<name>`" |

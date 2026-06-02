@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"nekocode/llm"
+	"nekocode/llm/types"
 )
 
 type Snapshot struct {
@@ -22,10 +22,10 @@ type Snapshot struct {
 	Skills          string        `json:"skills"`
 	Memory          string        `json:"memory"`
 	Archive         string        `json:"archive"`
-	Messages        []llm.Message `json:"messages"`
+	Messages        []types.Message `json:"messages"`
 	CompactBoundary int           `json:"compact_boundary"`
 
-	TokenBudget      int `json:"token_budget"`
+	ContextWindow      int `json:"context_window"`
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 
@@ -82,9 +82,6 @@ func (s *Snapshot) Save() error {
 	return os.WriteFile(filepath.Join(d, "session.json"), data, 0644)
 }
 
-func Delete(id string) error {
-	return os.RemoveAll(filepath.Join(dir(), id))
-}
 
 func List() []Meta {
 	entries, err := os.ReadDir(dir())

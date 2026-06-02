@@ -9,8 +9,9 @@ import (
 
 	"nekocode/bot/ctxmgr"
 	ctxfmt "nekocode/bot/ctxmgr/context"
-	"nekocode/bot/ctxmgr/compact"
+	"nekocode/bot/debug"
 	"nekocode/bot/tools"
+	"nekocode/llm/types"
 	"nekocode/llm"
 
 	"nekocode/common"
@@ -23,29 +24,20 @@ const (
 
 // Engine runs a sub-agent loop. Fully self-contained — does not import agent.
 type Engine struct {
-	llmClient    llm.LLM
+	llmClient    types.LLM
 	toolRegistry *tools.Registry
 	executor     *tools.Executor
+	mergeClient  types.LLM
 }
 
-func NewEngine(llmClient llm.LLM, registry *tools.Registry) *Engine {
+func NewEngine(llmClient types.LLM, registry *tools.Registry, mergeClient types.LLM) *Engine {
 	e := tools.NewExecutor(registry)
-	// Auto-approve write-level tools for subagents — the main agent already
-	// obtained user approval for the delegated task. Destructive tools (LevelDestructive,
-	// LevelForbidden) are still blocked by the executor's level check.
 	e.SetConfirmFn(func(req common.ConfirmRequest) bool {
-		return req.Level <= common.LevelWrite
+		return req.Level < common.LevelWrite
 	})
-	return &Engine{llmClient: llmClient, toolRegistry: registry, executor: e}
+	return &Engine{llmClient: llmClient, toolRegistry: registry, executor: e, mergeClient: mergeClient}
 }
 
-
-// toolCallItem mirrors agent.ToolCallItem to avoid circular imports.
-type toolCallItem struct {
-	ID   string
-	Name string
-	Args map[string]interface{}
-}
 
 // Run executes a subagent and returns a structured Result.
 // Pattern from Claude Code's runAgent() + finalizeAgentTool():
@@ -55,47 +47,49 @@ type toolCallItem struct {
 //   - Partial result recovery on error/interrupt
 //   - Metadata tracking (tokens, tool calls, duration) for main agent assessment
 func (e *Engine) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
+	subLog := debug.Sub(cfg.AgentType.Name)
+	subLog("start: prompt=%q", cfg.Prompt[:min(len(cfg.Prompt), 120)])
+	defer func(start time.Time) {
+		subLog("done: duration=%v", time.Since(start).Round(time.Millisecond))
+	}(time.Now())
+
 	startTime := time.Now()
 	var toolUseCount int
 	var totalTokens int
 
-	// Apply thoroughness-based overrides for the explore agent.
-	tokenBudget := cfg.TokenBudget / 10
-	if tokenBudget < 8000 {
-		tokenBudget = 8000
-	}
 	systemPrompt := cfg.AgentType.SystemPrompt
-	if cfg.AgentType.Name == "explore" {
-		switch cfg.Thoroughness {
-		case thoroughDeep:
-			systemPrompt = strings.Replace(systemPrompt,
-				"Focus on the specific question. For \"very thorough\": search across multiple directories and naming conventions.",
-				"Search across ALL packages, naming conventions, and locations. Read at least 5 files. Be exhaustive.", 1)
-		}
+	if cfg.AgentType.Name == "researcher" && cfg.Thoroughness == thoroughDeep {
+		systemPrompt = strings.Replace(systemPrompt,
+			"Focus on the specific question. For \"very thorough\": search across multiple directories and naming conventions.",
+			"Search across ALL packages, naming conventions, and locations. Read at least 5 files. Be exhaustive.", 1)
+	}
+	if cfg.Handoff != "" {
+		systemPrompt += "\n\n<handoff>\n" + cfg.Handoff + "\n</handoff>"
 	}
 
-	// Sub-agents have isolated contexts — they can't reference file content
-	// from the main agent's conversation. Swap in a fresh cache so their
-	// first read of any file returns full content, not a stub.
-	// Merge subagent cache back on completion so the main agent benefits
-	// from files the subagent discovered.
+	// Seed subagent cache with main agent's cached files to avoid cold-start
+	// disk reads. mtime/size checks in Lines() still guard against stale data.
 	savedCache := tools.GlobalFileCache
 	subCache := tools.NewFileStateCache()
+	subCache.Seed(savedCache)
 	tools.GlobalFileCache = subCache
 	defer func() {
 		savedCache.Merge(subCache)
 		tools.GlobalFileCache = savedCache
 	}()
 
-	ctxMgr := ctxmgr.New(systemPrompt, nil)
-	ctxMgr.SetTokenBudget(tokenBudget)
-	ctxMgr.SetSummarizer(e.makeSummarizer(ctx))
+	ctxMgr := ctxmgr.NewSub(systemPrompt, cfg.ContextWindow, e.mergeClient)
 
 	if cfg.Cwd != "" {
 		ctxMgr.Add("system", ctxfmt.FormatCwd(cfg.Cwd))
 	}
 	if cfg.ProjectContext != "" && !cfg.AgentType.OmitProjectContext {
 		ctxMgr.Add("system", cfg.ProjectContext)
+	}
+	if cfg.ConfirmFn != nil {
+		prev := e.executor.ConfirmFn()
+		e.executor.SetConfirmFn(cfg.ConfirmFn)
+		defer e.executor.SetConfirmFn(prev)
 	}
 	if cfg.DisableThinking {
 		e.llmClient.SetDisableThinking(true)
@@ -120,23 +114,28 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
 		}
 	}
 
+	makeMeta := func() runMeta {
+		hit, miss := ctxMgr.Tracker.CacheStats()
+		return runMeta{totalTokens: totalTokens, toolUseCount: toolUseCount, durationMs: time.Since(startTime).Milliseconds(), cacheHitTokens: hit, cacheMissTokens: miss}
+	}
 	for step := 0; ; step++ {
 		select {
 		case <-ctx.Done():
-			meta := runMeta{totalTokens: totalTokens, toolUseCount: toolUseCount, durationMs: time.Since(startTime).Milliseconds()}
-			return buildPartialResult(lastText, meta, cfg.AgentType.Name), ctx.Err()
+			subLog("interrupted: step=%d lastText=%q", step, lastText[:min(len(lastText), 200)])
+			return buildPartialResult(lastText, makeMeta()), ctx.Err()
 		default:
 		}
 
-		
+		ctxMgr.AutoCompactIfNeeded()
+
 		calls, text, err := e.reason(ctx, ctxMgr, cfg.AgentType.Tools, localAddTokens, phase)
 		if err != nil {
+			subLog("error: %v", err)
 			if lastText != "" {
-				meta := runMeta{totalTokens: totalTokens, toolUseCount: toolUseCount, durationMs: time.Since(startTime).Milliseconds()}
-				return buildPartialResult(lastText, meta, cfg.AgentType.Name), nil
+				subLog("partial_result: %q", lastText[:min(len(lastText), 300)])
+				return buildPartialResult(lastText, makeMeta()), nil
 			}
-			meta := runMeta{totalTokens: totalTokens, toolUseCount: toolUseCount, durationMs: time.Since(startTime).Milliseconds()}
-			return buildFailedResult(err.Error(), meta), err
+			return buildFailedResult(err.Error(), makeMeta()), err
 		}
 
 		if text != "" {
@@ -145,20 +144,22 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
 
 		if len(calls) == 0 {
 			phase("done")
-			meta := runMeta{totalTokens: totalTokens, toolUseCount: toolUseCount, durationMs: time.Since(startTime).Milliseconds()}
-			return buildResult(text, meta, cfg.AgentType.Name), nil
+			result := buildResult(text, makeMeta())
+			subLog("result: tokens=%d tools=%d duration=%dms output=%q",
+				result.TotalTokens, result.ToolUseCount, result.DurationMs,
+				text[:min(len(text), 300)])
+			return result, nil
 		}
 
 		toolUseCount += len(calls)
 
+		var toolNames []string
 		for _, c := range calls {
+			toolNames = append(toolNames, c.Name)
 			phase("Running " + c.Name)
 		}
-		items := make([]tools.ToolCallItem, len(calls))
-		for i, c := range calls {
-			items[i] = tools.ToolCallItem{ID: c.ID, Name: c.Name, Args: c.Args}
-		}
-		results := e.executor.ExecuteBatch(ctx, items)
+		subLog("tools: %v", toolNames)
+		results := e.executor.ExecuteBatch(ctx, calls)
 		batch := make([]ctxmgr.ToolResultMsg, len(results))
 		for i, r := range results {
 			content := r.Output
@@ -166,7 +167,7 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
 				content = r.Error
 			}
 			batch[i] = ctxmgr.ToolResultMsg{
-				Message:  llm.Message{Content: content, ToolCallID: r.ID},
+				Message:  types.Message{Content: content, ToolCallID: r.ID},
 				ToolName: calls[i].Name,
 			}
 		}
@@ -191,86 +192,47 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
 
 // runMeta carries execution statistics through the result builders.
 type runMeta struct {
-	totalTokens  int
-	toolUseCount int
-	durationMs   int64
+	totalTokens     int
+	toolUseCount    int
+	durationMs      int64
+	cacheHitTokens  int
+	cacheMissTokens int
 }
 
 // buildResult constructs a Result from a completed subagent run.
-func buildResult(rawOutput string, meta runMeta, agentType string) *Result {
-	content, keyFiles, filesChanged, issues := parseStructuredOutput(rawOutput)
-
-	if content == "" {
-		content = rawOutput
-	}
-
+func buildResult(rawOutput string, meta runMeta) *Result {
 	r := &Result{
-		Status:       StatusCompleted,
-		Content:      content,
-		KeyFiles:     keyFiles,
-		FilesChanged: filesChanged,
-		Issues:       issues,
-		TotalTokens:  meta.totalTokens,
-		ToolUseCount: meta.toolUseCount,
-		DurationMs:   meta.durationMs,
+		Status: StatusCompleted, Content: rawOutput,
+		TotalTokens: meta.totalTokens, ToolUseCount: meta.toolUseCount, DurationMs: meta.durationMs,
+		CacheHitTokens: meta.cacheHitTokens, CacheMissTokens: meta.cacheMissTokens,
 	}
-
-	r.classification = classifyHandoff(rawOutput, filesChanged, keyFiles)
-
+	r.classification = classifyHandoff(rawOutput)
 	return r
 }
 
 // buildPartialResult creates a Result for interrupted/killed subagents.
-func buildPartialResult(lastText string, meta runMeta, agentType string) *Result {
-	content, keyFiles, filesChanged, issues := parseStructuredOutput(lastText)
-	if content == "" {
-		content = lastText
-	}
+func buildPartialResult(lastText string, meta runMeta) *Result {
 	r := &Result{
-		Status:       StatusPartial,
-		Content:      content,
-		KeyFiles:     keyFiles,
-		FilesChanged: filesChanged,
-		Issues:       append(issues, "subagent was interrupted before completion"),
-		TotalTokens:  meta.totalTokens,
-		ToolUseCount: meta.toolUseCount,
-		DurationMs:   meta.durationMs,
+		Status: StatusPartial, Content: lastText,
+		TotalTokens: meta.totalTokens, ToolUseCount: meta.toolUseCount, DurationMs: meta.durationMs,
+		CacheHitTokens: meta.cacheHitTokens, CacheMissTokens: meta.cacheMissTokens,
 	}
-
-	r.classification = classifyHandoff(lastText, filesChanged, keyFiles)
-
+	r.classification = classUnavailable
 	return r
 }
 
 // buildFailedResult creates a Result for subagents that produced no output.
 func buildFailedResult(errMsg string, meta runMeta) *Result {
 	return &Result{
-		Status:         StatusFailed,
-		Content:        errMsg,
-		Issues:         []string{errMsg},
-		TotalTokens:    meta.totalTokens,
-		ToolUseCount:   meta.toolUseCount,
-		DurationMs:     meta.durationMs,
+		Status: StatusFailed, Content: errMsg,
+		TotalTokens: meta.totalTokens, ToolUseCount: meta.toolUseCount, DurationMs: meta.durationMs,
+		CacheHitTokens: meta.cacheHitTokens, CacheMissTokens: meta.cacheMissTokens,
 		classification: classUnavailable,
 	}
 }
 
-func (e *Engine) makeSummarizer(ctx context.Context) compact.Summarizer {
-	return func(msgs []llm.Message, prevSummary string) (string, error) {
-		prompt := compact.BuildPrompt(msgs, prevSummary)
-		resp, err := e.llmClient.Chat(ctx, []llm.Message{{Role: "user", Content: prompt}}, nil)
-		if err != nil {
-			return "", err
-		}
-		if len(resp.Choices) > 0 {
-			return resp.Choices[0].Message.Content, nil
-		}
-		return "", nil
-	}
-}
-
-func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []string, addTokens func(int, int), phase func(string)) ([]toolCallItem, string, error) {
-	var calls []toolCallItem
+func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []string, addTokens func(int, int), phase func(string)) ([]tools.ToolCallItem, string, error) {
+	var calls []tools.ToolCallItem
 	var textContent string
 	var reasoningContent string
 
@@ -304,7 +266,7 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 			firstAttempt = false
 		}
 		estCompl := 0
-		var lastUsage *llm.StreamUsage
+		var lastUsage *types.StreamUsage
 
 		firstReasoning := true
 		phaseThink := true
@@ -389,17 +351,17 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 			return nil
 		}
 
-		calls = make([]toolCallItem, 0, len(tcAccum))
+		calls = make([]tools.ToolCallItem, 0, len(tcAccum))
 		for i := 0; i < len(tcAccum); i++ {
 			acc := tcAccum[i]
 			if acc == nil {
 				continue
 			}
-			var args map[string]interface{}
+			var args map[string]any
 			if err := json.Unmarshal([]byte(acc.args.String()), &args); err != nil {
 				return fmt.Errorf("failed to parse tool arguments: %v", err)
 			}
-			calls = append(calls, toolCallItem{ID: acc.id, Name: acc.name, Args: args})
+			calls = append(calls, tools.ToolCallItem{ID: acc.id, Name: acc.name, Args: args})
 		}
 		return nil
 	})
@@ -413,7 +375,7 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 	return calls, textContent, nil
 }
 
-func (e *Engine) filteredToolDefs(allowed []string) []llm.ToolDef {
+func (e *Engine) filteredToolDefs(allowed []string) []types.ToolDef {
 	all := e.toolRegistry.Descriptors()
 	set := make(map[string]bool, len(allowed))
 	for _, n := range allowed {
@@ -436,21 +398,21 @@ type toolAccum struct {
 	args strings.Builder
 }
 
-func toLLMToolCalls(calls []toolCallItem) []llm.ToolCall {
-	out := make([]llm.ToolCall, len(calls))
+func toLLMToolCalls(calls []tools.ToolCallItem) []types.ToolCall {
+	out := make([]types.ToolCall, len(calls))
 	for i, c := range calls {
 		args, _ := json.Marshal(c.Args)
-		out[i] = llm.ToolCall{
+		out[i] = types.ToolCall{
 			ID:       c.ID,
 			Type:     "function",
-			Function: llm.FunctionCall{Name: c.Name, Arguments: string(args)},
+			Function: types.FunctionCall{Name: c.Name, Arguments: string(args)},
 		}
 	}
 	return out
 }
 
 // subAllExploration returns true if every call is read-only exploration.
-func subAllExploration(calls []toolCallItem) bool {
+func subAllExploration(calls []tools.ToolCallItem) bool {
 	if len(calls) == 0 {
 		return false
 	}
@@ -464,3 +426,4 @@ func subAllExploration(calls []toolCallItem) bool {
 	}
 	return true
 }
+

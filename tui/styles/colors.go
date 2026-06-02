@@ -16,7 +16,6 @@ const (
 	Red       = "#e06c75"
 	Blue      = "#7a8ba0"
 	DiffGreen = "#98c379"
-	DiffSubtle = "#5c6370"
 )
 
 const (

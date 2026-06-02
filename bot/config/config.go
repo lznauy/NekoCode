@@ -11,16 +11,16 @@ type Config struct {
 	APIKey         string `json:"api_key"`
 	Model          string `json:"model"`
 	BaseURL        string `json:"base_url"`
-	TokenBudget    int    `json:"token_budget"`
-	ThinkingBudget int    `json:"thinking_budget"` // 0=API default, -1=off, >0=budget; Anthropic default 16000
+	Protocol       string `json:"protocol,omitempty"` // "openai" (default) or "anthropic"
+	ContextWindow int    `json:"context_window"`
+	FlashModel    string `json:"flash_model,omitempty"` // cheap model for sub-tasks (subagents)
 }
 
 var Default = Config{
-	Provider:       "openai",
-	Model:          "gpt-4",
-	BaseURL:        "https://api.openai.com/v1",
-	TokenBudget:    128000,
-	ThinkingBudget: -1, // disabled by default; set >0 to enable
+	Provider:       "deepseek",
+	Model:          "deepseek-chat",
+	BaseURL:        "https://api.deepseek.com/v1",
+	ContextWindow: 128000,
 }
 
 func Load() (*Config, error) {

@@ -25,14 +25,16 @@ type Model struct {
 	Height   int
 	Ready    bool
 
-	state           chatState
-	processingStart time.Time
-	processingPhase string
-	activeSkill     string // skill activated this turn, shown in status bar
+	state            chatState
+	preConfirmState  chatState
+	processingStart  time.Time
+	processingPhase  string
+	activeSkill      string // skill activated this turn, shown in status bar
 	Suggestions     *components.Suggestions
 	ConfirmBar      *components.ConfirmBar
 	Scrollbar       *components.Scrollbar
 	confirmCh       chan common.ConfirmRequest
+	notifyCh        chan string
 }
 
 const version = "0.2.0"
@@ -42,9 +44,10 @@ func NewModel(b BotInterface) *Model {
 	sp.Spinner = spinner.Dot
 	sty := styles.DefaultStyles()
 
+	prov, mod := b.ProviderModel()
 	m := &Model{
-		Bot:         b,
-		Header:      components.NewHeader(80, b.Provider(), b.Model(), version),
+		Bot:    b,
+		Header: components.NewHeader(80, prov, mod, version),
 		Messages:    components.NewMessages(80, 14, &sty),
 		Input:       components.NewInput(80),
 		Splash:      components.NewSplash(80, 24, version),
@@ -56,6 +59,7 @@ func NewModel(b BotInterface) *Model {
 		Height:      24,
 		state:       stateReady,
 		confirmCh:   make(chan common.ConfirmRequest),
+		notifyCh:    make(chan string, 8),
 	}
 
 	b.Configure(
@@ -63,30 +67,37 @@ func NewModel(b BotInterface) *Model {
 			m.confirmCh <- req
 			return <-req.Response
 		},
-		func(phase string) {
-			m.setPhase(phase)
+		func(phase string) { m.setPhase(phase) },
+		func(items []common.TodoItem) { m.Messages.SetTodos(todoItemsText(items)) },
+		func(msg string) {
+			select {
+			case m.notifyCh <- msg:
+			default:
+			}
 		},
-		func(items []common.TodoItem) {
-			m.Messages.SetTodos(todoItemsText(items))
-		},
+		m.confirmCh,
 	)
 
 	return m
 }
 
 func (m *Model) Init() tea.Cmd {
-	return m.Input.Init()
+	return tea.Batch(m.Input.Init(), listenNotify(m.notifyCh))
 }
 
 func (m *Model) resizeMessages() {
 	extra := 0
 	if m.state == stateConfirming {
-		extra += m.ConfirmBar.Height(m.Width)
+		extra += m.ConfirmBar.Height(m.Width, m.Height)
 	}
 	if m.Suggestions.Visible() {
 		extra += m.Suggestions.Height()
 	}
-	m.Messages.SetSize(m.Width-1, m.Height-m.Header.Height()-m.Input.Height()-contentMarginV-extra)
+	msgHeight := m.Height - m.Header.Height() - m.Input.Height() - contentMarginV - extra
+	if msgHeight < 0 {
+		msgHeight = 0
+	}
+	m.Messages.SetSize(m.Width-1, msgHeight)
 }
 
 func (m *Model) transitionTo(state chatState) {
@@ -119,14 +130,21 @@ func listenConfirm(ch <-chan common.ConfirmRequest) tea.Cmd {
 	}
 }
 
+func listenNotify(ch <-chan string) tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return notifyMsg{content: msg}
+	}
+}
+
 // Processing phases displayed in the status line during agent execution.
 const (
 	phaseSteer     = "Processing new input..."
 	PhaseReady     = common.PhaseReady
 	PhaseWaiting   = common.PhaseWaiting
-	PhaseThinking  = common.PhaseThinking
-	PhaseReasoning = common.PhaseReasoning
-	PhaseRunning   = common.PhaseRunning
 )
 
 func (m *Model) setPhase(p string) {

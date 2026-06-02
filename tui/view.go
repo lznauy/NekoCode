@@ -33,7 +33,7 @@ func (m *Model) View() tea.View {
 	}
 
 	if m.state == stateConfirming {
-		if bar := m.ConfirmBar.View(m.Width); bar != "" {
+		if bar := m.ConfirmBar.View(m.Width, m.Height); bar != "" {
 			parts = append(parts, bar)
 		}
 	}

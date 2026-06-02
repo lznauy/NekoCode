@@ -1,6 +1,7 @@
 # NekoCode
 .claude/
 .nekocode/
+.understand-anything/
 
 # Go
 *.exe
