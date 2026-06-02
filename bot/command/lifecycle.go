@@ -22,25 +22,27 @@ type SkillState struct {
 // Deps bundles services needed by registration and lifecycle operations.
 type Deps struct {
 	CtxMgr        *ctxmgr.Manager
-	Ag            *agent.Agent
+	Ag            func() *agent.Agent                                    // dynamic: returns current agent
 	SkillReg      *skill.Registry
 	ToolRegistry  *tools.Registry
 	ContextWindow   int
-	Provider      string
-	Model         string
-	PromptBuilder *prompt.Builder
-	FreshStart    func() (string, error) // /new callback
+	GetConfigFn   func() (provider, model string)                       // dynamic config for /config and /model
+	ListModelsFn  func() []string                                       // available model names for /model
+	FreshStart    func() (string, error)                                // /new callback
+	SwitchModel   func(name string) (string, string, error)             // /model callback
 }
 
 // RegisterAll wires built-in and dynamic slash commands.
 func RegisterAll(p *Parser, deps Deps, st *SkillState) {
 	callbacks := &Callbacks{
 		ClearHistory:   deps.CtxMgr.Clear,
-		GetConfig:      func() string { return deps.Provider + "/" + deps.Model },
+		GetConfig:      func() string { p, m := deps.GetConfigFn(); return p + "/" + m },
 		ForceSummarize: func() (string, error) { return ForceSummarize(deps.CtxMgr) },
 		ContextStats:   func() string { return ContextStats(deps.CtxMgr) },
 		ContextReport:  func() string { return ContextReport(deps.CtxMgr, deps.ToolRegistry.Descriptors()) },
 		FreshStart:     deps.FreshStart,
+		ListModels:     deps.ListModelsFn,
+		SwitchModel:    deps.SwitchModel,
 	}
 	RegisterDefaults(p, callbacks)
 
@@ -49,7 +51,7 @@ func RegisterAll(p *Parser, deps Deps, st *SkillState) {
 		if len(cmd.Args) == 0 {
 			return "Usage: /plan <task>", true
 		}
-		deps.Ag.SetPlanMode(true)
+		deps.Ag().SetPlanMode(true)
 		deps.CtxMgr.SetSystemPrompt(prompt.PlanModePrompt(strings.Join(cmd.Args, " ")))
 		deps.CtxMgr.Add("user", strings.Join(cmd.Args, " "))
 		st.WantsAgent = true

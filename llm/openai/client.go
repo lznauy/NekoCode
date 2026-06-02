@@ -137,7 +137,14 @@ func (c *Client) ChatStream(ctx context.Context, messages []types.Message, tools
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 				continue
 			}
+			if chunk.Usage != nil {
+				chunk.Usage.Normalize()
+			}
 			if len(chunk.Choices) == 0 {
+				// Mimo sends usage in a separate final chunk with empty choices.
+				if chunk.Usage != nil {
+					tokenCh <- types.StreamToken{Usage: chunk.Usage}
+				}
 				continue
 			}
 			delta := chunk.Choices[0].Delta

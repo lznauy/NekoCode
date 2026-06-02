@@ -80,8 +80,22 @@ type ToolCallDelta struct {
 type StreamUsage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
-	CacheHitTokens   int `json:"prompt_cache_hit_tokens"`
-	CacheMissTokens  int `json:"prompt_cache_miss_tokens"`
+	CacheHitTokens   int
+	CacheMissTokens  int
+	// OpenAI standard: prompt_tokens_details.cached_tokens.
+	PromptTokensDetails *struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details,omitempty"`
+}
+
+// Normalize extracts cache fields from protocol-specific usage formats.
+func (u *StreamUsage) Normalize() {
+	if u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens > 0 {
+		u.CacheHitTokens = u.PromptTokensDetails.CachedTokens
+	}
+	if u.CacheHitTokens > 0 && u.PromptTokens > 0 {
+		u.CacheMissTokens = u.PromptTokens - u.CacheHitTokens
+	}
 }
 
 type ToolDef struct {

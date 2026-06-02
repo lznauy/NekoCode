@@ -28,10 +28,13 @@ func TestSkillState(t *testing.T) {
 func TestDeps(t *testing.T) {
 	d := Deps{
 		ContextWindow: 100000,
-		Provider:    "anthropic",
-		Model:       "claude-sonnet-4-6",
+		GetConfigFn:   func() (string, string) { return "anthropic", "claude-sonnet-4-6" },
 	}
 	if d.ContextWindow != 100000 {
 		t.Error("bad ContextWindow")
+	}
+	p, m := d.GetConfigFn()
+	if p != "anthropic" || m != "claude-sonnet-4-6" {
+		t.Errorf("bad GetConfigFn: %s/%s", p, m)
 	}
 }

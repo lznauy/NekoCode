@@ -91,7 +91,8 @@ type sseEvent struct {
 	} `json:"usage"`
 	Message struct {
 		Usage struct {
-			InputTokens int `json:"input_tokens"`
+			InputTokens         int `json:"input_tokens"`
+			CacheReadInputTokens int `json:"cache_read_input_tokens"`
 		} `json:"usage"`
 	} `json:"message"`
 }
@@ -304,10 +305,13 @@ func (c *Client) ChatStream(ctx context.Context, messages []types.Message, tools
 
 			switch event.Type {
 			case "message_start":
-				if event.Message.Usage.InputTokens > 0 {
-					tokenCh <- types.StreamToken{
-						Usage: &types.StreamUsage{PromptTokens: event.Message.Usage.InputTokens},
+				if event.Message.Usage.InputTokens > 0 || event.Message.Usage.CacheReadInputTokens > 0 {
+					u := &types.StreamUsage{
+						PromptTokens:  event.Message.Usage.InputTokens,
+						CacheHitTokens: event.Message.Usage.CacheReadInputTokens,
 					}
+					u.Normalize()
+					tokenCh <- types.StreamToken{Usage: u}
 				}
 			case "content_block_start":
 				var cb contentBlock

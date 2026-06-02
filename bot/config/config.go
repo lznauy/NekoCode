@@ -2,25 +2,38 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 )
 
+type ModelConfig struct {
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+	APIKey   string `json:"api_key"`
+	Model    string `json:"model"`
+	BaseURL  string `json:"base_url,omitempty"`
+	Protocol string `json:"protocol,omitempty"`
+}
+
 type Config struct {
-	Provider       string `json:"provider"`
-	APIKey         string `json:"api_key"`
-	Model          string `json:"model"`
-	BaseURL        string `json:"base_url"`
-	Protocol       string `json:"protocol,omitempty"` // "openai" (default) or "anthropic"
-	ContextWindow int    `json:"context_window"`
-	FlashModel    string `json:"flash_model,omitempty"` // cheap model for sub-tasks (subagents)
+	Active        string        `json:"active"`                  // name of the active model
+	ContextWindow int           `json:"context_window"`
+	FlashModel    string        `json:"flash_model,omitempty"`   // cheap model for sub-tasks (subagents)
+	Models        []ModelConfig `json:"models"`
 }
 
 var Default = Config{
-	Provider:       "deepseek",
-	Model:          "deepseek-chat",
-	BaseURL:        "https://api.deepseek.com/v1",
+	Active:        "default",
 	ContextWindow: 128000,
+	Models: []ModelConfig{
+		{
+			Name:     "default",
+			Provider: "deepseek",
+			Model:    "deepseek-chat",
+			BaseURL:  "https://api.deepseek.com/v1",
+		},
+	},
 }
 
 func Load() (*Config, error) {
@@ -41,5 +54,78 @@ func Load() (*Config, error) {
 		return &Default, nil
 	}
 
+	// Validate Active points to an existing model.
+	if cfg.Active != "" && len(cfg.Models) > 0 {
+		found := false
+		for _, m := range cfg.Models {
+			if m.Name == cfg.Active {
+				found = true
+				break
+			}
+		}
+		if !found {
+			fmt.Fprintf(os.Stderr, "config: active model %q not found, falling back to %q\n", cfg.Active, cfg.Models[0].Name)
+			cfg.Active = cfg.Models[0].Name
+		}
+	}
+
 	return &cfg, nil
+}
+
+// ResolveModel looks up a named model. If found, returns its full config.
+// If not found, falls back to the active model's config with the given name as the model field.
+func (c *Config) ResolveModel(name string) ModelConfig {
+	if name == "" {
+		return c.ActiveModelConfig()
+	}
+	if fm, ok := c.LookupModelConfig(name); ok {
+		return fm
+	}
+	am := c.ActiveModelConfig()
+	am.Model = name
+	return am
+}
+
+// ActiveModelConfig returns the ModelConfig for the currently active model.
+func (c *Config) ActiveModelConfig() ModelConfig {
+	for _, m := range c.Models {
+		if m.Name == c.Active {
+			return m
+		}
+	}
+	// Fallback to first model if active not found
+	if len(c.Models) > 0 {
+		return c.Models[0]
+	}
+	return ModelConfig{}
+}
+
+// LookupModelConfig returns the ModelConfig for a named model.
+func (c *Config) LookupModelConfig(name string) (ModelConfig, bool) {
+	for _, m := range c.Models {
+		if m.Name == name {
+			return m, true
+		}
+	}
+	return ModelConfig{}, false
+}
+
+// AllModelNames returns all available model names.
+func (c *Config) AllModelNames() []string {
+	names := make([]string, 0, len(c.Models))
+	for _, m := range c.Models {
+		names = append(names, m.Name)
+	}
+	return names
+}
+
+// SwitchModel switches to the named model. Returns false if not found.
+func (c *Config) SwitchModel(name string) bool {
+	for _, m := range c.Models {
+		if m.Name == name {
+			c.Active = name
+			return true
+		}
+	}
+	return false
 }

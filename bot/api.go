@@ -1,8 +1,10 @@
 package bot
 
 import (
+	"fmt"
 	"time"
 
+	"nekocode/bot/agent"
 	"nekocode/bot/command"
 
 	"nekocode/common"
@@ -10,15 +12,20 @@ import (
 
 // -- TUI interface (BotInterface) ------------------------------------------
 
-func (b *Bot) Steer(msg string)                         { b.ag.Steer(msg) }
-func (b *Bot) Abort()                                   { b.ag.Abort() }
-func (b *Bot) ProviderModel() (string, string) { return b.cfg.Provider, b.cfg.Model }
+func (b *Bot) Steer(msg string) { b.getAgent().Steer(msg) }
+func (b *Bot) Abort()           { b.getAgent().Abort() }
+func (b *Bot) ProviderModel() (string, string) {
+	am := b.cfg.ActiveModelConfig()
+	return am.Provider, am.Model
+}
 func (b *Bot) CommandNames() []string { return b.cmdParser.Commands() }
 
 func (b *Bot) Stats() common.BotStats {
-	p, c := b.ag.TokenUsage()
-	tp, tc := b.ag.TurnTokenUsage()
-	d := b.ag.Duration()
+	ag := b.getAgent()
+
+	p, c := ag.TokenUsage()
+	tp, tc := ag.TurnTokenUsage()
+	d := ag.Duration()
 	s := ""
 	if d > 0 {
 		if d < time.Second {
@@ -30,11 +37,12 @@ func (b *Bot) Stats() common.BotStats {
 	return common.BotStats{
 		PromptTokens: p, CompletionTokens: c,
 		TurnPrompt: tp, TurnCompletion: tc,
-		ContextTokens: b.ag.ContextTokens(),
+		ContextTokens: ag.ContextTokens(),
 		CompactCount:  b.ctxMgr.CompactCount,
 		Duration:      s,
 	}
 }
+
 func (b *Bot) ExecuteCommand(input string) (string, common.CmdResult) {
 	b.skillState.WantsAgent = false
 	cmd := b.cmdParser.Parse(input)
@@ -62,8 +70,9 @@ func (b *Bot) SkillHint() (string, bool) {
 }
 
 func (b *Bot) RunAgent(input string, onStep func(action, toolName, toolArgs, output string)) (string, error) {
-	result := b.ag.Run(input, onStep)
-	b.ag.SetPlanMode(false)
+	ag := b.getAgent()
+	result := ag.Run(input, onStep)
+	ag.SetPlanMode(false)
 	b.ctxMgr.SetSystemPrompt(b.promptBuilder.Build())
 	command.SummarizeIfNeeded(b.ctxMgr)
 	b.saveSession()
@@ -72,6 +81,8 @@ func (b *Bot) RunAgent(input string, onStep func(action, toolName, toolArgs, out
 
 func (b *Bot) Configure(confirmFn common.ConfirmFunc, phaseFn common.PhaseFunc, todoFn common.TodoFunc, notifyFn func(string), confirmCh chan common.ConfirmRequest) {
 	b.confirmFn = confirmFn
+	b.phaseFn = phaseFn
+	b.todoFn = todoFn
 	b.notifyFn = notifyFn
 	b.confirmCh = confirmCh
 	b.ag.SetConfirmFn(confirmFn)
@@ -85,6 +96,30 @@ func (b *Bot) Configure(confirmFn common.ConfirmFunc, phaseFn common.PhaseFunc, 
 }
 
 func (b *Bot) SetCallbacks(textFn, reasonFn func(string)) {
-	b.ag.SetStreamFn(func(delta string, _ bool) { textFn(delta) })
-	b.ag.SetReasoningStreamFn(reasonFn)
+	ag := b.getAgent()
+	ag.SetStreamFn(func(delta string, _ bool) { textFn(delta) })
+	ag.SetReasoningStreamFn(reasonFn)
+}
+
+func (b *Bot) getAgent() *agent.Agent {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.ag
+}
+
+// SwitchModel switches to the named model and rebuilds LLM clients.
+// Returns the new model name and provider, or an error if the model is not found.
+func (b *Bot) SwitchModel(name string) (string, string, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if !b.cfg.SwitchModel(name) {
+		return "", "", fmt.Errorf("model %q not found. Available: %v", name, b.cfg.AllModelNames())
+	}
+
+	b.initAgent()
+	b.ctxMgr.ResetCache()
+
+	am := b.cfg.ActiveModelConfig()
+	return am.Model, am.Provider, nil
 }

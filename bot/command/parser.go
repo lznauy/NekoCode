@@ -1,6 +1,7 @@
 package command
 
 import (
+	"fmt"
 	"strings"
 )
 
@@ -67,6 +68,8 @@ type Callbacks struct {
 	ContextStats   func() string
 	ContextReport  func() string
 	FreshStart     func() (string, error)
+	ListModels     func() []string
+	SwitchModel    func(name string) (string, string, error)
 }
 
 func RegisterDefaults(p *Parser, callbacks *Callbacks) {
@@ -79,6 +82,7 @@ func RegisterDefaults(p *Parser, callbacks *Callbacks) {
   /summarize   Force context compression now
   /context     Show detailed context window breakdown
   /config      Show current provider and model
+  /model       List or switch models (/model <name>)
   /plugin      Manage plugins (install, list, uninstall, etc.)
   /sessions    Manage saved sessions
 `, true
@@ -132,5 +136,31 @@ func RegisterDefaults(p *Parser, callbacks *Callbacks) {
 			return callbacks.GetConfig(), true
 		}
 		return "", true
+	})
+
+	p.Register("model", func(cmd *Command) (string, bool) {
+		if callbacks.SwitchModel == nil {
+			return "Model switching unavailable", true
+		}
+		if len(cmd.Args) == 0 {
+			var sb strings.Builder
+			if callbacks.GetConfig != nil {
+				sb.WriteString("Current: " + callbacks.GetConfig() + "\n")
+			}
+			if callbacks.ListModels != nil {
+				names := callbacks.ListModels()
+				sb.WriteString("Available:\n")
+				for _, n := range names {
+					sb.WriteString("  " + n + "\n")
+				}
+			}
+			sb.WriteString("\n/model <name> to switch")
+			return sb.String(), true
+		}
+		model, provider, err := callbacks.SwitchModel(cmd.Args[0])
+		if err != nil {
+			return err.Error(), true
+		}
+		return fmt.Sprintf("Switched to %s/%s", provider, model), true
 	})
 }

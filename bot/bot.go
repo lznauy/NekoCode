@@ -48,28 +48,29 @@ type Bot struct {
 	mcpClients    map[string]*mcp.Client
 	declHooks      *hooks.DeclarativeRegistry
 	confirmFn      common.ConfirmFunc
+	phaseFn        common.PhaseFunc
+	todoFn         common.TodoFunc
 	notifyFn       func(string)
 	confirmCh      chan common.ConfirmRequest
 	confirmMu      sync.Mutex
 	pendingConfirm bool
 	promptBuilder  *prompt.Builder
 	toolRegistry   *tools.Registry
+	projCtx        string // cached project context for model switching
+	mu             sync.Mutex
 }
 
 func New() *Bot {
 	b := &Bot{}
-	ctx := context.Background()
 
 	b.initConfig()
-	projCtx, projIndex := b.initCtxMgr()
-	llmClient := b.initLLM(ctx)
+	projIndex := b.initCtxMgr()
 	b.initToolRegistry(projIndex)
-	b.initSummarizer(ctx, llmClient)
+	b.initSummarizer()
 	b.initPlugins()
 	b.initSkills()
 	b.initSession()
-	b.initAgent(llmClient, projCtx)
-	b.initGuardrails()
+	b.initAgent()
 	b.initCommands()
 
 	return b
@@ -83,7 +84,7 @@ func (b *Bot) initConfig() {
 	b.promptBuilder = prompt.NewBuilder(cwd)
 }
 
-func (b *Bot) initCtxMgr() (projCtx string, projIndex *projctx.ProjectIndex) {
+func (b *Bot) initCtxMgr() *projctx.ProjectIndex {
 	systemPrompt := b.promptBuilder.Build()
 	memFile, _ := memory.Load(memory.DefaultPath())
 	b.ctxMgr = ctxmgr.New(ctxmgr.Config{SystemPrompt: systemPrompt, Memory: memFile})
@@ -91,14 +92,15 @@ func (b *Bot) initCtxMgr() (projCtx string, projIndex *projctx.ProjectIndex) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		b.ctxMgr.SetContextWindow(b.cfg.ContextWindow)
-		return "", nil
+		return nil
 	}
 
-	projCtx = projctx.LoadProjectContext(cwd)
-	if projCtx != "" {
-		b.ctxMgr.Add("system", projCtx)
+	b.projCtx = projctx.LoadProjectContext(cwd)
+	if b.projCtx != "" {
+		b.ctxMgr.Add("system", b.projCtx)
 	}
 
+	var projIndex *projctx.ProjectIndex
 	if idx, err := projctx.IndexProject(cwd); err == nil {
 		if skeleton := idx.FormatSkeleton(); skeleton != "" {
 			b.ctxMgr.Add("system", skeleton)
@@ -107,28 +109,13 @@ func (b *Bot) initCtxMgr() (projCtx string, projIndex *projctx.ProjectIndex) {
 	}
 
 	b.ctxMgr.SetContextWindow(b.cfg.ContextWindow)
-	return projCtx, projIndex
+	return projIndex
 }
 
-func (b *Bot) initLLM(_ context.Context) types.LLM {
-	llmClient := llm.NewClientWithProtocol(b.cfg.Provider, b.cfg.APIKey, b.cfg.BaseURL, b.cfg.Model, b.cfg.Protocol)
-
-	mergeModel := b.cfg.Model
-	if b.cfg.FlashModel != "" {
-		mergeModel = b.cfg.FlashModel
-	}
-	mergeClient := llm.NewClientWithProtocol(b.cfg.Provider, b.cfg.APIKey, b.cfg.BaseURL, mergeModel, b.cfg.Protocol)
-	mergeClient.SetDisableThinking(true)
-	mergeClient.SetMaxTokens(2000)
-	b.ctxMgr.MergeClient = mergeClient
-
-	return llmClient
-}
-
-func (b *Bot) initSummarizer(ctx context.Context, llmClient types.LLM) {
+func (b *Bot) initSummarizer() {
 	b.ctxMgr.CM.Summarizer = func(msgs []types.Message, prevSummary string) (string, error) {
 		prompt := compact.BuildPrompt(msgs, prevSummary)
-		resp, err := llmClient.Chat(ctx, []types.Message{{Role: "user", Content: prompt}}, nil)
+		resp, err := b.ctxMgr.MergeClient.Chat(context.Background(), []types.Message{{Role: "user", Content: prompt}}, nil)
 		if err != nil {
 			return "", err
 		}
@@ -292,20 +279,55 @@ func (b *Bot) initSession() {
 	b.sess = sess
 }
 
-func (b *Bot) initAgent(llmClient types.LLM, projCtx string) {
+func (b *Bot) initAgent() {
+	am := b.cfg.ActiveModelConfig()
+	llmClient := llm.NewClientWithProtocol(am.Provider, am.APIKey, am.BaseURL, am.Model, am.Protocol)
+
+	fm := b.cfg.ResolveModel(b.cfg.FlashModel)
+	mergeClient := llm.NewClientWithProtocol(fm.Provider, fm.APIKey, fm.BaseURL, fm.Model, fm.Protocol)
+	mergeClient.SetDisableThinking(true)
+	mergeClient.SetMaxTokens(2000)
+	b.ctxMgr.MergeClient = mergeClient
+
 	b.ag = agent.New(context.Background(), b.ctxMgr, llmClient, b.toolRegistry)
 	hm := hooks.NewManager()
 	hooks.RegisterBuiltin(hm)
 	b.ag.SetHookManager(hm)
 	b.ag.SetDeclarativeHooks(b.declHooks)
 
-	subModel := b.cfg.Model
-	if b.cfg.FlashModel != "" {
-		subModel = b.cfg.FlashModel
+	// Restore callbacks from Configure (if already called).
+	if b.confirmFn != nil {
+		b.ag.SetConfirmFn(b.confirmFn)
 	}
-	subLLM := llm.NewClientWithProtocol(b.cfg.Provider, b.cfg.APIKey, b.cfg.BaseURL, subModel, b.cfg.Protocol)
-	engine := subagent.NewEngine(subLLM, b.toolRegistry, b.ctxMgr.MergeClient)
+	if b.phaseFn != nil {
+		b.ag.SetPhaseFn(b.phaseFn)
+	}
+	if b.todoFn != nil {
+		b.ag.WireTodoWrite(func(items []common.TodoItem) {
+			b.ctxMgr.SetTodos(items)
+			b.todoFn(items)
+		})
+	}
 
+	// Restore guardrails context transform.
+	b.ag.SetContextTransform(func(msgs []types.Message) []types.Message {
+		toolResults := 0
+		for _, m := range msgs {
+			if m.Role == "tool" {
+				toolResults++
+			}
+		}
+		if toolResults > 40 {
+			msgs = append(msgs, types.Message{
+				Role:    "user",
+				Content: "[System] " + strconv.Itoa(toolResults) + " tool results accumulated. Check for unfinished sub-tasks — if any, continue with task. If all done, call task(verify) to validate, then report results.",
+			})
+		}
+		return msgs
+	})
+
+	subLLM := llm.NewClientWithProtocol(fm.Provider, fm.APIKey, fm.BaseURL, fm.Model, fm.Protocol)
+	engine := subagent.NewEngine(subLLM, b.toolRegistry, b.ctxMgr.MergeClient)
 
 	if t, err := b.toolRegistry.Get("task"); err == nil {
 		cwd, _ := os.Getwd()
@@ -318,9 +340,9 @@ func (b *Bot) initAgent(llmClient types.LLM, projCtx string) {
 				Prompt:          prompt,
 				AgentType:       at,
 				Cwd:             cwd,
-				ProjectContext:  projCtx,
+				ProjectContext:  b.projCtx,
 				Thoroughness:    thoroughness,
-					ContextWindow:     b.cfg.ContextWindow,
+				ContextWindow:     b.cfg.ContextWindow,
 				DisableThinking: true,
 				ConfirmFn:       b.ag.ConfirmFn(),
 			}
@@ -337,37 +359,19 @@ func (b *Bot) initAgent(llmClient types.LLM, projCtx string) {
 	}
 }
 
-func (b *Bot) initGuardrails() {
-	b.ag.SetContextTransform(func(msgs []types.Message) []types.Message {
-		toolResults := 0
-		for _, m := range msgs {
-			if m.Role == "tool" {
-				toolResults++
-			}
-		}
-		if toolResults > 40 {
-			msgs = append(msgs, types.Message{
-				Role:    "user",
-				Content: "[System] " + strconv.Itoa(toolResults) + " tool results accumulated. Check for unfinished sub-tasks — if any, continue with task. If all done, call task(verify) to validate, then report results.",
-			})
-		}
-		return msgs
-	})
-}
-
 func (b *Bot) initCommands() {
 	command.RegisterAll(b.cmdParser, command.Deps{
-		CtxMgr:        b.ctxMgr,
-		Ag:            b.ag,
-		SkillReg:      b.skillReg,
+		CtxMgr: b.ctxMgr,
+		Ag:            b.getAgent,
+		SkillReg: b.skillReg,
 		ToolRegistry:  b.toolRegistry,
-		ContextWindow:   b.cfg.ContextWindow,
-		Provider:      b.cfg.Provider,
-		Model:         b.cfg.Model,
-		PromptBuilder: b.promptBuilder,
+		ContextWindow: b.cfg.ContextWindow,
+		GetConfigFn:    b.ProviderModel,
+		ListModelsFn:  b.cfg.AllModelNames,
 		FreshStart: func() (string, error) {
 			return command.ForceFreshStart(b.ctxMgr, b.skillReg, b.cfg.ContextWindow)
 		},
+		SwitchModel: b.SwitchModel,
 	}, b.skillState)
 
 	b.cmdParser.Register("sessions", func(cmd *command.Command) (string, bool) {
@@ -779,7 +783,9 @@ func (b *Bot) saveSession() {
 	b.sess.Messages = msgs
 	b.sess.CompactBoundary = cb
 	b.sess.ContextWindow = budget
+	b.mu.Lock()
 	b.sess.PromptTokens, b.sess.CompletionTokens = b.ag.TokenUsage()
+	b.mu.Unlock()
 	for name := range b.skillReg.LoadedSet() {
 		b.sess.LoadedSkills = append(b.sess.LoadedSkills, name)
 	}
@@ -795,7 +801,9 @@ func (b *Bot) ResumeSession(id string) error {
 	}
 	b.ctxMgr.Restore(sess.SystemPrompt, sess.Skills, sess.Archive, sess.Memory,
 		sess.CompactBoundary, sess.Messages, sess.ContextWindow)
+	b.mu.Lock()
 	b.ag.AddTokens(sess.PromptTokens, sess.CompletionTokens)
+	b.mu.Unlock()
 	for _, name := range sess.LoadedSkills {
 		b.skillReg.MarkLoaded(name)
 	}

@@ -102,6 +102,7 @@ func (m *Manager) SetTodos(items []common.TodoItem) { m.mu.Lock(); defer m.mu.Un
 func (m *Manager) AllTasksDone() bool               { m.mu.RLock(); defer m.mu.RUnlock(); return m.ctx.AllTasksDone() }
 func (m *Manager) RecordUsage(prompt, completion int) { m.Tracker.RecordUsage(prompt, completion) }
 func (m *Manager) RecordCache(hit, miss int)          { m.Tracker.RecordCache(hit, miss) }
+func (m *Manager) ResetCache()                        { m.Tracker.ResetCache() }
 
 func (m *Manager) AutoCompactIfNeeded() (compact.Level, error) {
 	if m.CM != nil {

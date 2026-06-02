@@ -27,6 +27,14 @@ func (t *Tracker) RecordUsage(promptTokens, completionTokens int) {
 	t.newMessageTokens = 0
 }
 
+// ResetCache clears cumulative cache statistics (e.g. on model switch).
+func (t *Tracker) ResetCache() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.cacheHitTokens = 0
+	t.cacheMissTokens = 0
+}
+
 // RecordCache records KV cache hit/miss tokens.
 func (t *Tracker) RecordCache(hitTokens, missTokens int) {
 	t.mu.Lock()

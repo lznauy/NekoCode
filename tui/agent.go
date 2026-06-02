@@ -28,6 +28,9 @@ func (m *Model) startChat(value string) tea.Cmd {
 			Role: "system", Title: value, Content: resp, RenderedContent: resp,
 		})
 	}
+	// Refresh header after command (e.g. /model switch)
+	prov, mod := m.Bot.ProviderModel()
+	m.Header.SetModel(prov, mod)
 	if hint, wantsAgent := m.Bot.SkillHint(); wantsAgent {
 		m.activeSkill = hint
 		return m.startAgent(value)

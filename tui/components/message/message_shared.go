@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	maxTextWidth       = 120
+	maxTextWidth       = 150
 	messageLeftPadding = 2
 	barOverhead        = 3
 )

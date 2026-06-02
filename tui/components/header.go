@@ -27,6 +27,7 @@ func NewHeader(width int, provider, model, version string) *Header {
 
 func (h *Header) SetWidth(width int)  { h.Width = width }
 func (h *Header) SetTokens(total int) { h.Tokens = total }
+func (h *Header) SetModel(provider, model string) { h.Provider = provider; h.Model = model }
 func (h *Header) Height() int         { return 2 }
 
 func (h *Header) View() string {

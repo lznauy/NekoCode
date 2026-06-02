@@ -17,6 +17,7 @@ type BotInterface interface {
 	Steer(msg string)
 	Abort()
 	ProviderModel() (provider, model string)
+	SwitchModel(name string) (model, provider string, err error)
 }
 
 type notifyMsg struct {
