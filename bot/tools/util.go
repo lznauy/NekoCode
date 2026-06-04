@@ -30,12 +30,12 @@ func HashLine(s string) string {
 	})
 }
 
-// AnnotateLines prefixes each line with "lineNo:[hash]" for hashline editing.
+// AnnotateLines returns line hashes in the format "lineNo:hash" for editing.
 func AnnotateLines(content string) string {
 	lines := strings.Split(content, "\n")
 	var b strings.Builder
 	for i, line := range lines {
-		fmt.Fprintf(&b, "%d:[%s]%s", i+1, HashLine(line), line)
+		fmt.Fprintf(&b, "%d:%s", i+1, HashLine(line))
 		if i < len(lines)-1 {
 			b.WriteByte('\n')
 		}

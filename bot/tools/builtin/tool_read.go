@@ -147,15 +147,15 @@ func formatReadOutput(path string, lines []string, startLine, endLine int) strin
 	count := min(endLine-startLine+1, maxReadLines)
 	end := min(start+count, total)
 
-	var block strings.Builder
+	var contentBuf, hashBuf strings.Builder
 	for i := range end - start {
 		idx := start + i
 		lineNo := startLine + i
-		fmt.Fprintf(&block, `<l n="%d" h="%s">%s</l>`, lineNo, tools.HashLine(lines[idx]), lines[idx])
-		block.WriteByte('\n')
+		fmt.Fprintf(&contentBuf, "%s\n", lines[idx])
+		fmt.Fprintf(&hashBuf, "%d:%s\n", lineNo, tools.HashLine(lines[idx]))
 	}
-	body := strings.TrimRight(block.String(), "\n")
-	safe := strings.ReplaceAll(body, "]]>", "]]]]><![CDATA[>")
+	cdata := strings.TrimRight(contentBuf.String(), "\n")
+	cdata = strings.ReplaceAll(cdata, "]]>", "]]]]><![CDATA[>")
 
 	var out strings.Builder
 	fmt.Fprintf(&out, "<tool_output name=\"read\">\n<path>%s</path>\n<lines start=\"%d\" end=\"%d\" total=\"%d\"/>\n",
@@ -163,7 +163,7 @@ func formatReadOutput(path string, lines []string, startLine, endLine int) strin
 	if end < total {
 		fmt.Fprintf(&out, "<next startLine=\"%d\"/>\n", end+1)
 	}
-	fmt.Fprintf(&out, "<content>\n<format>Lines are &lt;l n=&quot;N&quot; h=&quot;XXXX&quot;&gt;content&lt;/l&gt;. Only content between tags is the actual file.</format>\n<![CDATA[\n%s\n]]>\n</content>\n</tool_output>", safe)
+	fmt.Fprintf(&out, "<content>\n<![CDATA[\n%s\n]]>\n</content>\n<hashes>\n%s</hashes>\n</tool_output>", cdata, hashBuf.String())
 	return out.String()
 }
 

@@ -69,7 +69,7 @@ func (t *EditTool) Preview(args map[string]any) string {
 }
 
 func (t *EditTool) Description() string {
-	return "Edit files by hashline. Read output wraps each line as <l n=\"lineNo\" h=\"hash\">content</l>. Build hash anchors from the n and h attributes as \"lineNo:hash\" (e.g. \"3:a3B\"). Use 2 hashes for ranges. Operations: replace(default), insert_after, insert_before, delete. Prefer this over write. Always read the file first."
+		return "Edit files by hashline. Read output has pure content in a <content> CDATA block and line hashes in a <hashes> block below. Find the hash for each line number in <hashes>, then build anchors as \"lineNo:hash\" (e.g. \"3:a3B\"). Use 2 hashes for ranges. Operations: replace(default), insert_after, insert_before, delete. Prefer this over write. Always read the file first."
 }
 
 func (t *EditTool) Parameters() []tools.Parameter {
@@ -77,7 +77,7 @@ func (t *EditTool) Parameters() []tools.Parameter {
 		{Name: "path", Type: "string", Required: true,
 			Description: "Absolute file path to edit."},
 		{Name: "hashes", Type: "array", Required: true,
-			Description: "Line anchors from Read \"<l>\" tags: \"lineNo:hash\" (e.g. \"3:a3B\"). The 4-char h= attribute identifies the line. e.g. [\"3:a3B\",\"5:b2C\"]"},
+				Description: "Line anchors from Read <hashes> block: \"lineNo:hash\" (e.g. \"3:a3B\"). e.g. [\"3:a3B\",\"5:b2C\"]"},
 		{Name: "new_string", Type: "string", Required: false,
 			Description: "Replacement text (omit for delete)."},
 		{Name: "op", Type: "string", Required: false,
@@ -193,9 +193,11 @@ func (t *EditTool) hashlineEdit(path string, hashes []string, args map[string]an
 		for _, h := range r.stale {
 			fmt.Fprintf(&sb, "  %s\n", h)
 		}
-		sb.WriteString("</stale>\n<current>\n<format>Lines are &lt;l n=&quot;N&quot; h=&quot;XXXX&quot;&gt;content&lt;/l&gt;. Only content between tags is the actual file.</format>\n<![CDATA[\n")
-		sb.WriteString(tools.AnnotateLines(strings.Join(r.lines, "\n")))
-		sb.WriteString("\n]]>\n</current>")
+	contentStr := strings.Join(r.lines, "\n")
+	cdata := strings.ReplaceAll(contentStr, "]]>", "]]]]><![CDATA[>")
+	fmt.Fprintf(&sb, "</stale>\n<current>\n<format>Content in CDATA block, hashes in <hashes> block.</format>\n<content>\n<![CDATA[\n%s\n]]>\n</content>\n<hashes>\n", cdata)
+	sb.WriteString(tools.AnnotateLines(contentStr))
+	sb.WriteString("\n</hashes>\n</current>")
 		return "", fmt.Errorf("%s", sb.String())
 	}
 
