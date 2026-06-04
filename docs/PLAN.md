@@ -135,11 +135,18 @@
 ### 75. Prompt 模块清理 ✅
 - 删除 prompt/plan.go（Plan mode prompt 内联到 lifecycle.go）
 
+### 76. 文生图工具 (ImageGen) ✅
+- 即梦 Jimeng 文生图 3.1 API 接入
+- 火山引擎 SigV4 签名 SDK 封装（`bot/sdk/`）
+- `image_gen` 工具：提交任务 → 轮询 → 下载保存本地
+- 配置：`image_gen_models` 数组，支持多文生图模型扩展
+- `image_gen_models[].provider` 可切换不同文生图服务商
+
 ## P2 — 生态与体验
 
-### 76. 后台任务 + 进度
-### 77. Checkpoint / Undo
-### 78. 凭证管理
-### 79. 自动化测试
+### 77. 后台任务 + 进度
+### 78. Checkpoint / Undo
+### 79. 凭证管理
+### 80. 自动化测试
 - Agent 行为回归测试（mock LLM 响应）
 - 工具执行单元测试（mock 文件系统/shell）

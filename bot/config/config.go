@@ -16,11 +16,21 @@ type ModelConfig struct {
 	Protocol string `json:"protocol,omitempty"`
 }
 
+type ImageGenConfig struct {
+	Name      string `json:"name"`
+	Provider  string `json:"provider"`            // e.g. "jimeng"
+	APIKey    string `json:"api_key"`             // Volcengine Access Key ID
+	SecretKey string `json:"secret_key"`          // Volcengine Secret Access Key
+	BaseURL   string `json:"base_url,omitempty"`  // default: https://visual.volcengineapi.com
+	Model     string `json:"model,omitempty"`     // default: jimeng_t2i_v31
+}
+
 type Config struct {
-	Active        string        `json:"active"`                  // name of the active model
-	ContextWindow int           `json:"context_window"`
-	FlashModel    string        `json:"flash_model,omitempty"`   // cheap model for sub-tasks (subagents)
-	Models        []ModelConfig `json:"models"`
+	Active          string           `json:"active"`                     // name of the active model
+	ContextWindow   int              `json:"context_window"`
+	FlashModel      string           `json:"flash_model,omitempty"`      // cheap model for sub-tasks (subagents)
+	Models          []ModelConfig    `json:"models"`
+	ImageGenModels  []ImageGenConfig `json:"image_gen_models,omitempty"` // text-to-image models
 }
 
 var Default = Config{
@@ -32,6 +42,14 @@ var Default = Config{
 			Provider: "deepseek",
 			Model:    "deepseek-chat",
 			BaseURL:  "https://api.deepseek.com/v1",
+		},
+	},
+	ImageGenModels: []ImageGenConfig{
+		{
+			Name:     "jimeng",
+			Provider: "jimeng",
+			Model:    "jimeng_t2i_v31",
+			BaseURL:  "https://visual.volcengineapi.com",
 		},
 	},
 }
@@ -117,6 +135,24 @@ func (c *Config) AllModelNames() []string {
 		names = append(names, m.Name)
 	}
 	return names
+}
+
+// ActiveImageGenModel returns the first ImageGenConfig, or empty if none configured.
+func (c *Config) ActiveImageGenModel() ImageGenConfig {
+	if len(c.ImageGenModels) > 0 {
+		return c.ImageGenModels[0]
+	}
+	return ImageGenConfig{}
+}
+
+// LookupImageGenModel returns the ImageGenConfig for a named image gen model.
+func (c *Config) LookupImageGenModel(name string) (ImageGenConfig, bool) {
+	for _, m := range c.ImageGenModels {
+		if m.Name == name {
+			return m, true
+		}
+	}
+	return ImageGenConfig{}, false
 }
 
 // SwitchModel switches to the named model. Returns false if not found.

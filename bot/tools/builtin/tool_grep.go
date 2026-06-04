@@ -46,7 +46,7 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) (string, er
 	grepArgs := []string{"-n"}
 	if _, err := exec.LookPath("rg"); err != nil {
 		bin = "grep"
-		grepArgs = append(grepArgs, "-r", "-I")
+		grepArgs = append(grepArgs, "-E", "-r", "-I")
 	} else {
 		grepArgs = append(grepArgs, "--no-heading")
 	}
@@ -64,7 +64,7 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) (string, er
 		if _, err := strconv.Atoi(ctxLines); err == nil {
 			grepArgs = append(grepArgs, "-C", ctxLines)
 		} else {
-			grepArgs = append(grepArgs, ctxLines)
+			grepArgs = append(grepArgs, strings.Fields(ctxLines)...)
 		}
 	}
 

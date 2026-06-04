@@ -41,7 +41,11 @@ func (t *WriteTool) Execute(ctx context.Context, args map[string]any) (string, e
 	if err := os.MkdirAll(filepath.Dir(safePath), 0755); err != nil {
 		return "", fmt.Errorf("failed to create directory: %v", err)
 	}
-	if err := os.WriteFile(safePath, []byte(content), 0644); err != nil {
+	mode := os.FileMode(0644)
+	if info, err := os.Stat(safePath); err == nil {
+		mode = info.Mode()
+	}
+	if err := os.WriteFile(safePath, []byte(content), mode); err != nil {
 		return "", fmt.Errorf("failed to write file: %v", err)
 	}
 	return fmt.Sprintf("Written: %s (%d chars)", safePath, len(content)), nil

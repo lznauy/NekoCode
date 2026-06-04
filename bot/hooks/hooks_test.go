@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-func TestEmptyManager(t *testing.T) {
-	m := NewManager()
-	if len(m.Evaluate(PointPreTurn)) != 0 {
-		t.Error("empty manager should produce no results")
+func TestEmptyRegistry(t *testing.T) {
+	r := NewRegistry()
+	if len(r.Evaluate(PreTurn, "", false)) != 0 {
+		t.Error("empty registry should produce no results")
 	}
 	if FormatHints(nil) != "" || FormatHints([]Hint{}) != "" {
 		t.Error("expected empty for nil/empty")
@@ -23,87 +23,80 @@ func TestFormatHints(t *testing.T) {
 }
 
 func TestQuotaHook(t *testing.T) {
-	hk := QuotaHook()
+	hk := quotaHook()
+	snap := &Snapshot{Store: make(map[string]int64)}
 
-	// Silent when quota not hard.
-	snap := makeSnap()
+	snap.set(StoreQuotaReads, 5)
 	if r := hk.On(snap); r != nil {
-		t.Error("quota not hard -> silent")
+		t.Error("reads=5 -> silent")
 	}
 
-	// Fire when hard.
-	snap = makeSnap()
-	snap.store.SetGauge(KeyQuotaHard, 1)
-	snap.store.SetGauge(KeyQuotaReads, 3)
+	snap.set(StoreQuotaReads, 4)
+	if r := hk.On(snap); r != nil {
+		t.Error("reads=4 -> silent")
+	}
+
+	snap.set(StoreQuotaReads, 2)
 	r := hk.On(snap)
 	if r == nil || r.Hint == nil {
-		t.Fatal("quota hard -> fire")
+		t.Fatal("reads=2 -> fire")
 	}
 	if r.Hint.Severity != "warning" {
 		t.Errorf("expected warning, got %s", r.Hint.Severity)
 	}
 
-	// Critical at 1.
-	snap = makeSnap()
-	snap.store.SetGauge(KeyQuotaHard, 1)
-	snap.store.SetGauge(KeyQuotaReads, 1)
+	snap.set(StoreQuotaReads, 0)
 	r = hk.On(snap)
 	if r == nil || r.Hint == nil || r.Hint.Severity != "critical" {
-		t.Error("reads=1 -> critical")
+		t.Error("reads=0 -> critical")
 	}
 }
 
 func TestVerificationHook(t *testing.T) {
-	hk := VerificationHook()
+	hk := verificationHook()
+	snap := &Snapshot{Store: make(map[string]int64)}
 
-	// No file modified -> silent.
-	snap := makeSnap()
 	if r := hk.On(snap); r != nil {
 		t.Error("no file modified -> silent")
 	}
 
-	// File modified -> fire once.
-	snap = makeSnap()
-	snap.store.SetFlag(KeyFileModified, true)
+	snap.set(StoreFileModified, 1)
 	r := hk.On(snap)
 	if r == nil || r.Hint == nil {
 		t.Fatal("file modified -> fire")
 	}
 
-	// Second call -> silent (already injected).
 	r = hk.On(snap)
 	if r != nil {
 		t.Error("already injected -> silent")
 	}
-
-	// Flag cleared (unset) -> reset state, then fire again.
-	snap = makeSnap()
-	hk.On(snap)       // reset injected
-	snap.store.SetFlag(KeyFileModified, true)
-	r = hk.On(snap)
-	if r == nil || r.Hint == nil {
-		t.Error("after reset -> should fire again")
-	}
 }
 
 func TestGarbledCircuitBreaker(t *testing.T) {
-	hk := GarbledCircuitBreaker()
-	snap := makeSnap()
+	hk := garbledCircuitBreaker()
+	snap := &Snapshot{Store: make(map[string]int64)}
+
 	if r := hk.On(snap); r != nil {
 		t.Error("no garbled -> silent")
 	}
-	snap.store.IncCounter(KeyRespGarbled)
-	snap.store.IncCounter(KeyRespGarbled)
+	snap.set(StoreRespGarbled, 2)
 	if r := hk.On(snap); r != nil {
 		t.Error("garbled=2 -> silent")
 	}
-	snap.store.IncCounter(KeyRespGarbled)
+	snap.set(StoreRespGarbled, 3)
 	r := hk.On(snap)
 	if r == nil || r.Stop == nil || *r.Stop != StopFormatError {
 		t.Error("garbled=3 -> stop")
 	}
 }
 
-func makeSnap() *Snapshot {
-	return &Snapshot{store: &Store{}}
+func TestResetSession(t *testing.T) {
+	r := NewRegistry()
+	r.Set(StoreFileModified, 1)
+	r.Set(StoreQuotaReads, 1)
+	r.ResetSession()
+
+	if r.store[StoreFileModified] != 0 || r.store[StoreQuotaReads] != 0 {
+		t.Error("store should be empty after session reset")
+	}
 }

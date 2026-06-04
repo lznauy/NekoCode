@@ -52,8 +52,8 @@ type Agent struct {
 	lastText          string
 
 	transform    ContextTransform
-	hookMgr      *hooks.Manager
-	declHooks    *hooks.DeclarativeRegistry
+	hookReg      *hooks.Registry
+	
 	startTime    time.Time
 }
 
@@ -71,8 +71,7 @@ func New(ctx context.Context, ctxMgr *ctxmgr.Manager, llmClient types.LLM, toolR
 	}
 }
 
-func (a *Agent) SetHookManager(m *hooks.Manager) { a.hookMgr = m }
-func (a *Agent) SetDeclarativeHooks(d *hooks.DeclarativeRegistry) { a.declHooks = d }
+func (a *Agent) SetHookRegistry(m *hooks.Registry) { a.hookReg = m }
 
 func (a *Agent) SetConfirmFn(fn common.ConfirmFunc) { a.executor.SetConfirmFn(fn) }
 func (a *Agent) ConfirmFn() common.ConfirmFunc       { return a.executor.ConfirmFn() }
@@ -161,5 +160,8 @@ func (a *Agent) Reset() {
 		a.exploration = budget.NewExplorationTracker()
 	} else {
 		a.exploration.Reset()
+	}
+	if a.hookReg != nil {
+		a.hookReg.ResetSession()
 	}
 }

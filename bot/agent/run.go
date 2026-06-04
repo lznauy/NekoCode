@@ -28,11 +28,22 @@ func (a *Agent) Run(input string, callback RunCallback) *RunResult {
 	a.ctxMgr.Add("user", input)
 	state := &stepState{Input: input}
 
+	// UserSubmit hooks.
+	if a.hookReg != nil {
+		for _, r := range a.hookReg.Evaluate(hooks.UserSubmit, "", false) {
+			if r.Hint != nil {
+				a.ctxMgr.Add("user", "[System] "+r.Hint.Content)
+			}
+		}
+	}
+
 	for !a.finished {
 		if finished := a.runTurn(state, callback); finished {
 			a.finished = true
 		}
 	}
+
+	a.evaluateStop()
 
 	if a.getCtx().Err() != nil || a.stopReason == hooks.StopInterrupted {
 		return &RunResult{FinalOutput: "Interrupted", Steps: a.step}
@@ -43,6 +54,16 @@ func (a *Agent) Run(input string, callback RunCallback) *RunResult {
 	return a.synthesizeAndReturn(callback)
 }
 
+func (a *Agent) evaluateStop() {
+	if a.hookReg != nil {
+		for _, r := range a.hookReg.Evaluate(hooks.Stop, "", false) {
+			if r.Hint != nil {
+				a.ctxMgr.Add("user", "[System] "+r.Hint.Content)
+			}
+		}
+	}
+}
+
 func (a *Agent) runTurn(state *stepState, callback RunCallback) (finished bool) {
 	msgCountBefore := a.ctxMgr.Len()
 
@@ -50,16 +71,15 @@ func (a *Agent) runTurn(state *stepState, callback RunCallback) (finished bool) 
 	state.quota = budget.ComputeQuota(a.ctxMgr.TokenUsage())
 
 	// —— PreTurn hooks ——
-	if a.hookMgr != nil {
-		a.hookMgr.Gauge(hooks.KeyQuotaHard, b2i(state.quota.Hard))
-		a.hookMgr.Gauge(hooks.KeyQuotaReads, int64(max(0, state.quota.MaxReads-state.quota.UsedReads)))
-		a.hookMgr.Gauge(hooks.KeyExploreScore, int64(a.exploration.Score))
-		a.hookMgr.Gauge(hooks.KeyTasksAllDone, b2i(a.ctxMgr.AllTasksDone()))
-		a.hookMgr.Value(hooks.KeyStepInput, state.Input)
-		a.hookMgr.ResetTurn()
+	if a.hookReg != nil {
+			a.hookReg.ResetTurn()
+		a.hookReg.Set(hooks.StoreQuotaReads, int64(max(0, state.quota.MaxSlots-state.quota.Used)))
+		a.hookReg.Set(hooks.StoreExploreScore, int64(a.exploration.Score))
+		a.hookReg.Set(hooks.StoreTasksAllDone, b2i(a.ctxMgr.AllTasksDone()))
+		a.hookReg.SetStr(hooks.StoreStepInput, state.Input)
 
 		var hints []hooks.Hint
-		for _, r := range a.hookMgr.Evaluate(hooks.PointPreTurn) {
+		for _, r := range a.hookReg.Evaluate(hooks.PreTurn, "", false) {
 			if r.Hint != nil {
 				hints = append(hints, *r.Hint)
 			}
@@ -80,7 +100,6 @@ func (a *Agent) runTurn(state *stepState, callback RunCallback) (finished bool) 
 	reasoning := a.Reason(state)
 
 	if reasoning.Interrupted {
-		state.quota.Rollback(state.quota.Snapshot())
 		if a.finished {
 			a.stopReason = hooks.StopInterrupted
 			return true
@@ -106,16 +125,16 @@ func (a *Agent) runTurn(state *stepState, callback RunCallback) (finished bool) 
 }
 
 func (a *Agent) handleText(reasoning *ReasoningResult, state *stepState, callback RunCallback) (finished bool) {
-	if a.hookMgr != nil {
+	if a.hookReg != nil {
 		if reasoning.GarbledToolCall {
-			a.hookMgr.Counter(hooks.KeyRespGarbled)
+			a.hookReg.Inc(hooks.StoreRespGarbled)
 		}
 		if reasoning.Action == ActionChat {
-			a.hookMgr.Turn(hooks.KeyRespChat)
+			a.hookReg.Inc(hooks.StoreRespChat)
 		}
 
 		// —— PostTurn hooks ——
-		results := a.hookMgr.Evaluate(hooks.PointPostTurn)
+		results := a.hookReg.Evaluate(hooks.PostTurn, "", false)
 		for _, r := range results {
 			if r.Stop != nil {
 				a.stopReason = *r.Stop
@@ -170,17 +189,6 @@ func (a *Agent) drainSteering() {
 	}
 }
 
-// extractFilePath 从工具调用参数中提取文件路径。
-func extractFilePath(tc tools.ToolCallItem) string {
-	if path, ok := tc.Args["path"].(string); ok {
-		return path
-	}
-	if path, ok := tc.Args["filePath"].(string); ok {
-		return path
-	}
-	return ""
-}
-
 // formatArgs 将工具参数格式化为 key=value 字符串供 TUI 展示。
 func formatArgs(args map[string]any) string {
 	if len(args) == 0 {
@@ -188,6 +196,9 @@ func formatArgs(args map[string]any) string {
 	}
 	keys := make([]string, 0, len(args))
 	for k := range args {
+		if k == "_preview" {
+			continue
+		}
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)

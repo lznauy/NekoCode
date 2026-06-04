@@ -46,7 +46,6 @@ type Bot struct {
 	skillReg      *skill.Registry
 	pluginReg     *plugin.Registry
 	mcpClients    map[string]*mcp.Client
-	declHooks      *hooks.DeclarativeRegistry
 	confirmFn      common.ConfirmFunc
 	phaseFn        common.PhaseFunc
 	todoFn         common.TodoFunc
@@ -56,6 +55,7 @@ type Bot struct {
 	pendingConfirm bool
 	promptBuilder  *prompt.Builder
 	toolRegistry   *tools.Registry
+	hookReg       *hooks.Registry
 	projCtx        string // cached project context for model switching
 	mu             sync.Mutex
 }
@@ -66,6 +66,8 @@ func New() *Bot {
 	b.initConfig()
 	projIndex := b.initCtxMgr()
 	b.initToolRegistry(projIndex)
+
+	b.initHooks()
 	b.initSummarizer()
 	b.initPlugins()
 	b.initSkills()
@@ -128,7 +130,7 @@ func (b *Bot) initSummarizer() {
 
 func (b *Bot) initToolRegistry(projIndex *projctx.ProjectIndex) {
 	b.toolRegistry = tools.NewRegistry()
-	builtin.RegisterAll(b.toolRegistry)
+	builtin.RegisterAll(b.toolRegistry, b.cfg.ImageGenModels)
 
 	if projIndex != nil {
 		builtin.RegisterProjectInfo(b.toolRegistry, projIndex)
@@ -154,7 +156,6 @@ func (b *Bot) initSkills() {
 func (b *Bot) initPlugins() {
 	b.pluginReg = plugin.NewRegistry(plugin.DefaultDirs())
 	b.pluginReg.Logf = debug.Log
-	b.declHooks = hooks.NewDeclarativeRegistry()
 	b.mcpClients = make(map[string]*mcp.Client)
 
 	b.pluginReg.LoadAll()
@@ -179,7 +180,11 @@ func (b *Bot) loadPluginExtensions(p *plugin.Plugin) {
 		subagent.RegisterPlugin(def.ToAgentType())
 	}
 	if hooksPath, ok := p.HooksPath(); ok {
-		if err := b.declHooks.ParseAndAdd(p.Dir, hooksPath); err != nil {
+		if pluginHooks, err := hooks.LoadPluginHooks(p.Dir, hooksPath); err == nil {
+			for _, h := range pluginHooks {
+				b.hookReg.Register(h)
+			}
+		} else {
 			debug.Log("plugin: hooks %s: %v", hooksPath, err)
 		}
 	}
@@ -232,7 +237,11 @@ func (b *Bot) unloadPluginExtensions(p *plugin.Plugin) {
 			delete(b.mcpClients, srvName)
 		}
 	}
-	b.declHooks.RemoveConfigForPlugin(p.Dir)
+	for _, h := range b.hookReg.List() {
+		if strings.HasPrefix(h.Name, "plugin:") && strings.Contains(h.Name, p.Dir) {
+			b.hookReg.Unregister(h.Name)
+		}
+	}
 }
 
 func expandMCPEnv(env map[string]string, pluginRoot string) map[string]string {
@@ -290,10 +299,7 @@ func (b *Bot) initAgent() {
 	b.ctxMgr.MergeClient = mergeClient
 
 	b.ag = agent.New(context.Background(), b.ctxMgr, llmClient, b.toolRegistry)
-	hm := hooks.NewManager()
-	hooks.RegisterBuiltin(hm)
-	b.ag.SetHookManager(hm)
-	b.ag.SetDeclarativeHooks(b.declHooks)
+	b.ag.SetHookRegistry(b.hookReg)
 
 	// Restore callbacks from Configure (if already called).
 	if b.confirmFn != nil {
@@ -809,4 +815,9 @@ func (b *Bot) ResumeSession(id string) error {
 	}
 	b.sess = sess
 	return nil
+}
+
+func (b *Bot) initHooks() {
+	b.hookReg = hooks.NewRegistry()
+	hooks.RegisterBuiltin(b.hookReg)
 }

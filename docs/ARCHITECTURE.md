@@ -4,7 +4,7 @@
 
 ## 项目概述
 
-NekoCode 是一个基于 Go 的终端 AI 助手，使用 Bubble Tea v2 构建 TUI，支持多 LLM provider（OpenAI 兼容 / Anthropic 兼容协议），具备 Agent 循环、Native Function Calling、工具执行、权限确认、Plan Mode、Plugin 系统、事件驱动 Hooks、MCP 客户端、子 Agent、上下文管理、Session Memory 等机制。
+NekoCode 是一个基于 Go 的终端 AI 助手，使用 Bubble Tea v2 构建 TUI，支持多 LLM provider（OpenAI 兼容 / Anthropic 兼容协议），具备 Agent 循环、Native Function Calling、工具执行、权限确认、Plan Mode、Plugin 系统、事件驱动 Hooks、MCP 客户端、子 Agent、上下文管理、Session Memory、AI 文生图等机制。
 
 ## 目录结构
 
@@ -20,7 +20,7 @@ nekocode/
 │   │   └── types.go                #     LLM 接口 + Message/Response/ToolDef + HTTP 客户端
 │   ├── anthropic/                  #   Anthropic 兼容协议
 │   │   └── client.go               #     Anthropic Messages API 兼容实现
-│   ├── openai/                     #   OpenAI 兼容协议（DeepSeek / MiMo 等）
+│   ├── openai/                     #   OpenAI 兼容协议（DeepSeek / MiniMax 等）
 │   │   └── client.go               #     OpenAI Chat Completions 兼容实现
 │   ├── factory.go                  #   NewClient / NewClientWithProtocol 工厂
 │   └── retry.go                    #   指数退避重试
@@ -124,7 +124,10 @@ nekocode/
 │           ├── tool_websearch.go   #       Web 搜索
 │           ├── tool_project_info.go#       项目信息查询
 │           ├── tool_tree.go         #       目录树
+│           ├── tool_image_gen.go    #       图片生成（即梦文生图）
 │           └── html2md.go          #       HTML→Markdown
+│   ├── sdk/                        #   外部 SDK 封装
+│   │   └── volcengine_signer.go    #     火山引擎 SigV4 签名器
 ├── tui/                            # TUI 界面
 │   ├── tui.go                      #   package tui 入口（Run 函数）
 │   ├── agent.go                    #   Agent 桥接 + startChat
@@ -165,7 +168,7 @@ nekocode/
 │       └── charset.go              #     制表符字符集
 ```
 
-## BotInterface（10 方法）
+## BotInterface（11 方法）
 
 ```go
 type BotInterface interface {
@@ -179,6 +182,7 @@ type BotInterface interface {
     Steer(msg string)
     Abort()
     ProviderModel() (provider, model string)
+    SwitchModel(name) (model, provider string, err error)
 }
 ```
 
@@ -229,7 +233,7 @@ Run() 主循环 → runTurn(state)
 ### Build 管线
 
 1. Layer 0: SystemPrompt + Skills（静态前缀）
-2. Layer 0: Memory（项目记忆，内容通过 ctxctx.Content.Memory 字段承载）
+2. Layer 0: Memory（项目记忆，内容通过 context.Content.Memory 字段承载）
 3. Layer 0.5: Archive（压缩摘要）
 4. Layer 1: Messages（全部保留，不再截断；Compactor 负责压缩）
 5. Layer 2: Todo + Hints（动态层）
@@ -266,6 +270,7 @@ type Tool interface {
 | todo_write | Sequential | Safe |
 | tree | Parallel | Safe |
 | project_info | Parallel | Safe |
+| image_gen | Sequential | Safe |
 
 ## Hook 系统（事件驱动）
 
@@ -287,23 +292,20 @@ type Tool interface {
 | Value | Set/Get | 每轮覆盖（Agent.ResetTurn 重置，字符串） |
 | Turn | Inc/Get/Reset | 每轮临时（Agent.ResetTurn 重置） |
 
-### 内置 Hook（9 个）
+### 内置 Hook（5 个 Inject + 1 个 Stop 断路器）
 
 | Hook | Point | 功能 |
 |------|-------|------|
 | quota | PreTurn | 配额告警，引导申请扩展 |
 | verification | PreTurn | 文件修改后提醒验证（闭包防重复） |
 | exploration_exhausted | PreTurn | 探索分数耗尽，强制行动 |
-| exploration_low | PreTurn | 探索分数偏低，提醒修改 |
 | explore_cascade | PostTool | 连续 researcher 无产出 |
-| repeated_tool_call | PostTool | 重复调用相同工具 |
 | unfinished_work | PostTurn | 有未完成任务时阻止闲聊结束 |
-| garbled_tool_call | PostTurn | XML 泄露，要求重试 |
 | garbled_circuit_breaker | PostTurn | 累计 3 次 garbled 则强制停止 |
 
 ### Hook 间抑制
 
-`exploration_exhausted` 和 `explore_cascade` 触发时自动抑制 `exploration_low`。需要跨轮记忆的 Hook（verification、exploration、cascade、repeated_call）使用闭包变量管理状态。
+`explore_cascade` 触发时自动抑制 `exploration_low`。需要跨轮记忆的 Hook（verification、exploration、cascade）使用闭包变量管理状态。
 
 ## Plugin 系统
 
@@ -376,7 +378,8 @@ Model
 | | 子 Agent | `bot/agent/subagent/` | 独立循环，3 种内置类型 + 插件扩展 |
 | LLM 网关 | `llm/` | OpenAI/Anthropic 双协议，统一接口 |
 | 工具系统 | `bot/tools/` | Tool 接口 + Executor + Registry |
-| | 内置工具 | `bot/tools/builtin/` | 13 个内置工具实现 |
+| | 内置工具 | `bot/tools/builtin/` | 14 个内置工具实现 |
+| SDK | `bot/sdk/` | 外部服务 SDK（火山引擎签名等） |
 | 上下文管理 | `bot/ctxmgr/` | Build 管线 + 五级压缩 + token 估算 |
 | Session Memory | `bot/ctxmgr/memory/` | Memory 文件持久化（10 section Markdown） |
 | Plugin 系统 | `bot/plugin/` | 安装/卸载/生命周期 |

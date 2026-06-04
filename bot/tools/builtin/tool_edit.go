@@ -24,66 +24,52 @@ type EditTool struct{}
 
 func (t *EditTool) Name() string                                     { return "edit" }
 func (t *EditTool) ExecutionMode(map[string]interface{}) tools.ExecutionMode { return tools.ModeSequential }
-func (t *EditTool) DangerLevel(args map[string]any) common.DangerLevel {
+func (t *EditTool) DangerLevel(map[string]any) common.DangerLevel { return common.LevelWrite }
+
+// Preview generates a diff preview for the TUI confirm bar.
+func (t *EditTool) Preview(args map[string]any) string {
 	hashes, ok := toStringSlice(args["hashes"])
 	if !ok || len(hashes) == 0 {
-		return common.LevelWrite
+		return ""
 	}
 	path, _ := args["path"].(string)
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return common.LevelWrite
-	}
-	lines := strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n")
-	newStr, _ := args["new_string"].(string)
-	op, _ := args["op"].(string)
-
-	hashToLines := buildHashToLines(lines)
-
-	startLine := resolveLine(hashToLines, hashes[0])
-	if startLine == 0 {
-		return common.LevelWrite
-	}
-	endLine := startLine
-	if len(hashes) > 1 {
-		endLine = resolveLine(hashToLines, hashes[1])
-		if endLine == 0 {
-			return common.LevelWrite
-		}
-	}
-	if startLine > endLine {
-		startLine, endLine = endLine, startLine
+	r, err := resolveEdit(path, hashes)
+	if err != nil || r.startLine == 0 {
+		return ""
 	}
 
 	var sb strings.Builder
 	sb.WriteString("── preview ──")
+	newStr, _ := args["new_string"].(string)
+	op, _ := args["op"].(string)
+	startLine, endLine := r.startLine, r.endLine
+
 	ctxStart := max(0, startLine-4)
-	for i := ctxStart; i < startLine-1 && i < len(lines); i++ {
-		sb.WriteString(fmt.Sprintf("\n %d:[%s]%s", i+1, tools.HashLine(lines[i]), lines[i]))
+	for i := ctxStart; i < startLine-1 && i < len(r.lines); i++ {
+		fmt.Fprintf(&sb, "\n %d:[%s]%s", i+1, tools.HashLine(r.lines[i]), r.lines[i])
 	}
-	for i := startLine - 1; i < endLine && i < len(lines); i++ {
-		sb.WriteString(fmt.Sprintf("\n-%d:[%s]%s", i+1, tools.HashLine(lines[i]), lines[i]))
+	for i := startLine - 1; i < endLine && i < len(r.lines); i++ {
+		fmt.Fprintf(&sb, "\n-%d:[%s]%s", i+1, tools.HashLine(r.lines[i]), r.lines[i])
 	}
 	if op != "delete" && newStr != "" {
 		lineNo := startLine
 		if op == "insert_after" {
 			lineNo = endLine + 1
 		}
-		for _, nl := range strings.Split(newStr, "\n") {
-			sb.WriteString(fmt.Sprintf("\n+%d:[%s]%s", lineNo, tools.HashLine(nl), nl))
+		for nl := range strings.SplitSeq(newStr, "\n") {
+			fmt.Fprintf(&sb, "\n+%d:[%s]%s", lineNo, tools.HashLine(nl), nl)
 			lineNo++
 		}
 	}
-	ctxEnd := min(len(lines), endLine+3)
-	for i := endLine; i < ctxEnd && i < len(lines); i++ {
-		sb.WriteString(fmt.Sprintf("\n %d:[%s]%s", i+1, tools.HashLine(lines[i]), lines[i]))
+	ctxEnd := min(len(r.lines), endLine+3)
+	for i := endLine; i < ctxEnd && i < len(r.lines); i++ {
+		fmt.Fprintf(&sb, "\n %d:[%s]%s", i+1, tools.HashLine(r.lines[i]), r.lines[i])
 	}
-	args["_preview"] = sb.String()
-	return common.LevelWrite
+	return sb.String()
 }
 
 func (t *EditTool) Description() string {
-	return "Edit files by hashline. Read output annotates each line as lineNo:[hash]content — [hash] is metadata, only content after ] is the actual file. Reference lines by hashes like {\"hashes\":[\"3:a3\"]} — use ONLY the 3-char hash, never include [ ] or content. Use 2 hashes for ranges [\"3:a3\",\"5:b2\"]. Operations: replace(default), insert_after, insert_before, delete. Prefer this over write. Always read the file first."
+	return "Edit files by hashline. Read output wraps each line as <l n=\"lineNo\" h=\"hash\">content</l>. Build hash anchors from the n and h attributes as \"lineNo:hash\" (e.g. \"3:a3B\"). Use 2 hashes for ranges. Operations: replace(default), insert_after, insert_before, delete. Prefer this over write. Always read the file first."
 }
 
 func (t *EditTool) Parameters() []tools.Parameter {
@@ -91,7 +77,7 @@ func (t *EditTool) Parameters() []tools.Parameter {
 		{Name: "path", Type: "string", Required: true,
 			Description: "Absolute file path to edit."},
 		{Name: "hashes", Type: "array", Required: true,
-			Description: "Line anchors: \"lineNo:hash\" from Read output. Use ONLY the 3-char hash (e.g. \"3:a3\"), never include brackets or pipe. e.g. [\"3:a3\",\"5:b2\"]"},
+			Description: "Line anchors from Read \"<l>\" tags: \"lineNo:hash\" (e.g. \"3:a3B\"). The 4-char h= attribute identifies the line. e.g. [\"3:a3B\",\"5:b2C\"]"},
 		{Name: "new_string", Type: "string", Required: false,
 			Description: "Replacement text (omit for delete)."},
 		{Name: "op", Type: "string", Required: false,
@@ -158,13 +144,21 @@ func toStringSlice(v any) ([]string, bool) {
 	return out, true
 }
 
-func (t *EditTool) hashlineEdit(path string, hashes []string, args map[string]any) (string, error) {
+// editRange holds the resolved result of parsing hashes against file content.
+type editRange struct {
+	lines     []string
+	startLine int
+	endLine   int
+	stale     []string
+}
+
+// resolveEdit reads the file and resolves hashes to line numbers.
+func resolveEdit(path string, hashes []string) (*editRange, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("failed to read file: %v", err)
+		return nil, err
 	}
 	lines := strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n")
-
 	hashToLines := buildHashToLines(lines)
 
 	var stale []string
@@ -174,15 +168,7 @@ func (t *EditTool) hashlineEdit(path string, hashes []string, args map[string]an
 		}
 	}
 	if len(stale) > 0 {
-		var sb strings.Builder
-		fmt.Fprintf(&sb, "<path>%s</path>\n<error>Hashline stale</error>\n<stale>\n", filepath.Base(path))
-		for _, h := range stale {
-			fmt.Fprintf(&sb, "  %s\n", h)
-		}
-		sb.WriteString("</stale>\n<current>\n<format>lineNo:[hash]content — [hash] is NOT file content</format>\n<![CDATA[\n")
-		sb.WriteString(tools.AnnotateLines(strings.Join(lines, "\n")))
-		sb.WriteString("\n]]>\n</current>")
-		return "", fmt.Errorf("%s", sb.String())
+		return &editRange{lines: lines, stale: stale}, nil
 	}
 
 	startLine := resolveLine(hashToLines, hashes[0])
@@ -192,6 +178,32 @@ func (t *EditTool) hashlineEdit(path string, hashes []string, args map[string]an
 	}
 	if startLine > endLine {
 		startLine, endLine = endLine, startLine
+	}
+	return &editRange{lines: lines, startLine: startLine, endLine: endLine}, nil
+}
+
+func (t *EditTool) hashlineEdit(path string, hashes []string, args map[string]any) (string, error) {
+	r, err := resolveEdit(path, hashes)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file: %v", err)
+	}
+	if len(r.stale) > 0 {
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "<path>%s</path>\n<error>Hashline stale</error>\n<stale>\n", filepath.Base(path))
+		for _, h := range r.stale {
+			fmt.Fprintf(&sb, "  %s\n", h)
+		}
+		sb.WriteString("</stale>\n<current>\n<format>Lines are &lt;l n=&quot;N&quot; h=&quot;XXXX&quot;&gt;content&lt;/l&gt;. Only content between tags is the actual file.</format>\n<![CDATA[\n")
+		sb.WriteString(tools.AnnotateLines(strings.Join(r.lines, "\n")))
+		sb.WriteString("\n]]>\n</current>")
+		return "", fmt.Errorf("%s", sb.String())
+	}
+
+	startLine, endLine := r.startLine, r.endLine
+
+	origMode := os.FileMode(0644)
+	if info, err := os.Stat(path); err == nil {
+		origMode = info.Mode()
 	}
 
 	op, _ := args["op"].(string)
@@ -203,21 +215,19 @@ func (t *EditTool) hashlineEdit(path string, hashes []string, args map[string]an
 
 	switch op {
 	case "insert_before":
-		lines = append(lines[:startLine-1], append(replacement, lines[startLine-1:]...)...)
+		r.lines = append(r.lines[:startLine-1], append(replacement, r.lines[startLine-1:]...)...)
 	case "insert_after":
-		lines = append(lines[:endLine], append(replacement, lines[endLine:]...)...)
+		r.lines = append(r.lines[:endLine], append(replacement, r.lines[endLine:]...)...)
 	case "delete":
-		lines = append(lines[:startLine-1], lines[endLine:]...)
+		r.lines = append(r.lines[:startLine-1], r.lines[endLine:]...)
 	default:
-		lines = append(lines[:startLine-1], append(replacement, lines[endLine:]...)...)
+		r.lines = append(r.lines[:startLine-1], append(replacement, r.lines[endLine:]...)...)
 	}
 
-	newText := strings.Join(lines, "\n")
-	if err := os.WriteFile(path, []byte(newText), 0644); err != nil {
+	newText := strings.Join(r.lines, "\n")
+	if err := os.WriteFile(path, []byte(newText), origMode); err != nil {
 		return "", fmt.Errorf("failed to write file: %v", err)
 	}
-
-	_ = lintFile(path)
 
 	what := "Replaced"
 	n := len(replacement)
@@ -226,7 +236,12 @@ func (t *EditTool) hashlineEdit(path string, hashes []string, args map[string]an
 	} else if op == "delete" {
 		what, n = "Deleted", endLine-startLine+1
 	}
-	return fmt.Sprintf("<path>%s</path>\n%s %d line(s) in %s", filepath.Base(path), what, n, filepath.Base(path)), nil
+	result := fmt.Sprintf("<path>%s</path>\n%s %d line(s) in %s", filepath.Base(path), what, n, filepath.Base(path))
+
+	if lint := lintFile(path); lint != "" {
+		result += "\n<lint>\n" + lint + "\n</lint>"
+	}
+	return result, nil
 }
 
 // ---------------------------------------------------------------------------

@@ -13,16 +13,21 @@ import (
 
 const base62Chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
-// HashLine returns a 3-character hash of the line content for hashline editing.
-// Empty lines return "___".
+// HashLine returns a 4-character hash of the line content for hashline editing.
+// Empty lines return "____".
 func HashLine(s string) string {
 	if s == "" {
-		return "___"
+		return "____"
 	}
 	h := fnv.New64a()
 	h.Write([]byte(s))
 	u := h.Sum64()
-	return string([]byte{base62Chars[u%62], base62Chars[(u/62)%62], base62Chars[(u/(62*62))%62]})
+	return string([]byte{
+		base62Chars[u%62],
+		base62Chars[(u/62)%62],
+		base62Chars[(u/(62*62))%62],
+		base62Chars[(u/(62*62*62))%62],
+	})
 }
 
 // AnnotateLines prefixes each line with "lineNo:[hash]" for hashline editing.
@@ -30,7 +35,7 @@ func AnnotateLines(content string) string {
 	lines := strings.Split(content, "\n")
 	var b strings.Builder
 	for i, line := range lines {
-		b.WriteString(fmt.Sprintf("%d:[%s]%s", i+1, HashLine(line), line))
+		fmt.Fprintf(&b, "%d:[%s]%s", i+1, HashLine(line), line)
 		if i < len(lines)-1 {
 			b.WriteByte('\n')
 		}

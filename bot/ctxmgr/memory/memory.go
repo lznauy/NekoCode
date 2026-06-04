@@ -161,7 +161,7 @@ func (f *File) MergeFromCompaction(newFacts []string, goal string) {
 
 func (f *File) parse(data string) {
 	current := ""
-	for _, line := range strings.Split(data, "\n") {
+	for line := range strings.SplitSeq(data, "\n") {
 		trimmed := strings.TrimSpace(line)
 		for key, header := range sectionHeaders {
 			if trimmed == header {

@@ -111,6 +111,8 @@ func (m *Model) onAgentStep(finalResponse *string) func(string, string, string, 
 				Content:   output,
 				Collapsed: toolName != "edit" && toolName != "write" && toolName != "bash",
 			})
+		case action == "tool_preview":
+			m.Messages.UpdateToolPreview(toolName, output)
 		case toolName != "":
 			m.Messages.AddToolOutput(toolName, output)
 		}

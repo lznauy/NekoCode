@@ -141,6 +141,15 @@ func (m *Messages) AddToolOutput(toolName, output string) {
 	m.mu.Unlock()
 }
 
+func (m *Messages) UpdateToolPreview(toolName, preview string) {
+	m.mu.Lock()
+	if m.processingItem != nil {
+		m.processingItem.UpdateToolPreview(toolName, preview)
+		m.invalidateProcessing()
+	}
+	m.mu.Unlock()
+}
+
 func (m *Messages) AccumulatedText() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()

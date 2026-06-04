@@ -18,6 +18,7 @@ type Executor struct {
 	planMode  bool
 	readFiles map[string]bool
 	readMu    sync.RWMutex
+	previewFn func(toolName string, args map[string]any, preview string)
 }
 
 func NewExecutor(r *Registry) *Executor {
@@ -25,9 +26,10 @@ func NewExecutor(r *Registry) *Executor {
 }
 
 func (e *Executor) SetConfirmFn(fn common.ConfirmFunc) { e.confirmFn = fn }
-func (e *Executor) ConfirmFn() common.ConfirmFunc    { return e.confirmFn }
-func (e *Executor) SetPhaseFn(fn common.PhaseFunc)     { e.phaseFn = fn }
-func (e *Executor) SetPlanMode(on bool)                { e.planMode = on }
+func (e *Executor) ConfirmFn() common.ConfirmFunc     { return e.confirmFn }
+func (e *Executor) SetPhaseFn(fn common.PhaseFunc)      { e.phaseFn = fn }
+func (e *Executor) SetPlanMode(on bool)                 { e.planMode = on }
+func (e *Executor) SetPreviewFn(fn func(string, map[string]any, string)) { e.previewFn = fn }
 
 func (e *Executor) ExecuteBatch(ctx context.Context, calls []ToolCallItem) []ToolCallResult {
 	var ro, mw []ToolCallItem
@@ -65,6 +67,15 @@ func (e *Executor) ExecuteBatch(ctx context.Context, calls []ToolCallItem) []Too
 
 	// Mutable: sequential.
 	for i, c := range mw {
+		if t, err := e.registry.Get(c.Name); err == nil {
+			if p, ok := t.(interface{ Preview(map[string]any) string }); ok {
+				preview := p.Preview(c.Args)
+				c.Args["_preview"] = preview
+				if e.previewFn != nil {
+					e.previewFn(c.Name, c.Args, preview)
+				}
+			}
+		}
 		results[n+i] = e.executeOne(ctx, c)
 	}
 	return results

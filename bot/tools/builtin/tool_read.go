@@ -25,7 +25,7 @@ func (t *ReadTool) Name() string                                     { return "r
 func (t *ReadTool) ExecutionMode(map[string]any) tools.ExecutionMode { return tools.ModeParallel }
 func (t *ReadTool) DangerLevel(map[string]any) common.DangerLevel    { return common.LevelSafe }
 func (t *ReadTool) Description() string {
-	return "Read file contents (text, images, PDF). Absolute path required. Use startLine/endLine for range, max 2000 lines. Lines are annotated as lineNo:[hash]content — the [hash] is a 3-char line identifier for the edit tool, NOT part of the file content."
+	return "Read file contents (text, images, PDF). Absolute path required. Use startLine/endLine for range, max 2000 lines. Lines are tagged as <l n=\"lineNo\" h=\"hash\">content</l> — n and h attributes are metadata for the edit tool, NOT part of the file content."
 }
 
 func (t *ReadTool) Parameters() []tools.Parameter {
@@ -151,7 +151,7 @@ func formatReadOutput(path string, lines []string, startLine, endLine int) strin
 	for i := range end - start {
 		idx := start + i
 		lineNo := startLine + i
-		block.WriteString(fmt.Sprintf("%d:[%s]%s", lineNo, tools.HashLine(lines[idx]), lines[idx]))
+		fmt.Fprintf(&block, `<l n="%d" h="%s">%s</l>`, lineNo, tools.HashLine(lines[idx]), lines[idx])
 		block.WriteByte('\n')
 	}
 	body := strings.TrimRight(block.String(), "\n")
@@ -163,7 +163,7 @@ func formatReadOutput(path string, lines []string, startLine, endLine int) strin
 	if end < total {
 		fmt.Fprintf(&out, "<next startLine=\"%d\"/>\n", end+1)
 	}
-	fmt.Fprintf(&out, "<content>\n<format>lineNo:[hash]content — [hash] is NOT file content</format>\n<![CDATA[\n%s\n]]>\n</content>\n</tool_output>", safe)
+	fmt.Fprintf(&out, "<content>\n<format>Lines are &lt;l n=&quot;N&quot; h=&quot;XXXX&quot;&gt;content&lt;/l&gt;. Only content between tags is the actual file.</format>\n<![CDATA[\n%s\n]]>\n</content>\n</tool_output>", safe)
 	return out.String()
 }
 

@@ -169,7 +169,7 @@ func todoItemsText(items []common.TodoItem) string {
 		return fmt.Sprintf("✓ All %d tasks complete", done)
 	}
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Tasks %d/%d", done, len(items)))
+	fmt.Fprintf(&b, "Tasks %d/%d", done, len(items))
 	for _, it := range items {
 		icon := "·" // · pending
 		switch it.Status {
@@ -178,7 +178,7 @@ func todoItemsText(items []common.TodoItem) string {
 		case "completed":
 			icon = "✓" // ✓ completed
 		}
-		b.WriteString(fmt.Sprintf("\n%s %s", icon, it.Content))
+		fmt.Fprintf(&b, "\n%s %s", icon, it.Content)
 	}
 	return b.String()
 }

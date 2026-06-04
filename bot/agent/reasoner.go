@@ -121,6 +121,9 @@ func (a *Agent) callLLMForTool() ([]tools.ToolCallItem, string, error) {
 
 		stream := streamResult{}
 		a.consumeStream(tokenCh, &stream)
+	if a.finished {
+		return context.Canceled
+	}
 
 		if ctxErr := a.getCtx().Err(); ctxErr != nil {
 			return ctxErr
@@ -160,6 +163,10 @@ func (a *Agent) consumeStream(tokenCh <-chan types.StreamToken, s *streamResult)
 	firstContent := true
 	firstReasoning := true
 	for token := range tokenCh {
+		if a.finished {
+			go func() { for range tokenCh {} }() // drain
+			return
+		}
 		if token.ReasoningContent != "" && firstReasoning {
 			firstReasoning = false
 			if a.phase != nil {
@@ -299,6 +306,9 @@ func (a *Agent) trySynthesize() string {
 
 		stream := streamResult{}
 		a.consumeStream(tokenCh, &stream)
+	if a.finished {
+		return context.Canceled
+	}
 
 		select {
 		case err := <-errCh:
@@ -331,6 +341,9 @@ func (a *Agent) emergencySynthesize() string {
 	}
 	stream := streamResult{}
 	a.consumeStream(tokenCh, &stream)
+	if a.finished {
+		return ""
+	}
 	text := tools.StripAnsi(stream.textBuf.String())
 	if isGarbledToolCall(text) {
 		return ""

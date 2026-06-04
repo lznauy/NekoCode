@@ -80,6 +80,18 @@ func (p *ProcessingItem) AddToolOutput(toolName, output string) {
 	p.setLastToolContent(toolName, output)
 }
 
+// UpdateToolPreview sets the preview content on the most recent matching tool block.
+func (p *ProcessingItem) UpdateToolPreview(toolName, preview string) {
+	for i := len(p.blocks) - 1; i >= 0; i-- {
+		b := &p.blocks[i]
+		if b.Type == block.BlockTool && b.ToolName == toolName && !b.Done {
+			b.Content = preview
+			p.invalidate()
+			return
+		}
+	}
+}
+
 func (p *ProcessingItem) setLastToolContent(toolName, output string) {
 	for i := len(p.blocks) - 1; i >= 0; i-- {
 		b := &p.blocks[i]

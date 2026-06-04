@@ -187,6 +187,8 @@ func (m *Model) handleIdleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		value := m.Input.Value()
 		if value == "" {
+			m.Messages.GotoBottom()
+			m.Input.SetFollow(true)
 			return nil
 		}
 		m.Suggestions.Hide()

@@ -387,7 +387,7 @@ func findGoModule(cwd string) (modDir, modPath string, err error) {
 		modFile := filepath.Join(dir, "go.mod")
 		if data, e := os.ReadFile(modFile); e == nil {
 			// Extract module path from go.mod.
-			for _, line := range strings.Split(string(data), "\n") {
+			for line := range strings.SplitSeq(string(data), "\n") {
 				line = strings.TrimSpace(line)
 				if strings.HasPrefix(line, "module ") {
 					return dir, strings.TrimSpace(strings.TrimPrefix(line, "module ")), nil

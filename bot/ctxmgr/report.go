@@ -91,7 +91,7 @@ func estimateSkills(skillList string) []SkillToken {
 		return nil
 	}
 	var skills []SkillToken
-	for _, line := range strings.Split(skillList, "\n") {
+	for line := range strings.SplitSeq(skillList, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "- ") {
 			continue
