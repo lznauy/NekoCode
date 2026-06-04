@@ -1,7 +1,5 @@
 # NekoCode 🐱
 
-> 终端里的 AI 编程伙伴，不止于终端
-
 <p align="center">
   <b>开源 · 多模型自由 · 猫娘角色 · Go 单二进制 · 可嵌入的 Agent 核心</b>
 </p>
