@@ -2,6 +2,8 @@ package prompt
 
 import (
 	_ "embed"
+	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -27,9 +29,22 @@ func (b *Builder) Build() string {
 	}
 	if b.cwd != "" {
 		now := time.Now().Format("2006-01-02")
-		parts = append(parts, ctxfmt.FormatEnv(b.cwd, now))
+		parts = append(parts, ctxfmt.FormatEnv(b.cwd, now, osRelease(), runtime.GOARCH))
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func osRelease() string {
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return runtime.GOOS
+	}
+	for line := range strings.SplitSeq(string(data), "\n") {
+			if id, ok := strings.CutPrefix(line, "ID="); ok {
+				return strings.Trim(id, `"`)
+		}
+	}
+	return runtime.GOOS
 }
 
 func PlanModePrompt(task string) string {

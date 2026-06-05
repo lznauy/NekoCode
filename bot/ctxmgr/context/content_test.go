@@ -171,8 +171,12 @@ func TestFormatCwd(t *testing.T) {
 }
 
 func TestFormatEnv(t *testing.T) {
-	s := FormatEnv("/home", "2026-01-01")
-	if !strings.Contains(s, "<env>") || !strings.Contains(s, "<cwd>") || !strings.Contains(s, "<date>") {
+	s := FormatEnv("/home", "2026-01-01", "linux", "amd64")
+	if !strings.Contains(s, "<env>") ||
+		!strings.Contains(s, "<cwd>") ||
+		!strings.Contains(s, "<date>") ||
+		!strings.Contains(s, "<os>") ||
+		!strings.Contains(s, "<arch>") {
 		t.Errorf("FormatEnv = %q", s)
 	}
 }

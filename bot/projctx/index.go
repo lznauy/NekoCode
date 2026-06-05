@@ -477,9 +477,9 @@ func (idx *ProjectIndex) FormatSkeleton() string {
 	var b strings.Builder
 
 	b.WriteString("<project>\n")
-	fmt.Fprintf(&b, "<lang>%s</lang>\n", idx.Language)
-	fmt.Fprintf(&b, "<module>%s</module>\n", idx.Module)
-	fmt.Fprintf(&b, "<stats>%d packages, %d files, %d symbols</stats>\n",
+	fmt.Fprintf(&b, "<language>%s</language>\n", idx.Language)
+	fmt.Fprintf(&b, "<module_path>%s</module_path>\n", idx.Module)
+	fmt.Fprintf(&b, "<summary>%d packages, %d files, %d symbols</summary>\n",
 		len(idx.Packages), len(idx.Files), len(idx.Symbols))
 
 	// Directory tree — first two levels only.
@@ -499,21 +499,37 @@ func (idx *ProjectIndex) FormatSkeleton() string {
 		sorted = append(sorted, d)
 	}
 	sort.Strings(sorted)
-	b.WriteString("<top>")
+	b.WriteString("<top_dirs depth=\"2\">")
 	for i, d := range sorted {
 		if i > 0 {
 			b.WriteString(", ")
 		}
 		b.WriteString(d)
 	}
-	b.WriteString("</top>\n")
+	b.WriteString("</top_dirs>\n")
 
-	// Internal dep graph — minimal.
+	// Internal dep graph — top 20 by default.
 	if len(idx.Deps) > 0 {
-		b.WriteString("<deps>\n")
+		// Count total entries with internal deps for truncation hint.
+		totalWithInternal := 0
+		for _, deps := range idx.Deps {
+			for _, d := range deps {
+				if strings.HasPrefix(d, idx.Module) {
+					totalWithInternal++
+					break
+				}
+			}
+		}
+
+		maxShow := 20
+		if totalWithInternal <= maxShow {
+			b.WriteString("<deps>\n")
+		} else {
+			fmt.Fprintf(&b, "<deps showing=\"%d of %d\">\n", maxShow, totalWithInternal)
+		}
 		count := 0
 		for pkg, deps := range idx.Deps {
-			if count >= 20 {
+			if count >= maxShow {
 				break
 			}
 			short := strings.TrimPrefix(pkg, idx.Module+"/")
