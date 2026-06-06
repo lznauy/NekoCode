@@ -78,13 +78,13 @@ func formatTodoItems(items []common.TodoItem) string {
 		return "All " + strconv.Itoa(done) + " tasks complete"
 	}
 	var sb strings.Builder
-	sb.WriteString(strconv.Itoa(len(items)) + " tasks, " + strconv.Itoa(done) + " done:")
+	fmt.Fprintf(&sb, "%d tasks, %d done:", len(items), done)
 	for _, it := range items {
 		mark := "[ ]"
 		if it.Status == "completed" {
 			mark = "[x]"
 		}
-		sb.WriteString("\n  " + mark + " " + it.Content)
+		fmt.Fprintf(&sb, "\n  %s %s", mark, it.Content)
 	}
 	return sb.String()
 }

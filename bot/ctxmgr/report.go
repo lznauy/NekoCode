@@ -234,7 +234,7 @@ func BuildBar(total int, segments []BarSegment, width int) string {
 		}
 		sty := barColors[s.Kind]
 		for range allocated[i] {
-			b.WriteString(sty.Render(ch) + " ")
+			fmt.Fprintf(&b, "%s ", sty.Render(ch))
 		}
 	}
 	return b.String()

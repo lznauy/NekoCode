@@ -145,13 +145,13 @@ func RegisterDefaults(p *Parser, callbacks *Callbacks) {
 		if len(cmd.Args) == 0 {
 			var sb strings.Builder
 			if callbacks.GetConfig != nil {
-				sb.WriteString("Current: " + callbacks.GetConfig() + "\n")
+				fmt.Fprintf(&sb, "Current: %s\n", callbacks.GetConfig())
 			}
 			if callbacks.ListModels != nil {
 				names := callbacks.ListModels()
 				sb.WriteString("Available:\n")
 				for _, n := range names {
-					sb.WriteString("  " + n + "\n")
+					fmt.Fprintf(&sb, "  %s\n", n)
 				}
 			}
 			sb.WriteString("\n/model <name> to switch")

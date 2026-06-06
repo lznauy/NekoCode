@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"fmt"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -55,7 +56,7 @@ func html2md(rawHTML string) string {
 			switch a {
 			case atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6:
 				ensureNewline(&b, &last)
-				b.WriteString(strings.Repeat("#", headingLevel(a)) + " ")
+				fmt.Fprintf(&b, "%s ", strings.Repeat("#", headingLevel(a)))
 			case atom.P, atom.Div, atom.Section, atom.Article:
 				ensureNewline(&b, &last)
 			case atom.Br:
@@ -91,7 +92,7 @@ func html2md(rawHTML string) string {
 					}
 					src = attrs["src"]
 				}
-				b.WriteString("\n![" + alt + "](" + src + ")\n")
+				fmt.Fprintf(&b, "\n![%s](%s)\n", alt, src)
 				last = '\n'
 			case atom.Hr:
 				b.WriteString("\n---\n")
@@ -128,7 +129,7 @@ func html2md(rawHTML string) string {
 				b.WriteByte('*')
 				last = '*'
 			case atom.A:
-				b.WriteString("](" + linkHref + ")")
+				fmt.Fprintf(&b, "](%s)", linkHref)
 				last = ')'
 				linkHref = ""
 			}
@@ -158,7 +159,7 @@ func html2md(rawHTML string) string {
 					}
 					src = attrs["src"]
 				}
-				b.WriteString("\n![" + alt + "](" + src + ")\n")
+				fmt.Fprintf(&b, "\n![%s](%s)\n", alt, src)
 				last = '\n'
 			}
 		}

@@ -1,6 +1,7 @@
 package components
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -188,9 +189,9 @@ func (i *Input) View() string {
 	pad := max(0, w-lipgloss.Width(footer)-1)
 
 	var b strings.Builder
-	b.WriteString(line + "\n")
-	b.WriteString(tv + "\n\n")
-	b.WriteString(footer + strings.Repeat(" ", pad) + styles.BorderStyle.Render(styles.Vertical) + "\n")
+	fmt.Fprintf(&b, "%s\n", line)
+	fmt.Fprintf(&b, "%s\n\n", tv)
+	fmt.Fprintf(&b, "%s%s%s\n", footer, strings.Repeat(" ", pad), styles.BorderStyle.Render(styles.Vertical))
 	b.WriteString(line)
 	return b.String()
 }

@@ -24,28 +24,28 @@ import (
 	"nekocode/bot/hooks"
 	"nekocode/bot/mcp"
 	"nekocode/bot/plugin"
-	"nekocode/bot/projctx"
-	"nekocode/common"
+	"nekocode/bot/cindex"
 	"nekocode/bot/prompt"
 	"nekocode/bot/session"
 	"nekocode/bot/skill"
 	"nekocode/bot/skill/bundled"
 	"nekocode/bot/tools"
 	"nekocode/bot/tools/builtin"
+	"nekocode/common"
 	"nekocode/llm"
 	"nekocode/llm/types"
 )
 
 type Bot struct {
-	cfg           *config.Config
-	ctxMgr        *ctxmgr.Manager
-	cmdParser     *command.Parser
-	skillState    *command.SkillState
-	ag            *agent.Agent
-	sess          *session.Snapshot
-	skillReg      *skill.Registry
-	pluginReg     *plugin.Registry
-	mcpClients    map[string]*mcp.Client
+	cfg            *config.Config
+	ctxMgr         *ctxmgr.Manager
+	cmdParser      *command.Parser
+	skillState     *command.SkillState
+	ag             *agent.Agent
+	sess           *session.Snapshot
+	skillReg       *skill.Registry
+	pluginReg      *plugin.Registry
+	mcpClients     map[string]*mcp.Client
 	confirmFn      common.ConfirmFunc
 	phaseFn        common.PhaseFunc
 	todoFn         common.TodoFunc
@@ -55,8 +55,9 @@ type Bot struct {
 	pendingConfirm bool
 	promptBuilder  *prompt.Builder
 	toolRegistry   *tools.Registry
-	hookReg       *hooks.Registry
+	hookReg        *hooks.Registry
 	projCtx        string // cached project context for model switching
+	cindexMgr      *cindex.Manager
 	mu             sync.Mutex
 }
 
@@ -64,8 +65,8 @@ func New() *Bot {
 	b := &Bot{}
 
 	b.initConfig()
-	projIndex := b.initCtxMgr()
-	b.initToolRegistry(projIndex)
+	b.initCtxMgr()
+	b.initToolRegistry()
 
 	b.initHooks()
 	b.initSummarizer()
@@ -86,7 +87,7 @@ func (b *Bot) initConfig() {
 	b.promptBuilder = prompt.NewBuilder(cwd)
 }
 
-func (b *Bot) initCtxMgr() *projctx.ProjectIndex {
+func (b *Bot) initCtxMgr() {
 	systemPrompt := b.promptBuilder.Build()
 	memFile, _ := memory.Load(memory.DefaultPath())
 	b.ctxMgr = ctxmgr.New(ctxmgr.Config{SystemPrompt: systemPrompt, Memory: memFile})
@@ -94,24 +95,30 @@ func (b *Bot) initCtxMgr() *projctx.ProjectIndex {
 	cwd, err := os.Getwd()
 	if err != nil {
 		b.ctxMgr.SetContextWindow(b.cfg.ContextWindow)
-		return nil
+		return
 	}
 
-	b.projCtx = projctx.LoadProjectContext(cwd)
+	b.projCtx = cindex.LoadProjectContext(cwd)
 	if b.projCtx != "" {
 		b.ctxMgr.Add("system", b.projCtx)
 	}
 
-	var projIndex *projctx.ProjectIndex
-	if idx, err := projctx.IndexProject(cwd); err == nil {
-		if skeleton := idx.FormatSkeleton(); skeleton != "" {
-			b.ctxMgr.Add("system", skeleton)
-		}
-		projIndex = idx
+	mgr, err := cindex.NewManager(cwd)
+	if err != nil {
+		b.ctxMgr.SetContextWindow(b.cfg.ContextWindow)
+		return
+	}
+	if err := mgr.Init(); err != nil {
+		b.ctxMgr.SetContextWindow(b.cfg.ContextWindow)
+		return
 	}
 
+	if skeleton := mgr.Graph().FormatSkeleton(cwd); skeleton != "" {
+		b.ctxMgr.Add("system", skeleton)
+	}
+
+	b.cindexMgr = mgr
 	b.ctxMgr.SetContextWindow(b.cfg.ContextWindow)
-	return projIndex
 }
 
 func (b *Bot) initSummarizer() {
@@ -128,12 +135,12 @@ func (b *Bot) initSummarizer() {
 	}
 }
 
-func (b *Bot) initToolRegistry(projIndex *projctx.ProjectIndex) {
+func (b *Bot) initToolRegistry() {
 	b.toolRegistry = tools.NewRegistry()
 	builtin.RegisterAll(b.toolRegistry, b.cfg.ImageGenModels)
 
-	if projIndex != nil {
-		builtin.RegisterProjectInfo(b.toolRegistry, projIndex)
+	if b.cindexMgr != nil {
+		b.toolRegistry.Register(cindex.NewProjectInfoTool(b.cindexMgr))
 	}
 
 	tools.GlobalFileCache = tools.NewFileStateCache()
@@ -348,7 +355,7 @@ func (b *Bot) initAgent() {
 				Cwd:             cwd,
 				ProjectContext:  b.projCtx,
 				Thoroughness:    thoroughness,
-				ContextWindow:     b.cfg.ContextWindow,
+				ContextWindow:   b.cfg.ContextWindow,
 				DisableThinking: true,
 				ConfirmFn:       b.ag.ConfirmFn(),
 			}
@@ -367,12 +374,12 @@ func (b *Bot) initAgent() {
 
 func (b *Bot) initCommands() {
 	command.RegisterAll(b.cmdParser, command.Deps{
-		CtxMgr: b.ctxMgr,
+		CtxMgr:        b.ctxMgr,
 		Ag:            b.getAgent,
-		SkillReg: b.skillReg,
+		SkillReg:      b.skillReg,
 		ToolRegistry:  b.toolRegistry,
 		ContextWindow: b.cfg.ContextWindow,
-		GetConfigFn:    b.ProviderModel,
+		GetConfigFn:   b.ProviderModel,
 		ListModelsFn:  b.cfg.AllModelNames,
 		FreshStart: func() (string, error) {
 			return command.ForceFreshStart(b.ctxMgr, b.skillReg, b.cfg.ContextWindow)
@@ -553,10 +560,6 @@ func (b *Bot) confirmInstall(source string, p *plugin.Plugin, isRemote bool) boo
 	return result
 }
 
-
-
-
-
 func sourceToRawURL(source string) string {
 	s := source
 	s = strings.TrimPrefix(s, "https://")
@@ -583,8 +586,6 @@ func sourceToRawURL(source string) string {
 	}
 	return "https://" + s
 }
-
-
 
 func (b *Bot) formatInstallPreview(p *plugin.Plugin) string {
 	var sb strings.Builder

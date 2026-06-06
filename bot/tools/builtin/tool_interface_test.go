@@ -28,7 +28,6 @@ func TestInterface(t *testing.T) {
 		{&TaskTool{}, "task", tools.ModeParallel, common.LevelSafe, 1},
 		{&WebSearchTool{}, "web_search", tools.ModeParallel, common.LevelSafe, 1},
 		{&WebFetchTool{}, "web_fetch", tools.ModeParallel, common.LevelSafe, 1},
-		{&ProjectInfoTool{}, "project_info", tools.ModeParallel, common.LevelSafe, 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

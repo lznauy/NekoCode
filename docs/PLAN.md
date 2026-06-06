@@ -142,6 +142,14 @@
 - 配置：`image_gen_models` 数组，支持多文生图模型扩展
 - `image_gen_models[].provider` 可切换不同文生图服务商
 
+### 77. 代码索引 (CIndex) ✅
+- Tree-sitter 多语言解析（Go/JS/TS/Python/Rust），提取函数/方法/类/结构体/接口/变量/常量
+- 代码知识图谱：符号关系图（calls/contains/imports），跨文件引用解析
+- 5 种查询模式：skeleton（项目概览）、symbol（符号查找）、deps（包依赖）、file（文件搜索）、search（FTS5 全文搜索）
+- 增量同步：fsnotify 文件监听 + 内容哈希 + 500ms 防抖
+- SQLite 持久化 + FTS5 全文索引，无 FTS5 时自动降级为内存模式
+- 替代原 `projctx` 模块，集成 `project_info` tool
+
 ## P2 — 生态与体验
 
 ### 77. 后台任务 + 进度

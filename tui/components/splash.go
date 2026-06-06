@@ -97,11 +97,11 @@ func (s *Splash) renderCat() string {
 	}
 
 	var b strings.Builder
-	b.WriteString(body.Render("   /\\___/\\") + "\n")
-	b.WriteString(body.Render("  ( ") + eyeStyle.Render("o") + body.Render("   ") + eyeStyle.Render("o") + body.Render(" )") + "\n")
-	b.WriteString(body.Render("   =  V  =") + "\n")
-	b.WriteString(body.Render("  /|     |\\") + "\n")
-	b.WriteString(body.Render(" (_|     |_)") + "\n")
+	fmt.Fprintf(&b, "%s\n", body.Render("   /\\___/\\"))
+	fmt.Fprintf(&b, "%s%s%s%s%s\n", body.Render("  ( "), eyeStyle.Render("o"), body.Render("   "), eyeStyle.Render("o"), body.Render(" )"))
+	fmt.Fprintf(&b, "%s\n", body.Render("   =  V  ="))
+	fmt.Fprintf(&b, "%s\n", body.Render("  /|     |\\"))
+	fmt.Fprintf(&b, "%s\n", body.Render(" (_|     |_)"))
 	b.WriteString(body.Render("    || ||"))
 
 	return b.String()

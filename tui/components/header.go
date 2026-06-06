@@ -1,6 +1,7 @@
 // header.go — 顶部标题栏（provider / model / version / tokens）。
 package components
 import (
+	"fmt"
 	"strings"
 
 	"nekocode/tui/styles"
@@ -49,8 +50,8 @@ func (h *Header) View() string {
 	line := strings.Repeat(styles.Horizontal, w)
 
 	var b strings.Builder
-	b.WriteString(content + strings.Repeat(" ", pad) + "\n")
-	b.WriteString(styles.BorderStyle.Render(line) + "\n")
+	fmt.Fprintf(&b, "%s%s\n", content, strings.Repeat(" ", pad))
+	fmt.Fprintf(&b, "%s\n", styles.BorderStyle.Render(line))
 
 	return b.String()
 }

@@ -3,9 +3,10 @@
 // This eliminates repeated glob/grep/read exploration at the
 // start of every conversation.
 
-package projctx
+package cindex
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -139,7 +140,7 @@ func loadWithIncludes(path string, processed map[string]bool, depth int, remaini
 	*remaining -= len(content)
 
 	var b strings.Builder
-	b.WriteString("\n<!-- " + filepath.Base(path) + " -->\n")
+	fmt.Fprintf(&b, "\n<!-- %s -->\n", filepath.Base(path))
 	b.WriteString(content)
 	b.WriteString("\n")
 	return b.String()

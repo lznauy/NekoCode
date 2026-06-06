@@ -129,13 +129,12 @@ func (p *ProcessingItem) renderActivitySection(contentW, sepW int) string {
 	sb.WriteString(sep)
 	sb.WriteString("\n")
 	for _, b := range items {
-		sb.WriteString("  ◉ " + b.ToolName)
+		fmt.Fprintf(&sb, "  ◉ %s", b.ToolName)
 		if b.ToolArgs != "" {
-			sb.WriteString(" ")
-			sb.WriteString(b.ToolArgs)
+			fmt.Fprintf(&sb, " %s", b.ToolArgs)
 		}
 		if !b.Done && b.Content == "" {
-			sb.WriteString(" " + p.sty.Subtle.Render("…"))
+			fmt.Fprintf(&sb, " %s", p.sty.Subtle.Render("…"))
 		}
 		sb.WriteString("\n")
 	}

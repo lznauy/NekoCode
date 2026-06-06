@@ -2,7 +2,6 @@ package builtin
 
 import (
 	"nekocode/bot/config"
-	"nekocode/bot/projctx"
 	"nekocode/bot/tools"
 )
 
@@ -23,9 +22,4 @@ func RegisterAll(r *tools.Registry, imageGenModels []config.ImageGenConfig) {
 	if len(imageGenModels) > 0 {
 		r.Register(NewImageGenTool(imageGenModels))
 	}
-}
-
-// RegisterProjectInfo registers the project_info tool with a built index.
-func RegisterProjectInfo(r *tools.Registry, idx *projctx.ProjectIndex) {
-	r.Register(NewProjectInfoTool(idx))
 }

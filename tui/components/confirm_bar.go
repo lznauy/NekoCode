@@ -76,16 +76,16 @@ func (c *ConfirmBar) View(width, termHeight int) string {
 	bottomBorder := c.sty.Border.Render(strings.Repeat(styles.Horizontal, barW))
 
 	var b strings.Builder
-	b.WriteString(titleBar + "\n")
+	fmt.Fprintf(&b, "%s\n", titleBar)
 	for _, line := range descLines {
 		pad := max(0, barW-lipgloss.Width(line))
-		b.WriteString(c.sty.Base.Render(line) + strings.Repeat(" ", pad) + "\n")
+		fmt.Fprintf(&b, "%s%s\n", c.sty.Base.Render(line), strings.Repeat(" ", pad))
 	}
 	if truncated {
-		b.WriteString(c.sty.Muted.Render("  ... (truncated)") + "\n")
+		fmt.Fprintf(&b, "%s\n", c.sty.Muted.Render("  ... (truncated)"))
 	}
-	b.WriteString(levelTag + "\n")
-	b.WriteString(prompt + strings.Repeat(" ", max(0, barW-promptW)) + "\n")
+	fmt.Fprintf(&b, "%s\n", levelTag)
+	fmt.Fprintf(&b, "%s%s\n", prompt, strings.Repeat(" ", max(0, barW-promptW)))
 	b.WriteString(bottomBorder)
 
 	return b.String()

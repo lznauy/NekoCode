@@ -89,9 +89,16 @@ nekocode/
 │   │   ├── registry.go             #     Registry（安装/卸载/启用/禁用 + LoadAll）
 │   │   ├── manifest.go             #     Manifest 解析（plugin.json）
 │   │   └── exec.go                 #     git clone + 文件复制 + install.sh 检测
-│   ├── projctx/                    #   项目上下文
-│   │   ├── project.go              #     NEKOCODE.md 发现 + 加载
-│   │   └── index.go                #     项目索引
+│   ├── cindex/                     #   代码索引（替代 projctx）
+│   │   ├── manager.go              #     入口管理器，协调各组件，处理降级
+│   │   ├── graph.go                #     核心数据结构（Node, Edge, Graph）+ 查询接口
+│   │   ├── db.go                   #     SQLite schema、持久化、FTS5 搜索
+│   │   ├── parser.go               #     Tree-sitter 解析引擎，提取符号和关系
+│   │   ├── index.go                #     索引编排（全量扫描、跨文件引用解析）
+│   │   ├── sync.go                 #     增量同步（fsnotify 监听 + 防抖）
+│   │   ├── traversal.go            #     BFS/DFS 图遍历、路径查找
+│   │   ├── tool.go                 #     project_info tool 接口层
+│   │   └── project.go              #     NEKOCODE.md 项目上下文发现
 │   ├── prompt/                     #   System Prompt 构建
 │   │   └── builder.go              #     Prompt 构建器
 │   ├── session/                    #   Session 管理
@@ -269,7 +276,7 @@ type Tool interface {
 | task | Parallel | Safe |
 | todo_write | Sequential | Safe |
 | tree | Parallel | Safe |
-| project_info | Parallel | Safe |
+| project_info | Parallel | Safe（cindex 代码索引：symbol/deps/file/search/skeleton） |
 | image_gen | Sequential | Safe |
 
 ## Hook 系统（事件驱动）

@@ -55,7 +55,7 @@ func verificationHook() Hook {
 
 func unfinishedWorkHook() Hook {
 	return Hook{
-		Name: "unfinished_work", Point: PreTurn,
+		Name: "unfinished_work", Point: PostTurn,
 		On: func(s *Snapshot) *Result {
 			if s.get(StoreTasksAllDone) == 0 {
 				return &Result{Hint: &Hint{Type: "verification", Severity: "critical",

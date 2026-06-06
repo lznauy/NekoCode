@@ -284,6 +284,15 @@ func resolveLine(hashToLines map[string][]int, param string) int {
 	if len(occ) == 0 {
 		return 0
 	}
+	// If expected line number is provided, check if it has the same hash.
+	// This prevents misplacement when similar lines have different hashes.
+	if expNo > 0 {
+		for _, o := range occ {
+			if o == expNo {
+				return expNo // exact match
+			}
+		}
+	}
 	if len(occ) == 1 || expNo == 0 {
 		return occ[0]
 	}

@@ -2,6 +2,7 @@
 package components
 
 import (
+	"fmt"
 	"strings"
 
 	"nekocode/tui/styles"
@@ -103,13 +104,13 @@ func (s *Suggestions) View(width int) string {
 	for i := s.scrollOff; i < end; i++ {
 		b.WriteByte('\n')
 		if i == s.selectedIdx {
-			b.WriteString(s.sty.Primary.Bold(true).Render("> " + s.items[i]))
+			fmt.Fprintf(&b, "%s", s.sty.Primary.Bold(true).Render("> "+s.items[i]))
 		} else {
-			b.WriteString(s.sty.Muted.Render("  " + s.items[i]))
+			fmt.Fprintf(&b, "%s", s.sty.Muted.Render("  "+s.items[i]))
 		}
 	}
 	if s.scrollOff > 0 || hasMore {
-		b.WriteString("\n" + s.sty.Subtle.Render("  ... more ..."))
+		fmt.Fprintf(&b, "\n%s", s.sty.Subtle.Render("  ... more ..."))
 	}
 	return b.String()
 }
