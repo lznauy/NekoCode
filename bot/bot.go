@@ -113,8 +113,10 @@ func (b *Bot) initCtxMgr() {
 		return
 	}
 
-	if skeleton := mgr.Graph().FormatSkeleton(cwd); skeleton != "" {
-		b.ctxMgr.Add("system", skeleton)
+	if g := mgr.Graph(); g != nil {
+		if skeleton := g.FormatSkeleton(cwd); skeleton != "" {
+			b.ctxMgr.Add("system", skeleton)
+		}
 	}
 
 	b.cindexMgr = mgr

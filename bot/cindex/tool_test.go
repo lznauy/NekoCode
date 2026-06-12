@@ -13,6 +13,7 @@ func setupTestManager(t *testing.T) *Manager {
 	dir := t.TempDir()
 
 	// Create a minimal Go project
+	writeFile(t, dir, "go.mod", "module myproject\n")
 	writeFile(t, dir, "main.go", `package main
 
 import "myproject/util"

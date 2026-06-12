@@ -2,6 +2,8 @@
 
 轻量级代码索引模块，为 NekoCode agent 提供项目结构感知能力。
 
+启动时自动检测项目根目录（查找 `.git`、`go.mod`、`package.json`、`Cargo.toml`、`pyproject.toml` 等标记文件）。在非项目目录（如 `$HOME`）打开时跳过索引，不影响其他功能。
+
 ## 功能
 
 - **多语言解析** — 基于 Tree-sitter，支持 Go、TypeScript/JavaScript、Python、Rust
@@ -9,8 +11,7 @@
 - **图遍历查询** — BFS/DFS、影响半径、调用链、祖先/后代遍历
 - **全文搜索** — SQLite FTS5，按名称、签名、文档搜索
 - **增量同步** — fsnotify 文件监听 + 内容哈希，文件变更自动更新索引
-- **持久化** — SQLite WAL 模式，索引结果缓存到 `.nekocode/cindex.db`
-- **降级模式** — 无 FTS5 时自动降级为内存模式，skeleton/deps/symbol/file 正常工作
+- **持久化** — SQLite WAL 模式，索引结果缓存到 `.nekocode/cindex.db`（纯 Go 驱动，无 CGO）
 
 ## 原理
 
@@ -87,14 +88,6 @@ Import 边通过目录路径匹配：`import "myproject/handler"` → PkgPath `"
 
 内容哈希（SHA256）避免重复解析未变更的文件。新目录自动加入 watcher。
 
-### 降级策略
-
-如果 SQLite 没有 FTS5 模块，CIndex 自动降级为**内存模式**：
-- 不创建数据库，不持久化
-- 每次启动重新构建图
-- `search:<term>` 查询不可用
-- 其他功能（skeleton、symbol、deps、file）正常工作
-
 ## 执行流程
 
 ### 启动流程
@@ -107,8 +100,11 @@ bot.go New()
 │   │   └── 扫描 ~/.nekocode/、项目根目录、.nekocode/rules/
 │   │
 │   ├── cindex.NewManager(cwd)                ← 创建管理器
+│   │   ├── findProjectRoot(cwd)              ← 向上查找 .git/go.mod/package.json 等
+│   │   │   ├── 找到 → 以项目根为索引根目录
+│   │   │   └── 没找到 → 跳过索引，返回 nil indexer
 │   │   ├── os.MkdirAll(.nekocode/)           ← 确保目录存在
-│   │   └── NewIndexer(cindex.db)             ← 打开 SQLite（可能失败→内存模式）
+│   │   └── NewIndexer(cindex.db)             ← 打开 SQLite
 │   │
 │   ├── mgr.Init()                            ← 初始化索引
 │   │   ├── LoadOrBuild(cwd)                  ← 尝试从 DB 加载
@@ -177,7 +173,7 @@ Agent 调用 project_info tool
 
 ```
 bot/cindex/
-├── manager.go      # 入口管理器，协调各组件，处理降级
+├── manager.go      # 入口管理器，协调各组件，项目根目录探测
 ├── graph.go        # 核心数据结构（Node, Edge, Graph）+ 查询接口
 ├── db.go           # SQLite schema、持久化、FTS5 搜索
 ├── parser.go       # Tree-sitter 解析引擎，提取符号和关系
@@ -315,15 +311,11 @@ CREATE VIRTUAL TABLE nodes_fts USING fts5(
 ## 依赖
 
 - `github.com/smacker/go-tree-sitter` — Tree-sitter Go binding (CGO)
-- `github.com/mattn/go-sqlite3` — SQLite driver (CGO)
+- `zombiezen.com/go/sqlite` — 纯 Go SQLite 驱动（无 CGO，含 FTS5）
 - `github.com/fsnotify/fsnotify` — 文件系统监听
 
 ## 测试
 
 ```bash
-# 运行测试（需要 FTS5 编译标签）
-go test -tags "fts5" ./bot/cindex/ -v
-
-# 不带 FTS5（DB 相关测试会自动跳过，内存模式测试正常运行）
 go test ./bot/cindex/ -v
 ```

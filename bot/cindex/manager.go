@@ -7,6 +7,20 @@ import (
 	"sync"
 )
 
+// projectMarkers are files/directories that indicate a project root.
+var projectMarkers = []string{
+	".git",
+	"go.mod",
+	"package.json",
+	"Cargo.toml",
+	"pyproject.toml",
+	"setup.py",
+	"pom.xml",
+	"build.gradle",
+	".svn",
+	".hg",
+}
+
 // Manager is the main entry point for the code graph system.
 // It replaces the old projctx.ProjectIndex with a full code graph.
 type Manager struct {
@@ -15,66 +29,60 @@ type Manager struct {
 	syncer  *Syncer
 	graph   *Graph
 	cwd     string
+	root    string // project root directory (may differ from cwd)
 }
 
 // NewManager creates a new code graph manager.
-// If the database cannot be opened (e.g. no FTS5 support), it falls back to
-// an in-memory-only mode where the graph is rebuilt on every Init().
+// It walks up from cwd to find a project root (by looking for .git, go.mod, etc.).
+// If no project root is found, the returned Manager has a nil indexer and Init() is a no-op.
 func NewManager(cwd string) (*Manager, error) {
-	// Ensure .nekocode directory exists
-	nekocodeDir := filepath.Join(cwd, ".nekocode")
+	root := findProjectRoot(cwd)
+	if root == "" {
+		// Not a project directory — skip cindex entirely
+		return &Manager{cwd: cwd}, nil
+	}
+
+	nekocodeDir := filepath.Join(root, ".nekocode")
 	if err := os.MkdirAll(nekocodeDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create .nekocode dir: %w", err)
 	}
 
-	// Create database path
 	dbPath := filepath.Join(nekocodeDir, "cindex.db")
-
-	// Create indexer — may fail if FTS5 is unavailable
 	indexer, err := NewIndexer(dbPath)
 	if err != nil {
-		// Fallback: create manager without DB (memory-only)
-		return &Manager{cwd: cwd}, nil
+		return nil, fmt.Errorf("open indexer: %w", err)
 	}
 
-	m := &Manager{
+	return &Manager{
 		indexer: indexer,
-		cwd:     cwd,
-	}
-
-	return m, nil
+		cwd:    cwd,
+		root:   root,
+	}, nil
 }
 
 // Init initializes the code graph by loading from database or building fresh.
+// If no project root was found (indexer is nil), this is a no-op.
 func (m *Manager) Init() error {
-	if m.indexer != nil {
-		// DB mode: try loading from database first
-		graph, err := m.indexer.LoadOrBuild(m.cwd)
-		if err != nil {
-			return fmt.Errorf("load or build: %w", err)
-		}
-		m.mu.Lock()
-		m.graph = graph
-		m.mu.Unlock()
+	if m.indexer == nil {
+		return nil
+	}
 
-		// Start file syncer
-		syncer, err := NewSyncer(m.indexer, m.cwd)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not start file syncer: %v\n", err)
-		} else {
-			m.syncer = syncer
-			syncer.SetGraph(graph)
-			syncer.Start()
-		}
+	graph, err := m.indexer.LoadOrBuild(m.root)
+	if err != nil {
+		return fmt.Errorf("load or build: %w", err)
+	}
+	m.mu.Lock()
+	m.graph = graph
+	m.mu.Unlock()
+
+	// Start file syncer
+	syncer, err := NewSyncer(m.indexer, m.root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not start file syncer: %v\n", err)
 	} else {
-		// Memory-only mode: build graph without DB persistence
-		graph, err := buildGraphFromDir(m.cwd)
-		if err != nil {
-			return fmt.Errorf("build graph: %w", err)
-		}
-		m.mu.Lock()
-		m.graph = graph
-		m.mu.Unlock()
+		m.syncer = syncer
+		syncer.SetGraph(graph)
+		syncer.Start()
 	}
 
 	return nil
@@ -105,14 +113,11 @@ func (m *Manager) Close() error {
 
 // Rebuild forces a full re-index of the project.
 func (m *Manager) Rebuild() error {
-	var graph *Graph
-	var err error
-
-	if m.indexer != nil {
-		graph, err = m.indexer.IndexAll(m.cwd)
-	} else {
-		graph, err = buildGraphFromDir(m.cwd)
+	if m.indexer == nil {
+		return nil
 	}
+
+	graph, err := m.indexer.IndexAll(m.root)
 	if err != nil {
 		return fmt.Errorf("rebuild: %w", err)
 	}
@@ -128,12 +133,26 @@ func (m *Manager) Rebuild() error {
 	return nil
 }
 
-// buildGraphFromDir builds an in-memory graph without DB persistence.
-func buildGraphFromDir(cwd string) (*Graph, error) {
-	g, err := buildGraphFromWalk(cwd, NewParser(), nil)
+// findProjectRoot walks up from dir looking for project marker files.
+// Returns the directory containing the marker, or "" if none found.
+func findProjectRoot(dir string) string {
+	abs, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, err
+		return ""
 	}
-	resolveReferences(g)
-	return g, nil
+
+	for {
+		for _, marker := range projectMarkers {
+			if _, err := os.Stat(filepath.Join(abs, marker)); err == nil {
+				return abs
+			}
+		}
+
+		parent := filepath.Dir(abs)
+		if parent == abs {
+			// Reached filesystem root
+			return ""
+		}
+		abs = parent
+	}
 }
