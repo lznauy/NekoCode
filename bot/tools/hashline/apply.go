@@ -36,10 +36,18 @@ func ApplyEdits(text string, hunks []Hunk, resolver BlockResolver, path string) 
 	lines := strings.Split(NormalizeToLF(text), "\n")
 
 	// Strip auto-prefix sentinels and collect warnings.
+	// Clone payload slices before mutation to avoid modifying caller data.
 	var autoprefixWarnings []string
 	for hi := range hunks {
+		var payloadCopied bool
 		for pi := range hunks[hi].Payload {
 			if rest, ok := strings.CutPrefix(hunks[hi].Payload[pi], autoprefixSentinel); ok {
+				if !payloadCopied {
+					payload := make([]string, len(hunks[hi].Payload))
+					copy(payload, hunks[hi].Payload)
+					hunks[hi].Payload = payload
+					payloadCopied = true
+				}
 				hunks[hi].Payload[pi] = rest
 				if len(autoprefixWarnings) == 0 {
 					autoprefixWarnings = append(autoprefixWarnings,
@@ -81,14 +89,17 @@ func ApplyEdits(text string, hunks []Hunk, resolver BlockResolver, path string) 
 		if h.Start < 1 || h.Start > len(lines) {
 			return nil, fmt.Errorf("hunk start line %d out of range [1..%d]", h.Start, len(lines))
 		}
-		if h.Kind != HunkInsert && (h.End < 1 || h.End < h.Start || h.End > len(lines)) {
-			return nil, fmt.Errorf("hunk end line %d out of range [1..%d]", h.End, len(lines))
+		if h.Kind != HunkInsert {
+			if h.End < 1 || h.End > len(lines) {
+				return nil, fmt.Errorf("hunk end line %d out of range [1..%d]", h.End, len(lines))
+			}
+			if h.End < h.Start {
+				return nil, fmt.Errorf("hunk end line %d precedes start line %d", h.End, h.Start)
+			}
 		}
 	}
 
-	// Sort hunks bottom-up for stable application.
-	// Use original index as tiebreaker to ensure stable ordering for
-	// head/tail inserts that share the same Start value (0).
+	// Build indexed hunks preserving original order.
 	type indexedHunk struct {
 		Hunk
 		idx int
@@ -97,6 +108,27 @@ func ApplyEdits(text string, hunks []Hunk, resolver BlockResolver, path string) 
 	for i, h := range hunks {
 		indexed[i] = indexedHunk{h, i}
 	}
+	sorted := make([]Hunk, len(indexed))
+	for i, ih := range indexed {
+		sorted[i] = ih.Hunk
+	}
+
+	// After-insert landing shift: slide after-insert hunks past trailing
+	// structural closers when the body indentation is shallower than the anchor.
+	// Run BEFORE sorting so the shifted Start values participate in the
+	// bottom-up sort order — otherwise a landing shift on an insert-after hunk
+	// can move it into another hunk's target range after the sort is fixed.
+	sorted, landingWarnings := RepairAfterInsertLandings(sorted, lines)
+	autoprefixWarnings = append(autoprefixWarnings, landingWarnings...)
+
+	// Copy shifted Start values back to indexed for re-sorting.
+	for i := range indexed {
+		indexed[i].Hunk.Start = sorted[i].Start
+	}
+
+	// Sort hunks bottom-up for stable application.
+	// Use original index as tiebreaker to ensure stable ordering for
+	// head/tail inserts that share the same Start value (0).
 	sort.Slice(indexed, func(i, j int) bool {
 		a, b := indexed[i], indexed[j]
 		aHead := a.Kind == HunkInsert && a.Cursor == "head"
@@ -126,15 +158,12 @@ func ApplyEdits(text string, hunks []Hunk, resolver BlockResolver, path string) 
 		// For regular hunks, sort descending by Start (bottom-up).
 		return a.Start > b.Start
 	})
-	sorted := make([]Hunk, len(indexed))
+
+	// Rebuild sorted from re-sorted indexed.
+	sorted = make([]Hunk, len(indexed))
 	for i, ih := range indexed {
 		sorted[i] = ih.Hunk
 	}
-
-	// After-insert landing shift: slide after-insert hunks past trailing
-	// structural closers when the body indentation is shallower than the anchor.
-	sorted, landingWarnings := RepairAfterInsertLandings(sorted, lines)
-	autoprefixWarnings = append(autoprefixWarnings, landingWarnings...)
 
 	// Apply hunks.
 	firstChanged := len(lines) + 1
@@ -373,8 +402,11 @@ func repairBoundaries(allLines []string, h Hunk, payload []string) ([]string, []
 	// Count consecutive duplicate leading lines.
 	leadCount := 0
 	for leadCount < len(payload) && start-1-leadCount >= 0 {
-		if strings.TrimSpace(payload[leadCount]) != strings.TrimSpace(allLines[start-1-leadCount]) ||
-			strings.TrimSpace(payload[leadCount]) == "" {
+		pTrimmed := strings.TrimSpace(payload[leadCount])
+		if pTrimmed == "" {
+			break
+		}
+		if pTrimmed != strings.TrimSpace(allLines[start-1-leadCount]) {
 			break
 		}
 		leadCount++
@@ -384,8 +416,11 @@ func repairBoundaries(allLines []string, h Hunk, payload []string) ([]string, []
 	trailCount := 0
 	for trailCount < len(payload) && end+trailCount < len(allLines) {
 		idx := len(payload) - 1 - trailCount
-		if strings.TrimSpace(payload[idx]) != strings.TrimSpace(allLines[end+trailCount]) ||
-			strings.TrimSpace(payload[idx]) == "" {
+		pTrimmed := strings.TrimSpace(payload[idx])
+		if pTrimmed == "" {
+			break
+		}
+		if pTrimmed != strings.TrimSpace(allLines[end+trailCount]) {
 			break
 		}
 		trailCount++
@@ -500,13 +535,17 @@ func countDelimitersInLine(line string, inBlockComment bool) (open, close int, s
 }
 
 func extractTrailingClosers(lines []string) []string {
-	var closers []string
-	for i := len(lines) - 1; i >= 0; i-- {
-		if isStructuralCloser(lines[i]) {
-			closers = append([]string{lines[i]}, closers...)
-		} else {
-			break
-		}
+	count := 0
+	for i := len(lines) - 1; i >= 0 && isStructuralCloser(lines[i]); i-- {
+		count++
+	}
+	if count == 0 {
+		return nil
+	}
+	closers := make([]string, count)
+	base := len(lines) - count
+	for i := 0; i < count; i++ {
+		closers[i] = lines[base+i]
 	}
 	return closers
 }
