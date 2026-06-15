@@ -12,11 +12,7 @@ jobs:
   build-linux:
     strategy:
       matrix:
-        include:
-          - goarch: amd64
-            zig_target: x86_64-linux-gnu
-          - goarch: arm64
-            zig_target: aarch64-linux-gnu
+        goarch: [amd64, arm64]
 
     runs-on: ubuntu-latest
     steps:
@@ -24,24 +20,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: stable
-      - uses: mlugg/setup-zig@v2
-
-      - name: Create zig CC wrapper
-        run: |
-          cat > /tmp/zigcc <<'EOF'
-          #!/bin/sh
-          exec zig cc -target ${{ matrix.zig_target }} "$@"
-          EOF
-          chmod +x /tmp/zigcc
 
       - name: Build
         env:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: "1"
-          CC: /tmp/zigcc
         run: |
-          go build -trimpath -ldflags="-s -w" -o dist/nekocode-linux-${GOARCH} .
+          go build -trimpath -ldflags="-s -w" -o dist/nekocode-linux-${GOARCH} ./cmd/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -67,9 +52,8 @@ jobs:
         env:
           GOOS: darwin
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: "1"
         run: |
-          go build -trimpath -ldflags="-s -w" -o dist/nekocode-darwin-${GOARCH} .
+          go build -trimpath -ldflags="-s -w" -o dist/nekocode-darwin-${GOARCH} ./cmd/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
