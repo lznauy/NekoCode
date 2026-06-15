@@ -18,13 +18,13 @@ func quotaHook() Hook {
 		On: func(s *Snapshot) *Result {
 			left := s.get(StoreQuotaReads)
 			if left > 2 {
-				s.set("flag:quota_warned", 0)
+				s.set("counter:quota_warned", 0)
 				return nil
 			}
-			if left == s.get("flag:quota_warned") {
+			if left == s.get("counter:quota_warned") {
 				return nil
 			}
-			s.set("flag:quota_warned", left)
+			s.set("counter:quota_warned", left)
 			sev := "warning"
 			content := fmt.Sprintf("剩余 %d 次读取配额。请使用已有信息，优先进行实质性修改。", left)
 			if left <= 0 {
@@ -42,16 +42,16 @@ func verificationHook() Hook {
 		On: func(s *Snapshot) *Result {
 			// Only fire when: has tasks, not all done, and no tool calls this turn.
 			if s.get(StoreHasTasks) == 0 || s.get(StoreTasksAllDone) == 1 {
-				s.set("flag:verify_injected", 0)
+				s.set("counter:verify_injected", 0)
 				return nil
 			}
 			if s.get(StoreTurnToolCalls) > 0 {
 				return nil
 			}
-			if s.flag("flag:verify_injected") {
+			if s.flag("counter:verify_injected") {
 				return nil
 			}
-			s.set("flag:verify_injected", 1)
+			s.set("counter:verify_injected", 1)
 			return &Result{Hint: &Hint{Type: "verification", Severity: "warning",
 				Content: "你还有未完成的任务，但本轮没有调用任何工具。请继续完成任务，或报告当前进度。"}}
 		},
@@ -64,17 +64,17 @@ func explorationExhaustedHook() Hook {
 		On: func(s *Snapshot) *Result {
 			// Only fire after significant exploration (>= 10 calls).
 			if s.get(StoreExploreCalls) < 10 {
-				s.set("flag:explore_injected", 0)
+				s.set("counter:explore_injected", 0)
 				return nil
 			}
 			if s.get(StoreExploreScore) > 0 {
-				s.set("flag:explore_injected", 0)
+				s.set("counter:explore_injected", 0)
 				return nil
 			}
-			if s.flag("flag:explore_injected") {
+			if s.flag("counter:explore_injected") {
 				return nil
 			}
-			s.set("flag:explore_injected", 1)
+			s.set("counter:explore_injected", 1)
 			return &Result{Hint: &Hint{Type: "exploration", Severity: "warning",
 				Content: "你已经探索够了。不要再调用 read/grep/glob/list——继续搜索只会浪费轮次。基于已有信息，要么编辑/写入文件，要么报告发现。\n\n你的任务：" + s.getStr(StoreStepInput)}}
 		},
@@ -104,7 +104,6 @@ func toolIdleHook() Hook {
 			// If this turn made substantive changes, reset idle counter.
 			if s.get(StoreHasEdits) == 1 {
 				s.set("counter:idle_calls", 0)
-				s.set("flag:idle_warned", 0)
 				return nil
 			}
 			// Only count turns that actually used tools.
@@ -115,10 +114,11 @@ func toolIdleHook() Hook {
 			n := s.get("counter:idle_calls") + turnCalls
 			s.set("counter:idle_calls", n)
 			if n >= 50 {
-				if s.flag("flag:idle_warned") {
-					return nil
-				}
-				s.set("flag:idle_warned", 1)
+				// Reset counter after firing: the reset is natural dedup —
+				// counter: keys survive ResetTurn, so the hook won't fire
+				// again until another 50 calls accumulate. Every 50 calls
+				// the cycle repeats.
+				s.set("counter:idle_calls", 0)
 				return &Result{Hint: &Hint{Type: "idle", Severity: "warning",
 					Content: fmt.Sprintf("你已经连续 %d 次只使用只读工具（read/grep/glob/list/tree）。基于已有信息，开始写代码或编辑文件推进任务。\n\n你的任务：%s",
 						n, s.getStr(StoreStepInput))}}
@@ -137,26 +137,26 @@ func completionQualityHook() Hook {
 				return nil
 			}
 			if s.get(StoreHasTasks) == 0 {
-				s.set("flag:quality_warned", 0)
+				s.set("counter:quality_warned", 0)
 				return nil
 			}
 			if s.get(StoreTasksAllDone) == 0 {
-				s.set("flag:quality_warned", 0)
+				s.set("counter:quality_warned", 0)
 				return nil
 			}
-			if s.flag("flag:quality_warned") {
+			if s.flag("counter:quality_warned") {
 				return nil
 			}
 			// Skip if this turn had tool calls (may be pure analysis).
 			if s.get(StoreTurnToolCalls) > 0 {
-				s.set("flag:quality_warned", 1)
+				s.set("counter:quality_warned", 1)
 				return nil
 			}
 			if s.flag(StoreFileModified) {
-				s.set("flag:quality_warned", 1)
+				s.set("counter:quality_warned", 1)
 				return nil
 			}
-			s.set("flag:quality_warned", 1)
+			s.set("counter:quality_warned", 1)
 			return &Result{Hint: &Hint{Type: "quality", Severity: "warning",
 				Content: "所有任务标记为完成，但此轮未修改任何文件。如果实际工作未完成，请继续；如果确实无需修改文件（如纯分析任务），可忽略此提示。"}}
 		},

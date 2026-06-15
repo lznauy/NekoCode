@@ -173,7 +173,7 @@ func TestCompletionQualityHook(t *testing.T) {
 	if r := hk.On(snap); r != nil {
 		t.Error("tasks done + modified → silent")
 	}
-	if !snap.flag("flag:quality_warned") {
+	if !snap.flag("counter:quality_warned") {
 		t.Error("guard should be set")
 	}
 
@@ -338,7 +338,7 @@ func TestToolIdleHook(t *testing.T) {
 		}
 	}
 
-	// 50th call → fire
+	// 50th call → fire AND counter resets to 0
 	r := hk.On(snap)
 	if r == nil || r.Hint == nil {
 		t.Fatal("50th idle call → fire")
@@ -346,35 +346,39 @@ func TestToolIdleHook(t *testing.T) {
 	if r.Hint.Type != "idle" {
 		t.Errorf("expected idle, got %s", r.Hint.Type)
 	}
-
-	// After fire, dedup → silent
-	if r := hk.On(snap); r != nil {
-		t.Error("after fire → silent (dedup)")
+	if c := snap.get("counter:idle_calls"); c != 0 {
+		t.Errorf("after fire: counter should reset to 0, got %d", c)
 	}
 
-	// Edits turn resets both counter and dedup flag
+	// After reset, next call is NOT 50 → silent (natural dedup via counter=0)
+	if r := hk.On(snap); r != nil {
+		t.Error("after fire → silent (counter reset, not yet 50)")
+	}
+
+	// Edits turn resets counter
 	snap.set(StoreHasEdits, 1)
 	if r := hk.On(snap); r != nil {
-		t.Error("edits resets dedup")
+		t.Error("edits still resets counter")
 	}
 
-	// After reset, can fire again on new idle streak
+	// After edit reset, accumulate 50 more → fires again (cycle repeats)
 	snap.set(StoreHasEdits, 0)
-	snap.set(StoreTurnToolCalls, 5)
-	// idle count: 5, 10, ..., 45 (silent), 50 (fire)
-	for i := 0; i < 9; i++ {
+	snap.set(StoreTurnToolCalls, 10)
+	// 10, 20, 30, 40, 50 → 5 calls
+	for i := 0; i < 4; i++ {
 		if r := hk.On(snap); r != nil {
 			t.Errorf("idle call %d → silent", i+1)
 		}
 	}
-	// 50th call → fire
-	snap.set(StoreHasEdits, 0)
 	r = hk.On(snap)
 	if r == nil || r.Hint == nil {
-		t.Fatal("new idle streak 50th call → fire")
+		t.Fatal("second cycle 50th call → fire")
 	}
 	if r.Hint.Type != "idle" {
 		t.Errorf("expected idle, got %s", r.Hint.Type)
+	}
+	if c := snap.get("counter:idle_calls"); c != 0 {
+		t.Errorf("after second fire: counter should reset to 0, got %d", c)
 	}
 
 	// Turn with no tool calls → silent

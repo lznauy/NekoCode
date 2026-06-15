@@ -191,8 +191,13 @@ func (a *Agent) handleText(reasoning *ReasoningResult, state *stepState, callbac
 			if r.Hint != nil {
 				a.consecutiveHints++
 				if a.consecutiveHints >= maxConsecutiveHints {
+					a.step++
 					a.stopReason = hooks.StopCompleted
-					a.lastText = reasoning.ActionInput
+					if reasoning.IsError || reasoning.GarbledToolCall {
+						a.lastText = fmt.Sprintf("[Agent stopped: %d consecutive hints without progress]", a.consecutiveHints)
+					} else {
+						a.lastText = reasoning.ActionInput
+					}
 					return true
 				}
 				// Save this turn's text before re-injecting, so the
@@ -223,10 +228,13 @@ func (a *Agent) handleText(reasoning *ReasoningResult, state *stepState, callbac
 	return true
 }
 
-// injectHint adds a hook hint to the context as a system message.
+// injectHint adds a hook hint to the context as a user-role message.
+// User role is used intentionally — many models (especially DeepSeek) pay
+// little attention to system messages that appear mid-conversation, but
+// consistently follow user-role instructions.
 func (a *Agent) injectHint(h *hooks.Hint) {
 	if h != nil {
-		a.ctxMgr.Add("system", "[Hook: "+h.Type+"] "+h.Content)
+		a.ctxMgr.Add("user", "<system-reminder>\n[Hook: "+h.Type+"] "+h.Content+"\n</system-reminder>")
 	}
 }
 

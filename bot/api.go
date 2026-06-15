@@ -165,7 +165,9 @@ func (b *Bot) SessionMessages() []common.DisplayMessage {
 	isInternal := func(content string) bool {
 		return strings.Contains(content, "<hints>") ||
 			strings.Contains(content, "<skill") ||
-			strings.Contains(content, "Current working directory")
+			strings.Contains(content, "Current working directory") ||
+			strings.Contains(content, "<system-reminder>") ||
+			strings.HasPrefix(content, "[Hook:")
 	}
 
 	var out []common.DisplayMessage
@@ -174,7 +176,9 @@ func (b *Bot) SessionMessages() []common.DisplayMessage {
 		m := msgs[i]
 		switch m.Role {
 		case "user":
-			out = append(out, common.DisplayMessage{Role: "user", Content: m.Content})
+			if !isInternal(m.Content) {
+				out = append(out, common.DisplayMessage{Role: "user", Content: m.Content})
+			}
 			i++
 		case "assistant":
 			var blocks []common.DisplayBlock
