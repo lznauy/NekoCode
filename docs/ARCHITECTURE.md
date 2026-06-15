@@ -25,8 +25,9 @@ nekocode/
 │   ├── factory.go                  #   NewClient / NewClientWithProtocol 工厂
 │   └── retry.go                    #   指数退避重试
 ├── bot/                            # 核心逻辑
-│   ├── bot.go                      #   Bot 结构体 + 依赖注入 + 插件命令
+│   ├── bot.go                      #   Bot 结构体 + 依赖注入
 │   ├── api.go                      #   公开 API（BotInterface 实现）
+│   ├── plugin_commands.go          #   插件命令注册
 │   ├── agent/                      #   Agent 循环
 │   │   ├── agent.go                #     Agent 结构体
 │   │   ├── run.go                  #     Run() 主循环 + handleText
@@ -96,6 +97,8 @@ nekocode/
 │   │   ├── traversal.go            #     BFS/DFS 图遍历、路径查找
 │   │   ├── tool.go                 #     project_info tool 接口层
 │   │   └── project.go              #     NEKOCODE.md 项目上下文发现
+│   ├── treesitter/                 #   Tree-sitter 语言支持
+│   │   └── langs.go                #     语言注册 + 查询定义
 │   ├── prompt/                     #   System Prompt 构建
 │   │   ├── builder.go              #     Prompt 构建器
 │   │   ├── system.md               #     英文 System Prompt 模板
@@ -178,7 +181,7 @@ nekocode/
 │       └── charset.go              #     制表符字符集
 ```
 
-## BotInterface（10 方法）
+## BotInterface（12 方法）
 
 ```go
 type BotInterface interface {
@@ -193,6 +196,7 @@ type BotInterface interface {
     Abort()
     ProviderModel() (provider, model string)
     SwitchModel(name) (model, provider string, err error)
+    SessionMessages() []DisplayMessage
 }
 ```
 
@@ -282,7 +286,8 @@ type Tool interface {
 | todo_write | Sequential | Safe |
 | tree | Parallel | Safe |
 | project_info | Parallel | Safe（cindex 代码索引：symbol/deps/file/search/skeleton） |
-| image_gen | Sequential | Safe |
+| image_gen | Sequential | Safe（即梦文生图 · 火山引擎 SigV4） |
+| skill | Parallel | Safe（技能包加载） |
 
 ## Hook 系统（事件驱动）
 
@@ -388,14 +393,16 @@ Model
 | Agent 循环 | `bot/agent/` | Reason→Execute→Feedback，中断，重试 |
 | | 子 Agent | `bot/agent/subagent/` | 独立循环，3 种内置类型 + 插件扩展 |
 | LLM 网关 | `llm/` | OpenAI/Anthropic 双协议，统一接口 |
-| 工具系统 | `bot/tools/` | Tool 接口 + Executor + Registry |
-| | 内置工具 | `bot/tools/builtin/` | 13 个内置工具实现（project_info 在 cindex/） |
-| SDK | `bot/sdk/` | 外部服务 SDK（火山引擎签名等） |
+| 工具系统 | `bot/tools/` | Tool 接口 + Executor + Registry + FileCache |
+| | 内置工具 | `bot/tools/builtin/` | 12 个内置工具实现 + image_gen（条件注册） |
+| | Hashline | `bot/tools/hashline/` | 编辑锚点 · 哈希计算 · Patch DSL · 3-way merge |
+| SDK | `bot/sdk/` | 外部服务 SDK（火山引擎 SigV4 签名） |
 | 上下文管理 | `bot/ctxmgr/` | Build 管线 + 五级压缩 + token 估算 |
 | Session Memory | `bot/ctxmgr/memory/` | Memory 文件持久化（10 section Markdown） |
 | Plugin 系统 | `bot/plugin/` | 安装/卸载/生命周期 |
 | MCP 客户端 | `bot/mcp/` | JSON-RPC 2.0 |
 | Hook 系统 | `bot/hooks/` | 事件驱动（7 种触发点）+ 声明式（plugin.go） |
+| Tree-sitter | `bot/treesitter/` | 多语言解析器注册 + AST 查询 |
 | 命令系统 | `bot/command/` | 斜杠命令解析 |
 | 调试日志 | `bot/debug/` | 全局 debug.Log（时间戳 + subagent 标签） |
 | TUI | `tui/` | Bubble Tea v2 组件化 |

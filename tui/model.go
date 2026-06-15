@@ -37,7 +37,7 @@ type Model struct {
 	notifyCh        chan string
 }
 
-const version = "0.2.0"
+const version = "0.3.1"
 
 func NewModel(b BotInterface) *Model {
 	sp := spinner.New()

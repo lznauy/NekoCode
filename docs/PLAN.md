@@ -150,11 +150,28 @@
 - SQLite 持久化 + FTS5 全文索引，无 FTS5 时自动降级为内存模式
 - 替代原 `projctx` 模块，集成 `project_info` tool
 
+### 78. SQLite 纯 Go 化 ✅
+- 替换 go-sqlite3（依赖 CGO）为 zombiezen.com/go/sqlite（纯 Go 实现）
+- 消除 C 编译器依赖，简化交叉编译，提升跨平台兼容性
+
+### 79. Hashline 编辑升级 ✅
+- Patch DSL 解析优化，编辑锚点稳定性提升
+- 3-way merge 恢复机制完善
+
+### 80. TUI 升级 ✅
+- Bubble Tea v2 生态全面升级
+- 组件渲染优化，消息列表性能改进
+
+### 81. 多项 Bug 修复 ✅
+- 编辑工具模糊匹配修复
+- 子 Agent 结果处理修复
+- Agent 循环稳定性改进
+
 ## P2 — 生态与体验
 
-### 78. 后台任务 + 进度
-### 79. Checkpoint / Undo
-### 80. 凭证管理
-### 81. 自动化测试
+### 82. 后台任务 + 进度
+### 83. Checkpoint / Undo
+### 84. 凭证管理
+### 85. 自动化测试
 - Agent 行为回归测试（mock LLM 响应）
 - 工具执行单元测试（mock 文件系统/shell）
