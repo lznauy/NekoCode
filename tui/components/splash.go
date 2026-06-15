@@ -58,7 +58,7 @@ func (s *Splash) View() string {
 	}
 
 	lines = append(lines, "") // gap
-	for _, line := range strings.Split(title, "\n") {
+	for line := range strings.SplitSeq(title, "\n") {
 		lines = append(lines, center.Render(line))
 	}
 	lines = append(lines, center.Render(sep))

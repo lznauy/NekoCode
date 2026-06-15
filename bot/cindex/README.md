@@ -2,11 +2,11 @@
 
 轻量级代码索引模块，为 NekoCode agent 提供项目结构感知能力。
 
-启动时自动检测项目根目录（查找 `.git`、`go.mod`、`package.json`、`Cargo.toml`、`pyproject.toml` 等标记文件）。在非项目目录（如 `$HOME`）打开时跳过索引，不影响其他功能。
+启动时自动检测项目根目录（查找 `.git`、`go.mod`、`package.json`、`Cargo.toml`、`pyproject.toml`、`setup.py`、`pom.xml`、`build.gradle`、`.svn`、`.hg` 等标记文件）。在非项目目录（如 `$HOME`）打开时跳过索引，不影响其他功能。
 
 ## 功能
 
-- **多语言解析** — 基于 Tree-sitter，支持 Go、TypeScript/JavaScript、Python、Rust
+- **多语言解析** — 基于 Tree-sitter，支持 Go、JavaScript/JSX、TypeScript/TSX、Python、Rust
 - **符号关系图** — 提取函数、方法、类、结构体、接口、变量、常量，建立调用、包含、导入关系
 - **图遍历查询** — BFS/DFS、影响半径、调用链、祖先/后代遍历
 - **全文搜索** — SQLite FTS5，按名称、签名、文档搜索
@@ -99,6 +99,8 @@ bot.go New()
 │   ├── cindex.LoadProjectContext(cwd)        ← 发现 NEKOCODE.md 文件
 │   │   └── 扫描 ~/.nekocode/、项目根目录、.nekocode/rules/
 │   │
+│   ├── ctxMgr.Add("system", projCtx)         ← 注入 NEKOCODE.md 内容
+│   │
 │   ├── cindex.NewManager(cwd)                ← 创建管理器
 │   │   ├── findProjectRoot(cwd)              ← 向上查找 .git/go.mod/package.json 等
 │   │   │   ├── 找到 → 以项目根为索引根目录
@@ -107,9 +109,9 @@ bot.go New()
 │   │   └── NewIndexer(cindex.db)             ← 打开 SQLite
 │   │
 │   ├── mgr.Init()                            ← 初始化索引
-│   │   ├── LoadOrBuild(cwd)                  ← 尝试从 DB 加载
+│   │   ├── LoadOrBuild(root)                 ← 尝试从 DB 加载
 │   │   │   ├── DB 有数据 → LoadGraph()       ← 直接加载
-│   │   │   └── DB 为空 → IndexAll(cwd)       ← 全量构建
+│   │   │   └── DB 为空 → IndexAll(root)      ← 全量构建
 │   │   │       ├── Clear()                   ← 清空旧数据
 │   │   │       ├── buildGraphFromWalk()      ← 遍历+解析+写入
 │   │   │       └── resolveReferences()       ← 跨文件引用解析
@@ -117,8 +119,7 @@ bot.go New()
 │   │   └── NewSyncer() + Start()             ← 启动文件监听
 │   │       └── fsnotify.Watch(所有目录)
 │   │
-│   ├── ctxMgr.Add("system", skeleton)        ← 注入项目概览到系统提示
-│   └── ctxMgr.Add("system", projCtx)         ← 注入 NEKOCODE.md 内容
+│   └── ctxMgr.Add("system", skeleton)        ← 注入项目概览到系统提示
 │
 └── initToolRegistry()
     └── toolRegistry.Register(ProjectInfoTool) ← 注册 project_info tool
@@ -277,7 +278,8 @@ CREATE TABLE nodes (
     pkg_path TEXT,            -- 包路径（目录相对路径）
     signature TEXT,           -- 函数签名
     doc TEXT,                 -- 文档注释
-    visibility TEXT           -- public, private, protected
+    visibility TEXT,          -- public, private, protected
+    content_hash TEXT
 );
 
 -- 关系表
@@ -306,6 +308,32 @@ CREATE VIRTUAL TABLE nodes_fts USING fts5(
     content=nodes,
     content_rowid=id
 );
+
+-- FTS 同步触发器
+CREATE TRIGGER nodes_ai AFTER INSERT ON nodes BEGIN
+    INSERT INTO nodes_fts(rowid, name, signature, doc)
+    VALUES (new.id, new.name, new.signature, new.doc);
+END;
+
+CREATE TRIGGER nodes_ad AFTER DELETE ON nodes BEGIN
+    INSERT INTO nodes_fts(nodes_fts, rowid, name, signature, doc)
+    VALUES ('delete', old.id, old.name, old.signature, old.doc);
+END;
+
+CREATE TRIGGER nodes_au AFTER UPDATE ON nodes BEGIN
+    INSERT INTO nodes_fts(nodes_fts, rowid, name, signature, doc)
+    VALUES ('delete', old.id, old.name, old.signature, old.doc);
+    INSERT INTO nodes_fts(rowid, name, signature, doc)
+    VALUES (new.id, new.name, new.signature, new.doc);
+END;
+
+-- 索引
+CREATE INDEX idx_nodes_name ON nodes(name);
+CREATE INDEX idx_nodes_file ON nodes(file);
+CREATE INDEX idx_nodes_kind ON nodes(kind);
+CREATE INDEX idx_edges_from ON edges(from_id);
+CREATE INDEX idx_edges_to ON edges(to_id);
+CREATE INDEX idx_edges_kind ON edges(kind);
 ```
 
 ## 依赖

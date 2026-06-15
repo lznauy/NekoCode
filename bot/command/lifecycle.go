@@ -7,8 +7,10 @@ import (
 	"nekocode/bot/agent"
 	"nekocode/bot/ctxmgr"
 	"nekocode/bot/prompt"
+	"nekocode/bot/hooks"
 	"nekocode/bot/skill"
 	"nekocode/bot/tools"
+	"nekocode/common"
 )
 
 // SkillState tracks skill-related state shared between bot and command packages.
@@ -34,17 +36,7 @@ type Deps struct {
 
 // RegisterAll wires built-in and dynamic slash commands.
 func RegisterAll(p *Parser, deps Deps, st *SkillState) {
-	callbacks := &Callbacks{
-		ClearHistory:   deps.CtxMgr.Clear,
-		GetConfig:      func() string { p, m := deps.GetConfigFn(); return p + "/" + m },
-		ForceSummarize: func() (string, error) { return ForceSummarize(deps.CtxMgr) },
-		ContextStats:   func() string { return ContextStats(deps.CtxMgr) },
-		ContextReport:  func() string { return ContextReport(deps.CtxMgr, deps.ToolRegistry.Descriptors()) },
-		FreshStart:     deps.FreshStart,
-		ListModels:     deps.ListModelsFn,
-		SwitchModel:    deps.SwitchModel,
-	}
-	RegisterDefaults(p, callbacks)
+	RegisterDefaults(p, deps)
 
 	// /plan: enter read-only exploration mode.
 	p.Register("plan", func(cmd *Command) (string, bool) {
@@ -137,7 +129,7 @@ func ContextStats(ctxMgr *ctxmgr.Manager) string {
 		{Size: r.Messages, Kind: "msgs"},
 		{Size: free, Kind: "free"},
 	}, 20)
-	return fmt.Sprintf("%s  %s / %s", bar, ctxmgr.FormatTokens(used), ctxmgr.FormatTokens(r.Budget))
+	return fmt.Sprintf("%s  %s / %s", bar, common.FormatTokens(used), common.FormatTokens(r.Budget))
 }
 
 // ContextReport returns a detailed context window breakdown.
@@ -149,10 +141,15 @@ func ContextReport(ctxMgr *ctxmgr.Manager, toolDescs []tools.Descriptor) string 
 }
 
 // ForceFreshStart archives current conversation and starts a new session.
-func ForceFreshStart(ctxMgr *ctxmgr.Manager, skillReg *skill.Registry, contextWindow int) (string, error) {
+func ForceFreshStart(ctxMgr *ctxmgr.Manager, skillReg *skill.Registry, hookReg *hooks.Registry, contextWindow int) (string, error) {
 	count, oldTokens, _ := ctxMgr.Stats()
 	skillReg.ClearLoaded()
 	ctxMgr.SetSkillList(skill.BuildSkillListText(skillReg.List(), nil, contextWindow))
+	// Reset hook session state so guards like completionQualityHook
+	// don't carry stale flags across /new boundaries.
+	if hookReg != nil {
+		hookReg.ResetSession()
+	}
 	if count <= 2 {
 		ctxMgr.FreshStart()
 		return "New session started.", nil

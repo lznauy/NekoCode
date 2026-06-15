@@ -3,24 +3,21 @@ package types
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
+
+	"nekocode/common"
 )
 
-var sharedTransport = &http.Transport{
-	MaxIdleConns:       20,
-	IdleConnTimeout:    90 * time.Second,
-	DisableCompression: false,
-}
-
 var SharedHTTPClientTimeout = &http.Client{
-	Transport: sharedTransport,
+	Transport: common.SharedTransport,
 	Timeout:   120 * time.Second,
 }
 
 // SharedHTTPStreamClient is used for streaming requests. The timeout is intentionally
 // long (10 min) — streaming responses can take minutes of token generation.
 var SharedHTTPStreamClient = &http.Client{
-	Transport: sharedTransport,
+	Transport: common.SharedTransport,
 	Timeout:   10 * time.Minute,
 }
 
@@ -94,7 +91,7 @@ func (u *StreamUsage) Normalize() {
 		u.CacheHitTokens = u.PromptTokensDetails.CachedTokens
 	}
 	if u.CacheHitTokens > 0 && u.PromptTokens > 0 {
-		u.CacheMissTokens = u.PromptTokens - u.CacheHitTokens
+		u.CacheMissTokens = max(0, u.PromptTokens-u.CacheHitTokens)
 	}
 }
 
@@ -125,5 +122,41 @@ type LLM interface {
 	Chat(ctx context.Context, messages []Message, tools []ToolDef) (*Response, error)
 	ChatStream(ctx context.Context, messages []Message, tools []ToolDef) (<-chan StreamToken, <-chan error)
 	SetMaxTokens(n int)
+	GetMaxTokens() int
 	SetDisableThinking(disable bool)
+	GetDisableThinking() bool
+}
+
+// BaseClient holds common fields and setters shared by all LLM client implementations.
+// Embed this in concrete clients to avoid duplicating struct fields and trivial methods.
+type BaseClient struct {
+	APIKey          string
+	BaseURL         string
+	Model           string
+	MaxTokens       int
+	Temperature     float64
+	DisableThinking bool
+	thinkingMu      sync.RWMutex // protects DisableThinking (subagent engine mutates concurrently)
+	maxTokensMu     sync.RWMutex // protects MaxTokens (merge/summarize mutates concurrently)
+}
+
+func (c *BaseClient) SetMaxTokens(n int) {
+	c.maxTokensMu.Lock()
+	c.MaxTokens = n
+	c.maxTokensMu.Unlock()
+}
+func (c *BaseClient) GetMaxTokens() int {
+	c.maxTokensMu.RLock()
+	defer c.maxTokensMu.RUnlock()
+	return c.MaxTokens
+}
+func (c *BaseClient) SetDisableThinking(d bool) {
+	c.thinkingMu.Lock()
+	c.DisableThinking = d
+	c.thinkingMu.Unlock()
+}
+func (c *BaseClient) GetDisableThinking() bool {
+	c.thinkingMu.RLock()
+	defer c.thinkingMu.RUnlock()
+	return c.DisableThinking
 }

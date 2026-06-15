@@ -2,9 +2,10 @@ package tools
 
 import (
 	"os"
-	"path/filepath"
 	"sort"
 	"sync"
+
+	"nekocode/bot/tools/hashline"
 )
 
 const maxCacheEntries = 100
@@ -27,75 +28,91 @@ type FileStateCache struct {
 	order   []string // LRU, most recent at end
 }
 
-var GlobalFileCache *FileStateCache
+var globalFileCache *FileStateCache
+var globalSnapshotStore *hashline.SnapshotStore
+var globalCacheMu sync.Mutex // protects save/swap/restore sequences in subagent engine
+
+// SetGlobalFileCache sets the global file state cache.
+func SetGlobalFileCache(c *FileStateCache) { globalFileCache = c }
+
+// GetGlobalFileCache returns the global file state cache.
+func GetGlobalFileCache() *FileStateCache { return globalFileCache }
+
+// GlobalCacheMu returns the mutex that protects the global file cache
+// save/swap/restore sequence in the subagent engine.
+func GlobalCacheMu() *sync.Mutex { return &globalCacheMu }
+
+// SetGlobalSnapshotStore sets the global snapshot store.
+func SetGlobalSnapshotStore(s *hashline.SnapshotStore) { globalSnapshotStore = s }
+
+// GetGlobalSnapshotStore returns the global snapshot store.
+func GetGlobalSnapshotStore() *hashline.SnapshotStore { return globalSnapshotStore }
 
 func NewFileStateCache() *FileStateCache {
 	return &FileStateCache{entries: make(map[string]*fileState)}
 }
 
-// Get returns a hint string if [startLine, endLine] is fully covered by the cache.
-// Returns ("", false) when the range is not covered, the file changed, or not cached.
-func (c *FileStateCache) Get(path string, startLine, endLine int) (string, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	key := normalizePath(path)
-	e, ok := c.entries[key]
-	if !ok {
-		return "", false
-	}
-	info, err := os.Stat(path)
-	if err != nil || info.ModTime().UnixNano() != e.Mtime || info.Size() != e.Size {
-		return "", false
-	}
-	if e.Lines == nil {
-		return "", false
-	}
-	if endLine > len(e.Lines) {
-		endLine = len(e.Lines)
-	}
-	for _, r := range e.Ranges {
-		if r.Start <= startLine && endLine <= r.End {
-			return "[content already read — see earlier Read output for this file]", true
-		}
-	}
-	return "", false
-}
-
 // Lines returns the cached full-file content if the file hasn't changed.
 func (c *FileStateCache) Lines(path string) ([]string, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	key := normalizePath(path)
+
+	// Fast path: lookup under read lock only (no I/O).
+	c.mu.RLock()
 	e, ok := c.entries[key]
 	if !ok || e.Lines == nil {
+		c.mu.RUnlock()
 		return nil, false
 	}
+	// Copy fields needed for staleness check.
+	mtime, size := e.Mtime, e.Size
+	lines := e.Lines
+	c.mu.RUnlock()
+
+	// Staleness check outside lock (os.Stat may block on slow filesystems).
 	info, err := os.Stat(path)
-	if err != nil || info.ModTime().UnixNano() != e.Mtime || info.Size() != e.Size {
+	if err != nil || info.ModTime().UnixNano() != mtime || info.Size() != size {
+		// Evict stale entry only if it hasn't already been refreshed by
+		// another goroutine. Compare against the fresh stat values, not
+		// the old cached values, to avoid evicting a just-updated entry.
+		// Guard against nil info when os.Stat fails (file deleted).
+		c.mu.Lock()
+		if err == nil {
+			newMtime := info.ModTime().UnixNano()
+			newSize := info.Size()
+			if cur, exists := c.entries[key]; exists && (cur.Mtime != newMtime || cur.Size != newSize) {
+				c.remove(key)
+			}
+		} else {
+			// File no longer exists — remove from cache.
+			c.remove(key)
+		}
+		c.mu.Unlock()
 		return nil, false
 	}
-	return e.Lines, true
+	return lines, true
 }
 
 // Put stores the full file content and marks [startLine, endLine] as read.
 func (c *FileStateCache) Put(path string, lines []string, startLine, endLine int) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
+	// Stat outside lock to avoid blocking readers on slow filesystems.
 	info, err := os.Stat(path)
 	if err != nil {
 		return
 	}
+	mtime := info.ModTime().UnixNano()
+	size := info.Size()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	key := normalizePath(path)
 	e, ok := c.entries[key]
-	if !ok || info.ModTime().UnixNano() != e.Mtime || info.Size() != e.Size {
+	if !ok || e.Mtime != mtime || e.Size != size {
 		// Fresh or changed: replace.
 		e = &fileState{
 			Lines: lines,
-			Mtime: info.ModTime().UnixNano(),
-			Size:  info.Size(),
+			Mtime: mtime,
+			Size:  size,
 		}
 		c.entries[key] = e
 		c.order = append(c.order, key)
@@ -113,7 +130,20 @@ func (c *FileStateCache) Invalidate(path string) {
 
 // Seed copies entries from src into this cache. Used to warm a subagent cache
 // with the main agent's previously read files, avoiding cold-start disk reads.
+// Only copies entries that don't already exist in this cache.
 func (c *FileStateCache) Seed(src *FileStateCache) {
+	c.transferFrom(src, false)
+}
+
+// Merge copies entries from other into this cache, replacing entries with
+// older Mtime values. Used to merge a subagent's cache back after completion.
+func (c *FileStateCache) Merge(other *FileStateCache) {
+	c.transferFrom(other, true)
+}
+
+// transferFrom copies entries from src. If overwrite is true, existing entries
+// are replaced when the source has a newer Mtime.
+func (c *FileStateCache) transferFrom(src *FileStateCache, overwrite bool) {
 	if src == nil {
 		return
 	}
@@ -123,30 +153,28 @@ func (c *FileStateCache) Seed(src *FileStateCache) {
 	defer src.mu.RUnlock()
 
 	for p, e := range src.entries {
-		if _, ok := c.entries[p]; !ok {
-			c.entries[p] = e
-			c.order = append(c.order, p)
-		}
-	}
-}
-
-func (c *FileStateCache) Merge(other *FileStateCache) {
-	if other == nil {
-		return
-	}
-	other.mu.RLock()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	defer other.mu.RUnlock()
-
-	for p, e := range other.entries {
-		if existing, ok := c.entries[p]; !ok || e.Mtime > existing.Mtime {
-			if ok {
+		if existing, ok := c.entries[p]; ok {
+			if overwrite && e.Mtime > existing.Mtime {
 				c.remove(p)
+			} else {
+				continue
 			}
-			c.entries[p] = e
-			c.order = append(c.order, p)
 		}
+		// Deep copy the struct and its slices to avoid shared mutable
+		// state between caches. Shallow copy would share the backing
+		// arrays of Lines and Ranges, causing cross-cache corruption
+		// when mergeRanges appends to Ranges.
+		cp := *e
+		if e.Lines != nil {
+			cp.Lines = make([]string, len(e.Lines))
+			copy(cp.Lines, e.Lines)
+		}
+		if e.Ranges != nil {
+			cp.Ranges = make([]lineRange, len(e.Ranges))
+			copy(cp.Ranges, e.Ranges)
+		}
+		c.entries[p] = &cp
+		c.order = append(c.order, p)
 	}
 	c.evictIfNeeded()
 }
@@ -185,8 +213,5 @@ func mergeRanges(ranges []lineRange, r lineRange) []lineRange {
 }
 
 func normalizePath(p string) string {
-	if resolved, err := filepath.EvalSymlinks(filepath.Clean(p)); err == nil {
-		return resolved
-	}
-	return filepath.Clean(p)
+	return normalizePathKey(p)
 }

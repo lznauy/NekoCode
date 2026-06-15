@@ -15,17 +15,16 @@ import (
 	"unicode/utf8"
 
 	"nekocode/bot/tools"
-
-	"nekocode/common"
+	"nekocode/bot/tools/hashline"
 )
 
-type ReadTool struct{}
+type ReadTool struct {
+	SafeReadOnlyTool
+}
 
-func (t *ReadTool) Name() string                                     { return "read" }
-func (t *ReadTool) ExecutionMode(map[string]any) tools.ExecutionMode { return tools.ModeParallel }
-func (t *ReadTool) DangerLevel(map[string]any) common.DangerLevel    { return common.LevelSafe }
+func (t *ReadTool) Name() string { return "read" }
 func (t *ReadTool) Description() string {
-	return "Read file contents (text, images, PDF). Absolute path required. Use startLine/endLine for range, max 2000 lines. Lines are tagged as <l n=\"lineNo\" h=\"hash\">content</l> — n and h attributes are metadata for the edit tool, NOT part of the file content."
+	return "Read file contents (text, images, PDF). Absolute path required. Use startLine/endLine for range, max 500 lines. Output format: [path#TAG] header followed by lineNo:content lines. TAG is an 8-hex content hash for the edit tool."
 }
 
 func (t *ReadTool) Parameters() []tools.Parameter {
@@ -36,12 +35,12 @@ func (t *ReadTool) Parameters() []tools.Parameter {
 	}
 }
 
-const maxReadLines = 2000
+const maxReadLines = 500
 
 func (t *ReadTool) Execute(ctx context.Context, args map[string]any) (string, error) {
-	path, ok := args["path"].(string)
-	if !ok || path == "" {
-		return "", fmt.Errorf("missing path parameter")
+	path, err := requireStringArg(args, "path")
+	if err != nil {
+		return "", err
 	}
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".png", ".jpg", ".jpeg", ".gif":
@@ -53,29 +52,17 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) (string, er
 	}
 }
 
-func getIntArg(args map[string]any, key string) (int, bool) {
-	v, ok := args[key]
-	if !ok || v == nil {
-		return 0, false
-	}
-	f, ok := v.(float64)
-	if !ok {
-		return 0, false
-	}
-	return int(f), true
-}
-
 func (t *ReadTool) readTextCached(path string, args map[string]any) (string, error) {
-	startLine, ok := getIntArg(args, "startLine")
-	if !ok {
-		return "", fmt.Errorf("missing required parameter: startLine")
+	startLine, err := requireIntArg(args, "startLine")
+	if err != nil {
+		return "", err
 	}
-	endLine, ok := getIntArg(args, "endLine")
-	if !ok {
-		return "", fmt.Errorf("missing required parameter: endLine")
+	endLine, err := requireIntArg(args, "endLine")
+	if err != nil {
+		return "", err
 	}
 
-	cache := tools.GlobalFileCache
+	cache := tools.GetGlobalFileCache()
 	if cache != nil {
 		// Cache has file content — format from cache regardless of whether
 		// the range was already covered. Re-formatting is cheap and avoids the
@@ -95,9 +82,6 @@ func (t *ReadTool) readTextCached(path string, args map[string]any) (string, err
 	fullLines, err := readFileLines(path)
 	if err != nil {
 		return "", err
-	}
-	if fullLines == nil {
-		return "", nil // handled by readFileLines (binary, etc.)
 	}
 
 	result := formatReadOutput(path, fullLines, startLine, endLine)
@@ -122,49 +106,55 @@ func readFileLines(path string) ([]string, error) {
 			}
 			return nil, fmt.Errorf("%s", msg)
 		}
-		return nil, fmt.Errorf("failed to read file: %v", err)
+		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 	if isBinary(data) {
-		return nil, fmt.Errorf("<tool_output name=\"read\">\n<path>%s</path>\n<error>binary file</error>\n</tool_output>", filepath.Base(path))
+		return nil, fmt.Errorf("[%s#ERR] binary file", filepath.Base(path))
 	}
-	text := tools.StripAnsi(string(data))
-	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text := tools.NormalizeText(string(data))
 	lines := strings.Split(text, "\n")
 	if len(lines) == 1 && lines[0] == "" {
-		return nil, fmt.Errorf("[file is empty]")
+		// Empty file is valid — return a single empty line.
+		return []string{""}, nil
 	}
 	return lines, nil
 }
 
-// formatReadOutput formats lines[startLine:endLine] as the read tool's XML output.
+// formatReadOutput formats lines[startLine:endLine] as the hashline output.
+// Format: [path#TAG] header, then lineNo:content lines.
 func formatReadOutput(path string, lines []string, startLine, endLine int) string {
 	total := len(lines)
+	if startLine < 1 {
+		startLine = 1
+	}
+	if endLine < startLine {
+		return fmt.Sprintf("[%s#ERR] endLine (%d) < startLine (%d)", filepath.Base(path), endLine, startLine)
+	}
 	if startLine > total {
-		return fmt.Sprintf("<tool_output name=\"read\">\n<path>%s</path>\n<lines total=\"%d\"/>\n<error>startLine %d out of range</error>\n</tool_output>",
-			filepath.Base(path), total, startLine)
+		return fmt.Sprintf("[%s#ERR] startLine %d out of range (total %d)", filepath.Base(path), startLine, total)
 	}
 	start := startLine - 1
 	count := min(endLine-startLine+1, maxReadLines)
 	end := min(start+count, total)
 
-	var contentBuf, hashBuf strings.Builder
+	// Record full-file snapshot for hashline edit recovery.
+	fullText := strings.Join(lines, "\n")
+	tools.RecordSnapshot(path, fullText)
+
+	// Compute file hash tag.
+	tag := hashline.ComputeFileHash(fullText)
+
+	var out strings.Builder
+	fmt.Fprintf(&out, "[%s#%s]\n", path, tag)
 	for i := range end - start {
 		idx := start + i
 		lineNo := startLine + i
-		fmt.Fprintf(&contentBuf, "%s\n", lines[idx])
-		fmt.Fprintf(&hashBuf, "%d:%s\n", lineNo, tools.HashLine(lines[idx]))
+		fmt.Fprintf(&out, "%d:%s\n", lineNo, lines[idx])
 	}
-	cdata := strings.TrimRight(contentBuf.String(), "\n")
-	cdata = strings.ReplaceAll(cdata, "]]>", "]]]]><![CDATA[>")
-
-	var out strings.Builder
-	fmt.Fprintf(&out, "<tool_output name=\"read\">\n<path>%s</path>\n<lines start=\"%d\" end=\"%d\" total=\"%d\"/>\n",
-		filepath.Base(path), startLine, end, total)
 	if end < total {
-		fmt.Fprintf(&out, "<next startLine=\"%d\"/>\n", end+1)
+		fmt.Fprintf(&out, "... (next startLine=%d, total=%d)", end+1, total)
 	}
-	fmt.Fprintf(&out, "<content>\n<![CDATA[\n%s\n]]>\n</content>\n<hashes>\n%s</hashes>\n</tool_output>", cdata, hashBuf.String())
-	return out.String()
+	return strings.TrimRight(out.String(), "\n")
 }
 
 
@@ -181,7 +171,7 @@ func isBinary(data []byte) bool {
 func (t *ReadTool) readImage(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", fmt.Errorf("failed to open image: %v", err)
+		return "", fmt.Errorf("failed to open image: %w", err)
 	}
 	defer f.Close()
 	cfg, format, err := image.DecodeConfig(f)

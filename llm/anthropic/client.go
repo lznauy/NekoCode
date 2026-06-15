@@ -1,12 +1,9 @@
 package anthropic
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -14,13 +11,7 @@ import (
 )
 
 type Client struct {
-	APIKey          string
-	BaseURL         string
-	Model           string
-	maxTokens       int
-	temperature     float64
-	disableThinking bool
-	thinkingBudget  int
+	types.BaseClient
 }
 
 func New(apiKey, baseURL, model string) *Client {
@@ -28,16 +19,15 @@ func New(apiKey, baseURL, model string) *Client {
 		baseURL = "https://api.anthropic.com/v1"
 	}
 	return &Client{
-		APIKey:      apiKey,
-		BaseURL:     baseURL,
-		Model:       model,
-		maxTokens:   32000,
-		temperature: 0.7,
+		BaseClient: types.BaseClient{
+			APIKey:      apiKey,
+			BaseURL:     baseURL,
+			Model:       model,
+			MaxTokens:   32000,
+			Temperature: 0.7,
+		},
 	}
 }
-
-func (c *Client) SetMaxTokens(n int)        { c.maxTokens = n }
-func (c *Client) SetDisableThinking(d bool) { c.disableThinking = d }
 
 // --- request/response types ---
 
@@ -91,7 +81,7 @@ type sseEvent struct {
 	} `json:"usage"`
 	Message struct {
 		Usage struct {
-			InputTokens         int `json:"input_tokens"`
+			InputTokens          int `json:"input_tokens"`
 			CacheReadInputTokens int `json:"cache_read_input_tokens"`
 		} `json:"usage"`
 	} `json:"message"`
@@ -130,6 +120,9 @@ func toMessages(messages []types.Message) ([]message, string) {
 
 	for _, msg := range messages {
 		if msg.Role == "system" {
+			if systemPrompt != "" {
+				systemPrompt += "\n\n"
+			}
 			systemPrompt += msg.Content
 			continue
 		}
@@ -199,8 +192,8 @@ func (c *Client) buildRequest(messages []types.Message, tools []types.ToolDef, s
 	msgs, sys := toMessages(messages)
 	return &request{
 		Model:       c.Model,
-		MaxTokens:   c.maxTokens,
-		Temperature: c.temperature,
+		MaxTokens:   c.GetMaxTokens(),
+		Temperature: c.Temperature,
 		System:      sys,
 		Messages:    msgs,
 		Tools:       toTools(tools),
@@ -208,32 +201,32 @@ func (c *Client) buildRequest(messages []types.Message, tools []types.ToolDef, s
 	}
 }
 
-func (c *Client) Chat(ctx context.Context, messages []types.Message, tools []types.ToolDef) (*types.Response, error) {
-	body := c.buildRequest(messages, tools, false)
-	jsonBody, _ := json.Marshal(body)
+func (c *Client) headers() map[string]string {
+	return map[string]string{
+		"x-api-key":         c.APIKey,
+		"anthropic-version": "2023-06-01",
+	}
+}
 
+// newStreamRequest creates an *http.Request for streaming, reusing pre-marshaled body.
+func (c *Client) newStreamRequest(ctx context.Context, jsonBody []byte) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/messages", bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", c.APIKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
+	for k, v := range c.headers() {
+		req.Header.Set(k, v)
+	}
+	return req, nil
+}
 
-	resp, err := types.SharedHTTPClientTimeout.Do(req)
+func (c *Client) Chat(ctx context.Context, messages []types.Message, tools []types.ToolDef) (*types.Response, error) {
+	body := c.buildRequest(messages, tools, false)
+	data, err := types.DoJSONRequest(ctx, c.BaseURL+"/messages", c.headers(), body)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error: %s - %s", resp.Status, string(data))
-	}
-
 	var ar response
 	if err := json.Unmarshal(data, &ar); err != nil {
 		return nil, err
@@ -252,34 +245,15 @@ func (c *Client) ChatStream(ctx context.Context, messages []types.Message, tools
 		body := c.buildRequest(messages, tools, true)
 		jsonBody, _ := json.Marshal(body)
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/messages", bytes.NewBuffer(jsonBody))
+		req, err := c.newStreamRequest(ctx, jsonBody)
 		if err != nil {
 			errCh <- err
 			return
 		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("x-api-key", c.APIKey)
-		req.Header.Set("anthropic-version", "2023-06-01")
 
 		resp, err := types.SharedHTTPStreamClient.Do(req)
 		if err != nil {
 			errCh <- err
-			return
-		}
-		defer resp.Body.Close()
-
-		done := make(chan struct{})
-		go func() {
-			select {
-			case <-ctx.Done():
-				resp.Body.Close()
-			case <-done:
-			}
-		}()
-
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			errCh <- fmt.Errorf("API error (HTTP %d): %s", resp.StatusCode, string(body))
 			return
 		}
 
@@ -290,24 +264,17 @@ func (c *Client) ChatStream(ctx context.Context, messages []types.Message, tools
 		}
 		toolAccums := make(map[int]*toolAccum)
 
-		scanner := bufio.NewScanner(resp.Body)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if !strings.HasPrefix(line, "data: ") {
-				continue
-			}
-			data := strings.TrimPrefix(line, "data: ")
-
+		types.StreamSSE(ctx, resp, tokenCh, errCh, func(data string, tokenCh chan<- types.StreamToken) error {
 			var event sseEvent
 			if err := json.Unmarshal([]byte(data), &event); err != nil {
-				continue
+				return nil
 			}
 
 			switch event.Type {
 			case "message_start":
 				if event.Message.Usage.InputTokens > 0 || event.Message.Usage.CacheReadInputTokens > 0 {
 					u := &types.StreamUsage{
-						PromptTokens:  event.Message.Usage.InputTokens,
+						PromptTokens:   event.Message.Usage.InputTokens,
 						CacheHitTokens: event.Message.Usage.CacheReadInputTokens,
 					}
 					u.Normalize()
@@ -316,7 +283,7 @@ func (c *Client) ChatStream(ctx context.Context, messages []types.Message, tools
 			case "content_block_start":
 				var cb contentBlock
 				if err := json.Unmarshal(event.ContentBlock, &cb); err != nil {
-					continue
+					return nil
 				}
 				if cb.Type == "tool_use" {
 					toolAccums[event.Index] = &toolAccum{id: cb.ID, name: cb.Name}
@@ -325,7 +292,7 @@ func (c *Client) ChatStream(ctx context.Context, messages []types.Message, tools
 				var td textDelta
 				if json.Unmarshal(event.Delta, &td) == nil && td.Type == "text_delta" {
 					tokenCh <- types.StreamToken{Content: td.Text}
-					continue
+					return nil
 				}
 				var ijd inputJSONDelta
 				if json.Unmarshal(event.Delta, &ijd) == nil && ijd.Type == "input_json_delta" {
@@ -346,15 +313,8 @@ func (c *Client) ChatStream(ctx context.Context, messages []types.Message, tools
 					}
 				}
 			}
-		}
-		close(done)
-		if err := scanner.Err(); err != nil {
-			if ctx.Err() != nil {
-				errCh <- ctx.Err()
-			} else {
-				errCh <- err
-			}
-		}
+			return nil
+		})
 	}()
 
 	return tokenCh, errCh

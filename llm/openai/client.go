@@ -1,39 +1,30 @@
 package openai
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
-	"strings"
 
 	"nekocode/llm/types"
 )
 
 type streamChunk struct {
 	Choices []struct {
-		Delta        delta         `json:"delta"`
-		FinishReason string        `json:"finish_reason"`
+		Delta        delta  `json:"delta"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *types.StreamUsage `json:"usage"`
 }
 
 type delta struct {
-	Content          string        `json:"content"`
-	ReasoningContent string        `json:"reasoning_content"`
+	Content          string           `json:"content"`
+	ReasoningContent string           `json:"reasoning_content"`
 	ToolCalls        []types.ToolCall `json:"tool_calls,omitempty"`
 }
 
 type Client struct {
-	APIKey          string
-	BaseURL         string
-	Model           string
-	maxTokens       int
-	temperature     float64
-	disableThinking bool
+	types.BaseClient
 	reasoningEffort string
 }
 
@@ -42,39 +33,41 @@ func New(apiKey, baseURL, model string) *Client {
 		baseURL = "https://api.deepseek.com/v1"
 	}
 	return &Client{
-		APIKey:      apiKey,
-		BaseURL:     baseURL,
-		Model:       model,
-		maxTokens:   32000,
-		temperature: 0.3,
+		BaseClient: types.BaseClient{
+			APIKey:      apiKey,
+			BaseURL:     baseURL,
+			Model:       model,
+			MaxTokens:   32000,
+			Temperature: 0.3,
+		},
 	}
 }
 
-func (c *Client) SetMaxTokens(n int)        { c.maxTokens = n }
-func (c *Client) SetDisableThinking(d bool) { c.disableThinking = d }
+func (c *Client) headers() map[string]string {
+	return map[string]string{
+		"Authorization": "Bearer " + c.APIKey,
+	}
+}
+
+// newStreamRequest creates an *http.Request for streaming, reusing pre-marshaled body.
+func (c *Client) newStreamRequest(ctx context.Context, jsonBody []byte) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/chat/completions", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range c.headers() {
+		req.Header.Set(k, v)
+	}
+	return req, nil
+}
 
 func (c *Client) Chat(ctx context.Context, messages []types.Message, tools []types.ToolDef) (*types.Response, error) {
 	body := c.buildBody(messages, tools, false)
-	jsonBody, _ := json.Marshal(body)
-
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/chat/completions", bytes.NewBuffer(jsonBody))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.APIKey)
-
-	resp, err := types.SharedHTTPClientTimeout.Do(req)
+	data, err := types.DoJSONRequest(ctx, c.BaseURL+"/chat/completions", c.headers(), body)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (HTTP %d): %s", resp.StatusCode, string(data))
-	}
-
 	var r types.Response
 	if err := json.Unmarshal(data, &r); err != nil {
 		return nil, err
@@ -83,59 +76,32 @@ func (c *Client) Chat(ctx context.Context, messages []types.Message, tools []typ
 }
 
 func (c *Client) ChatStream(ctx context.Context, messages []types.Message, tools []types.ToolDef) (<-chan types.StreamToken, <-chan error) {
-	body := c.buildBody(messages, tools, true)
-	jsonBody, _ := json.Marshal(body)
-
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/chat/completions", bytes.NewBuffer(jsonBody))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.APIKey)
-
-	resp, err := types.SharedHTTPStreamClient.Do(req)
-	if err != nil {
-		ch := make(chan types.StreamToken)
-		ech := make(chan error, 1)
-		ech <- err
-		close(ch)
-		return ch, ech
-	}
-
 	tokenCh := make(chan types.StreamToken)
 	errCh := make(chan error, 1)
 
 	go func() {
 		defer close(tokenCh)
 		defer close(errCh)
-		defer resp.Body.Close()
 
-		done := make(chan struct{})
-		go func() {
-			select {
-			case <-ctx.Done():
-				resp.Body.Close()
-			case <-done:
-			}
-		}()
+		body := c.buildBody(messages, tools, true)
+		jsonBody, _ := json.Marshal(body)
 
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			errCh <- fmt.Errorf("API error (HTTP %d): %s", resp.StatusCode, string(body))
+		req, err := c.newStreamRequest(ctx, jsonBody)
+		if err != nil {
+			errCh <- err
 			return
 		}
 
-		scanner := bufio.NewScanner(resp.Body)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if !strings.HasPrefix(line, "data: ") {
-				continue
-			}
-			data := strings.TrimPrefix(line, "data: ")
-			if data == "[DONE]" {
-				continue
-			}
+		resp, err := types.SharedHTTPStreamClient.Do(req)
+		if err != nil {
+			errCh <- err
+			return
+		}
 
+		types.StreamSSE(ctx, resp, tokenCh, errCh, func(data string, tokenCh chan<- types.StreamToken) error {
 			var chunk streamChunk
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				continue
+				return nil
 			}
 			if chunk.Usage != nil {
 				chunk.Usage.Normalize()
@@ -145,7 +111,7 @@ func (c *Client) ChatStream(ctx context.Context, messages []types.Message, tools
 				if chunk.Usage != nil {
 					tokenCh <- types.StreamToken{Usage: chunk.Usage}
 				}
-				continue
+				return nil
 			}
 			delta := chunk.Choices[0].Delta
 			token := types.StreamToken{
@@ -164,15 +130,8 @@ func (c *Client) ChatStream(ctx context.Context, messages []types.Message, tools
 					},
 				}
 			}
-		}
-		close(done)
-		if err := scanner.Err(); err != nil {
-			if ctx.Err() != nil {
-				errCh <- ctx.Err()
-			} else {
-				errCh <- err
-			}
-		}
+			return nil
+		})
 	}()
 
 	return tokenCh, errCh
@@ -181,14 +140,14 @@ func (c *Client) ChatStream(ctx context.Context, messages []types.Message, tools
 func (c *Client) buildBody(messages []types.Message, tools []types.ToolDef, stream bool) map[string]any {
 	body := map[string]any{
 		"model": c.Model, "messages": messages,
-		"max_tokens": c.maxTokens, "temperature": c.temperature,
+		"max_tokens": c.GetMaxTokens(), "temperature": c.Temperature,
 		"stream": stream,
 	}
 	if len(tools) > 0 {
 		body["tools"] = tools
 		body["tool_choice"] = "auto"
 	}
-	if c.disableThinking {
+	if c.GetDisableThinking() {
 		body["thinking"] = map[string]string{"type": "disabled"}
 	} else if c.reasoningEffort != "" {
 		body["reasoning_effort"] = c.reasoningEffort

@@ -9,15 +9,13 @@ import (
 	"strings"
 
 	"nekocode/bot/tools"
-
-	"nekocode/common"
 )
 
-type TreeTool struct{}
+type TreeTool struct {
+	SafeReadOnlyTool
+}
 
-func (t *TreeTool) Name() string                                     { return "tree" }
-func (t *TreeTool) ExecutionMode(map[string]any) tools.ExecutionMode { return tools.ModeParallel }
-func (t *TreeTool) DangerLevel(map[string]any) common.DangerLevel    { return common.LevelSafe }
+func (t *TreeTool) Name() string { return "tree" }
 func (t *TreeTool) Description() string {
 	return "Show directory tree. depth (default 3, max 6), limit (default 400). Ignores hidden files."
 }
@@ -31,13 +29,13 @@ func (t *TreeTool) Parameters() []tools.Parameter {
 }
 
 func (t *TreeTool) Execute(ctx context.Context, args map[string]any) (string, error) {
-	path, ok := args["path"].(string)
-	if !ok || path == "" {
-		return "", fmt.Errorf("missing path parameter")
+	path, err := requireStringArg(args, "path")
+	if err != nil {
+		return "", err
 	}
 
-	depth := clampOpt(args, "depth", 3, 1, 6)
-	limit := clampOpt(args, "limit", 400, 1, 800)
+	depth := clampIntArg(args, "depth", 3, 1, 6)
+	limit := clampIntArg(args, "limit", 400, 1, 800)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s/\n", filepath.Base(path))
@@ -61,7 +59,7 @@ func walkTree(dir, prefix string, depth, limit int, b *strings.Builder) (int, er
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return 0, fmt.Errorf("read dir %s: %v", dir, err)
+		return 0, fmt.Errorf("read dir %s: %w", dir, err)
 	}
 
 	type item struct {
@@ -96,19 +94,4 @@ func walkTree(dir, prefix string, depth, limit int, b *strings.Builder) (int, er
 		count++
 	}
 	return count, nil
-}
-
-func clampOpt(args map[string]any, key string, def, min, max int) int {
-	v, ok := args[key].(float64)
-	if !ok {
-		return def
-	}
-	n := int(v)
-	if n < min {
-		return min
-	}
-	if n > max {
-		return max
-	}
-	return n
 }

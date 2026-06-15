@@ -144,10 +144,10 @@ func TestSnapshotRestore(t *testing.T) {
 	m.Add("user", "hello world")
 	m.SetContextWindow(50000)
 
-	sp, sk, ar, mem, cb, msgs, budget := m.Snapshot()
+	snap := m.Snapshot()
 
 	m2 := newManager()
-	m2.Restore(sp, sk, ar, mem, cb, msgs, budget)
+	m2.Restore(snap)
 
 	if n := m2.Len(); n != m.Len() {
 		t.Errorf("restored Len = %d, want %d", n, m.Len())

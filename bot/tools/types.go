@@ -3,6 +3,9 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"sort"
+	"strings"
 
 	"nekocode/common"
 	"nekocode/llm/types"
@@ -27,6 +30,14 @@ type ToolCallResult struct {
 	Name   string
 	Output string
 	Error  string
+}
+
+// EffectiveOutput returns Error if non-empty, otherwise Output.
+func (r ToolCallResult) EffectiveOutput() string {
+	if r.Error != "" {
+		return r.Error
+	}
+	return r.Output
 }
 
 // Tool is the interface all tools implement.
@@ -72,4 +83,29 @@ func ToToolDefs(descs []Descriptor) []types.ToolDef {
 		}
 	}
 	return defs
+}
+
+// FormatArgs serializes a tool args map into "key=value,key2=value2" form.
+// Used by sub-agent engine to produce displayable args (same format as the main agent).
+func FormatArgs(args map[string]any) string {
+	if len(args) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		if k == "_preview" || k == "_sub_callback" {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var pairs []string
+	for _, k := range keys {
+		val := fmt.Sprint(args[k])
+		if strings.ContainsAny(val, ",=" + "\"") {
+			val = "\"" + strings.ReplaceAll(strings.ReplaceAll(val, "\\", "\\\\"), "\"", "\\\"") + "\""
+		}
+		pairs = append(pairs, k+"="+val)
+	}
+	return strings.Join(pairs, ",")
 }

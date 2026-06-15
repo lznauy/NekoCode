@@ -7,19 +7,14 @@ import (
 	"sort"
 	"strings"
 
+	"nekocode/common"
+
 	"gopkg.in/yaml.v3"
 )
 
 // DefaultDirs returns the default skill directories (project + user).
 func DefaultDirs() []string {
-	var dirs []string
-	if cwd, err := os.Getwd(); err == nil {
-		dirs = append(dirs, filepath.Join(cwd, ".nekocode", "skills"))
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		dirs = append(dirs, filepath.Join(home, ".nekocode", "skills"))
-	}
-	return dirs
+	return common.NekocodeDirs("skills")
 }
 
 // discoverSkills scans directories for skill.md / SKILL.md files.
@@ -125,19 +120,12 @@ func parseSkillContent(content string) (*Skill, error) {
 }
 
 func parseFrontmatter(content string) (*frontmatter, string, error) {
-	content = strings.ReplaceAll(content, "\r\n", "\n")
-	content = strings.TrimSpace(content)
-	if !strings.HasPrefix(content, "---") {
-		return nil, "", fmt.Errorf("frontmatter must start with ---")
+	yamlBytes, body, err := common.ParseYAMLFrontmatter(content)
+	if err != nil {
+		return nil, "", err
 	}
-	rest := content[3:]
-	yamlText, body, found := strings.Cut(rest, "\n---")
-	if !found {
-		return nil, "", fmt.Errorf("unclosed frontmatter (missing closing ---)")
-	}
-
 	var fm frontmatter
-	if err := yaml.Unmarshal([]byte(yamlText), &fm); err != nil {
+	if err := yaml.Unmarshal(yamlBytes, &fm); err != nil {
 		return nil, "", fmt.Errorf("invalid YAML: %w", err)
 	}
 	return &fm, body, nil

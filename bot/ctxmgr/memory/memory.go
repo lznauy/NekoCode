@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"nekocode/common"
 )
 
 // File is the in-memory representation of the memory file.
@@ -29,6 +31,8 @@ type File struct {
 	CompletedTasks string
 	ArchMap        string
 	Preferences    string
+
+	fieldMap map[string]*string // initialized once
 }
 
 // sectionHeaders maps section names to their markdown headers.
@@ -42,13 +46,12 @@ var sectionHeaders = map[string]string{
 
 // DefaultPath returns the default memory file path.
 func DefaultPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".nekocode", "memory.md")
+	return filepath.Join(common.NekocodeHome(), "memory.md")
 }
 
 // Load reads the memory file from disk. Returns an empty File if none exists.
 func Load(path string) (*File, error) {
-	f := &File{path: path}
+	f := newFile(path)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -60,15 +63,22 @@ func Load(path string) (*File, error) {
 	return f, nil
 }
 
+func newFile(path string) *File {
+	f := &File{path: path}
+	f.fieldMap = map[string]*string{
+		"TechStack":      &f.TechStack,
+		"ActiveGoals":    &f.ActiveGoals,
+		"CompletedTasks": &f.CompletedTasks,
+		"ArchMap":        &f.ArchMap,
+		"Preferences":    &f.Preferences,
+	}
+	return f
+}
+
 // Save writes the memory file to disk.
 func (f *File) Save() error {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-
-	dir := filepath.Dir(f.path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
 
 	var b strings.Builder
 	for _, key := range []string{"TechStack", "ActiveGoals", "CompletedTasks", "ArchMap", "Preferences"} {
@@ -81,7 +91,7 @@ func (f *File) Save() error {
 			b.WriteString(content + "\n\n")
 		}
 	}
-	return os.WriteFile(f.path, []byte(b.String()), 0644)
+	return common.WriteFileWithDir(f.path, []byte(b.String()), 0o644)
 }
 
 // Build returns the formatted memory block for Layer 0 injection.
@@ -146,7 +156,7 @@ func (f *File) MergeFromCompaction(newFacts []string, goal string) {
 		if fact == "" {
 			continue
 		}
-		if strings.Contains(f.ArchMap, fact) {
+		if containsLine(f.ArchMap, fact) {
 			continue
 		}
 		if strings.TrimSpace(f.ArchMap) == "" {
@@ -158,6 +168,26 @@ func (f *File) MergeFromCompaction(newFacts []string, goal string) {
 }
 
 // -- internal ----------------------------------------------------------
+
+// containsLine checks if haystack contains needle as a complete trimmed line,
+// stripping common list prefixes ("- ", "* ", "• "). This avoids false positives
+// from substring matching (e.g., "Go" matching "Google").
+func containsLine(haystack, needle string) bool {
+	needle = strings.TrimSpace(needle)
+	needle = strings.TrimPrefix(needle, "- ")
+	needle = strings.TrimPrefix(needle, "* ")
+	needle = strings.TrimPrefix(needle, "• ")
+	for line := range strings.SplitSeq(haystack, "\n") {
+		trimmed := strings.TrimSpace(line)
+		trimmed = strings.TrimPrefix(trimmed, "- ")
+		trimmed = strings.TrimPrefix(trimmed, "* ")
+		trimmed = strings.TrimPrefix(trimmed, "• ")
+		if trimmed == needle {
+			return true
+		}
+	}
+	return false
+}
 
 func (f *File) parse(data string) {
 	current := ""
@@ -198,13 +228,16 @@ func (f *File) resolveSection(name string) string {
 }
 
 func (f *File) fieldPtrs() map[string]*string {
-	return map[string]*string{
-		"TechStack":     &f.TechStack,
-		"ActiveGoals":   &f.ActiveGoals,
-		"CompletedTasks": &f.CompletedTasks,
-		"ArchMap":       &f.ArchMap,
-		"Preferences":   &f.Preferences,
+	if f.fieldMap == nil {
+		f.fieldMap = map[string]*string{
+			"TechStack":      &f.TechStack,
+			"ActiveGoals":    &f.ActiveGoals,
+			"CompletedTasks": &f.CompletedTasks,
+			"ArchMap":        &f.ArchMap,
+			"Preferences":    &f.Preferences,
+		}
 	}
+	return f.fieldMap
 }
 
 func (f *File) getField(key string) string {

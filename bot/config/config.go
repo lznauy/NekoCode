@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"nekocode/common"
 )
 
 type ModelConfig struct {
@@ -55,12 +57,7 @@ var Default = Config{
 }
 
 func Load() (*Config, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return &Default, nil
-	}
-
-	configPath := filepath.Join(homeDir, ".nekocode", "config.json")
+	configPath := filepath.Join(common.NekocodeHome(), "config.json")
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -135,24 +132,6 @@ func (c *Config) AllModelNames() []string {
 		names = append(names, m.Name)
 	}
 	return names
-}
-
-// ActiveImageGenModel returns the first ImageGenConfig, or empty if none configured.
-func (c *Config) ActiveImageGenModel() ImageGenConfig {
-	if len(c.ImageGenModels) > 0 {
-		return c.ImageGenModels[0]
-	}
-	return ImageGenConfig{}
-}
-
-// LookupImageGenModel returns the ImageGenConfig for a named image gen model.
-func (c *Config) LookupImageGenModel(name string) (ImageGenConfig, bool) {
-	for _, m := range c.ImageGenModels {
-		if m.Name == name {
-			return m, true
-		}
-	}
-	return ImageGenConfig{}, false
 }
 
 // SwitchModel switches to the named model. Returns false if not found.

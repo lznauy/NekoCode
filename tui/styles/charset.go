@@ -15,6 +15,18 @@ var (
 	HeavyVert   = "┃"
 )
 
+// Agent bullets for tool attribution in activity/changes sections.
+var (
+	MainBullet = "ฅ"              // 猫爪 — main agent tools
+	SubBullet  = "೬"              // 猫屎 — sub-agent tools
+	MainCat    = "₍ᐢ ᗒ.ᗕ ᐢ₎"     // main agent cat face
+	CatLeft    = "₍ᐢ"          // left ear/paw
+	CatLEye    = "ᗒ"           // left eye
+	CatNose    = "."            // nose
+	CatREye    = "ᗕ"           // right eye
+	CatRight   = " ᐢ₎"         // right paw/ear
+)
+
 func init() {
 	runewidth.DefaultCondition.EastAsianWidth = true
 
@@ -22,6 +34,9 @@ func init() {
 		Vertical = "|"
 		Horizontal = "-"
 		HeavyVert = "|"
+		MainBullet = "*"
+		SubBullet = "*"
+		MainCat = "(=^.^=)"
 	}
 }
 

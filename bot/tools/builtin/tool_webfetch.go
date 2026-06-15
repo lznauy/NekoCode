@@ -15,6 +15,7 @@ import (
 )
 
 type WebFetchTool struct {
+	SafeReadOnlyTool
 	client *http.Client
 }
 
@@ -30,12 +31,6 @@ func NewWebFetchTool() *WebFetchTool {
 }
 
 func (t *WebFetchTool) Name() string { return "web_fetch" }
-func (t *WebFetchTool) ExecutionMode(map[string]any) tools.ExecutionMode {
-	return tools.ModeParallel
-}
-func (t *WebFetchTool) DangerLevel(map[string]any) common.DangerLevel {
-	return common.LevelSafe
-}
 
 func (t *WebFetchTool) Description() string {
 	return "Fetch web page as text. When quoting, cite source URL and keep quotes ≤125 chars."
@@ -49,27 +44,27 @@ func (t *WebFetchTool) Parameters() []tools.Parameter {
 }
 
 func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) (string, error) {
-	rawURL, ok := args["url"].(string)
-	if !ok || strings.TrimSpace(rawURL) == "" {
-		return "", fmt.Errorf("missing url parameter")
+	rawURL, err := requireStringArg(args, "url")
+	if err != nil {
+		return "", err
 	}
 
 	if err := validateURL(rawURL); err != nil {
-		return "", fmt.Errorf("URL validation failed: %v", err)
+		return "", fmt.Errorf("URL validation failed: %w", err)
 	}
 
-	prompt, _ := args["prompt"].(string)
+	prompt := optStringArg(args, "prompt", "")
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to build request: %v", err)
+		return "", fmt.Errorf("failed to build request: %w", err)
 	}
 	req.Header.Set("User-Agent", "NekoCode/1.0")
 	req.Header.Set("Accept", "text/html,text/plain,*/*")
 
 	resp, err := t.client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("request failed: %v", err)
+		return "", fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -79,7 +74,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) (string
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 5<<20))
 	if err != nil {
-		return "", fmt.Errorf("failed to read response: %v", err)
+		return "", fmt.Errorf("failed to read response: %w", err)
 	}
 
 	contentType := resp.Header.Get("Content-Type")

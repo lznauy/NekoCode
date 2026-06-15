@@ -8,16 +8,15 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"nekocode/bot/tools"
 
-	"nekocode/common"
+	"nekocode/bot/tools"
 )
 
-type GrepTool struct{}
+type GrepTool struct {
+	SafeReadOnlyTool
+}
 
-func (t *GrepTool) Name() string                                       { return "grep" }
-func (t *GrepTool) ExecutionMode(map[string]any) tools.ExecutionMode { return tools.ModeParallel }
-func (t *GrepTool) DangerLevel(map[string]any) common.DangerLevel     { return common.LevelSafe }
+func (t *GrepTool) Name() string { return "grep" }
 func (t *GrepTool) Description() string {
 	return "Search file contents (rg or grep). Returns matching lines with line numbers. Supports regex, glob filtering, and context lines (-A/-B/-C)."
 }
@@ -32,15 +31,12 @@ func (t *GrepTool) Parameters() []tools.Parameter {
 }
 
 func (t *GrepTool) Execute(ctx context.Context, args map[string]any) (string, error) {
-	pattern, ok := args["pattern"].(string)
-	if !ok || pattern == "" {
-		return "", fmt.Errorf("missing pattern parameter")
+	pattern, err := requireStringArg(args, "pattern")
+	if err != nil {
+		return "", err
 	}
 
-	basePath := "."
-	if p, ok := args["path"].(string); ok && p != "" {
-		basePath = p
-	}
+	basePath := optStringArg(args, "path", ".")
 
 	bin := "rg"
 	grepArgs := []string{"-n"}
@@ -78,7 +74,7 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) (string, er
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			return "No matches found", nil
 		}
-		return "", fmt.Errorf("grep failed: %v\nOutput: %s", err, string(output))
+		return "", fmt.Errorf("grep failed: %w\nOutput: %s", err, string(output))
 	}
 
 	return tools.StripAnsi(string(output)), nil

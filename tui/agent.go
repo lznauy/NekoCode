@@ -3,9 +3,6 @@ package tui
 
 import (
 	"fmt"
-	"os"
-	"runtime/debug"
-	"time"
 
 	"nekocode/common"
 	"nekocode/tui/components/block"
@@ -14,12 +11,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-func logPanic(r any) {
-	stack := debug.Stack()
-	path := fmt.Sprintf("/tmp/nekocode/nekocode-panic-%d.log", time.Now().Unix())
-	msg := fmt.Sprintf("PANIC: %v\n\nStack:\n%s", r, string(stack))
-	_ = os.WriteFile(path, []byte(msg), 0644)
-}
 
 func (m *Model) startChat(value string) tea.Cmd {
 	resp, cr := m.Bot.ExecuteCommand(value)
@@ -58,7 +49,7 @@ func (m *Model) startAgent(value string) tea.Cmd {
 
 	m.Bot.SetCallbacks(
 		func(delta string) { m.Messages.ProcessStreamText(delta) },
-		func(delta string) { m.Messages.ProcessReasoningText(delta) },
+		func(delta string) { m.Messages.ProcessThinkingText(delta) },
 	)
 
 	return tea.Batch(
@@ -69,10 +60,15 @@ func (m *Model) startAgent(value string) tea.Cmd {
 }
 
 func (m *Model) runAgent(value string) func() tea.Msg {
-	return func() tea.Msg {
+	return func() (msg tea.Msg) {
 		defer func() {
 			if r := recover(); r != nil {
-				logPanic(r)
+				common.WritePanicLog(r)
+				// Ensure the TUI does not get stuck in stateProcessing.
+				msg = doneMsg{
+					content: fmt.Sprintf("internal panic: %v", r),
+					err:     fmt.Errorf("panic: %v", r),
+				}
 			}
 		}()
 
@@ -80,7 +76,10 @@ func (m *Model) runAgent(value string) func() tea.Msg {
 
 		result, err := m.Bot.RunAgent(value, m.onAgentStep(&finalResponse))
 
-		if finalResponse == "" {
+		// Use RunAgent returned FinalOutput as the primary source.
+		// finalResponse from callbacks can be stale when hooks trigger
+		// intermediate turns without "chat" actions.
+		if result != "" {
 			finalResponse = result
 		}
 		if finalResponse == "" {
@@ -103,13 +102,49 @@ func (m *Model) onAgentStep(finalResponse *string) func(string, string, string, 
 		case action == "chat":
 			*finalResponse = output
 			m.Messages.AddThinkBlock(output)
+		case action == "sub_agent_start":
+			// toolName = subType, toolArgs = subID, output = colorIdx
+			colorIdx := 0
+			if n, err := fmt.Sscanf(output, "%d", &colorIdx); err != nil || n != 1 {
+				colorIdx = -1
+			}
+			m.Messages.AddSubAgent(toolArgs, toolName, colorIdx)
+		case action == "sub_agent_end":
+			// toolArgs = subID
+			m.Messages.RemoveSubAgent(toolArgs)
+		case action == "sub_tool_start":
+			// toolName = actual tool name, toolArgs = args, output = subID:colorIdx
+			subID, colorIdx := parseSubEvent(output)
+			m.Messages.ProcessToolBlock(block.ContentBlock{
+				Type:      block.BlockTool,
+				ToolName:  toolName,
+				ToolArgs:  formatBriefArgs(toolName, toolArgs),
+				Content:   "",
+				Collapsed: !block.IsPersistent(toolName),
+				SubID:     subID,
+				SubColor:  colorIdx,
+			})
+		case action == "sub_execute_tool":
+			// toolName = actual tool name, output = text, toolArgs = subID:colorIdx
+			subID, _ := parseSubEvent(toolArgs)
+			m.Messages.AddSubToolOutput(subID, toolName, output)
 		case action == "tool_start":
 			m.Messages.ProcessToolBlock(block.ContentBlock{
 				Type:      block.BlockTool,
 				ToolName:  toolName,
 				ToolArgs:  formatBriefArgs(toolName, toolArgs),
 				Content:   output,
-				Collapsed: toolName != "edit" && toolName != "write" && toolName != "bash",
+				Collapsed: !block.IsPersistent(toolName),
+			})
+		case action == "tool_blocked":
+			// Blocked by quota — create a tool block showing the rejection reason.
+			m.Messages.ProcessToolBlock(block.ContentBlock{
+				Type:      block.BlockTool,
+				ToolName:  toolName,
+				ToolArgs:  formatBriefArgs(toolName, toolArgs),
+				Content:   output,
+				Collapsed: false,
+				Done:      true,
 			})
 		case action == "tool_preview":
 			m.Messages.UpdateToolPreview(toolName, output)
@@ -117,5 +152,21 @@ func (m *Model) onAgentStep(finalResponse *string) func(string, string, string, 
 			m.Messages.AddToolOutput(toolName, output)
 		}
 	}
+}
+
+// parseSubEvent parses "subID:colorIdx" from event payload.
+func parseSubEvent(payload string) (subID string, colorIdx int) {
+	colorIdx = -1
+	for i := len(payload) - 1; i >= 0; i-- {
+		if payload[i] == ':' {
+			if n, err := fmt.Sscanf(payload[i+1:], "%d", &colorIdx); err != nil || n != 1 {
+				colorIdx = -1
+			}
+			subID = payload[:i]
+			return
+		}
+	}
+	subID = payload
+	return
 }
 

@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"nekocode/llm/types"
 )
 
 // startMockMCP builds and starts a minimal MCP server that responds to
@@ -105,7 +107,7 @@ func TestClientInitialize(t *testing.T) {
 			Description: "A mock tool",
 			InputSchema: InputSchema{
 				Type: "object",
-				Properties: map[string]Property{
+				Properties: map[string]types.Property{
 					"input": {Type: "string", Description: "input param"},
 				},
 			},

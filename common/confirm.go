@@ -8,6 +8,16 @@ type ConfirmRequest struct {
 	Response chan bool
 }
 
+// NewConfirmRequest creates a ConfirmRequest with an initialized response channel.
+func NewConfirmRequest(toolName string, args map[string]any, level DangerLevel) ConfirmRequest {
+	return ConfirmRequest{
+		ToolName: toolName,
+		Args:     args,
+		Level:    level,
+		Response: make(chan bool, 1),
+	}
+}
+
 // ConfirmFunc asks the user to approve a tool call.
 type ConfirmFunc func(req ConfirmRequest) bool
 

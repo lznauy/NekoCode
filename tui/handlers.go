@@ -21,22 +21,31 @@ const (
 // --- done ---
 
 func (m *Model) handleDone(msg doneMsg) tea.Cmd {
-	var finalBlocks []block.ContentBlock
-	if msg.err == nil {
-		finalBlocks = block.FilterFinalBlocks(m.Messages.ProcessingBlocks())
+	finalBlocks := block.FilterFinalBlocks(m.Messages.ProcessingBlocks())
+
+	// Use msg.content (the final chat output) as primary rendered content.
+	// AccumulatedText() may include intermediate turn text when PostTurn hooks
+	// trigger additional agent loops, so fall back to it only when final output
+	// is empty.
+	accumulated := strings.TrimSpace(msg.content)
+	if accumulated == "" {
+		accumulated = strings.TrimSpace(m.Messages.AccumulatedText())
 	}
 	m.transitionTo(stateReady)
 
 	if msg.err != nil {
+		// Preserve tool blocks even on error — show what was attempted.
+		if len(finalBlocks) > 0 {
+			m.Messages.AddMessage(message.ChatMessage{
+				Role:   "assistant",
+				Blocks: finalBlocks,
+			})
+		}
 		m.Messages.AddMessage(message.ChatMessage{
 			Role:    "error",
 			Content: fmt.Sprintf("Error: %v", msg.err),
 		})
 	} else {
-		accumulated := strings.TrimSpace(m.Messages.AccumulatedText())
-		if accumulated == "" {
-			accumulated = msg.content
-		}
 		footer := ""
 		if msg.duration != "" || msg.tokens != "" {
 			footer = "Duration: " + msg.duration

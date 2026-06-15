@@ -23,7 +23,8 @@ func RenderFixed(text string, maxLines int, skipEmpty bool, lineSty lipgloss.Sty
 		if out.Len() > 0 {
 			out.WriteString("\n")
 		}
-		out.WriteString("  " + lineSty.Render(lines[i]))
+			out.WriteString("  ")
+			out.WriteString(lineSty.Render(lines[i]))
 	}
 	if out.Len() == 0 {
 		return ""

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"nekocode/bot/mcp"
 )
 
 // Author from plugin.json.
@@ -27,12 +29,8 @@ type HookEntry struct {
 }
 
 // MCPServerConfig from plugin.json mcpServers map.
-type MCPServerConfig struct {
-	Command     string            `json:"command"`
-	Args        []string          `json:"args,omitempty"`
-	Env         map[string]string `json:"env,omitempty"`
-	DangerLevel string            `json:"dangerLevel,omitempty"` // "safe", "modify", "danger" (defaults to "modify" when unset)
-}
+// Alias for mcp.ServerConfig to avoid duplicating the struct definition.
+type MCPServerConfig = mcp.ServerConfig
 
 // Manifest maps .claude-plugin/plugin.json.
 type Manifest struct {
@@ -57,14 +55,7 @@ func ParseManifest(pluginDir string) (*Manifest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read manifest: %w", err)
 	}
-	var m Manifest
-	if err := json.Unmarshal(data, &m); err != nil {
-		return nil, fmt.Errorf("parse manifest: %w", err)
-	}
-	if m.Name == "" {
-		return nil, fmt.Errorf("missing required field: name")
-	}
-	return &m, nil
+	return ParseManifestData(data)
 }
 
 // ParseManifestData parses manifest JSON from raw bytes.

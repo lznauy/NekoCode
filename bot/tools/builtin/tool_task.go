@@ -3,18 +3,16 @@ package builtin
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"nekocode/bot/agent/subagent"
 	"nekocode/bot/tools"
-
-	"nekocode/common"
 )
 
 // SubAgentFunc is the function signature for running a sub-agent.
 type SubAgentFunc func(ctx context.Context, prompt, agentType, thoroughness string) (*subagent.Result, error)
 
 type TaskTool struct {
+	SafeReadOnlyTool
 	run SubAgentFunc
 }
 
@@ -25,10 +23,8 @@ func (t *TaskTool) Wire(run SubAgentFunc) {
 }
 
 func (t *TaskTool) Name() string { return "task" }
-func (t *TaskTool) ExecutionMode(map[string]any) tools.ExecutionMode { return tools.ModeParallel }
-func (t *TaskTool) DangerLevel(map[string]any) common.DangerLevel     { return common.LevelSafe }
 func (t *TaskTool) Description() string {
-	return "Delegate multi-step work to an isolated sub-agent. Subagent cannot see your conversation — include full context in prompt. Types: researcher (search/analyze), executor (write/edit), verify (validate changes). For simple tasks (single file, one grep), use direct tools instead."
+	return "Delegate multi-step work to an isolated sub-agent. Only the main agent can use this tool — sub-agents cannot spawn nested agents. Include full context in prompt since the subagent cannot see your conversation. Types: researcher (search/analyze), executor (write/edit), verify (validate changes). For simple tasks (single file, one grep), use direct tools instead."
 }
 
 func (t *TaskTool) Parameters() []tools.Parameter {
@@ -45,14 +41,14 @@ func (t *TaskTool) Execute(ctx context.Context, args map[string]any) (string, er
 		return "", fmt.Errorf("task tool: not wired")
 	}
 
-	prompt, ok := args["prompt"].(string)
-	if !ok || strings.TrimSpace(prompt) == "" {
-		return "", fmt.Errorf("missing prompt parameter")
+	prompt, err := requireStringArg(args, "prompt")
+	if err != nil {
+		return "", err
 	}
 
-	typeName, ok := args["type"].(string)
-	if !ok || typeName == "" {
-		return "", fmt.Errorf("missing type parameter — must specify: explore, verify, executor, plan")
+	typeName, err := requireStringArg(args, "type")
+	if err != nil {
+		return "", fmt.Errorf("missing type parameter — must specify: researcher, executor, verify")
 	}
 
 	thoroughness := ""
@@ -62,7 +58,13 @@ func (t *TaskTool) Execute(ctx context.Context, args map[string]any) (string, er
 		thoroughness = "very thorough"
 	}
 
-	result, err := t.run(ctx, prompt, typeName, thoroughness)
+	// Read sub-callback from args (injected by agent for TUI forwarding).
+	subCtx := ctx
+	if cb, ok := args["_sub_callback"].(subagent.SubCallbackFn); ok {
+		subCtx = subagent.WithSubCallback(ctx, cb)
+		delete(args, "_sub_callback") // clean up
+	}
+	result, err := t.run(subCtx, prompt, typeName, thoroughness)
 	if err != nil && result == nil {
 		return "", err
 	}

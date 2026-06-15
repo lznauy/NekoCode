@@ -4,22 +4,20 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
+	"nekocode/llm"
 	"nekocode/llm/types"
 )
 
 const (
-	mergeMaxTokens   = 2000
-	mergeMaxRetries  = 3
-	mergeBaseBackoff = 500 * time.Millisecond
-	mergeFailTag     = "[Merge Failed — raw append]"
+	mergeMaxTokens = 2000
+	mergeFailTag   = "[Merge Failed — raw append]"
 )
 
 // MergeSummaries runs an independent LLM session to merge old and new summaries.
 // Uses a clean context (no history) with thinking disabled — fast and focused.
 // Returns the merged summary, or falls back to raw append on failure.
-func MergeSummaries(llmClient types.LLM, oldSummary, newSummary string) string {
+func MergeSummaries(ctx context.Context, llmClient types.LLM, oldSummary, newSummary string) string {
 	if oldSummary == "" {
 		return newSummary
 	}
@@ -27,39 +25,46 @@ func MergeSummaries(llmClient types.LLM, oldSummary, newSummary string) string {
 		return oldSummary
 	}
 
-	merged, err := tryMerge(llmClient, oldSummary, newSummary)
+	merged, err := tryMerge(ctx, llmClient, oldSummary, newSummary)
 	if err != nil {
-		// Fallback: raw string append with failure tag.
-		return fmt.Sprintf("%s\n\n%s\n\n---\n%s\n%s",
-			oldSummary, newSummary, mergeFailTag,
+		// Fallback: raw string append with size limit to prevent unbounded growth.
+		combined := oldSummary + "\n\n" + newSummary
+		runes := []rune(combined)
+		if len(runes) > mergeMaxTokens*4 {
+			combined = string(runes[:mergeMaxTokens*4]) + "\n... (truncated)"
+		}
+		return fmt.Sprintf("%s\n\n---\n%s\n%s",
+			combined, mergeFailTag,
 			"Previous merge failed. Content preserved as-is. Async healing will clean up.")
 	}
 	return merged
 }
 
-func tryMerge(client types.LLM, oldSummary, newSummary string) (string, error) {
+func tryMerge(ctx context.Context, client types.LLM, oldSummary, newSummary string) (string, error) {
+	// Save and restore both MaxTokens and DisableThinking to avoid
+	// mutating shared state when concurrent sub-agents use the same client.
+	origMaxTokens := client.GetMaxTokens()
+	origThinking := client.GetDisableThinking()
 	client.SetMaxTokens(mergeMaxTokens)
 	client.SetDisableThinking(true)
+	defer func() {
+		client.SetMaxTokens(origMaxTokens)
+		client.SetDisableThinking(origThinking)
+	}()
 
-	var lastErr error
-	for attempt := 0; attempt < mergeMaxRetries; attempt++ {
-		if attempt > 0 {
-			time.Sleep(mergeBaseBackoff * time.Duration(1<<uint(attempt-1)))
+	var merged string
+	err := llm.Retry(ctx, llm.DefaultRetryConfig, func() error {
+		m, err := callMerge(ctx, client, oldSummary, newSummary)
+		if err != nil {
+			return err
 		}
-
-		merged, err := callMerge(client, oldSummary, newSummary)
-		if err == nil {
-			return merged, nil
-		}
-		lastErr = err
-	}
-	return "", fmt.Errorf("merge failed after %d retries: %w", mergeMaxRetries, lastErr)
+		merged = m
+		return nil
+	})
+	return merged, err
 }
 
-func callMerge(client types.LLM, oldSummary, newSummary string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
+func callMerge(ctx context.Context, client types.LLM, oldSummary, newSummary string) (string, error) {
 	prompt := buildMergePrompt(oldSummary, newSummary)
 	resp, err := client.Chat(ctx, []types.Message{{Role: "user", Content: prompt}}, nil)
 	if err != nil {

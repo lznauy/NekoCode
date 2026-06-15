@@ -9,7 +9,8 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"nekocode/common")
+	"nekocode/common"
+)
 
 type ConfirmBar struct {
 	req *common.ConfirmRequest
@@ -54,26 +55,48 @@ func (c *ConfirmBar) View(width, termHeight int) string {
 	maxLines := confirmMaxLines(termHeight)
 
 	title := c.sty.Primary.Bold(true).Render("  Confirm")
-	prefix := c.sty.Border.Render(styles.Horizontal + " ")
-	titleBar := prefix + title + " " + strings.Repeat(styles.Horizontal, max(0, barW-lipgloss.Width(prefix+title)))
+	prefix := "┌─  Confirm "
+	rightLen := max(0, barW-lipgloss.Width(prefix)-1)
+	rightDash := c.sty.Border.Render(strings.Repeat(styles.Horizontal, rightLen) + "┐")
+	titleBar := c.sty.Border.Render("┌─") + title + " " + rightDash
 
 	desc := c.formatDesc()
-	descLines := wrapText("  "+desc, contentW)
+	rawLines := wrapText("  "+desc, contentW)
+	var descLines []string
+	for i, line := range rawLines {
+		if i == 0 {
+			descLines = append(descLines, line)
+		} else {
+			descLines = append(descLines, "  "+line)
+		}
+	}
 	truncated := len(descLines) > maxLines
 	if truncated {
 		descLines = descLines[:maxLines]
 	}
 
-	levelTag := "  " + c.sty.Yellow.Render("["+c.req.Level.String()+"]")
+	// Styled action buttons with background colours.
+	yesBtn := lipgloss.NewStyle().
+		Background(lipgloss.Color(styles.BtnYesBg)).
+		Foreground(lipgloss.Color(styles.DiffGreen)).
+		Bold(true).
+		Padding(0, 2).
+		Render("[enter] yes")
+	noBtn := lipgloss.NewStyle().
+		Background(lipgloss.Color(styles.BtnNoBg)).
+		Foreground(lipgloss.Color(styles.BtnNoFg)).
+		Padding(0, 2).
+		Render("[esc] no")
+	levelTag := c.sty.Yellow.Render("["+c.req.Level.String()+"]")
 	if c.req.Level == common.LevelForbidden {
-		levelTag = "  " + c.sty.Red.Render("["+c.req.Level.String()+"]")
+		levelTag = c.sty.Red.Render("["+c.req.Level.String()+"]")
 	}
-
-	hint := c.sty.Primary.Bold(true).Render("[enter] yes") + "  " + c.sty.Muted.Render("[esc] no")
-	prompt := "  " + c.sty.Base.Render("Proceed?  ") + hint
+	prompt := "  " + levelTag + "  " + c.sty.Base.Render("Proceed?  ") + yesBtn + "  " + noBtn
 	promptW := lipgloss.Width(prompt)
 
-	bottomBorder := c.sty.Border.Render(strings.Repeat(styles.Horizontal, barW))
+	// Separator line between description and actions.
+	sep := c.sty.Border.Render("├" + strings.Repeat(styles.Horizontal, barW-2) + "┤")
+	bottomBorder := c.sty.Border.Render("└" + strings.Repeat(styles.Horizontal, barW-2) + "┘")
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n", titleBar)
@@ -84,7 +107,7 @@ func (c *ConfirmBar) View(width, termHeight int) string {
 	if truncated {
 		fmt.Fprintf(&b, "%s\n", c.sty.Muted.Render("  ... (truncated)"))
 	}
-	fmt.Fprintf(&b, "%s\n", levelTag)
+	fmt.Fprintf(&b, "%s\n", sep)
 	fmt.Fprintf(&b, "%s%s\n", prompt, strings.Repeat(" ", max(0, barW-promptW)))
 	b.WriteString(bottomBorder)
 
@@ -105,6 +128,7 @@ func (c *ConfirmBar) formatDesc() string {
 	switch c.req.ToolName {
 	case "bash":
 		if cmd, ok := c.req.Args["command"].(string); ok && cmd != "" {
+			cmd = truncateCmd(cmd)
 			return cmd
 		}
 	case "write":
@@ -137,8 +161,9 @@ func wrapText(text string, maxW int) []string {
 	remaining := []rune(text)
 	for len(remaining) > 0 {
 		displayW := lipgloss.Width(string(remaining))
-		if displayW <= maxW {
-			lines = append(lines, string(remaining))
+		if displayW <= maxW && !strings.ContainsRune(string(remaining), '\n') {
+			// Safe to emit as one line: no embedded newlines and fits within maxW.
+			lines = append(lines, strings.TrimRight(string(remaining), "\n"))
 			break
 		}
 		// Find how many runes fit within maxW.
@@ -180,4 +205,23 @@ func wrapText(text string, maxW int) []string {
 		}
 	}
 	return lines
+}
+
+// truncateCmd shortens a bash command for display in the confirm bar.
+func truncateCmd(cmd string) string {
+	const maxLen = 200
+	if len(cmd) <= maxLen {
+		return cmd
+	}
+	// Truncate at a natural boundary to avoid breaking quoted strings mid-token.
+	// Prefer the last space (or pipe/semicolon) before maxLen.
+	cut := maxLen - 3
+	for i := cut; i > maxLen-60 && i > 0; i-- {
+		b := cmd[i-1]
+		if b == ' ' || b == '|' || b == ';' || b == '&' {
+			cut = i
+			break
+		}
+	}
+	return cmd[:cut] + "..."
 }

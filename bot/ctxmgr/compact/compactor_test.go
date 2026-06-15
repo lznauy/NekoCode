@@ -26,8 +26,8 @@ func TestFindRecentTurnBoundary(t *testing.T) {
 	if b := cm.findRecentTurnBoundary(2); b != 2 {
 		t.Errorf("last 2 turns: got %d, want 2", b)
 	}
-	if b := cm.findRecentTurnBoundary(99); b != 0 {
-		t.Errorf("beyond all turns: got %d, want 0", b)
+	if b := cm.findRecentTurnBoundary(99); b != 6 {
+		t.Errorf("beyond all turns: got %d, want 6 (all messages eligible for compaction)", b)
 	}
 }
 

@@ -7,31 +7,6 @@ import (
 	"nekocode/llm/types"
 )
 
-func TestTruncateStr_Under(t *testing.T) {
-	if s := truncateStr("hello", 10); s != "hello" {
-		t.Errorf("short string changed: %q", s)
-	}
-}
-
-func TestTruncateStr_Over(t *testing.T) {
-	s := truncateStr("hello world", 5)
-	if !strings.HasSuffix(s, "...") {
-		t.Errorf("missing truncation suffix: %q", s)
-	}
-}
-
-func TestTruncateStr_Exact(t *testing.T) {
-	if s := truncateStr("hello", 5); s != "hello" {
-		t.Errorf("exact length changed: %q", s)
-	}
-}
-
-func TestTruncateStr_Empty(t *testing.T) {
-	if s := truncateStr("", 5); s != "" {
-		t.Errorf("empty string: %q", s)
-	}
-}
-
 func TestExtractXMLBlock(t *testing.T) {
 	raw := "<summary>compressed content here</summary>"
 	if s := extractXMLBlock(raw, "summary"); s != "compressed content here" {
@@ -69,6 +44,24 @@ func TestFormatCompactSummary(t *testing.T) {
 func TestFormatCompactSummary_Empty(t *testing.T) {
 	if s := FormatCompactSummary("no summary tag"); s != "" {
 		t.Errorf("expected empty: %q", s)
+	}
+}
+
+func TestFormatMessages(t *testing.T) {
+	msgs := []types.Message{
+		{Role: "user", Content: "hello"},
+		{Role: "tool", Content: ClearedMarker},
+		{Role: "assistant", Content: "world"},
+	}
+	s := FormatMessages(msgs)
+	if !strings.Contains(s, "[user]: hello") {
+		t.Error("should contain user message")
+	}
+	if !strings.Contains(s, "[assistant]: world") {
+		t.Error("should contain assistant message")
+	}
+	if strings.Contains(s, ClearedMarker) {
+		t.Error("should skip cleared markers")
 	}
 }
 

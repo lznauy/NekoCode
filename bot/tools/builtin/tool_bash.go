@@ -39,29 +39,42 @@ func (t *BashTool) Parameters() []tools.Parameter {
 func (t *BashTool) DangerLevel(args map[string]any) common.DangerLevel {
 	cmd, _ := args["command"].(string)
 	cmd = strings.TrimSpace(cmd)
+	// Strip heredoc bodies before keyword matching so that source code
+	// embedded in heredocs (e.g. "func " matching "nc ") does not
+	// cause false-positive forbidden classifications.
+	cmdForMatch := stripHeredocBodies(cmd)
 
-	if matchAny(cmd, []string{
+	if matchAny(cmdForMatch, []string{
 		"sudo", "eval", "nc ", "ncat",
 		"telnet", "ssh ", "scp ", "nohup", "disown",
-		"> /dev/", "mkfs", "dd ", "chown", "chmod 777",
+		"> /dev/", "mkfs", "dd ", "chmod 777",
 		"| bash", "| sh", "|bash", "|sh",
 	}) {
 		return common.LevelForbidden
 	}
 
-	if matchAny(cmd, []string{
+	if matchAny(cmdForMatch, []string{
 		"curl", "wget", "rm ", "rmdir", "chmod ", "chown ", "kill", "pkill",
 		"shutdown", "reboot", "mv ", "git push", "git reset --hard",
+		"git branch -d", "git branch -D",
+		"git config --global", "git config --system", "git config --local",
+		"git config --replace-all", "git config --unset", "git config --edit",
 		"docker rm", "docker rmi",
 	}) {
 		return common.LevelDestructive
 	}
 
-	if matchAny(cmd, []string{
+	if matchAny(cmdForMatch, []string{
 		"mkdir", "touch ", "cp ", "tar ", "zip ",
 		"gzip ", "git commit", "git add", "pip install", "npm install",
 		"go install", "cargo install", "make ", "docker build",
 	}) {
+		return common.LevelWrite
+	}
+
+	// Detect shell redirection that writes to files ( > path) — uses
+	// quoted-stripped variant so " > " inside a string is not flagged.
+	if hasWriteRedirection(cmdForMatch) {
 		return common.LevelWrite
 	}
 
@@ -75,13 +88,20 @@ func (t *BashTool) DangerLevel(args map[string]any) common.DangerLevel {
 
 var readOnlyPrefixes = []string{
 	"go version", "go env", "go doc", "go vet", "go fmt",
-	"git status", "git log", "git diff", "git branch", "git show",
-	"git blame", "git tag", "git remote", "git config",
-	"ls", "pwd", "whoami", "date", "env", "printenv",
-	"which", "type ", "uname", "hostname", "id ", "wc ",
+	"git status", "git log", "git diff", "git show",
+	"git blame", "git tag", "git remote",
+	"pwd", "whoami", "date", "printenv",
+	"which", "uname", "hostname", "wc ",
 	"cat ", "head ", "tail ", "less ", "more ",
-	"du ", "df ", "free ", "uptime", "ps ", "pgrep",
+	"du ", "df ", "free ", "uptime", "pgrep",
 	"man ", "info ", "file ", "stat ",
+}
+
+// readOnlyCommands are single-word commands that are safe even without arguments.
+// Matched as exact word (command name followed by space or end-of-string) to
+// avoid false positives like "ls" matching "lsblk" or "env" matching "envsubst".
+var readOnlyCommands = []string{
+	"ls", "env", "id", "ps", "type",
 }
 
 func isReadOnly(cmd string) bool {
@@ -91,12 +111,146 @@ func isReadOnly(cmd string) bool {
 			return true
 		}
 	}
+	for _, c := range readOnlyCommands {
+		if lower == c || strings.HasPrefix(lower, c+" ") {
+			return true
+		}
+	}
 	return false
 }
 
 func matchAny(cmd string, patterns []string) bool {
 	for _, p := range patterns {
-		if strings.Contains(cmd, p) || strings.HasPrefix(cmd, p) {
+		if strings.Contains(cmd, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// stripQuotedSegments replaces single-quoted and double-quoted segments with
+// spaces of the same length, so that shell keywords inside quotes are not
+// mistaken for operators (e.g. " > " inside a string literal).
+func stripQuotedSegments(cmd string) string {
+	out := make([]byte, 0, len(cmd))
+	i := 0
+	for i < len(cmd) {
+		ch := cmd[i]
+		if ch == '\'' {
+			out = append(out, ' ') // replace opening quote
+			i++
+			for i < len(cmd) && cmd[i] != '\'' {
+				out = append(out, ' ')
+				i++
+			}
+			if i < len(cmd) {
+				out = append(out, ' ') // replace closing quote
+				i++
+			}
+		} else if ch == '"' {
+			out = append(out, ' ') // replace opening quote
+			i++
+			for i < len(cmd) && cmd[i] != '"' {
+				if cmd[i] == '\\' && i+1 < len(cmd) {
+					out = append(out, ' ', ' ') // escape + escaped char
+					i += 2
+				} else {
+					out = append(out, ' ')
+					i++
+				}
+			}
+			if i < len(cmd) {
+				out = append(out, ' ') // replace closing quote
+				i++
+			}
+		} else {
+			out = append(out, ch)
+			i++
+		}
+	}
+	return string(out)
+}
+
+// stripHeredocBodies truncates cmd at the first here-doc marker so that
+// heredoc body content does not pollute keyword matching.
+func stripHeredocBodies(cmd string) string {
+	clean := stripQuotedSegments(cmd)
+	if idx := strings.Index(clean, "<<"); idx >= 0 {
+		return cmd[:idx]
+	}
+	// Fallback: << inside a double-quoted shell wrapper (bash "cmd << 'EOF'")
+	// is masked by stripQuotedSegments. Only truncate when the rest of the
+	// command is multi-line — single-line quoted << (echo "a<<b") is not a
+	// here-doc and must be left intact.
+	if idx := strings.Index(cmd, "<<"); idx >= 0 && strings.IndexByte(cmd[idx:], '\n') >= 0 {
+		return cmd[:idx]
+	}
+	return cmd
+}
+
+// isWriteRedirect returns true when the token at position idx in cmd is a
+// shell output redirect (>, >>, or 2>) that writes to a real file — not to
+// /dev/null or another /dev/ pseudo-file.
+func isWriteRedirect(cmd string, idx int, tokLen int) bool {
+	rest := strings.TrimSpace(cmd[idx+tokLen:])
+	if rest == "" {
+		return false
+	}
+	return !strings.HasPrefix(rest, "/dev/null") && !strings.HasPrefix(rest, "/dev/")
+}
+
+// hasWriteRedirection returns true when cmd contains a shell redirect
+// that writes to a regular file (not /dev/null or /dev/).
+func hasWriteRedirection(cmd string) bool {
+	clean := stripQuotedSegments(cmd)
+	// Spaced tokens match standard redirects like "cmd > /path",
+	// "cmd >> /path", "cmd 2> /path", "cmd &> /path", "cmd 1> /path".
+	spacedToks := []string{" > ", ">> ", "2> ", " &> ", "1> "}
+	for _, tok := range spacedToks {
+		pos := 0
+		for {
+			idx := strings.Index(clean[pos:], tok)
+			if idx < 0 {
+				break
+			}
+			idx += pos
+			if isWriteRedirect(clean, idx, len(tok)) {
+				return true
+			}
+			pos = idx + 1
+		}
+	}
+	// Compact tokens match "cmd>/path", "cmd>>file", "cmd2>/path",
+	// "cmd&>/path", "cmd1>/path" (no space between operator and target).
+	compactToks := []string{">", ">>", "2>", "&>", "1>"}
+	for _, tok := range compactToks {
+		pos := 0
+		for {
+			idx := strings.Index(clean[pos:], tok)
+			if idx < 0 {
+				break
+			}
+			idx += pos
+			next := idx + len(tok)
+			// If the char after the token is a space, the spaced variant already
+			// handled it (or it's a legit non-redirect like "cmd2 > file").
+			if next >= len(clean) || clean[next] == ' ' {
+				pos = idx + 1
+				continue
+			}
+			if isWriteRedirect(clean, idx, len(tok)) {
+				return true
+			}
+			pos = idx + 1
+		}
+	}
+	// Catch leading redirect: "> file", ">> file" (spaced form not caught elsewhere).
+	for _, prefix := range []string{"> ", ">> "} {
+		if !strings.HasPrefix(clean, prefix) {
+			continue
+		}
+		rest := strings.TrimSpace(strings.TrimPrefix(clean, prefix))
+		if rest != "" && !strings.HasPrefix(rest, "/dev/null") && !strings.HasPrefix(rest, "/dev/") {
 			return true
 		}
 	}
@@ -104,9 +258,9 @@ func matchAny(cmd string, patterns []string) bool {
 }
 
 func (t *BashTool) Execute(ctx context.Context, args map[string]any) (string, error) {
-	cmdStr, ok := args["command"].(string)
-	if !ok || cmdStr == "" {
-		return "", fmt.Errorf("missing command parameter")
+	cmdStr, err := requireStringArg(args, "command")
+	if err != nil {
+		return "", err
 	}
 
 	cmdStr = strings.TrimSpace(cmdStr)
@@ -126,7 +280,9 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) (string, er
 
 	cmd := exec.CommandContext(cmdCtx, "bash", "-c", cmdStr)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Dir, _ = os.Getwd()
+	if dir, err := os.Getwd(); err == nil {
+		cmd.Dir = dir
+	}
 
 	// Kill the entire process group on context cancellation.
 	// exec.CommandContext only kills the direct child (bash), not grandchildren.

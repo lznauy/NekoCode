@@ -61,18 +61,10 @@ func (p *Parser) Execute(cmd *Command) (string, bool) {
 	return handler(cmd)
 }
 
-type Callbacks struct {
-	ClearHistory   func()
-	GetConfig      func() string
-	ForceSummarize func() (string, error)
-	ContextStats   func() string
-	ContextReport  func() string
-	FreshStart     func() (string, error)
-	ListModels     func() []string
-	SwitchModel    func(name string) (string, string, error)
-}
+// RegisterDefaults registers the built-in slash commands using Deps directly.
+func RegisterDefaults(p *Parser, deps Deps) {
+	getConfig := func() string { pr, m := deps.GetConfigFn(); return pr + "/" + m }
 
-func RegisterDefaults(p *Parser, callbacks *Callbacks) {
 	p.Register("help", func(cmd *Command) (string, bool) {
 		return `Available commands:
   /help        Show this help message
@@ -83,72 +75,52 @@ func RegisterDefaults(p *Parser, callbacks *Callbacks) {
   /context     Show detailed context window breakdown
   /config      Show current provider and model
   /model       List or switch models (/model <name>)
+  /plan        Read-only exploration mode, approve before execution
   /plugin      Manage plugins (install, list, uninstall, etc.)
   /sessions    Manage saved sessions
+  /export      Export conversation context to JSON file
 `, true
 	})
 
 	p.Register("clear", func(cmd *Command) (string, bool) {
-		if callbacks.ClearHistory != nil {
-			callbacks.ClearHistory()
-		}
+		deps.CtxMgr.Clear()
 		return "Conversation history cleared.", true
 	})
 
 	p.Register("stats", func(cmd *Command) (string, bool) {
-		if callbacks.ContextStats != nil {
-			return callbacks.ContextStats(), true
-		}
-		return "Stats unavailable", true
+		return ContextStats(deps.CtxMgr), true
 	})
 
 	p.Register("summarize", func(cmd *Command) (string, bool) {
-		if callbacks.ForceSummarize != nil {
-			result, err := callbacks.ForceSummarize()
-			if err != nil {
-				return "Summarize failed: " + err.Error(), true
-			}
-			return result, true
+		result, err := ForceSummarize(deps.CtxMgr)
+		if err != nil {
+			return "Summarize failed: " + err.Error(), true
 		}
-		return "Summarize unavailable", true
+		return result, true
 	})
 
 	p.Register("new", func(cmd *Command) (string, bool) {
-		if callbacks.FreshStart != nil {
-			result, err := callbacks.FreshStart()
-			if err != nil {
-				return "Failed to start new conversation: " + err.Error(), true
-			}
-			return result, true
+		result, err := deps.FreshStart()
+		if err != nil {
+			return "Failed to start new conversation: " + err.Error(), true
 		}
-		return "Fresh start unavailable", true
+		return result, true
 	})
 
 	p.Register("context", func(cmd *Command) (string, bool) {
-		if callbacks.ContextReport != nil {
-			return callbacks.ContextReport(), true
-		}
-		return "Context report unavailable", true
+		return ContextReport(deps.CtxMgr, deps.ToolRegistry.Descriptors()), true
 	})
 
 	p.Register("config", func(cmd *Command) (string, bool) {
-		if callbacks.GetConfig != nil {
-			return callbacks.GetConfig(), true
-		}
-		return "", true
+		return getConfig(), true
 	})
 
 	p.Register("model", func(cmd *Command) (string, bool) {
-		if callbacks.SwitchModel == nil {
-			return "Model switching unavailable", true
-		}
 		if len(cmd.Args) == 0 {
 			var sb strings.Builder
-			if callbacks.GetConfig != nil {
-				fmt.Fprintf(&sb, "Current: %s\n", callbacks.GetConfig())
-			}
-			if callbacks.ListModels != nil {
-				names := callbacks.ListModels()
+			fmt.Fprintf(&sb, "Current: %s\n", getConfig())
+			if deps.ListModelsFn != nil {
+				names := deps.ListModelsFn()
 				sb.WriteString("Available:\n")
 				for _, n := range names {
 					fmt.Fprintf(&sb, "  %s\n", n)
@@ -157,7 +129,7 @@ func RegisterDefaults(p *Parser, callbacks *Callbacks) {
 			sb.WriteString("\n/model <name> to switch")
 			return sb.String(), true
 		}
-		model, provider, err := callbacks.SwitchModel(cmd.Args[0])
+		model, provider, err := deps.SwitchModel(cmd.Args[0])
 		if err != nil {
 			return err.Error(), true
 		}

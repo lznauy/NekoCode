@@ -40,11 +40,13 @@ func (t *ExplorationTracker) Reset() {
 	t.Score = MaxScore
 }
 
+// toolCosts maps exploration tools to their score deduction.
 var toolCosts = map[string]int{
 	"read":       readCost,
 	"grep":       grepCost,
 	"glob":       trivialCost,
 	"list":       trivialCost,
+	"bash":       grepCost, // bash can be exploratory (ls, cat, etc.)
 	"web_search": webSearchCost,
 	"web_fetch":  webFetchCost,
 	"task":       taskCost,

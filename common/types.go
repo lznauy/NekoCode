@@ -51,3 +51,33 @@ type TodoItem struct {
 
 // TodoFunc is called whenever the todo list is updated.
 type TodoFunc func(items []TodoItem)
+
+// CountCompleted returns the number of completed items.
+func CountCompleted(items []TodoItem) int {
+	n := 0
+	for _, it := range items {
+		if it.Status == "completed" {
+			n++
+		}
+	}
+	return n
+}
+
+// TodoStatusIcon returns the display icon for a todo status.
+func TodoStatusIcon(status string) string {
+	switch status {
+	case "in_progress":
+		return "▸"
+	case "completed":
+		return "✓"
+	default:
+		return "·"
+	}
+}
+
+// SubSlot tracks an active sub-agent for rendering and slot management.
+type SubSlot struct {
+	ID       string
+	SubType  string
+	ColorIdx int
+}

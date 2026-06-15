@@ -18,7 +18,7 @@ func TestInterface(t *testing.T) {
 	}{
 		{&ReadTool{}, "read", tools.ModeParallel, common.LevelSafe, 3},
 		{&WriteTool{}, "write", tools.ModeSequential, common.LevelWrite, 2},
-		{&EditTool{}, "edit", tools.ModeSequential, common.LevelWrite, 3},
+		{&EditTool{}, "edit", tools.ModeSequential, common.LevelWrite, 1},
 		{&BashTool{}, "bash", tools.ModeSequential, common.LevelWrite, 1},
 		{&GlobTool{}, "glob", tools.ModeParallel, common.LevelSafe, 1},
 		{&GrepTool{}, "grep", tools.ModeParallel, common.LevelSafe, 1},

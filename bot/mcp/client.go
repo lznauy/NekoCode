@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"nekocode/llm/types"
 )
 
 // ServerConfig defines how to launch an MCP server.
@@ -28,15 +31,9 @@ type ToolDef struct {
 
 // InputSchema is JSON Schema for tool parameters.
 type InputSchema struct {
-	Type       string              `json:"type"`
-	Properties map[string]Property `json:"properties,omitempty"`
-	Required   []string            `json:"required,omitempty"`
-}
-
-// Property is a single parameter definition.
-type Property struct {
-	Type        string `json:"type"`
-	Description string `json:"description,omitempty"`
+	Type       string                `json:"type"`
+	Properties map[string]types.Property `json:"properties,omitempty"`
+	Required   []string              `json:"required,omitempty"`
 }
 
 // Client manages a connection to one MCP server process.
@@ -71,6 +68,8 @@ func (c *Client) Start() error {
 	}
 
 	c.cmd = exec.Command(c.Config.Command, c.Config.Args...)
+	// Start with parent environment so MCP servers inherit PATH, HOME, etc.
+	c.cmd.Env = append(c.cmd.Env, os.Environ()...)
 	for k, v := range c.Config.Env {
 		c.cmd.Env = append(c.cmd.Env, k+"="+v)
 	}
@@ -88,11 +87,13 @@ func (c *Client) Start() error {
 	c.stdout = bufio.NewReader(stdout)
 
 	if err := c.cmd.Start(); err != nil {
+		c.stdin.Close()
 		return fmt.Errorf("start server: %w", err)
 	}
 
 	// Initialize handshake.
 	if err := c.initialize(); err != nil {
+		c.stdin.Close()
 		_ = c.cmd.Process.Kill()
 		c.cmd = nil
 		return fmt.Errorf("initialize: %w", err)
@@ -157,9 +158,9 @@ func (c *Client) CallTool(name string, args map[string]any) (string, error) {
 	}
 
 	var text string
-	for _, c := range callResp.Content {
-		if c.Type == "text" {
-			text += c.Text
+	for _, item := range callResp.Content {
+		if item.Type == "text" {
+			text += item.Text
 		}
 	}
 	if callResp.IsError {

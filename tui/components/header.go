@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"nekocode/common"
 	"nekocode/tui/styles"
 
 	"charm.land/lipgloss/v2"
@@ -40,7 +41,7 @@ func (h *Header) View() string {
 	dot := styles.BorderStyle.Render(" · ")
 
 	if h.Tokens > 0 {
-		right = styles.FmtTokens(h.Tokens) + dot + right
+		right = common.FormatTokens(h.Tokens) + dot + right
 	}
 
 	content := left + dot + right

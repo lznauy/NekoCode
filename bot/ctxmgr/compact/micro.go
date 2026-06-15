@@ -8,7 +8,7 @@ import (
 
 // compactableTools are the tools whose results can be safely cleared.
 var compactableTools = map[string]bool{
-	"read": true, "bash": true, "grep": true, "glob": true,
+	"read": true, "bash": true, "grep": true, "glob": true, "list": true,
 	"web_search": true, "web_fetch": true, "edit": true, "write": true,
 }
 
@@ -79,14 +79,11 @@ func (m *Compactor) microCompact() int {
 		if msg.Role != "tool" || msg.Content == ClearedMarker {
 			continue
 		}
-		if !m.isCompactableResult(i) {
-			continue
-		}
 		if i >= recentBoundary {
 			continue
 		}
 		assistantIdx, toolName := m.lookupAssistantTool(i)
-		if assistantIdx < 0 {
+		if assistantIdx < 0 || !compactableTools[toolName] {
 			continue
 		}
 		pri := compactableToolPriority(toolName, msg.Content)
@@ -163,24 +160,9 @@ func (m *Compactor) findRecentTurnBoundary(n int) int {
 			}
 		}
 	}
-	return 0
+	// Not enough user messages to satisfy the request — all messages are
+	// considered "old" and eligible for compaction.
+	return len(msgs)
 }
 
-func (m *Compactor) isCompactableResult(resultIdx int) bool {
-	msgs := m.Ctx.Messages
-	targetID := msgs[resultIdx].ToolCallID
-	if targetID == "" {
-		return false
-	}
-	for i := resultIdx - 1; i >= 0; i-- {
-		if msgs[i].Role == "assistant" {
-			for _, tc := range msgs[i].ToolCalls {
-				if tc.ID == targetID {
-					return compactableTools[tc.Function.Name]
-				}
-			}
-		}
-	}
-	return false
-}
 

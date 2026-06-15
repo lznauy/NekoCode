@@ -54,17 +54,7 @@ func (m *Compactor) CollapseContext() error {
 	}
 
 	prompt.WriteString("=== New messages to merge ===\n")
-	for _, msg := range toCollapse {
-		content := strings.TrimSpace(msg.Content)
-		if content == "" || content == "." || content == ClearedMarker {
-			continue
-		}
-		limit := 500
-		if msg.Role == "tool" {
-			limit = 800
-		}
-		fmt.Fprintf(&prompt, "[%s]: %s\n", msg.Role, truncateStr(content, limit))
-	}
+	prompt.WriteString(FormatMessages(toCollapse))
 
 	rawSummary, err := m.Summarizer([]types.Message{{Role: "user", Content: prompt.String()}}, "")
 	if err != nil {

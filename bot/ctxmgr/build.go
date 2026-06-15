@@ -1,14 +1,15 @@
 package ctxmgr
 
 import (
-	"nekocode/bot/ctxmgr/compact"
 	"nekocode/llm/types"
 )
 
 func (m *Manager) filterValidMessages(kept []types.Message) []types.Message {
 	hasResult := map[string]bool{}
 	for _, msg := range kept {
-		if msg.Role == "tool" && msg.ToolCallID != "" && msg.Content != compact.ClearedMarker {
+		// ClearedMarker still counts as "has result" — the tool was executed,
+		// we just cleared old output. Excluding it would drop the assistant message.
+		if msg.Role == "tool" && msg.ToolCallID != "" {
 			hasResult[msg.ToolCallID] = true
 		}
 	}

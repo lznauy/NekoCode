@@ -34,6 +34,7 @@ type Agent struct {
 	llmClient    types.LLM
 	toolRegistry *tools.Registry
 	executor     *tools.Executor
+	subSlotMgr   *SubSlotManager
 
 	phase      common.PhaseFunc
 	textFn     StreamCallback
@@ -46,10 +47,13 @@ type Agent struct {
 	complSnap  int64
 
 	step              int
-	finished          bool
+	finished          atomic.Bool
 	stopReason        hooks.StopReason
 	exploration       *budget.ExplorationTracker
 	lastText          string
+
+	consecutiveHints    int // PostTurn hint injections without tool progress
+	consecutiveFailures int // consecutive LLM call failures
 
 	transform    ContextTransform
 	hookReg      *hooks.Registry
@@ -68,6 +72,7 @@ func New(ctx context.Context, ctxMgr *ctxmgr.Manager, llmClient types.LLM, toolR
 		llmClient:    llmClient,
 		toolRegistry: toolRegistry,
 		executor:     tools.NewExecutor(toolRegistry),
+		subSlotMgr:   NewSubSlotManager(),
 	}
 }
 
@@ -111,7 +116,7 @@ func (a *Agent) Steer(msg string) {
 }
 func (a *Agent) Abort() {
 	debug.Log("Abort: user interrupt requested")
-	a.finished = true
+	a.finished.Store(true)
 	a.liveMu.Lock()
 	a.cancelFn()
 	a.liveMu.Unlock()
@@ -147,12 +152,15 @@ func (a *Agent) Reset() {
 	if a.curCtx.Err() != nil {
 		a.curCtx, a.cancelFn = context.WithCancel(a.parentCtx)
 	}
-	a.liveMu.Unlock()
 	a.step = 0
-	a.finished = false
 	a.stopReason = hooks.StopCompleted
 	a.lastReason = ""
 	a.lastText = ""
+	a.consecutiveHints = 0
+	a.consecutiveFailures = 0
+	a.liveMu.Unlock()
+
+	a.finished.Store(false)
 	a.promptSnap = a.promptTok.Load()
 	a.complSnap = a.complTok.Load()
 	a.startTime = time.Now()
@@ -163,5 +171,12 @@ func (a *Agent) Reset() {
 	}
 	if a.hookReg != nil {
 		a.hookReg.ResetSession()
+		// Reset per-run flags that shouldn't persist across agent invocations.
+		// StoreFileModified: prevents verification hook from firing on every
+		//   subsequent turn after a file was modified in a previous run.
+		// SetTodos: prevents completion_quality from firing on trivial turns
+		//   due to leftover completed tasks from a prior agent invocation.
+		a.hookReg.Set(hooks.StoreFileModified, 0)
 	}
+	a.ctxMgr.SetTodos(nil)
 }

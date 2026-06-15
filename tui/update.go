@@ -1,6 +1,7 @@
 // update.go — tea.Update 主循环消息分发。
 package tui
 import (
+	"nekocode/common"
 	"nekocode/tui/components"
 	"nekocode/tui/components/message"
 
@@ -12,7 +13,7 @@ import (
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	defer func() {
 		if r := recover(); r != nil {
-			logPanic(r)
+			common.WritePanicLog(r)
 		}
 	}()
 

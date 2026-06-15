@@ -75,13 +75,10 @@ nekocode/
 │   ├── debug/                      #   全局调试日志（独立子系统，不依赖 compact）
 │   │   └── log.go                  #     debug.Log（时间戳 + 来源 + subagent 标签 + 10MB rotate）
 │   ├── hooks/                      #   Hook 系统（事件驱动）
-│   │   ├── hooks.go                #     Hint / StopReason / FormatHints
-│   │   ├── hook.go                 #     HookPoint + Hook + Manager + Evaluate
-│   │   ├── event.go                #     Store（5 种原子类型：Counter/Flag/Gauge/Value/Turn）+ Snapshot
-│   │   ├── key.go                  #     事件 key 常量（11 个）
-│   │   ├── builtin.go              #     RegisterBuiltin（9 个内置 Hook）
-│   │   ├── inject.go               #     9 个内置 Hook 具体实现
-│   │   └── declarative.go          #     声明式 hooks（JSON 配置驱动，6 种事件类型）
+│   │   ├── hooks.go                #     HookPoint / Hint / StopReason / Hook / Registry + Evaluate
+│   │   ├── keys.go                 #     事件 key 常量（8 个）
+│   │   ├── builtin.go              #     RegisterBuiltin（6 个内置 Hook）
+│   │   └── plugin.go               #     声明式 hooks（JSON 配置驱动，6 种事件类型）+ LoadPluginHooks
 │   ├── mcp/                        #   MCP 客户端
 │   │   ├── client.go               #     JSON-RPC 2.0 客户端 + Server 管理
 │   │   └── tool.go                 #     MCPTool 适配器
@@ -100,7 +97,9 @@ nekocode/
 │   │   ├── tool.go                 #     project_info tool 接口层
 │   │   └── project.go              #     NEKOCODE.md 项目上下文发现
 │   ├── prompt/                     #   System Prompt 构建
-│   │   └── builder.go              #     Prompt 构建器
+│   │   ├── builder.go              #     Prompt 构建器
+│   │   ├── system.md               #     英文 System Prompt 模板
+│   │   └── system_zh.md            #     中文 System Prompt 模板
 │   ├── session/                    #   Session 管理
 │   │   └── session.go              #     Session 持久化
 │   ├── skill/                      #   技能系统
@@ -111,13 +110,21 @@ nekocode/
 │   │       ├── bundled.go           #       嵌入入口
 │   │       └── meta/                #       技能元数据
 │   └── tools/                      #   工具系统
-│       ├── types.go                #     Tool 接口 + ToolCallItem
-│       ├── executor.go             #     Executor + 权限检查
+│       ├── types.go                #     Tool 接口 + ToolCallItem + ToolCallResult + Descriptor
+│       ├── executor.go             #     Executor + 权限检查 + ExecuteBatch
 │       ├── registry.go             #     注册表
 │       ├── file_cache.go           #     文件缓存（Seed/Merge/LRU）
 │       ├── util.go                 #     辅助函数（HashLine / StripAnsi / ValidatePath）
+│       ├── hashline/               #     Hashline 编辑子系统
+│       │   ├── hash.go             #       文件内容哈希计算
+│       │   ├── patch.go            #       Patch DSL 解析
+│       │   ├── apply.go            #       编辑应用 + 边界修复
+│       │   ├── recovery.go         #       3-way merge 恢复
+│       │   ├── mismatch.go         #       不匹配处理
+│       │   └── snapshot.go         #       快照管理
 │       └── builtin/                #     内置工具
 │           ├── register.go         #       RegisterAll()
+│           ├── block_resolver.go   #       Tree-sitter 块解析器（Go/Python/JS/TS/Rust）
 │           ├── tool_bash.go        #       Bash 执行
 │           ├── tool_read.go        #       文件读取
 │           ├── tool_write.go       #       文件写入
@@ -129,12 +136,9 @@ nekocode/
 │           ├── tool_todo.go        #       Todo 管理
 │           ├── tool_webfetch.go    #       Web 抓取
 │           ├── tool_websearch.go   #       Web 搜索
-│           ├── tool_project_info.go#       项目信息查询
 │           ├── tool_tree.go         #       目录树
 │           ├── tool_image_gen.go    #       图片生成（即梦文生图）
 │           └── html2md.go          #       HTML→Markdown
-│   ├── sdk/                        #   外部 SDK 封装
-│   │   └── volcengine_signer.go    #     火山引擎 SigV4 签名器
 ├── tui/                            # TUI 界面
 │   ├── tui.go                      #   package tui 入口（Run 函数）
 │   ├── agent.go                    #   Agent 桥接 + startChat
@@ -151,7 +155,6 @@ nekocode/
 │   │   │   └── block_tool.go        #       工具块 + edit 预览渲染
 │   │   ├── message/                #     消息项渲染
 │   │   │   ├── message.go           #       Message 结构体
-│   │   │   ├── message_render.go    #       渲染逻辑
 │   │   │   ├── message_assistant.go #       助手消息渲染
 │   │   │   ├── message_user.go      #       用户消息渲染
 │   │   │   ├── message_system.go    #       系统消息渲染
@@ -175,7 +178,7 @@ nekocode/
 │       └── charset.go              #     制表符字符集
 ```
 
-## BotInterface（11 方法）
+## BotInterface（10 方法）
 
 ```go
 type BotInterface interface {
@@ -201,9 +204,10 @@ type BotInterface interface {
   ▼
 Run() 主循环 → runTurn(state)
   │
+  ├─ UserSubmit hooks: Evaluate → [System] hints
   ├─ AutoCompactIfNeeded() 看门狗
   ├─ budget.ComputeQuota() 计算工具配额
-  ├─ PreTurn hooks: Emit gauges → Evaluate → Layer2 hints
+  ├─ PreTurn hooks: Evaluate → Layer2 hints
   ├─ drainSteering() 排空中途输入
   │
   ├─ Reason(state) → ReasoningResult
@@ -214,9 +218,10 @@ Run() 主循环 → runTurn(state)
   │   └─ withRetry() 指数退避重试
   │
   ├─ [工具调用] executeAndFeedback(calls, reasoning, state)
-  │   ├─ 工具执行 + Emit 事件（Counter/Flag/Turn）
-  │   ├─ Declarative PostToolUse hooks
-  │   └─ PostTool hooks: Evaluate → Stop/Hint
+  │   ├─ 配额过滤 + PreToolUse hooks（per-tool）
+  │   ├─ 工具执行 + 事件记录（Inc/Flag）
+  │   ├─ PostToolUse hooks（per-tool）
+  │   └─ PostTool hooks（batch）: Evaluate → Stop/Hint
   │
   ├─ [文本响应] handleText(reasoning, state)
   │   ├─ Emit garbled/chat Turn
@@ -281,30 +286,28 @@ type Tool interface {
 
 ## Hook 系统（事件驱动）
 
-### 三种触发点
+### 七种触发点
 
 | Point | 时机 | 注入方式 |
 |-------|------|---------|
-| PreTurn | LLM 推理前 | Layer2 suffix |
-| PostTool | 全部工具执行后 | `[System]` 消息 |
+| PreTurn | LLM 推理前 | Layer2 hints |
+| PreToolUse | 单个工具执行前（per-tool） | `[System]` 消息 |
+| PostToolUse | 单个工具执行后（per-tool） | `[System]` 消息 |
+| PostTool | 全部工具执行后（batch） | `[System]` + Stop |
 | PostTurn | LLM 纯文本返回后 | `[System]` + Stop |
+| UserSubmit | 用户提交输入后 | `[System]` 消息 |
+| Stop | Agent 循环结束时 | Stop 判定 |
 
-### 五种事件类型
+### 事件存储模型
 
-| 类型 | 方法 | 生命周期 |
-|------|------|---------|
-| Counter | Inc/Get | 全局累计（跨轮持久） |
-| Flag | Set/Get | 全局布尔（跨轮持久） |
-| Gauge | Set/Get | 每轮覆盖（Agent.ResetTurn 重置） |
-| Value | Set/Get | 每轮覆盖（Agent.ResetTurn 重置，字符串） |
-| Turn | Inc/Get/Reset | 每轮临时（Agent.ResetTurn 重置） |
+使用 `Registry` + `Snapshot` 模式：单一 `map[string]int64` 存储所有事件值，`map[string]string` 存储字符串值。通过 key 前缀约定语义（`counter:` 跨轮持久，`turn:` / `gauge:` / `flag:` / `value:` 由 Agent.Reset 或 ResetSession 重置）。
 
-### 内置 Hook（5 个 Inject + 1 个 Stop 断路器）
+### 内置 Hook（6 个）
 
 | Hook | Point | 功能 |
 |------|-------|------|
 | quota | PreTurn | 配额告警，引导申请扩展 |
-| verification | PreTurn | 文件修改后提醒验证（闭包防重复） |
+| verification | PreTurn | 文件修改后提醒验证（flag 防重复） |
 | exploration_exhausted | PreTurn | 探索分数耗尽，强制行动 |
 | explore_cascade | PostTool | 连续 researcher 无产出 |
 | unfinished_work | PostTurn | 有未完成任务时阻止闲聊结束 |
@@ -312,7 +315,7 @@ type Tool interface {
 
 ### Hook 间抑制
 
-`explore_cascade` 触发时自动抑制 `exploration_low`。需要跨轮记忆的 Hook（verification、exploration、cascade）使用闭包变量管理状态。
+`explore_cascade` 触发时自动抑制 `exploration_low`。需要跨轮记忆的 Hook（verification、exploration、cascade）使用 flag 变量管理状态。
 
 ## Plugin 系统
 
@@ -323,7 +326,7 @@ type Tool interface {
 
 ## 声明式 Hooks
 
-`bot/hooks/declarative.go`：
+`bot/hooks/plugin.go`（`LoadPluginHooks`）：
 - 事件类型：PreToolUse / PostToolUse / PostToolUseFailure / UserPromptSubmit / SessionStart / Stop
 - JSON 配置（hooks.json）
 - Tool name matcher（`|` 分隔，regex 支持）
@@ -385,13 +388,13 @@ Model
 | | 子 Agent | `bot/agent/subagent/` | 独立循环，3 种内置类型 + 插件扩展 |
 | LLM 网关 | `llm/` | OpenAI/Anthropic 双协议，统一接口 |
 | 工具系统 | `bot/tools/` | Tool 接口 + Executor + Registry |
-| | 内置工具 | `bot/tools/builtin/` | 14 个内置工具实现 |
+| | 内置工具 | `bot/tools/builtin/` | 13 个内置工具实现（project_info 在 cindex/） |
 | SDK | `bot/sdk/` | 外部服务 SDK（火山引擎签名等） |
 | 上下文管理 | `bot/ctxmgr/` | Build 管线 + 五级压缩 + token 估算 |
 | Session Memory | `bot/ctxmgr/memory/` | Memory 文件持久化（10 section Markdown） |
 | Plugin 系统 | `bot/plugin/` | 安装/卸载/生命周期 |
 | MCP 客户端 | `bot/mcp/` | JSON-RPC 2.0 |
-| Hook 系统 | `bot/hooks/` | 事件驱动 + 声明式 |
+| Hook 系统 | `bot/hooks/` | 事件驱动（7 种触发点）+ 声明式（plugin.go） |
 | 命令系统 | `bot/command/` | 斜杠命令解析 |
 | 调试日志 | `bot/debug/` | 全局 debug.Log（时间戳 + subagent 标签） |
 | TUI | `tui/` | Bubble Tea v2 组件化 |

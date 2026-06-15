@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"nekocode/common"
 )
 
 // Plugin represents an installed plugin instance.
@@ -63,83 +65,75 @@ func (p *Plugin) MCPServers() map[string]MCPServerConfig {
 
 // --- recursive auto-discovery ----------------------------------------------
 
-func (p *Plugin) autoDiscoverSkills() []string {
-	var dirs []string
-	filepath.WalkDir(p.Dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || !d.IsDir() {
+// walkFind walks root looking for entries whose name matches matchName (case-insensitive).
+// If matchDir is true, only directories are matched; otherwise only files.
+// For directories, the matched dir is not recursed into.
+func walkFind(root string, matchName string, matchDir bool) []string {
+	var results []string
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
 			return nil
 		}
-		if strings.EqualFold(d.Name(), "skills") {
-			dirs = append(dirs, path)
-			return filepath.SkipDir // don't recurse into skills/
-		}
-		return nil
-	})
-	return dirs
-}
-
-func (p *Plugin) autoDiscoverAgents() []string {
-	var paths []string
-	filepath.WalkDir(p.Dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || !d.IsDir() {
+		if matchDir && !d.IsDir() {
 			return nil
 		}
-		if strings.EqualFold(d.Name(), "agents") {
-			ents, _ := os.ReadDir(path)
-			for _, e := range ents {
-				if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
-					paths = append(paths, filepath.Join(path, e.Name()))
-				}
+		if !matchDir && d.IsDir() {
+			return nil
+		}
+		if strings.EqualFold(d.Name(), matchName) {
+			results = append(results, path)
+			if matchDir {
+				return filepath.SkipDir
 			}
-			return filepath.SkipDir
-		}
-		return nil
-	})
-	return paths
-}
-
-func (p *Plugin) autoDiscoverHooks() (string, bool) {
-	var found string
-	filepath.WalkDir(p.Dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		if strings.EqualFold(d.Name(), "hooks.json") {
-			found = path
 			return filepath.SkipAll
 		}
 		return nil
 	})
-	if found != "" {
-		// Return path relative to plugin root.
-		rel, _ := filepath.Rel(p.Dir, found)
+	return results
+}
+
+func (p *Plugin) autoDiscoverSkills() []string {
+	return walkFind(p.Dir, "skills", true)
+}
+
+func (p *Plugin) autoDiscoverAgents() []string {
+	var paths []string
+	dirs := walkFind(p.Dir, "agents", true)
+	for _, dir := range dirs {
+		ents, _ := os.ReadDir(dir)
+		for _, e := range ents {
+			if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
+				paths = append(paths, filepath.Join(dir, e.Name()))
+			}
+		}
+	}
+	return paths
+}
+
+func (p *Plugin) autoDiscoverHooks() (string, bool) {
+	found := walkFind(p.Dir, "hooks.json", false)
+	if len(found) > 0 {
+		rel, _ := filepath.Rel(p.Dir, found[0])
 		return rel, true
 	}
 	return "", false
 }
 
 func (p *Plugin) autoDiscoverMCP() map[string]MCPServerConfig {
-	var result map[string]MCPServerConfig
-	filepath.WalkDir(p.Dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
+	found := walkFind(p.Dir, ".mcp.json", false)
+	for _, path := range found {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
 		}
-		if strings.EqualFold(d.Name(), ".mcp.json") {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return nil
-			}
-			var cfg struct {
-				MCPServers map[string]MCPServerConfig `json:"mcpServers"`
-			}
-			if json.Unmarshal(data, &cfg) == nil {
-				result = cfg.MCPServers
-			}
-			return filepath.SkipAll
+		var cfg struct {
+			MCPServers map[string]MCPServerConfig `json:"mcpServers"`
 		}
-		return nil
-	})
-	return result
+		if json.Unmarshal(data, &cfg) == nil && len(cfg.MCPServers) > 0 {
+			return cfg.MCPServers
+		}
+	}
+	return nil
 }
 
 func resolvePath(base, rel string) string {
@@ -173,23 +167,12 @@ type Registry struct {
 
 // DefaultDirs returns plugin search paths (project > user).
 func DefaultDirs() []string {
-	var dirs []string
-	if cwd, err := os.Getwd(); err == nil {
-		dirs = append(dirs, filepath.Join(cwd, ".nekocode", "plugins"))
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		dirs = append(dirs, filepath.Join(home, ".nekocode", "plugins"))
-	}
-	return dirs
+	return common.NekocodeDirs("plugins")
 }
 
 // userPluginDir returns the user-level plugin directory.
 func userPluginDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".nekocode", "plugins"), nil
+	return filepath.Join(common.NekocodeHome(), "plugins"), nil
 }
 
 // NewRegistry creates a plugin registry scanning baseDirs.
@@ -316,7 +299,7 @@ func (r *Registry) Install(source string) (*Plugin, error) {
 		if err := r.gitClone(source, pluginDir); err != nil {
 			return nil, err
 		}
-	} else if looksLikeGitRepo(source) {
+	} else if common.LooksLikeGit(source) {
 		// Short form: "user/repo".
 		url := "https://github.com/" + source
 		name := strings.ReplaceAll(source, "/", "-")
@@ -366,19 +349,22 @@ func (r *Registry) Install(source string) (*Plugin, error) {
 
 // Uninstall removes a plugin from disk and registry.
 func (r *Registry) Uninstall(name string) error {
-	r.mu.Lock()
+	r.mu.RLock()
 	p, ok := r.plugins[name]
+	r.mu.RUnlock()
 	if !ok {
-		r.mu.Unlock()
 		return fmt.Errorf("plugin %q not found", name)
 	}
-	delete(r.plugins, name)
-	r.mu.Unlock()
 
+	// Delete from disk first — if this fails, the in-memory state stays consistent.
 	if err := os.RemoveAll(p.Dir); err != nil {
 		return fmt.Errorf("remove plugin dir: %w", err)
 	}
+
+	r.mu.Lock()
+	delete(r.plugins, name)
 	r.saveRegistryFile()
+	r.mu.Unlock()
 	return nil
 }
 
@@ -505,11 +491,6 @@ func repoName(url string) string {
 		return parts[len(parts)-2] + "-" + parts[len(parts)-1]
 	}
 	return s
-}
-
-func looksLikeGitRepo(s string) bool {
-	parts := strings.Split(s, "/")
-	return len(parts) == 2 && !strings.Contains(parts[0], ".") && !strings.Contains(parts[0], ":")
 }
 
 func fileExists(path string) bool {

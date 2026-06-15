@@ -17,10 +17,10 @@ import (
 	"nekocode/bot/config"
 	"nekocode/bot/sdk"
 	"nekocode/bot/tools"
-	"nekocode/common"
 )
 
 type ImageGenTool struct {
+	SequentialSafeTool
 	client *http.Client
 	models []config.ImageGenConfig
 }
@@ -33,13 +33,6 @@ func NewImageGenTool(models []config.ImageGenConfig) *ImageGenTool {
 }
 
 func (t *ImageGenTool) Name() string { return "image_gen" }
-
-func (t *ImageGenTool) ExecutionMode(map[string]any) tools.ExecutionMode {
-	return tools.ModeSequential
-}
-func (t *ImageGenTool) DangerLevel(map[string]any) common.DangerLevel {
-	return common.LevelSafe
-}
 
 func (t *ImageGenTool) Description() string {
 	return "Generate images from text prompts using configured text-to-image models. Images are saved to local files and links are returned."
@@ -57,9 +50,9 @@ func (t *ImageGenTool) Parameters() []tools.Parameter {
 }
 
 func (t *ImageGenTool) Execute(ctx context.Context, args map[string]any) (string, error) {
-	prompt, ok := args["prompt"].(string)
-	if !ok || strings.TrimSpace(prompt) == "" {
-		return "", fmt.Errorf("missing prompt parameter")
+	prompt, err := requireStringArg(args, "prompt")
+	if err != nil {
+		return "", err
 	}
 
 	cfg := t.resolveModel(args)
@@ -67,7 +60,7 @@ func (t *ImageGenTool) Execute(ctx context.Context, args map[string]any) (string
 		return "", fmt.Errorf("no image gen models configured — add image_gen_models in ~/.nekocode/config.json")
 	}
 
-	outputDir, _ := args["output_dir"].(string)
+	outputDir := optStringArg(args, "output_dir", "")
 	if outputDir == "" {
 		outputDir, _ = os.Getwd()
 	}
@@ -133,9 +126,9 @@ func (t *ImageGenTool) executeJimeng(ctx context.Context, cfg config.ImageGenCon
 
 	signer := sdk.NewVolcSigner(cfg.APIKey, cfg.SecretKey, "cn-north-1", "cv")
 
-	width := intArg(args, "width", 1328)
-	height := intArg(args, "height", 1328)
-	seed := intArg(args, "seed", -1)
+	width := optIntArg(args, "width", 1328)
+	height := optIntArg(args, "height", 1328)
+	seed := optIntArg(args, "seed", -1)
 
 	submitBody := map[string]any{
 		"req_key": model,
@@ -325,21 +318,4 @@ func (t *ImageGenTool) jimengCallRaw(ctx context.Context, signer *sdk.VolcSigner
 	}
 
 	return respBody, nil
-}
-
-func intArg(args map[string]any, key string, defaultVal int) int {
-	v, ok := args[key]
-	if !ok {
-		return defaultVal
-	}
-	// JSON numbers come as float64 from unmarshaled args
-	switch n := v.(type) {
-	case float64:
-		return int(n)
-	case int:
-		return n
-	case int64:
-		return int(n)
-	}
-	return defaultVal
 }

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"nekocode/common"
 )
 
 // newTestPlugin creates a temporary plugin directory with a valid plugin.json manifest.
@@ -179,8 +181,8 @@ func TestLooksLikeGitRepo(t *testing.T) {
 		{"", false},
 	}
 	for _, tt := range tests {
-		if got := looksLikeGitRepo(tt.input); got != tt.want {
-			t.Errorf("looksLikeGitRepo(%q) = %v, want %v", tt.input, got, tt.want)
+		if got := common.LooksLikeGit(tt.input); got != tt.want {
+			t.Errorf("LooksLikeGit(%q) = %v, want %v", tt.input, got, tt.want)
 		}
 	}
 }

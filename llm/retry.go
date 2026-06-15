@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
+
+	"nekocode/common"
 )
 
 // RetryConfig defines the exponential backoff parameters.
@@ -20,32 +21,6 @@ var DefaultRetryConfig = RetryConfig{
 	MaxAttempts: 4,
 	BaseDelay:   500 * time.Millisecond,
 	MaxDelay:    8 * time.Second,
-}
-
-// ---- HTTP status extraction -------------------------------------------------
-
-// apiErrorRE matches error formats used by Chat/ChatStream:
-//
-//	"API error (HTTP 429): ..."   (OpenAI-compat)
-var apiErrorRE = regexp.MustCompile(`API error(?: \(HTTP (\d+)\))?: (\d+)`)
-
-func extractHTTPStatus(err error) (int, bool) {
-	msg := err.Error()
-	m := apiErrorRE.FindStringSubmatch(msg)
-	if m == nil {
-		return 0, false
-	}
-	// Group 1: code from "(HTTP %d)" format; Group 2: code from "status string" format.
-	for _, g := range []string{m[1], m[2]} {
-		if g != "" {
-			var code int
-			fmt.Sscanf(g, "%d", &code)
-			if code >= 100 && code < 600 {
-				return code, true
-			}
-		}
-	}
-	return 0, false
 }
 
 // ---- Retry classification --------------------------------------------------
@@ -65,7 +40,7 @@ func isRetryableStatus(code int) bool {
 //
 // Priority order:
 //  1. Context cancellation / deadline exceeded → terminal (caller gave up).
-//  2. HTTP status code extracted from the error → classified by range:
+//  2. HTTP status code extracted from typed *common.HTTPError → classified by range:
 //     408, 429, 5xx = retryable; 4xx = terminal.
 //  3. Keyword fallback for non-HTTP errors (network-level, DNS, etc.).
 func IsRetryable(err error) bool {
@@ -76,15 +51,13 @@ func IsRetryable(err error) bool {
 		return false
 	}
 
-	if code, ok := extractHTTPStatus(err); ok {
-		return isRetryableStatus(code)
+	var httpErr *common.HTTPError
+	if errors.As(err, &httpErr) {
+		return isRetryableStatus(httpErr.StatusCode)
 	}
 
 	// Network-level errors — don't carry HTTP codes.
 	msg := err.Error()
-	if errors.Is(err, context.DeadlineExceeded) {
-		return false
-	}
 	for _, kw := range retryableKeywords {
 		if strings.Contains(msg, kw) {
 			return true

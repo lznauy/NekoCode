@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"nekocode/tui/styles"
+	"nekocode/bot/tools"
 
 	"nekocode/common")
 
@@ -24,10 +24,21 @@ func formatBriefArgs(toolName, toolArgs string) string {
 	args := parse(toolArgs)
 
 	switch toolName {
-	case "read", "write", "list", "tree":
+	case "read":
+		p := args["path"]
+		if s, ok := args["startLine"]; ok {
+			if e, ok2 := args["endLine"]; ok2 {
+				return fmt.Sprintf("%s %s-%s", p, s, e)
+			}
+		}
+		return p
+	case "write", "list", "tree":
 		return args["path"]
 	case "edit":
-		return args["path"]
+		if p := tools.ExtractFirstPathFromPatch(args["patch"]); p != "" {
+			return p
+		}
+		return args["patch"]
 	case "bash":
 		cmd := args["command"]
 		// Only show the first line — heredocs and multi-line scripts
@@ -76,7 +87,7 @@ func formatBriefArgs(toolName, toolArgs string) string {
 
 func tokensSummary(b BotInterface) string {
 	st := b.Stats()
-	return "↑" + styles.FmtTokens(st.TurnPrompt) + " ↓" + styles.FmtTokens(st.TurnCompletion)
+	return "↑" + common.FormatTokens(st.TurnPrompt) + " ↓" + common.FormatTokens(st.TurnCompletion)
 }
 
 func formatTodos(raw string) string {

@@ -3,13 +3,7 @@ package block
 
 import (
 	"strings"
-
-	"nekocode/tui/styles"
-
-	"charm.land/lipgloss/v2"
 )
-
-var toolAccent = lipgloss.NewStyle().Foreground(lipgloss.Color(styles.Yellow))
 
 type BlockType int
 
@@ -25,6 +19,8 @@ type ContentBlock struct {
 	ToolArgs  string
 	Collapsed bool
 	Done      bool
+	SubID     string // "" = main agent; non-empty = sub-agent UUID
+	SubColor  int    // -1 = main agent; 0-7 = sub-agent color index
 }
 
 // FilterFinalBlocks returns persistent tool blocks (edit, bash, write).
@@ -42,17 +38,18 @@ func IsPersistent(toolName string) bool {
 	return toolName == "edit" || toolName == "bash" || toolName == "write"
 }
 
-// ParseReadOutput 从 read 工具的结构化输出中提取纯文本内容。
+// ParseReadOutput extracts the displayable content from read tool output.
+// New format: [path#TAG]\nlineNo:content... — skip the header line.
 func ParseReadOutput(content string) string {
-	start := strings.Index(content, "<![CDATA[")
-	if start == -1 {
-		return content
+	// If it starts with [path#TAG] header, skip it for display.
+	if strings.HasPrefix(content, "[") {
+		if idx := strings.IndexByte(content, '\n'); idx >= 0 {
+			// Verify '#' is present to avoid matching code like "[array]\n..."
+			if strings.Contains(content[:idx], "#") {
+				return content[idx+1:]
+			}
+		}
 	}
-	start += len("<![CDATA[")
-	end := strings.Index(content[start:], "]]>")
-	if end == -1 {
-		return content[start:]
-	}
-	return content[start : start+end]
+	return content
 }
 

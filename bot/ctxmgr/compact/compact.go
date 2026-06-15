@@ -74,18 +74,22 @@ func (m *Compactor) FullCompact() error {
 
 	// Constraint verification handled by Memory at Layer 0.
 
-	m.Ctx.Archive = archiveText
-
 	// Facts preserved in Memory by caller.
 
 	if archiveTokens < minArchive {
+		// Summary quality too low — keep more messages but still update
+		// the archive. A bad summary is better than no summary at all
+		// since it provides some continuity; the extra kept messages
+		// compensate for the missing detail.
 		keep *= 2
 		if keep > len(m.Ctx.Messages)-1 {
 			keep = len(m.Ctx.Messages) - 1
 		}
 		split = len(m.Ctx.Messages) - keep
+		debug.Log("full_compact: quality check failed (archive=%d < min=%d), doubling keep to %d", archiveTokens, minArchive, keep)
 	}
 
+	m.Ctx.Archive = archiveText
 	m.Ctx.CompactBoundary = split
 	debug.Log("full_compact: summarized %d msgs (%d tokens) into archive (%d tokens), boundary=%d, kept=%d",
 		len(toSummarize), inputTokens, archiveTokens, split, keep)
@@ -108,15 +112,6 @@ func (m *Compactor) countMessagesForLastNTurns(n int) int {
 	if n <= 0 {
 		return 0
 	}
-	msgs := m.Ctx.Messages
-	turns := 0
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == "user" {
-			turns++
-			if turns >= n {
-				return len(msgs) - i
-			}
-		}
-	}
-	return len(msgs)
+	boundary := m.findRecentTurnBoundary(n)
+	return len(m.Ctx.Messages) - boundary
 }

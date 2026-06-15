@@ -1,114 +1,331 @@
-// EditTool — hashline-anchored file editing.
+// EditTool — hashline DSL-based file editing.
 
 package builtin
 
 import (
 	"context"
+	"crypto/sha256"
+	_ "embed"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 
+	"nekocode/bot/debug"
 	"nekocode/bot/tools"
-
-	"nekocode/common"
+	"nekocode/bot/tools/hashline"
 )
 
 // ---------------------------------------------------------------------------
 // tool definition
 // ---------------------------------------------------------------------------
 
-type EditTool struct{}
-
-func (t *EditTool) Name() string                                     { return "edit" }
-func (t *EditTool) ExecutionMode(map[string]interface{}) tools.ExecutionMode { return tools.ModeSequential }
-func (t *EditTool) DangerLevel(map[string]any) common.DangerLevel { return common.LevelWrite }
-
-// Preview generates a diff preview for the TUI confirm bar.
-func (t *EditTool) Preview(args map[string]any) string {
-	hashes, ok := toStringSlice(args["hashes"])
-	if !ok || len(hashes) == 0 {
-		return ""
-	}
-	path, _ := args["path"].(string)
-	r, err := resolveEdit(path, hashes)
-	if err != nil || r.startLine == 0 {
-		return ""
-	}
-
-	var sb strings.Builder
-	sb.WriteString("── preview ──")
-	newStr, _ := args["new_string"].(string)
-	op, _ := args["op"].(string)
-	startLine, endLine := r.startLine, r.endLine
-
-	ctxStart := max(0, startLine-4)
-	for i := ctxStart; i < startLine-1 && i < len(r.lines); i++ {
-		fmt.Fprintf(&sb, "\n %d:[%s]%s", i+1, tools.HashLine(r.lines[i]), r.lines[i])
-	}
-	for i := startLine - 1; i < endLine && i < len(r.lines); i++ {
-		fmt.Fprintf(&sb, "\n-%d:[%s]%s", i+1, tools.HashLine(r.lines[i]), r.lines[i])
-	}
-	if op != "delete" && newStr != "" {
-		lineNo := startLine
-		if op == "insert_after" {
-			lineNo = endLine + 1
-		}
-		for nl := range strings.SplitSeq(newStr, "\n") {
-			fmt.Fprintf(&sb, "\n+%d:[%s]%s", lineNo, tools.HashLine(nl), nl)
-			lineNo++
-		}
-	}
-	ctxEnd := min(len(r.lines), endLine+3)
-	for i := endLine; i < ctxEnd && i < len(r.lines); i++ {
-		fmt.Fprintf(&sb, "\n %d:[%s]%s", i+1, tools.HashLine(r.lines[i]), r.lines[i])
-	}
-	return sb.String()
+type EditTool struct {
+	WriteModeTool
 }
 
+func (t *EditTool) Name() string { return "edit" }
+
+// snapshotUndoPath returns the pre-edit snapshot path in /tmp for the given file.
+func snapshotUndoPath(safePath string) string {
+	h := sha256.Sum256([]byte(safePath))
+	hash := hex.EncodeToString(h[:])[:16]
+	return filepath.Join("/tmp/nekocode/snapshots", hash+"_"+filepath.Base(safePath)+".pre-edit")
+}
+
+//go:embed edit_description.md
+var editDescription string
+
 func (t *EditTool) Description() string {
-		return "Edit files by hashline. Read output has pure content in a <content> CDATA block and line hashes in a <hashes> block below. Find the hash for each line number in <hashes>, then build anchors as \"lineNo:hash\" (e.g. \"3:a3B\"). Use 2 hashes for ranges. Operations: replace(default), insert_after, insert_before, delete. Prefer this over write. Always read the file first."
+	return editDescription
 }
 
 func (t *EditTool) Parameters() []tools.Parameter {
 	return []tools.Parameter{
-		{Name: "path", Type: "string", Required: true,
-			Description: "Absolute file path to edit."},
-		{Name: "hashes", Type: "array", Required: true,
-				Description: "Line anchors from Read <hashes> block: \"lineNo:hash\" (e.g. \"3:a3B\"). e.g. [\"3:a3B\",\"5:b2C\"]"},
-		{Name: "new_string", Type: "string", Required: false,
-			Description: "Replacement text (omit for delete)."},
-		{Name: "op", Type: "string", Required: false,
-			Description: "replace | insert_after | insert_before | delete (default: replace)."},
+		{Name: "patch", Type: "string", Required: true,
+			Description: "Hashline patch DSL. See tool description for format. When revert=true, use bare file path instead."},
+		{Name: "revert", Type: "boolean", Required: false,
+			Description: "Set to true to revert file to its pre-edit state. Patch should be the bare file path."},
 	}
+}
+
+// ---------------------------------------------------------------------------
+// types
+// ---------------------------------------------------------------------------
+
+// editCache holds Preview results for Execute to reuse.
+type editCache struct {
+	entries map[string]editCacheEntry
+}
+
+type editCacheEntry struct {
+	safePath         string
+	normalizedBefore string
+	result           *hashline.ApplyResult
+}
+
+// preflightResult carries the in-memory result of a prepareOne call so
+// commitResult can land it on disk without re-reading or re-applying.
+type preflightResult struct {
+	safePath         string
+	normalizedBefore string
+	result           *hashline.ApplyResult
+	hunks            []hashline.Hunk
+	lineEnding       string
+	origMode         os.FileMode
+	recovered        bool
+}
+
+// ---------------------------------------------------------------------------
+// preview
+// ---------------------------------------------------------------------------
+
+// Preview reads files, applies edits to copies, returns a diff for TUI.
+func (t *EditTool) Preview(args map[string]any) string {
+	patchStr, _ := args["patch"].(string)
+	if patchStr == "" {
+		return ""
+	}
+	// Revert mode: patch is a bare file path, not a hashline DSL.
+	if rv, _ := args["revert"].(bool); rv {
+		return fmt.Sprintf("(revert: %s)", filepath.Base(patchStr))
+	}
+	patch, err := hashline.ParsePatch(patchStr)
+	if err != nil {
+		return fmt.Sprintf("(parse error: %v)", err)
+	}
+
+	cache := &editCache{entries: make(map[string]editCacheEntry)}
+	var sb strings.Builder
+	var errs []string
+	for _, fp := range patch.Files {
+		safePath, err := tools.ValidatePath(fp.Path)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", filepath.Base(fp.Path), err))
+			continue
+		}
+		oldText, err := tools.ReadNormalizedFile(safePath)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", filepath.Base(fp.Path), err))
+			continue
+		}
+		result, err := hashline.ApplyEdits(oldText, fp.Hunks, GlobalBlockResolver, safePath)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", filepath.Base(fp.Path), err))
+			continue
+		}
+		cache.entries[safePath] = editCacheEntry{safePath, oldText, result}
+		preview := buildDiffPreview(oldText, result.Text, result.ResolvedHunks)
+		if preview == "" {
+			continue
+		}
+		sb.WriteString(preview)
+		sb.WriteByte('\n')
+	}
+	if len(errs) > 0 {
+		fmt.Fprintf(&sb, "\n(errors: %s)", strings.Join(errs, "; "))
+	}
+	if len(cache.entries) > 0 {
+		args["_editCache"] = cache
+	}
+	return sb.String()
 }
 
 // ---------------------------------------------------------------------------
 // execute
 // ---------------------------------------------------------------------------
 
-func (t *EditTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
-	path, ok := args["path"].(string)
-	if !ok || path == "" {
-		return "", fmt.Errorf("filePath is required")
-	}
-	safePath, err := tools.ValidatePath(path)
-	if err != nil {
-		return "", err
-	}
-	hashes, ok := toStringSlice(args["hashes"])
-	if !ok || len(hashes) == 0 {
-		return "", fmt.Errorf("hashes is required — read the file first to get line hashes")
+func (t *EditTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+	patchStr, ok := args["patch"].(string)
+	if !ok || patchStr == "" {
+		return "", fmt.Errorf("patch parameter is required")
 	}
 
-	return t.hashlineEdit(safePath, hashes, args)
+	// Revert mode: restore file from pre-edit snapshot.
+	if rv, _ := args["revert"].(bool); rv {
+		safePath, err := tools.ValidatePath(patchStr)
+		if err != nil {
+			return "", fmt.Errorf("revert: invalid path: %w", err)
+		}
+		undoFile := snapshotUndoPath(safePath)
+		preData, err := os.ReadFile(undoFile)
+		if err != nil {
+			return "", fmt.Errorf("revert: no snapshot for %s: %w", filepath.Base(safePath), err)
+		}
+		mode := getFileMode(safePath)
+		if err := os.WriteFile(safePath, preData, mode); err != nil {
+			return "", fmt.Errorf("revert: write failed: %w", err)
+		}
+		newTag := tools.RecordSnapshot(safePath, string(preData))
+		return fmt.Sprintf("[%s#%s] Reverted to pre-edit state from %s\n", safePath, newTag, undoFile), nil
+	}
+
+	patch, err := hashline.ParsePatch(patchStr)
+	if err != nil {
+		return "", fmt.Errorf("patch parse error: %w", err)
+	}
+	var cache *editCache
+	if c, ok := args["_editCache"]; ok {
+		cache, _ = c.(*editCache)
+	}
+	seen := make(map[string]bool)
+
+	// Preflight: validate and apply every file in memory before any write.
+	var prepared []preflightResult
+	for _, fp := range patch.Files {
+		pe, err := t.prepareOne(fp, cache, seen)
+		if err != nil {
+			return "", fmt.Errorf("[%s] %w", fp.Path, err)
+		}
+		prepared = append(prepared, *pe)
+	}
+
+	// Commit: write every prepared result to disk.
+	var results []string
+	for _, pe := range prepared {
+		msg, err := t.commitResult(pe)
+		if err != nil {
+			return "", fmt.Errorf("[%s] %w", pe.safePath, err)
+		}
+		results = append(results, msg)
+	}
+	return strings.Join(results, "\n"), nil
 }
 
+// prepareOne validates, reads, and applies edits to a single file in memory.
+// Returns a preflightResult for commitResult; does NOT write to disk.
+func (t *EditTool) prepareOne(fp hashline.FilePatch, cache *editCache, seen map[string]bool) (*preflightResult, error) {
+	safePath, err := tools.ValidatePath(fp.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	// Accept relative paths that ValidatePath successfully resolved.
+	// The LLM should use absolute paths from Read output ([ABSPATH#TAG]),
+	// but resolving a relative path is safe and more forgiving.
+	if !strings.HasPrefix(fp.Path, "/") && safePath == fp.Path {
+		return nil, fmt.Errorf("unresolvable path %q", fp.Path)
+	}
+
+	// Read current file content.
+	data, err := tools.ReadSafeFile(fp.Path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
+
+	origMode := getFileMode(safePath)
+
+	rawText := string(data)
+	lineEnding := hashline.DetectLineEnding(rawText)
+	normalizedCurrent := tools.NormalizeText(rawText)
+
+	// Try preview cache.
+	var result *hashline.ApplyResult
+	var recovered bool
+
+	if !seen[safePath] && cache != nil {
+		seen[safePath] = true
+		if cached, ok := cache.entries[safePath]; ok && cached.normalizedBefore == normalizedCurrent {
+			result = cached.result
+		}
+	}
+
+	// No usable cache — apply directly.
+	if result == nil {
+		currentHash := hashline.ComputeFileHash(normalizedCurrent)
+		if currentHash != fp.FileTag {
+			recoveryResult, recoveryErr := hashline.TryRecover(hashline.RecoveryRequest{
+				Path:        safePath,
+				CurrentText: normalizedCurrent,
+				ExpectedTag: fp.FileTag,
+				Edits:       fp.Hunks,
+				Snapshots:   tools.GetGlobalSnapshotStore(),
+				Resolver:    GlobalBlockResolver,
+			})
+			if recoveryErr != nil {
+				return nil, t.staleTagError(safePath, normalizedCurrent, fp, recoveryErr)
+			}
+			result = recoveryResult
+			recovered = true
+		} else {
+			var err error
+			result, err = hashline.ApplyEdits(normalizedCurrent, fp.Hunks, GlobalBlockResolver, safePath)
+			if err != nil {
+				return nil, fmt.Errorf("apply failed: %w", err)
+			}
+		}
+	}
+
+	return &preflightResult{
+		safePath:         safePath,
+		normalizedBefore: normalizedCurrent,
+		result:           result,
+		hunks:            fp.Hunks,
+		lineEnding:       lineEnding,
+		origMode:         origMode,
+		recovered:        recovered,
+	}, nil
+}
+
+// commitResult writes the apply result to disk, records snapshot, and formats output.
+func (t *EditTool) commitResult(pe preflightResult) (string, error) {
+	finalText := hashline.RestoreLineEndings(pe.result.Text, pe.lineEnding)
+
+	// Save pre-edit content for undo via write tool.
+	undoFile := snapshotUndoPath(pe.safePath)
+	if err := os.MkdirAll(filepath.Dir(undoFile), 0755); err == nil {
+		preEditContent := hashline.RestoreLineEndings(pe.normalizedBefore, pe.lineEnding)
+		if err := os.WriteFile(undoFile, []byte(preEditContent), 0644); err != nil {
+			debug.Log("edit: undo snapshot write failed: %v", err)
+		}
+	}
+
+	if err := os.WriteFile(pe.safePath, []byte(finalText), pe.origMode); err != nil {
+		return "", fmt.Errorf("failed to write file: %w", err)
+	}
+
+	newTag := tools.RecordSnapshot(pe.safePath, pe.result.Text)
+
+	msg := formatEditResult(pe.safePath, pe.normalizedBefore, pe.result.Text, pe.result.ResolvedHunks, newTag, pe.recovered)
+
+	if len(pe.result.Warnings) > 0 {
+		for _, w := range pe.result.Warnings {
+			msg += "\n⚠ " + w
+		}
+	}
+
+	if lint := lintFile(pe.safePath); lint != "" {
+		msg += "\n" + lint
+	}
+	return msg, nil
+}
+
+// staleTagError builds a MismatchError with anchor-line context so the
+// agent can see which lines its hunk(s) reference in the current file.
+func (t *EditTool) staleTagError(path, normalizedCurrent string, fp hashline.FilePatch, recoveryErr error) error {
+	hashRecognized := false
+	if store := tools.GetGlobalSnapshotStore(); store != nil {
+		hashRecognized = store.ByHash(path, fp.FileTag) != nil
+	}
+	return &hashline.MismatchError{
+		Path:             path,
+		ExpectedFileHash: fp.FileTag,
+		ActualFileHash:   hashline.ComputeFileHash(normalizedCurrent),
+		FileLines:        strings.Split(normalizedCurrent, "\n"),
+		AnchorLines:      hashline.CollectAnchorLines(fp.Hunks),
+		HashRecognized:   hashRecognized,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// lint
+// ---------------------------------------------------------------------------
+
+// lintFile runs gofmt on .go files and returns errors, or empty string.
 func lintFile(path string) string {
-	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
+	switch strings.ToLower(filepath.Ext(path)) {
 	case ".go":
 		return lintGo(path)
 	default:
@@ -126,188 +343,4 @@ func lintGo(path string) string {
 		}
 	}
 	return ""
-}
-
-func toStringSlice(v any) ([]string, bool) {
-	arr, ok := v.([]any)
-	if !ok {
-		return nil, false
-	}
-	out := make([]string, len(arr))
-	for i, item := range arr {
-		s, ok := item.(string)
-		if !ok {
-			return nil, false
-		}
-		out[i] = s
-	}
-	return out, true
-}
-
-// editRange holds the resolved result of parsing hashes against file content.
-type editRange struct {
-	lines     []string
-	startLine int
-	endLine   int
-	stale     []string
-}
-
-// resolveEdit reads the file and resolves hashes to line numbers.
-func resolveEdit(path string, hashes []string) (*editRange, error) {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	lines := strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n")
-	hashToLines := buildHashToLines(lines)
-
-	var stale []string
-	for _, h := range hashes {
-		if resolveLine(hashToLines, h) == 0 {
-			stale = append(stale, h)
-		}
-	}
-	if len(stale) > 0 {
-		return &editRange{lines: lines, stale: stale}, nil
-	}
-
-	startLine := resolveLine(hashToLines, hashes[0])
-	endLine := startLine
-	if len(hashes) > 1 {
-		endLine = resolveLine(hashToLines, hashes[1])
-	}
-	if startLine > endLine {
-		startLine, endLine = endLine, startLine
-	}
-	return &editRange{lines: lines, startLine: startLine, endLine: endLine}, nil
-}
-
-func (t *EditTool) hashlineEdit(path string, hashes []string, args map[string]any) (string, error) {
-	r, err := resolveEdit(path, hashes)
-	if err != nil {
-		return "", fmt.Errorf("failed to read file: %v", err)
-	}
-	if len(r.stale) > 0 {
-		var sb strings.Builder
-		fmt.Fprintf(&sb, "<path>%s</path>\n<error>Hashline stale</error>\n<stale>\n", filepath.Base(path))
-		for _, h := range r.stale {
-			fmt.Fprintf(&sb, "  %s\n", h)
-		}
-	contentStr := strings.Join(r.lines, "\n")
-	cdata := strings.ReplaceAll(contentStr, "]]>", "]]]]><![CDATA[>")
-	fmt.Fprintf(&sb, "</stale>\n<current>\n<format>Content in CDATA block, hashes in <hashes> block.</format>\n<content>\n<![CDATA[\n%s\n]]>\n</content>\n<hashes>\n", cdata)
-	sb.WriteString(tools.AnnotateLines(contentStr))
-	sb.WriteString("\n</hashes>\n</current>")
-		return "", fmt.Errorf("%s", sb.String())
-	}
-
-	startLine, endLine := r.startLine, r.endLine
-
-	origMode := os.FileMode(0644)
-	if info, err := os.Stat(path); err == nil {
-		origMode = info.Mode()
-	}
-
-	op, _ := args["op"].(string)
-	newStr, _ := args["new_string"].(string)
-	var replacement []string
-	if newStr != "" {
-		replacement = strings.Split(newStr, "\n")
-	}
-
-	switch op {
-	case "insert_before":
-		r.lines = append(r.lines[:startLine-1], append(replacement, r.lines[startLine-1:]...)...)
-	case "insert_after":
-		r.lines = append(r.lines[:endLine], append(replacement, r.lines[endLine:]...)...)
-	case "delete":
-		r.lines = append(r.lines[:startLine-1], r.lines[endLine:]...)
-	default:
-		r.lines = append(r.lines[:startLine-1], append(replacement, r.lines[endLine:]...)...)
-	}
-
-	newText := strings.Join(r.lines, "\n")
-	if err := os.WriteFile(path, []byte(newText), origMode); err != nil {
-		return "", fmt.Errorf("failed to write file: %v", err)
-	}
-
-	what := "Replaced"
-	n := len(replacement)
-	if op == "insert_after" || op == "insert_before" {
-		what = "Inserted"
-	} else if op == "delete" {
-		what, n = "Deleted", endLine-startLine+1
-	}
-	result := fmt.Sprintf("<path>%s</path>\n%s %d line(s) in %s", filepath.Base(path), what, n, filepath.Base(path))
-
-	if lint := lintFile(path); lint != "" {
-		result += "\n<lint>\n" + lint + "\n</lint>"
-	}
-	return result, nil
-}
-
-// ---------------------------------------------------------------------------
-// hashline helpers
-// ---------------------------------------------------------------------------
-
-// cleanHash strips annotation syntax from a hash value: brackets [a3] → a3,
-// and legacy | separator a3| → a3.
-func cleanHash(s string) string {
-	return strings.TrimRight(strings.TrimSuffix(strings.TrimPrefix(s, "["), "]"), "|")
-}
-
-// parseHashParam splits a hashline param "lineNo:hash" into its parts.
-func parseHashParam(s string) (lineNo int, hash string) {
-	if idx := strings.IndexByte(s, ':'); idx > 0 {
-		if n, err := strconv.Atoi(s[:idx]); err == nil {
-			return n, cleanHash(s[idx+1:])
-		}
-	}
-	return 0, cleanHash(s)
-}
-
-// buildHashToLines maps each line's hash to its 1-based line numbers.
-func buildHashToLines(lines []string) map[string][]int {
-	m := make(map[string][]int)
-	for i, line := range lines {
-		h := tools.HashLine(line)
-		m[h] = append(m[h], i+1)
-	}
-	return m
-}
-
-// resolveLine finds the best-matching line number for a hashline param.
-// Returns 0 if the hash is not found in the file.
-func resolveLine(hashToLines map[string][]int, param string) int {
-	expNo, h := parseHashParam(param)
-	occ := hashToLines[h]
-	if len(occ) == 0 {
-		return 0
-	}
-	// If expected line number is provided, check if it has the same hash.
-	// This prevents misplacement when similar lines have different hashes.
-	if expNo > 0 {
-		for _, o := range occ {
-			if o == expNo {
-				return expNo // exact match
-			}
-		}
-	}
-	if len(occ) == 1 || expNo == 0 {
-		return occ[0]
-	}
-	best := occ[0]
-	for _, o := range occ[1:] {
-		if abs(o-expNo) < abs(best-expNo) {
-			best = o
-		}
-	}
-	return best
-}
-
-func abs(n int) int {
-	if n < 0 {
-		return -n
-	}
-	return n
 }

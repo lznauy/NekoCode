@@ -26,6 +26,11 @@ var (
 	}
 )
 
+// ShouldSkipDir returns true if the directory should be skipped during walks.
+func ShouldSkipDir(name string) bool {
+	return ignoreDirs[name] || (strings.HasPrefix(name, ".") && name != ".")
+}
+
 // Indexer orchestrates the indexing process.
 type Indexer struct {
 	parser *Parser
@@ -82,7 +87,7 @@ func buildGraphFromWalk(cwd string, parser *Parser, db *DB) (*Graph, error) {
 		}
 		if info.IsDir() {
 			name := info.Name()
-			if ignoreDirs[name] || (strings.HasPrefix(name, ".") && name != ".") {
+			if ShouldSkipDir(name) {
 				return filepath.SkipDir
 			}
 			rel, _ := filepath.Rel(cwd, path)
@@ -111,66 +116,7 @@ func buildGraphFromWalk(cwd string, parser *Parser, db *DB) (*Graph, error) {
 		hash := fmt.Sprintf("%x", sha256.Sum256(content))
 		nodes, edges := parser.ParseFile(path, content)
 
-		// Compute package path from directory structure (e.g., "bot/cindex")
-		lang := detectLanguageForFile(ext)
-		relDir, _ := filepath.Rel(cwd, filepath.Dir(path))
-		if relDir == "." {
-			relDir = ""
-		}
-		pkgPath := relDir
-		// For Go, use the package name if no directory structure
-		if ext == ".go" && pkgPath == "" && len(nodes) > 0 {
-			pkgPath = nodes[0].PkgPath
-		}
-		// Update nodes' PkgPath to use the directory-based path
-		for _, n := range nodes {
-			n.PkgPath = pkgPath
-		}
-
-		// Create a file-level node to anchor import edges
-		fileNode := &Node{
-			Name:    filepath.Base(path),
-			Kind:    "file",
-			File:    path,
-			PkgPath: pkgPath,
-		}
-		fileNodeID := g.AddNode(fileNode)
-		if db != nil {
-			db.SaveNode(fileNode)
-		}
-
-		// Add nodes to graph, tracking parser-index → graph-ID mapping
-		parserIDToGraphID := make(map[int64]int64)
-		for idx, n := range nodes {
-			n.ID = g.AddNode(n)
-			parserIDToGraphID[int64(-(idx+1))] = n.ID
-			if db != nil {
-				db.SaveNode(n)
-			}
-		}
-
-		// Fix edge FromID and add to graph
-		for _, e := range edges {
-			if e.FromID < 0 {
-				if graphID, ok := parserIDToGraphID[e.FromID]; ok {
-					e.FromID = graphID
-				} else {
-					continue
-				}
-			}
-			// Import edges at file level: associate with file node
-			if e.FromID == 0 {
-				if e.Kind == EdgeImports {
-					e.FromID = fileNodeID
-				} else {
-					continue
-				}
-			}
-			e.ID = g.AddEdge(e)
-			if db != nil {
-				db.SaveEdge(e)
-			}
-		}
+		_, lang := insertFileIntoGraph(g, db, path, cwd, nodes, edges)
 
 		// Record file
 		if db != nil {
@@ -273,20 +219,89 @@ func resolveReferences(g *Graph) {
 	}
 }
 
+// extToLang maps file extensions to language names.
+var extToLang = map[string]string{
+	".go":  "go",
+	".js":  "javascript",
+	".jsx": "javascript",
+	".ts":  "typescript",
+	".tsx": "typescript",
+	".py":  "python",
+	".rs":  "rust",
+	".java": "java",
+}
+
 // detectLanguageForFile returns the language name for a file extension.
 func detectLanguageForFile(ext string) string {
-	switch ext {
-	case ".go":
-		return "go"
-	case ".js", ".jsx":
-		return "javascript"
-	case ".ts", ".tsx":
-		return "typescript"
-	case ".py":
-		return "python"
-	case ".rs":
-		return "rust"
-	default:
-		return "unknown"
+	if lang, ok := extToLang[ext]; ok {
+		return lang
 	}
+	return "unknown"
+}
+
+// insertFileIntoGraph adds a parsed file's nodes and edges to the graph and DB.
+// Returns the file node ID and the detected language. If db is nil, DB writes
+// are skipped (used during initial walk when DB is not yet open).
+func insertFileIntoGraph(g *Graph, db *DB, path string, cwd string, nodes []*Node, edges []*Edge) (int64, string) {
+	ext := filepath.Ext(path)
+	lang := detectLanguageForFile(ext)
+
+	// Compute package path from directory structure
+	relDir, _ := filepath.Rel(cwd, filepath.Dir(path))
+	if relDir == "." {
+		relDir = ""
+	}
+	pkgPath := relDir
+	if ext == ".go" && pkgPath == "" && len(nodes) > 0 {
+		pkgPath = nodes[0].PkgPath
+	}
+	for _, n := range nodes {
+		n.PkgPath = pkgPath
+	}
+
+	// Create file-level node to anchor import edges
+	fileNode := &Node{
+		Name:    filepath.Base(path),
+		Kind:    "file",
+		File:    path,
+		PkgPath: pkgPath,
+	}
+	fileNodeID := g.AddNode(fileNode)
+	if db != nil {
+		db.SaveNode(fileNode)
+	}
+
+	// Add nodes to graph, tracking parser-index → graph-ID mapping
+	parserIDToGraphID := make(map[int64]int64)
+	for idx, n := range nodes {
+		n.ID = g.AddNode(n)
+		parserIDToGraphID[int64(-(idx+1))] = n.ID
+		if db != nil {
+			db.SaveNode(n)
+		}
+	}
+
+	// Fix edge FromID and add to graph
+	for _, e := range edges {
+		if e.FromID < 0 {
+			if graphID, ok := parserIDToGraphID[e.FromID]; ok {
+				e.FromID = graphID
+			} else {
+				continue
+			}
+		}
+		if e.FromID == 0 {
+			if e.Kind == EdgeImports {
+				e.FromID = fileNodeID
+			} else {
+				continue
+			}
+		}
+		e.ID = g.AddEdge(e)
+		if db != nil {
+			db.SaveEdge(e)
+		}
+	}
+
+	return fileNodeID, lang
 }

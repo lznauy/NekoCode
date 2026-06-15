@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+
+	"nekocode/common"
 )
 
 // Skill represents a loaded skill definition.
@@ -28,23 +30,18 @@ type Skill struct {
 
 // Registry manages loaded skills, thread-safe.
 type Registry struct {
-	mu     sync.RWMutex
-	skills map[string]*Skill
-	loaded map[string]bool
+	*common.Registry[*Skill]
+	loaded sync.Map // map[string]bool — tracks skills loaded in current session
 }
 
 func NewRegistry() *Registry {
-	return &Registry{skills: make(map[string]*Skill), loaded: make(map[string]bool)}
+	return &Registry{
+		Registry: common.NewRegistry[*Skill](func(s *Skill) string { return s.Name }),
+	}
 }
 
 func (r *Registry) RegisterBundled(skills []*Skill) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, sk := range skills {
-		if _, exists := r.skills[sk.Name]; !exists {
-			r.skills[sk.Name] = sk
-		}
-	}
+	r.Registry.RegisterAll(skills)
 }
 
 func (r *Registry) Load(dirs []string) error {
@@ -54,68 +51,37 @@ func (r *Registry) Load(dirs []string) error {
 		if err != nil {
 			continue
 		}
-		r.mu.Lock()
-		if _, exists := r.skills[sk.Name]; !exists {
-			r.skills[sk.Name] = sk
+		if !r.Registry.Has(sk.Name) {
+			r.Registry.Register(sk)
 		}
-		r.mu.Unlock()
 	}
 	return nil
 }
 
-func (r *Registry) Get(name string) (*Skill, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	sk, ok := r.skills[name]
-	return sk, ok
-}
-
-func (r *Registry) List() []*Skill {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	out := make([]*Skill, 0, len(r.skills))
-	for _, sk := range r.skills {
-		out = append(out, sk)
-	}
-	return out
-}
-
 func (r *Registry) MarkLoaded(name string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.loaded[name] = true
+	r.loaded.Store(name, true)
 }
 
 func (r *Registry) ClearLoaded() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.loaded = make(map[string]bool)
+	r.loaded.Clear()
 }
 
 func (r *Registry) IsLoaded(name string) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.loaded[name]
+	_, ok := r.loaded.Load(name)
+	return ok
 }
 
 func (r *Registry) LoadedSet() map[string]bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	out := make(map[string]bool, len(r.loaded))
-	for k, v := range r.loaded {
-		out[k] = v
-	}
+	out := make(map[string]bool)
+	r.loaded.Range(func(key, value any) bool {
+		out[key.(string)] = true
+		return true
+	})
 	return out
 }
 
 func (r *Registry) names() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	names := make([]string, 0, len(r.skills))
-	for _, sk := range r.skills {
-		names = append(names, sk.Name)
-	}
-	return names
+	return r.Registry.Names()
 }
 
 func (r *Registry) namesString() string {

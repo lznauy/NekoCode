@@ -19,6 +19,7 @@ const (
 	KindClass     NodeKind = "class"
 	KindVar       NodeKind = "var"
 	KindConst     NodeKind = "const"
+	KindFile      NodeKind = "file"
 )
 
 // EdgeKind represents the type of a relationship between nodes.
@@ -214,11 +215,11 @@ func (g *Graph) FindNodesByFile(name string) []*Node {
 	return result
 }
 
-// GetCallers returns all nodes that call the given node.
-func (g *Graph) GetCallers(nodeID int64) []*Node {
+// nodesFromEdges returns nodes reachable from edges in edgesByTo[id] filtered by kind.
+func (g *Graph) nodesFromEdges(id int64, kind EdgeKind) []*Node {
 	var result []*Node
-	for _, e := range g.edgesByTo[nodeID] {
-		if e.Kind == EdgeCalls {
+	for _, e := range g.edgesByTo[id] {
+		if e.Kind == kind {
 			if n, ok := g.Nodes[e.FromID]; ok {
 				result = append(result, n)
 			}
@@ -227,11 +228,11 @@ func (g *Graph) GetCallers(nodeID int64) []*Node {
 	return result
 }
 
-// GetCallees returns all nodes called by the given node.
-func (g *Graph) GetCallees(nodeID int64) []*Node {
+// nodesToEdges returns nodes reachable from edges in edgesByFrom[id] filtered by kind.
+func (g *Graph) nodesToEdges(id int64, kind EdgeKind) []*Node {
 	var result []*Node
-	for _, e := range g.edgesByFrom[nodeID] {
-		if e.Kind == EdgeCalls {
+	for _, e := range g.edgesByFrom[id] {
+		if e.Kind == kind {
 			if n, ok := g.Nodes[e.ToID]; ok {
 				result = append(result, n)
 			}
@@ -240,23 +241,10 @@ func (g *Graph) GetCallees(nodeID int64) []*Node {
 	return result
 }
 
-// GetChildren returns all nodes contained by the given node.
-func (g *Graph) GetChildren(nodeID int64) []*Node {
-	var result []*Node
-	for _, e := range g.edgesByFrom[nodeID] {
-		if e.Kind == EdgeContains {
-			if n, ok := g.Nodes[e.ToID]; ok {
-				result = append(result, n)
-			}
-		}
-	}
-	return result
-}
-
-// GetParent returns the node that contains the given node.
-func (g *Graph) GetParent(nodeID int64) *Node {
-	for _, e := range g.edgesByTo[nodeID] {
-		if e.Kind == EdgeContains {
+// firstFromEdge returns the first node in edgesByTo[id] matching kind, or nil.
+func (g *Graph) firstFromEdge(id int64, kind EdgeKind) *Node {
+	for _, e := range g.edgesByTo[id] {
+		if e.Kind == kind {
 			if n, ok := g.Nodes[e.FromID]; ok {
 				return n
 			}
@@ -264,6 +252,18 @@ func (g *Graph) GetParent(nodeID int64) *Node {
 	}
 	return nil
 }
+
+// GetCallers returns all nodes that call the given node.
+func (g *Graph) GetCallers(nodeID int64) []*Node { return g.nodesFromEdges(nodeID, EdgeCalls) }
+
+// GetCallees returns all nodes called by the given node.
+func (g *Graph) GetCallees(nodeID int64) []*Node { return g.nodesToEdges(nodeID, EdgeCalls) }
+
+// GetChildren returns all nodes contained by the given node.
+func (g *Graph) GetChildren(nodeID int64) []*Node { return g.nodesToEdges(nodeID, EdgeContains) }
+
+// GetParent returns the node that contains the given node.
+func (g *Graph) GetParent(nodeID int64) *Node { return g.firstFromEdge(nodeID, EdgeContains) }
 
 // FormatSkeleton produces a compact project overview for Layer 0 injection.
 // This is compatible with the old projctx.ProjectIndex.FormatSkeleton().
@@ -442,19 +442,8 @@ func detectLanguage(g *Graph) string {
 	langs := make(map[string]int)
 	for _, n := range g.Nodes {
 		ext := filepath.Ext(n.File)
-		switch ext {
-		case ".go":
-			langs["go"]++
-		case ".ts", ".tsx":
-			langs["typescript"]++
-		case ".js", ".jsx":
-			langs["javascript"]++
-		case ".py":
-			langs["python"]++
-		case ".rs":
-			langs["rust"]++
-		case ".java":
-			langs["java"]++
+		if lang := detectLanguageForFile(ext); lang != "unknown" {
+			langs[lang]++
 		}
 	}
 	maxCount := 0

@@ -3,7 +3,6 @@ package agent
 import (
 	"nekocode/bot/debug"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -35,10 +34,10 @@ type ReasoningResult struct {
 	TextContent     string
 	Interrupted     bool
 	GarbledToolCall bool
+	IsError         bool // set when the LLM call itself failed (not a text response)
 }
 
 func (a *Agent) Reason(state *stepState) *ReasoningResult {
-	a.drainSteering()
 	if a.phase != nil {
 		a.phase(common.PhaseThinking)
 	}
@@ -54,7 +53,7 @@ func (a *Agent) Reason(state *stepState) *ReasoningResult {
 		if textContent != "" && !isGarbledToolCall(textContent) {
 			return &ReasoningResult{Thought: "Truncated reply", Action: ActionChat, ActionInput: textContent}
 		}
-		return &ReasoningResult{Thought: "LLM call failed", Action: ActionChat, ActionInput: fmt.Sprintf("调用失败: %v", err)}
+		return &ReasoningResult{Thought: "LLM call failed", Action: ActionChat, ActionInput: fmt.Sprintf("LLM call failed: %v", err), IsError: true}
 	}
 
 	if len(toolCalls) == 0 {
@@ -72,7 +71,7 @@ func (a *Agent) Reason(state *stepState) *ReasoningResult {
 		tc := toolCalls[0]
 		return &ReasoningResult{
 			Thought: "Call tool: " + tc.Name, Action: ActionExecuteTool,
-			ActionInput: tc.Name + ":" + formatArgs(tc.Args),
+			ActionInput: tc.Name + ":" + tools.FormatArgs(tc.Args),
 			ToolCalls:   toolCalls, TextContent: textContent,
 		}
 	}
@@ -109,169 +108,62 @@ func (a *Agent) callLLMForTool() ([]tools.ToolCallItem, string, error) {
 			messages = a.transform(messages)
 		}
 
-		tokenCh, errCh := a.llmClient.ChatStream(a.getCtx(), messages, toolDefs)
-		if tokenCh == nil {
-			if err, ok := <-errCh; ok {
-				return err
-			}
-			return fmt.Errorf("chat stream failed")
+		result, err := tools.CallLLM(a.llmClient, tools.LLMCallOptions{
+			Ctx:            a.getCtx(),
+			Messages:       messages,
+			ToolDefs:       toolDefs,
+			Callbacks:      a.streamCallbacks(),
+			CheckDone:      func() bool { return a.finished.Load() },
+			EstimatePrompt: true,
+		})
+		if err != nil {
+			return err
 		}
 
-		a.AddTokens(estimatePrompt(messages), 0)
-
-		stream := streamResult{}
-		a.consumeStream(tokenCh, &stream)
-	if a.finished {
-		return context.Canceled
-	}
-
-		if ctxErr := a.getCtx().Err(); ctxErr != nil {
-			return ctxErr
+		textContent = result.Text
+		if result.Reasoning != "" {
+			a.lastReason = result.Reasoning
 		}
-		select {
-		case err := <-errCh:
-			if err != nil {
-				return err
-			}
-		default:
-		}
-
-		textContent = tools.StripAnsi(stream.textBuf.String())
-		if stream.reasoningBuf.Len() > 0 {
-			a.lastReason = stream.reasoningBuf.String()
-		}
-		if len(stream.tcAccum) == 0 {
+		if len(result.ToolCalls) == 0 {
 			return nil
 		}
 
-		items = stream.toolCalls()
-		a.ctxMgr.AddAssistantToolCall(textContent, a.lastReason, stream.llmToolCalls())
+		items = result.ToolCalls
+		a.ctxMgr.AddAssistantToolCall(textContent, a.lastReason, tools.ToLLMToolCalls(items))
 		return nil
 	})
 
 	return items, textContent, err
 }
 
-// streamResult holds the output of consuming a ChatStream.
-type streamResult struct {
-	textBuf      strings.Builder
-	reasoningBuf strings.Builder
-	tcAccum      map[int]*toolAccum
-}
-
-func (a *Agent) consumeStream(tokenCh <-chan types.StreamToken, s *streamResult) {
-	firstContent := true
-	firstReasoning := true
-	for token := range tokenCh {
-		if a.finished {
-			go func() { for range tokenCh {} }() // drain
-			return
-		}
-		if token.ReasoningContent != "" && firstReasoning {
-			firstReasoning = false
-			if a.phase != nil {
-				a.phase(common.PhaseThinking)
-			}
-		}
-		if token.Content != "" {
-			if firstContent {
-				firstContent = false
-				if a.phase != nil {
-					a.phase(common.PhaseReasoning)
-				}
-			}
-			s.textBuf.WriteString(token.Content)
+// streamCallbacks returns the StreamCallbacks for the main agent.
+func (a *Agent) streamCallbacks() tools.StreamCallbacks {
+	return tools.StreamCallbacks{
+		OnText: func(delta string) {
 			if a.textFn != nil {
-				a.textFn(token.Content, false)
+				a.textFn(delta, false)
 			}
-			a.AddTokens(0, 1)
-		}
-		if token.ReasoningContent != "" {
-			s.reasoningBuf.WriteString(token.ReasoningContent)
+		},
+		OnReasoning: func(delta string) {
 			if a.reasonFn != nil {
-				a.reasonFn(token.ReasoningContent)
+				a.reasonFn(delta)
 			}
-			a.AddTokens(0, 1)
-		}
-		if token.Usage != nil {
-			if token.Usage.PromptTokens > 0 || token.Usage.CompletionTokens > 0 {
-				a.ctxMgr.RecordUsage(token.Usage.PromptTokens, token.Usage.CompletionTokens)
+		},
+		OnPhase: func(phase string) {
+			if a.phase != nil {
+				a.phase(phase)
 			}
-			if token.Usage.CacheHitTokens > 0 || token.Usage.CacheMissTokens > 0 {
-				a.ctxMgr.RecordCache(token.Usage.CacheHitTokens, token.Usage.CacheMissTokens)
-			}
-		}
-		if token.ToolCallDelta != nil {
-			if firstContent {
-				firstContent = false
-				if a.phase != nil {
-					a.phase(common.PhaseReasoning)
-				}
-			}
-			if s.tcAccum == nil {
-				s.tcAccum = make(map[int]*toolAccum)
-			}
-			idx := token.ToolCallDelta.Index
-			acc := s.tcAccum[idx]
-			if acc == nil {
-				acc = &toolAccum{}
-				s.tcAccum[idx] = acc
-			}
-			if token.ToolCallDelta.ID != "" {
-				acc.id = token.ToolCallDelta.ID
-			}
-			if token.ToolCallDelta.Name != "" {
-				acc.name = token.ToolCallDelta.Name
-			}
-			acc.args.WriteString(token.ToolCallDelta.Arguments)
-			a.AddTokens(0, 1)
-		}
+		},
+		AddTokens: func(prompt, completion int) {
+			a.AddTokens(prompt, completion)
+		},
+		RecordUsage: func(prompt, completion int) {
+			a.ctxMgr.RecordUsage(prompt, completion)
+		},
+		RecordCache: func(hit, miss int) {
+			a.ctxMgr.RecordCache(hit, miss)
+		},
 	}
-}
-
-func (s *streamResult) toolCalls() []tools.ToolCallItem {
-	var items []tools.ToolCallItem
-	for i := 0; i < len(s.tcAccum); i++ {
-		acc := s.tcAccum[i]
-		if acc == nil {
-			continue
-		}
-		var args map[string]any
-		if err := json.Unmarshal([]byte(acc.args.String()), &args); err != nil {
-			continue
-		}
-		items = append(items, tools.ToolCallItem{ID: acc.id, Name: acc.name, Args: args})
-	}
-	return items
-}
-
-func (s *streamResult) llmToolCalls() []types.ToolCall {
-	var calls []types.ToolCall
-	for i := 0; i < len(s.tcAccum); i++ {
-		acc := s.tcAccum[i]
-		if acc == nil {
-			continue
-		}
-		calls = append(calls, types.ToolCall{
-			ID: acc.id, Type: "function",
-			Function: types.FunctionCall{Name: acc.name, Arguments: acc.args.String()},
-		})
-	}
-	return calls
-}
-
-type toolAccum struct {
-	id   string
-	name string
-	args strings.Builder
-}
-
-func estimatePrompt(messages []types.Message) int {
-	n := 0
-	for _, m := range messages {
-		n += len(m.Content) + len(m.Role)
-	}
-	return n / 4
 }
 
 // -- synthesize --
@@ -291,64 +183,50 @@ func (a *Agent) trySynthesize() string {
 	var text string
 
 	err := withRetry(a.getCtx(), func() error {
-		messages := a.ctxMgr.Build(false)
-		messages = append(messages, types.Message{Role: "user", Content: synthesizePrompt})
-
-		tokenCh, errCh := a.llmClient.ChatStream(a.getCtx(), messages, nil)
-		if tokenCh == nil {
-			if err, ok := <-errCh; ok {
-				return err
-			}
-			return fmt.Errorf("chat stream failed")
+		result, err := a.streamSynthesize(a.getCtx())
+		if err != nil {
+			return err
 		}
-
-		a.AddTokens(estimatePrompt(messages), 0)
-
-		stream := streamResult{}
-		a.consumeStream(tokenCh, &stream)
-	if a.finished {
-		return context.Canceled
-	}
-
-		select {
-		case err := <-errCh:
-			if err != nil {
-				return err
-			}
-		default:
-		}
-		text = tools.StripAnsi(stream.textBuf.String())
+		text = result
 		return nil
 	})
 
-	if err != nil && !errors.Is(err, context.Canceled) && text != "" && !isGarbledToolCall(text) {
-		return text
+	if err != nil && errors.Is(err, context.Canceled) {
+		return ""
 	}
 	return text
 }
 
 func (a *Agent) emergencySynthesize() string {
 	a.ctxMgr.AutoCompactIfNeeded()
-	msgs := a.ctxMgr.Build(false)
-	msgs = append(msgs, types.Message{Role: "user", Content: synthesizePrompt})
 
 	ctx, cancel := context.WithTimeout(a.getCtx(), 30*time.Second)
 	defer cancel()
 
-	tokenCh, _ := a.llmClient.ChatStream(ctx, msgs, nil)
-	if tokenCh == nil {
-		return ""
-	}
-	stream := streamResult{}
-	a.consumeStream(tokenCh, &stream)
-	if a.finished {
-		return ""
-	}
-	text := tools.StripAnsi(stream.textBuf.String())
+	text, _ := a.streamSynthesize(ctx)
 	if isGarbledToolCall(text) {
 		return ""
 	}
 	return text
+}
+
+// streamSynthesize executes a single synthesis LLM call (no tools).
+// Returns the synthesized text. Used by both trySynthesize and emergencySynthesize.
+func (a *Agent) streamSynthesize(ctx context.Context) (string, error) {
+	messages := a.ctxMgr.Build(false)
+	messages = append(messages, types.Message{Role: "user", Content: synthesizePrompt})
+
+	result, err := tools.CallLLM(a.llmClient, tools.LLMCallOptions{
+		Ctx:            ctx,
+		Messages:       messages,
+		Callbacks:      a.streamCallbacks(),
+		CheckDone:      func() bool { return a.finished.Load() },
+		EstimatePrompt: true,
+	})
+	if err != nil {
+		return "", err
+	}
+	return result.Text, nil
 }
 
 // -- helpers --

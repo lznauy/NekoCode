@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"nekocode/common"
+	"nekocode/llm/types"
 )
 
 func TestMCPToolAdapter(t *testing.T) {
@@ -15,7 +16,7 @@ func TestMCPToolAdapter(t *testing.T) {
 			Description: "Search for files matching a pattern",
 			InputSchema: InputSchema{
 				Type: "object",
-				Properties: map[string]Property{
+				Properties: map[string]types.Property{
 					"pattern": {Type: "string", Description: "Glob pattern to match"},
 					"dir":     {Type: "string", Description: "Directory to search"},
 				},
@@ -66,7 +67,7 @@ func TestMCPToolExecute(t *testing.T) {
 	mockTools := []ToolDef{
 		{Name: "echo", Description: "Echo back", InputSchema: InputSchema{
 			Type:       "object",
-			Properties: map[string]Property{"msg": {Type: "string"}},
+			Properties: map[string]types.Property{"msg": {Type: "string"}},
 		}},
 	}
 	cmd, cleanup := startMockMCP(t, mockTools)

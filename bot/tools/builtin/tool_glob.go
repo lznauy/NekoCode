@@ -4,20 +4,18 @@ package builtin
 import (
 	"context"
 	"fmt"
-	"nekocode/bot/tools"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"nekocode/common"
+	"nekocode/bot/tools"
 )
 
-type GlobTool struct{}
+type GlobTool struct {
+	SafeReadOnlyTool
+}
 
 func (t *GlobTool) Name() string { return "glob" }
-func (t *GlobTool) ExecutionMode(map[string]any) tools.ExecutionMode {
-	return tools.ModeParallel
-}
 
 func (t *GlobTool) Description() string {
 	return "Find files matching a glob pattern. Supports ** for recursive directory search (e.g. \"src/**/*.go\"). Returns newline-separated file paths."
@@ -30,33 +28,26 @@ func (t *GlobTool) Parameters() []tools.Parameter {
 	}
 }
 
-func (t *GlobTool) DangerLevel(args map[string]any) common.DangerLevel {
-	return common.LevelSafe
-}
-
 func (t *GlobTool) Execute(ctx context.Context, args map[string]any) (string, error) {
-	pattern, ok := args["pattern"].(string)
-	if !ok || pattern == "" {
-		return "", fmt.Errorf("missing pattern parameter")
+	pattern, err := requireStringArg(args, "pattern")
+	if err != nil {
+		return "", err
 	}
 
-	basePath := "."
-	if p, ok := args["path"].(string); ok && p != "" {
-		basePath = p
-	}
+	basePath := optStringArg(args, "path", ".")
 
 	var matches []string
 	if strings.Contains(pattern, "**") {
 		var err error
 		matches, err = globRecursive(basePath, pattern)
 		if err != nil {
-			return "", fmt.Errorf("glob failed: %v", err)
+			return "", fmt.Errorf("glob failed: %w", err)
 		}
 	} else {
 		var err error
 		matches, err = filepath.Glob(filepath.Join(basePath, pattern))
 		if err != nil {
-			return "", fmt.Errorf("glob failed: %v", err)
+			return "", fmt.Errorf("glob failed: %w", err)
 		}
 	}
 

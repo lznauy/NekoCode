@@ -17,6 +17,7 @@ import (
 )
 
 type WebSearchTool struct {
+	SafeReadOnlyTool
 	client *http.Client
 }
 
@@ -25,12 +26,6 @@ func NewWebSearchTool() *WebSearchTool {
 }
 
 func (t *WebSearchTool) Name() string { return "web_search" }
-func (t *WebSearchTool) ExecutionMode(map[string]any) tools.ExecutionMode {
-	return tools.ModeParallel
-}
-func (t *WebSearchTool) DangerLevel(map[string]any) common.DangerLevel {
-	return common.LevelSafe
-}
 
 func (t *WebSearchTool) Description() string {
 	return "Search the web. Include a \"Sources:\" section with [Title](URL) links after answering."
@@ -44,9 +39,9 @@ func (t *WebSearchTool) Parameters() []tools.Parameter {
 }
 
 func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) (string, error) {
-	query, ok := args["query"].(string)
-	if !ok || strings.TrimSpace(query) == "" {
-		return "", fmt.Errorf("missing query parameter")
+	query, err := requireStringArg(args, "query")
+	if err != nil {
+		return "", err
 	}
 	n := 8
 	if v, ok := args["numResults"].(float64); ok && v > 0 {
@@ -55,7 +50,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) (strin
 			n = 15
 		}
 	}
-	return searchExa(ctx, query, n)
+	return t.searchExa(ctx, query, n)
 }
 
 // --- Exa MCP (JSON-RPC over SSE) ---
@@ -64,7 +59,7 @@ func exaEndpoint() string {
 	return "https://mcp.exa.ai/mcp"
 }
 
-func searchExa(ctx context.Context, query string, n int) (string, error) {
+func (t *WebSearchTool) searchExa(ctx context.Context, query string, n int) (string, error) {
 	body, _ := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
@@ -88,7 +83,7 @@ func searchExa(ctx context.Context, query string, n int) (string, error) {
 		req.Header.Set("X-Api-Key", k)
 	}
 
-	resp, err := tools.NewToolHTTPClient(30 * time.Second).Do(req)
+	resp, err := t.client.Do(req)
 	if err != nil {
 		return "", err
 	}

@@ -54,8 +54,7 @@ func (t *MCPTool) DangerLevel(args map[string]any) common.DangerLevel {
 
 func (t *MCPTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	_ = ctx
-	name := strings.TrimPrefix(t.fullName, t.client.Name+"__")
-	return t.client.CallTool(name, args)
+	return t.client.CallTool(t.def.Name, args)
 }
 
 // ParseDangerLevel converts a string to a DangerLevel.

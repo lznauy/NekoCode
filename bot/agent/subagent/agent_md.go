@@ -3,7 +3,8 @@ package subagent
 import (
 	"fmt"
 	"os"
-	"strings"
+
+	"nekocode/common"
 
 	"gopkg.in/yaml.v3"
 )
@@ -21,22 +22,12 @@ func ParseAgentMD(path string) (*AgentDef, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read agent file: %w", err)
 	}
-	content := strings.ReplaceAll(string(data), "\r\n", "\n")
-	content = strings.TrimSpace(content)
-
-	if !strings.HasPrefix(content, "---") {
-		return nil, fmt.Errorf("missing frontmatter (---)")
+	yamlBytes, body, err := common.ParseYAMLFrontmatter(string(data))
+	if err != nil {
+		return nil, err
 	}
-
-	rest := content[3:]
-	yamlText, body, found := strings.Cut(rest, "\n---")
-	if !found {
-		return nil, fmt.Errorf("unclosed frontmatter")
-	}
-	body = strings.TrimSpace(body)
-
 	var def AgentDef
-	if err := yaml.Unmarshal([]byte(yamlText), &def); err != nil {
+	if err := yaml.Unmarshal(yamlBytes, &def); err != nil {
 		return nil, fmt.Errorf("invalid frontmatter: %w", err)
 	}
 	if def.Name == "" {

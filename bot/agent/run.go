@@ -2,13 +2,24 @@ package agent
 
 import (
 	"fmt"
-	"sort"
-	"strings"
 
 	"nekocode/bot/agent/budget"
 	"nekocode/bot/hooks"
-	"nekocode/bot/tools"
 )
+
+// maxAgentSteps is the hard ceiling on agent loop iterations. Prevents
+// infinite loops when the LLM keeps producing tool calls or PostTurn hooks
+// keep injecting hints without progress.
+const maxAgentSteps = 150
+
+// maxConsecutiveHints is the maximum number of consecutive PostTurn hint
+// injections without any intervening tool calls. Beyond this the agent
+// is stuck in a text-only loop and should stop.
+const maxConsecutiveHints = 3
+
+// maxConsecutiveFailures is the maximum number of consecutive LLM call
+// failures (after retries). Beyond this the LLM is likely broken.
+const maxConsecutiveFailures = 5
 
 type RunResult struct {
 	FinalOutput string
@@ -31,15 +42,18 @@ func (a *Agent) Run(input string, callback RunCallback) *RunResult {
 	// UserSubmit hooks.
 	if a.hookReg != nil {
 		for _, r := range a.hookReg.Evaluate(hooks.UserSubmit, "", false) {
-			if r.Hint != nil {
-				a.ctxMgr.Add("user", "[System] "+r.Hint.Content)
-			}
+			a.injectHint(r.Hint)
 		}
 	}
 
-	for !a.finished {
+	for !a.finished.Load() {
+		if a.step >= maxAgentSteps {
+			a.stopReason = hooks.StopCompleted
+			a.lastText = "[Agent stopped: reached maximum step limit]"
+			break
+		}
 		if finished := a.runTurn(state, callback); finished {
-			a.finished = true
+			a.finished.Store(true)
 		}
 	}
 
@@ -57,8 +71,11 @@ func (a *Agent) Run(input string, callback RunCallback) *RunResult {
 func (a *Agent) evaluateStop() {
 	if a.hookReg != nil {
 		for _, r := range a.hookReg.Evaluate(hooks.Stop, "", false) {
+			if r.Stop != nil {
+				a.stopReason = *r.Stop
+			}
 			if r.Hint != nil {
-				a.ctxMgr.Add("user", "[System] "+r.Hint.Content)
+				a.injectHint(r.Hint)
 			}
 		}
 	}
@@ -72,11 +89,21 @@ func (a *Agent) runTurn(state *stepState, callback RunCallback) (finished bool) 
 
 	// —— PreTurn hooks ——
 	if a.hookReg != nil {
-			a.hookReg.ResetTurn()
+		a.hookReg.ResetTurn()
 		a.hookReg.Set(hooks.StoreQuotaReads, int64(max(0, state.quota.MaxSlots-state.quota.Used)))
 		a.hookReg.Set(hooks.StoreExploreScore, int64(a.exploration.Score))
-		a.hookReg.Set(hooks.StoreTasksAllDone, b2i(a.ctxMgr.AllTasksDone()))
+		tasksDone := int64(0)
+		if a.ctxMgr.AllTasksDone() {
+			tasksDone = 1
+		}
+		a.hookReg.Set(hooks.StoreTasksAllDone, tasksDone)
+		hasTasks := int64(0)
+		if a.ctxMgr.HasTasks() {
+			hasTasks = 1
+		}
+		a.hookReg.Set(hooks.StoreHasTasks, hasTasks)
 		a.hookReg.SetStr(hooks.StoreStepInput, state.Input)
+		a.hookReg.Set(hooks.StoreStepInputLen, int64(len([]rune(state.Input))))
 
 		var hints []hooks.Hint
 		for _, r := range a.hookReg.Evaluate(hooks.PreTurn, "", false) {
@@ -100,17 +127,23 @@ func (a *Agent) runTurn(state *stepState, callback RunCallback) (finished bool) 
 	reasoning := a.Reason(state)
 
 	if reasoning.Interrupted {
-		if a.finished {
+		if a.finished.Load() {
 			a.stopReason = hooks.StopInterrupted
 			return true
 		}
+		// Count interrupted responses toward the step limit to prevent
+		// unbounded loops when the LLM repeatedly produces interrupted output.
+		a.step++
 		a.ctxMgr.TruncateTo(msgCountBefore)
 		a.drainSteering()
 		return false
 	}
 
-	calls := a.collectCalls(reasoning)
+	calls := reasoning.ToolCalls
 	if len(calls) > 0 {
+		// Tool calls mean the agent is making progress — reset hint counter.
+		a.consecutiveHints = 0
+		a.consecutiveFailures = 0
 		var stopReason hooks.StopReason
 		var shouldStop bool
 		state, shouldStop, stopReason = a.executeAndFeedback(calls, reasoning, state, callback)
@@ -125,12 +158,22 @@ func (a *Agent) runTurn(state *stepState, callback RunCallback) (finished bool) 
 }
 
 func (a *Agent) handleText(reasoning *ReasoningResult, state *stepState, callback RunCallback) (finished bool) {
+	// Track consecutive LLM failures.
+	if reasoning.IsError {
+		a.consecutiveFailures++
+		if a.consecutiveFailures >= maxConsecutiveFailures {
+			a.step++
+			a.stopReason = hooks.StopCompleted
+			a.lastText = fmt.Sprintf("[Agent stopped: %d consecutive LLM failures]", a.consecutiveFailures)
+			return true
+		}
+	} else {
+		a.consecutiveFailures = 0
+	}
+
 	if a.hookReg != nil {
 		if reasoning.GarbledToolCall {
 			a.hookReg.Inc(hooks.StoreRespGarbled)
-		}
-		if reasoning.Action == ActionChat {
-			a.hookReg.Inc(hooks.StoreRespChat)
 		}
 
 		// —— PostTurn hooks ——
@@ -138,10 +181,27 @@ func (a *Agent) handleText(reasoning *ReasoningResult, state *stepState, callbac
 		for _, r := range results {
 			if r.Stop != nil {
 				a.stopReason = *r.Stop
+				a.lastText = reasoning.ActionInput
 				return true
 			}
 			if r.Hint != nil {
-				a.ctxMgr.Add("user", "[System] "+r.Hint.Content)
+				a.consecutiveHints++
+				if a.consecutiveHints >= maxConsecutiveHints {
+					a.stopReason = hooks.StopCompleted
+					a.lastText = reasoning.ActionInput
+					return true
+				}
+				// Save this turn's text before re-injecting, so the
+				// TUI stream accumulates it and handleDone can fall back.
+				if reasoning.Action == ActionChat {
+					a.ctxMgr.AddAssistantResponse(reasoning.ActionInput, a.lastReason)
+					if callback != nil {
+						callback(reasoning.Action.String(), "", "", reasoning.ActionInput)
+					}
+				}
+				a.lastText = reasoning.ActionInput
+				a.injectHint(r.Hint)
+				a.step++
 				return false
 			}
 		}
@@ -153,18 +213,17 @@ func (a *Agent) handleText(reasoning *ReasoningResult, state *stepState, callbac
 	if reasoning.Action == ActionChat {
 		a.ctxMgr.AddAssistantResponse(reasoning.ActionInput, a.lastReason)
 	}
-	callback(reasoning.Action.String(), "", "", reasoning.ActionInput)
+	if callback != nil {
+		callback(reasoning.Action.String(), "", "", reasoning.ActionInput)
+	}
 	return true
 }
 
-func b2i(b bool) int64 {
-	if b { return 1 }
-	return 0
-}
-
-// collectCalls returns tool calls for execution.
-func (a *Agent) collectCalls(reasoning *ReasoningResult) []tools.ToolCallItem {
-	return reasoning.ToolCalls
+// injectHint adds a hook hint to the context as a system message.
+func (a *Agent) injectHint(h *hooks.Hint) {
+	if h != nil {
+		a.ctxMgr.Add("system", "[Hook: "+h.Type+"] "+h.Content)
+	}
 }
 
 // synthesizeAndReturn 额外调一次 LLM 生成总结，用于非正常结束的兜底输出。
@@ -187,28 +246,4 @@ func (a *Agent) drainSteering() {
 			return
 		}
 	}
-}
-
-// formatArgs 将工具参数格式化为 key=value 字符串供 TUI 展示。
-func formatArgs(args map[string]any) string {
-	if len(args) == 0 {
-		return ""
-	}
-	keys := make([]string, 0, len(args))
-	for k := range args {
-		if k == "_preview" {
-			continue
-		}
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	var pairs []string
-	for _, k := range keys {
-		val := fmt.Sprint(args[k])
-		if strings.ContainsAny(val, ",=\"") {
-			val = `"` + strings.ReplaceAll(strings.ReplaceAll(val, "\\", "\\\\"), "\"", "\\\"") + `"`
-		}
-		pairs = append(pairs, k+"="+val)
-	}
-	return strings.Join(pairs, ",")
 }

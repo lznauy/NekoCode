@@ -4,10 +4,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/charmbracelet/glamour"
+	"charm.land/glamour/v2"
 )
-
-var glamourStyle = []byte(`{"document":{"margin":0}}`)
 
 var (
 	mu        sync.Mutex
@@ -21,7 +19,6 @@ func Warmup() {
 	for w := 40; w <= 160; w++ {
 		r, err := glamour.NewTermRenderer(
 			glamour.WithStandardStyle("tokyo-night"),
-			glamour.WithStylesFromJSONBytes(glamourStyle),
 			glamour.WithWordWrap(w),
 		)
 		if err != nil {
@@ -39,7 +36,6 @@ func getRenderer(width int) *glamour.TermRenderer {
 	}
 	r, err := glamour.NewTermRenderer(
 		glamour.WithStandardStyle("tokyo-night"),
-		glamour.WithStylesFromJSONBytes(glamourStyle),
 		glamour.WithWordWrap(width),
 	)
 	if err != nil {
@@ -53,53 +49,13 @@ func RenderMarkdown(content string, width int) string {
 	if width <= 0 {
 		width = 80
 	}
-	// Split into blocks at paragraph boundaries, keeping fenced code blocks intact.
-	blocks := splitBlocks(content)
-	var parts []string
-	for _, block := range blocks {
-		block = strings.TrimSpace(block)
-		if block == "" {
-			continue
-		}
-		out, err := getRenderer(width).Render(block)
-		if err != nil {
-			parts = append(parts, block)
-		} else {
-			parts = append(parts, strings.TrimSpace(out))
-		}
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
 	}
-	return strings.Join(parts, "\n\n")
-}
-
-// splitBlocks splits content at "\n\n" paragraph breaks, but preserves
-// fenced code blocks (starting with ```) as single units.
-func splitBlocks(content string) []string {
-	lines := strings.Split(content, "\n")
-	var blocks []string
-	var cur []string
-	inFence := false
-
-	for _, line := range lines {
-		if strings.HasPrefix(line, "```") {
-			inFence = !inFence
-			cur = append(cur, line)
-			if !inFence {
-				blocks = append(blocks, strings.Join(cur, "\n"))
-				cur = nil
-			}
-			continue
-		}
-		if !inFence && line == "" {
-			if len(cur) > 0 {
-				blocks = append(blocks, strings.Join(cur, "\n"))
-				cur = nil
-			}
-			continue
-		}
-		cur = append(cur, line)
+	out, err := getRenderer(width).Render(content)
+	if err != nil {
+		return content
 	}
-	if len(cur) > 0 {
-		blocks = append(blocks, strings.Join(cur, "\n"))
-	}
-	return blocks
+	return strings.TrimSpace(out)
 }

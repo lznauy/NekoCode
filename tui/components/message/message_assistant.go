@@ -119,7 +119,7 @@ func (m *AssistantMessageItem) Render(width int) string {
 		msgParts = append(msgParts, "", styles.SubtleStyle.Render(m.footer))
 	}
 
-	msgBlock := thickLeftBar(stripLeadingSpaces(strings.TrimSpace(lipgloss.JoinVertical(lipgloss.Left, msgParts...))), lipgloss.Color("#4ec9b0"), cw)
+	msgBlock := thickLeftBar(stripLeadingSpaces(strings.TrimSpace(lipgloss.JoinVertical(lipgloss.Left, msgParts...))), lipgloss.Color(styles.Primary), cw)
 
 	m.cache.rendered = msgBlock
 	m.cache.width = cw

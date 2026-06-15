@@ -5,16 +5,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"nekocode/bot/tools"
 
-	"nekocode/common"
+	"nekocode/bot/tools"
 )
 
-type WriteTool struct{}
+type WriteTool struct {
+	WriteModeTool
+}
 
-func (t *WriteTool) Name() string                                       { return "write" }
-func (t *WriteTool) ExecutionMode(map[string]any) tools.ExecutionMode { return tools.ModeSequential }
-func (t *WriteTool) DangerLevel(map[string]any) common.DangerLevel     { return common.LevelWrite }
+func (t *WriteTool) Name() string { return "write" }
 func (t *WriteTool) Description() string {
 	return "Create or overwrite a file. Auto-creates parent dirs. Must Read existing files first (enforced). Use Edit for partial changes. Content: use \\n \\\" \\\\ for newlines/quotes/backslashes."
 }
@@ -27,10 +26,13 @@ func (t *WriteTool) Parameters() []tools.Parameter {
 }
 
 func (t *WriteTool) Execute(ctx context.Context, args map[string]any) (string, error) {
-	path, _ := args["path"].(string)
-	content, _ := args["content"].(string)
-	if path == "" {
-		return "", fmt.Errorf("missing path parameter")
+	path, err := requireStringArg(args, "path")
+	if err != nil {
+		return "", err
+	}
+	content, err := requireStringArg(args, "content")
+	if err != nil {
+		return "", err
 	}
 
 	safePath, err := tools.ValidatePath(path)
@@ -39,14 +41,16 @@ func (t *WriteTool) Execute(ctx context.Context, args map[string]any) (string, e
 	}
 
 	if err := os.MkdirAll(filepath.Dir(safePath), 0755); err != nil {
-		return "", fmt.Errorf("failed to create directory: %v", err)
+		return "", fmt.Errorf("failed to create directory: %w", err)
 	}
-	mode := os.FileMode(0644)
-	if info, err := os.Stat(safePath); err == nil {
-		mode = info.Mode()
-	}
+	mode := getFileMode(safePath)
 	if err := os.WriteFile(safePath, []byte(content), mode); err != nil {
-		return "", fmt.Errorf("failed to write file: %v", err)
+		return "", fmt.Errorf("failed to write file: %w", err)
+	}
+	// Record snapshot for hashline edit recovery within the session.
+	tag := tools.RecordSnapshot(safePath, content)
+	if tag != "" {
+		return fmt.Sprintf("[%s#%s] Written (%d chars)", safePath, tag, len(content)), nil
 	}
 	return fmt.Sprintf("Written: %s (%d chars)", safePath, len(content)), nil
 }

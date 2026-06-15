@@ -134,7 +134,7 @@ func (i *Input) visualLines() int {
 		tw = 1
 	}
 	n := 0
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		rl := len([]rune(line))
 		if rl == 0 {
 			n++

@@ -34,7 +34,7 @@ type Config struct {
 }
 
 // NewSub creates a lightweight Manager for subagents.
-// No Compactor — subagents don't do LLM-based compaction.
+// A Compactor is only created when mergeClient is non-nil (for archive merging).
 func NewSub(systemPrompt string, contextWindow int, mergeClient types.LLM) *Manager {
 	ctx := ctxctx.New(systemPrompt)
 	m := &Manager{
@@ -43,28 +43,31 @@ func NewSub(systemPrompt string, contextWindow int, mergeClient types.LLM) *Mana
 		ContextWindow: contextWindow,
 	}
 	if mergeClient != nil {
+		mergeCtx := context.Background()
 		m.CM = &compact.Compactor{
 			Ctx:           &m.ctx,
 			ContextWindow:  &m.ContextWindow,
 			Tracker:       m.Tracker,
 			CompactCount:  &m.CompactCount,
 			TrimCount:     &m.TrimCount,
-			Summarizer:    makeSummarizer(mergeClient),
+			Summarizer:    MakeSummarizer(mergeCtx, mergeClient),
+			CancelCtx:     mergeCtx,
 			Cfg:           compact.DefaultConfig,
 		}
 	}
 	return m
 }
 
-// makeSummarizer creates a Summarizer func from an LLM client.
-func makeSummarizer(client types.LLM) compact.Summarizer {
+// MakeSummarizer creates a Summarizer func from an LLM client.
+// The provided context is used for LLM calls, enabling cancellation.
+func MakeSummarizer(ctx context.Context, client types.LLM) compact.Summarizer {
 	return func(msgs []types.Message, prevSummary string) (string, error) {
 		prompt := compact.BuildPrompt(msgs, prevSummary)
-		resp, err := client.Chat(context.Background(), []types.Message{{Role: "user", Content: prompt}}, nil)
+		resp, err := client.Chat(ctx, []types.Message{{Role: "user", Content: prompt}}, nil)
 		if err != nil {
 			return "", err
 		}
-		if len(resp.Choices) > 0 {
+		if len(resp.Choices) > 0 && resp.Choices[0].Message.Content != "" {
 			return resp.Choices[0].Message.Content, nil
 		}
 		return "", fmt.Errorf("no response from summarizer")
@@ -89,20 +92,28 @@ func New(cfg Config) *Manager {
 		CompactCount:  &m.CompactCount,
 		TrimCount:     &m.TrimCount,
 		Summarizer:    cfg.Summarizer,
+		CancelCtx:     context.Background(),
 		Cfg:           compact.DefaultConfig,
 	}
 	return m
 }
 func (m *Manager) SetSystemPrompt(s string)            { m.mu.Lock(); defer m.mu.Unlock(); m.ctx.SystemPrompt = s }
-func (m *Manager) SetSkillList(s string)     { m.ctx.Skills = s }
+func (m *Manager) SetSkillList(s string)     { m.mu.Lock(); defer m.mu.Unlock(); m.ctx.Skills = s }
 func (m *Manager) SetHints(s string)         { m.mu.Lock(); defer m.mu.Unlock(); m.ctx.Hints = s }
-func (m *Manager) SetContextWindow(budget int) { if budget > 0 { m.ContextWindow = budget } }
+func (m *Manager) SetContextWindow(budget int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if budget > 0 { m.ContextWindow = budget }
+}
 
 func (m *Manager) SetTodos(items []common.TodoItem) { m.mu.Lock(); defer m.mu.Unlock(); m.ctx.LoadTodos(items) }
 func (m *Manager) AllTasksDone() bool               { m.mu.RLock(); defer m.mu.RUnlock(); return m.ctx.AllTasksDone() }
-func (m *Manager) RecordUsage(prompt, completion int) { m.Tracker.RecordUsage(prompt, completion) }
-func (m *Manager) RecordCache(hit, miss int)          { m.Tracker.RecordCache(hit, miss) }
-func (m *Manager) ResetCache()                        { m.Tracker.ResetCache() }
+func (m *Manager) HasTasks() bool                   { m.mu.RLock(); defer m.mu.RUnlock(); return m.ctx.HasTasks() }
+// RecordUsage, RecordCache, and ResetCache hold the read lock for the full
+// call so FreshStart (which replaces m.Tracker under write lock) cannot race.
+func (m *Manager) RecordUsage(prompt, completion int) { m.mu.RLock(); defer m.mu.RUnlock(); m.Tracker.RecordUsage(prompt, completion) }
+func (m *Manager) RecordCache(hit, miss int)          { m.mu.RLock(); defer m.mu.RUnlock(); m.Tracker.RecordCache(hit, miss) }
+func (m *Manager) ResetCache()                        { m.mu.RLock(); defer m.mu.RUnlock(); m.Tracker.ResetCache() }
 
 func (m *Manager) AutoCompactIfNeeded() (compact.Level, error) {
 	if m.CM != nil {
@@ -118,20 +129,50 @@ func (m *Manager) NeedsSummarization() bool {
 }
 
 func (m *Manager) Summarize() error {
+	if m.CM == nil {
+		return nil
+	}
+	// Phase 1: FullCompact mutates Messages and CompactBoundary — must be
+	// serialized with other readers/writers.
+	m.mu.Lock()
 	prevArchive := m.ctx.Archive
 	if err := m.CM.FullCompact(); err != nil {
+		m.mu.Unlock()
 		return err
 	}
-	// Merge new archive with previous using independent merge session.
-	if prevArchive != "" && m.ctx.Archive != "" && m.MergeClient != nil {
-		m.ctx.Archive = compact.MergeSummaries(m.MergeClient, prevArchive, m.ctx.Archive)
+	newArchive := m.ctx.Archive
+	m.mu.Unlock()
+
+	// Phase 2: Merge new archive with previous using independent LLM session.
+	// This can take seconds — run outside the lock so Build/Add/RecordUsage
+	// are not blocked.
+	if prevArchive != "" && newArchive != "" && m.MergeClient != nil {
+		mergeCtx := m.CM.CancelCtx
+		if mergeCtx == nil {
+			mergeCtx = context.Background()
+		}
+		merged := compact.MergeSummaries(mergeCtx, m.MergeClient, prevArchive, newArchive)
+
+		m.mu.Lock()
+		m.ctx.Archive = merged
+		m.mu.Unlock()
 	}
 	return nil
 }
 
-func (m *Manager) Len() int { return len(m.ctx.Messages) }
+func (m *Manager) Len() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	n := len(m.ctx.Messages)
+	if m.ctx.CompactBoundary > 0 && m.ctx.CompactBoundary < n {
+		return n - m.ctx.CompactBoundary
+	}
+	return n
+}
 
 func (m *Manager) Stats() (int, int, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	visible := m.ctx.Messages
 	if m.ctx.CompactBoundary > 0 && m.ctx.Archive != "" && m.ctx.CompactBoundary < len(visible) {
 		visible = visible[m.ctx.CompactBoundary:]
@@ -142,7 +183,13 @@ func (m *Manager) Stats() (int, int, bool) {
 }
 
 func (m *Manager) TokenUsage() (int, int) {
-	return token.EstimateTokens(m.ctx.Messages) + token.EstimateString(m.ctx.Archive), m.ContextWindow
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	visible := m.ctx.Messages
+	if m.ctx.CompactBoundary > 0 && m.ctx.Archive != "" && m.ctx.CompactBoundary < len(visible) {
+		visible = visible[m.ctx.CompactBoundary:]
+	}
+	return token.EstimateTokens(visible) + token.EstimateString(m.ctx.Archive), m.ContextWindow
 }
 
 // -- Build ------------------------------------------------------------
@@ -182,7 +229,7 @@ func (m *Manager) RemoveMessages(startIdx, endIdx int) {
 	}
 	n := endIdx - startIdx + 1
 	m.ctx.Messages = append(m.ctx.Messages[:startIdx], m.ctx.Messages[endIdx+1:]...)
-		debug.Log("remove_messages: dropped %d messages [%d:%d] (total now %d)", n, startIdx, endIdx, len(m.ctx.Messages)-n)
+	debug.Log("remove_messages: dropped %d messages [%d:%d] (total now %d)", n, startIdx, endIdx, len(m.ctx.Messages))
 	if m.ctx.CompactBoundary > startIdx {
 		if m.ctx.CompactBoundary <= endIdx {
 			m.ctx.CompactBoundary = startIdx
@@ -196,32 +243,50 @@ func (m *Manager) FreshStart() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	n := len(m.ctx.Messages)
-	m.ctx.Messages = make([]types.Message, 0)
+	m.clearInternal()
 	debug.Log("fresh_start: clearing all %d messages", n)
-	m.ctx.CompactBoundary = 0
-	m.ctx.Todo = ""
-	m.ctx.TodoItems = nil
 	m.ctx.Hints = ""
 	m.Tracker = &token.Tracker{}
 }
 
-func (m *Manager) Snapshot() (sysPrompt, skills, archive, memory string, compactBoundary int, messages []types.Message, budget int) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.ctx.SystemPrompt, m.ctx.Skills, m.ctx.Archive, m.ctx.Memory,
-		m.ctx.CompactBoundary, m.ctx.Messages, m.ContextWindow
+// ManagerSnapshot captures the full context manager state for session persistence.
+type ManagerSnapshot struct {
+	SystemPrompt    string
+	Skills          string
+	Archive         string
+	Memory          string
+	Hints           string
+	CompactBoundary int
+	Messages        []types.Message
+	Budget          int
 }
 
-func (m *Manager) Restore(sysPrompt, skills, archive, memory string, compactBoundary int, messages []types.Message, budget int) {
+func (m *Manager) Snapshot() ManagerSnapshot {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return ManagerSnapshot{
+		SystemPrompt:    m.ctx.SystemPrompt,
+		Skills:          m.ctx.Skills,
+		Archive:         m.ctx.Archive,
+		Memory:          m.ctx.Memory,
+		Hints:           m.ctx.Hints,
+		CompactBoundary: m.ctx.CompactBoundary,
+		Messages:        m.ctx.Messages,
+		Budget:          m.ContextWindow,
+	}
+}
+
+func (m *Manager) Restore(s ManagerSnapshot) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.ctx.SystemPrompt = sysPrompt
-	m.ctx.Skills = skills
-	m.ctx.Archive = archive
-	m.ctx.Memory = memory
-	m.ctx.CompactBoundary = compactBoundary
-	m.ctx.Messages = messages
-	m.ContextWindow = budget
+	m.ctx.SystemPrompt = s.SystemPrompt
+	m.ctx.Skills = s.Skills
+	m.ctx.Archive = s.Archive
+	m.ctx.Memory = s.Memory
+	m.ctx.Hints = s.Hints
+	m.ctx.CompactBoundary = s.CompactBoundary
+	m.ctx.Messages = s.Messages
+	m.ContextWindow = s.Budget
 	m.Tracker = &token.Tracker{}
 }
 

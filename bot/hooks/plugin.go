@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -53,33 +54,48 @@ func LoadPluginHooks(pluginRoot, hooksPath string) ([]Hook, error) {
 	var hooks []Hook
 
 	for _, eh := range cfg.PreToolUse {
-		hooks = append(hooks, makePluginHook(PreToolUse, "PreToolUse", pluginRoot, eh))
+		hooks = append(hooks, makePluginHook(PreToolUse, "PreToolUse", pluginRoot, eh, false))
 	}
 	for _, eh := range cfg.PostToolUse {
-		hooks = append(hooks, makePluginHook(PostToolUse, "PostToolUse", pluginRoot, eh))
+		hooks = append(hooks, makePluginHook(PostToolUse, "PostToolUse", pluginRoot, eh, false))
 	}
 	for _, eh := range cfg.PostToolUseFailure {
-		hooks = append(hooks, makePluginHook(PostToolUse, "PostToolUseFailure", pluginRoot, eh))
+		hooks = append(hooks, makePluginHook(PostToolUse, "PostToolUseFailure", pluginRoot, eh, true))
 	}
 	for _, eh := range cfg.UserPromptSubmit {
-		hooks = append(hooks, makePluginHook(UserSubmit, "UserPromptSubmit", pluginRoot, eh))
+		hooks = append(hooks, makePluginHook(UserSubmit, "UserPromptSubmit", pluginRoot, eh, false))
 	}
 	for _, eh := range cfg.SessionStart {
-		hooks = append(hooks, makePluginHook(PreTurn, "SessionStart", pluginRoot, eh))
+		// SessionStart hooks fire only once per session. We use a store
+		// flag ("session:started") as a one-shot guard so the hook body
+		// executes on the first PreTurn and is skipped thereafter.
+		inner := makePluginHook(PreTurn, "SessionStart", pluginRoot, eh, false)
+		origOn := inner.On
+		inner.On = func(s *Snapshot) *Result {
+			if s.flag("session:started") {
+				return nil
+			}
+			s.set("session:started", 1)
+			return origOn(s)
+		}
+		hooks = append(hooks, inner)
 	}
 	for _, eh := range cfg.Stop {
-		hooks = append(hooks, makePluginHook(Stop, "Stop", pluginRoot, eh))
+		hooks = append(hooks, makePluginHook(Stop, "Stop", pluginRoot, eh, false))
 	}
 
 	return hooks, nil
 }
 
-func makePluginHook(point HookPoint, eventType, pluginRoot string, eh eventHook) Hook {
+func makePluginHook(point HookPoint, eventType, pluginRoot string, eh eventHook, requireError bool) Hook {
 	return Hook{
 		Name:  fmt.Sprintf("plugin:%s:%s", eventType, eh.Matcher),
 		Point: point,
 		On: func(s *Snapshot) *Result {
 			if !matchTool(eh.Matcher, s.Tool) {
+				return nil
+			}
+			if requireError && !s.Error {
 				return nil
 			}
 			for _, ha := range eh.Hooks {
@@ -117,6 +133,8 @@ func runPluginCommand(pluginRoot string, ha hookAction) (string, error) {
 	return string(out), err
 }
 
+var matcherCache sync.Map // string → *regexp.Regexp
+
 func matchTool(matcher, toolName string) bool {
 	if matcher == "" || matcher == ".*" {
 		return true
@@ -126,9 +144,22 @@ func matchTool(matcher, toolName string) bool {
 		if alt == toolName {
 			return true
 		}
-		if matched, err := regexp.MatchString("^"+alt+"$", toolName); err == nil && matched {
+		re := getOrCompileMatcher(alt)
+		if re != nil && re.MatchString(toolName) {
 			return true
 		}
 	}
 	return false
+}
+
+func getOrCompileMatcher(pattern string) *regexp.Regexp {
+	if v, ok := matcherCache.Load(pattern); ok {
+		return v.(*regexp.Regexp)
+	}
+	re, err := regexp.Compile("^" + pattern + "$")
+	if err != nil {
+		return nil
+	}
+	matcherCache.Store(pattern, re)
+	return re
 }

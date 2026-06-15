@@ -4,10 +4,15 @@
 package styles
 
 import (
-	"fmt"
-
 	"charm.land/lipgloss/v2"
 )
+
+// SubColors are the exclusive palette for sub-agent color assignments.
+// Index 0-7, each sub-agent gets a unique color during its lifetime.
+var SubColors = [8]string{
+	"#e57373", "#81c784", "#64b5f6", "#ffb74d",
+	"#ba68c8", "#4dd0e1", "#fff176", "#f06292",
+}
 
 // Exported color hex values for direct use by other packages.
 const (
@@ -16,6 +21,11 @@ const (
 	Red       = "#e06c75"
 	Blue      = "#7a8ba0"
 	DiffGreen = "#98c379"
+	DiffDelBg  = "#3d2020"
+	DiffAddBg  = "#1e3024"
+	BtnYesBg   = "#1e3024"
+	BtnNoBg    = "#3d2020"
+	BtnNoFg    = "#e06c75"
 )
 
 const (
@@ -27,7 +37,7 @@ const (
 	blueInt  = Blue
 	redInt   = Red
 	yellow   = Yellow
-	catBody  = "#505050"
+	catBody  = "#4ec9b0"
 	catEye   = "#7ec8e3"
 )
 
@@ -83,10 +93,12 @@ var (
 	CatEyeStyle  = defaultStyles.CatEye
 )
 
-// FmtTokens formats a token count for display (e.g. 1200 → "1.2k").
-func FmtTokens(n int) string {
-	if n >= 1000 {
-		return fmt.Sprintf("%.1fk", float64(n)/1000)
+// BulletForBlock returns the bullet character and style for a content block.
+// Main agent (SubID empty) uses teal; sub-agents use their assigned palette color.
+func BulletForBlock(subID string, subColor int, tealStyle lipgloss.Style) (string, lipgloss.Style) {
+	if subID == "" || subColor < 0 || subColor >= len(SubColors) {
+		return MainBullet, tealStyle
 	}
-	return fmt.Sprintf("%d", n)
+	c := lipgloss.Color(SubColors[subColor])
+	return SubBullet, lipgloss.NewStyle().Foreground(c)
 }

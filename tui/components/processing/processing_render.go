@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"nekocode/common"
 	"nekocode/tui/components/block"
 	"nekocode/tui/styles"
 
@@ -20,19 +21,19 @@ func (p *ProcessingItem) Render(width int) string {
 
 	var sections []string
 	sections = append(sections, p.renderSummary())
-	if s := p.renderActivitySection(contentW, contentW); s != "" {
+	if s := p.renderActivitySection(contentW); s != "" {
 		sections = append(sections, s)
 	}
-	if s := p.renderChangesSection(contentW, contentW); s != "" {
+	if s := p.renderChangesSection(contentW); s != "" {
 		sections = append(sections, s)
 	}
-	if s := p.renderTodos(contentW, contentW); s != "" {
+	if s := p.renderTodos(contentW); s != "" {
 		sections = append(sections, s)
 	}
-	if s := p.renderOutputSection(contentW, contentW); s != "" {
+	if s := p.renderOutputSection(contentW); s != "" {
 		sections = append(sections, s)
 	}
-	if s := p.renderReasoningSection(contentW, contentW); s != "" {
+	if s := p.renderThinkingSection(contentW); s != "" {
 		sections = append(sections, s)
 	}
 	sections = append(sections, p.renderHeader())
@@ -62,12 +63,12 @@ func (p *ProcessingItem) renderHeader() string {
 	}
 	tp := ""
 	if p.tokenPrompt > 0 || p.tokenCompl > 0 {
-		tp = " " + p.sty.Subtle.Render("↑"+styles.FmtTokens(p.tokenPrompt)+" ↓"+styles.FmtTokens(p.tokenCompl))
+		tp = " " + p.sty.Muted.Render("↑"+common.FormatTokens(p.tokenPrompt)+" ↓"+common.FormatTokens(p.tokenCompl))
 	}
 	if p.compactCount > 0 {
-		tp += " " + p.sty.Subtle.Render(fmt.Sprintf("🧹%d", p.compactCount))
+		tp += " " + p.sty.Muted.Render(fmt.Sprintf("🧹%d", p.compactCount))
 	}
-	return "\n" + p.sty.Teal.Render(s) + " " + p.sty.Subtle.Render(l) + sk + tp
+	return p.sty.Teal.Render(s) + " " + p.sty.Base.Render(l) + sk + tp
 }
 
 // -- summary ---------------------------------------------------------------
@@ -78,7 +79,7 @@ func (p *ProcessingItem) renderSummary() string {
 		if b.Type != block.BlockTool {
 			continue
 		}
-		if isActivityTool(b.ToolName) {
+		if !block.IsPersistent(b.ToolName) {
 			actN++
 		} else {
 			chgN++
@@ -94,18 +95,34 @@ func (p *ProcessingItem) renderSummary() string {
 	if chgN > 0 {
 		parts = append(parts, fmt.Sprintf("%d changes", chgN))
 	}
-	if len(parts) == 0 {
-		return p.sty.Subtle.Render("(=^.^=)")
+
+	// Cat face with eye color + colored sub-agent bullets
+	var headerBuilder strings.Builder
+	headerBuilder.WriteString(p.sty.CatBody.Render(styles.CatLeft))
+	headerBuilder.WriteString(p.sty.CatEye.Render(styles.CatLEye))
+	headerBuilder.WriteString(p.sty.Muted.Render(styles.CatNose))
+	headerBuilder.WriteString(p.sty.CatEye.Render(styles.CatREye))
+	headerBuilder.WriteString(p.sty.CatBody.Render(styles.CatRight))
+	for _, s := range p.subSlots {
+		if s.ColorIdx >= 0 && s.ColorIdx < len(styles.SubColors) {
+			c := lipgloss.Color(styles.SubColors[s.ColorIdx])
+			headerBuilder.WriteByte(' ')
+			headerBuilder.WriteString(lipgloss.NewStyle().Foreground(c).Render(styles.SubBullet))
+		}
 	}
-	return p.sty.Subtle.Render("(=^.^=) · " + strings.Join(parts, " · "))
+	header := headerBuilder.String()
+	if len(parts) == 0 {
+		return header + "\n"
+	}
+	return header + p.sty.Subtle.Render(" · " + strings.Join(parts, " · ")) + "\n"
 }
 
 // -- activity section -------------------------------------------------------
 
-func (p *ProcessingItem) renderActivitySection(contentW, sepW int) string {
+func (p *ProcessingItem) renderActivitySection(sepW int) string {
 	var items []block.ContentBlock
 	for _, b := range p.blocks {
-		if b.Type == block.BlockTool && isActivityTool(b.ToolName) {
+		if b.Type == block.BlockTool && !block.IsPersistent(b.ToolName) {
 			items = append(items, b)
 		}
 	}
@@ -124,17 +141,18 @@ func (p *ProcessingItem) renderActivitySection(contentW, sepW int) string {
 	items = items[start:]
 
 	var sb strings.Builder
-	sb.WriteString("\n")
-	sep := p.sty.Subtle.Render("── activity " + strings.Repeat("─", sepW-lipgloss.Width("── activity ")))
+	sep := p.sty.Primary.Render("── activity " + strings.Repeat("─", sepW-lipgloss.Width("── activity ")))
 	sb.WriteString(sep)
 	sb.WriteString("\n")
 	for _, b := range items {
-		fmt.Fprintf(&sb, "  ◉ %s", b.ToolName)
+		// Choose bullet based on sub-agent color
+		bullet, bulletStyle := styles.BulletForBlock(b.SubID, b.SubColor, p.sty.Teal)
+		fmt.Fprintf(&sb, "  %s %s", bulletStyle.Render(bullet), p.sty.Base.Bold(true).Render(b.ToolName))
 		if b.ToolArgs != "" {
-			fmt.Fprintf(&sb, " %s", b.ToolArgs)
+			fmt.Fprintf(&sb, " %s", p.sty.Muted.Render(b.ToolArgs))
 		}
 		if !b.Done && b.Content == "" {
-			fmt.Fprintf(&sb, " %s", p.sty.Subtle.Render("…"))
+			fmt.Fprintf(&sb, " %s", p.sty.Muted.Render("…"))
 		}
 		sb.WriteString("\n")
 	}
@@ -147,10 +165,10 @@ func (p *ProcessingItem) renderActivitySection(contentW, sepW int) string {
 
 // -- changes section --------------------------------------------------------
 
-func (p *ProcessingItem) renderChangesSection(contentW, sepW int) string {
+func (p *ProcessingItem) renderChangesSection(w int) string {
 	var items []block.ContentBlock
 	for _, b := range p.blocks {
-		if b.Type == block.BlockTool && !isActivityTool(b.ToolName) {
+		if b.Type == block.BlockTool && block.IsPersistent(b.ToolName) {
 			items = append(items, b)
 		}
 	}
@@ -158,90 +176,104 @@ func (p *ProcessingItem) renderChangesSection(contentW, sepW int) string {
 		return ""
 	}
 	total := len(items)
-	if p.cachedChangesW == sepW && p.cachedChangesN == total && p.cachedChanges != "" {
+	if p.cachedChangesW == w && p.cachedChangesN == total && p.cachedChanges != "" {
 		return p.cachedChanges
 	}
 
 	var sb strings.Builder
-	sb.WriteString("\n")
-	sep := p.sty.Subtle.Render("── changes " + strings.Repeat("─", sepW-lipgloss.Width("── changes ")))
+	sep := p.sty.Primary.Render("── changes " + strings.Repeat("─", w-lipgloss.Width("── changes ")))
 	sb.WriteString(sep)
 	sb.WriteString("\n")
-	sb.WriteString(block.RenderTools(items, contentW, p.sty))
+	sb.WriteString(block.RenderTools(items, w, p.sty))
 
 	p.cachedChanges = sb.String()
-	p.cachedChangesW = sepW
+	p.cachedChangesW = w
 	p.cachedChangesN = total
 	return p.cachedChanges
 }
 
 // -- tasks section ----------------------------------------------------------
 
-func (p *ProcessingItem) renderTodos(contentW, sepW int) string {
+func (p *ProcessingItem) renderTodos(w int) string {
 	if p.todos == "" {
 		return ""
 	}
-	if p.cachedTodosW < 0 || sepW != p.cachedTodosW {
+	if p.cachedTodosW < 0 || w != p.cachedTodosW {
 		green := lipgloss.NewStyle().Foreground(lipgloss.Color(styles.DiffGreen))
 		var sb strings.Builder
-		sb.WriteString("\n")
-		sep := p.sty.Yellow.Render("── tasks " + strings.Repeat("─", sepW-lipgloss.Width("── tasks ")))
+		
+		sep := p.sty.Yellow.Render("── tasks " + strings.Repeat("─", w-lipgloss.Width("── tasks ")))
 		sb.WriteString(sep)
-		sb.WriteString("\n\n")
-		for _, line := range strings.Split(p.todos, "\n") {
+		sb.WriteString("\n")
+		for line := range strings.SplitSeq(p.todos, "\n") {
 			switch {
 			case strings.HasPrefix(line, "✓ All"):
+								sb.WriteString("  ")
 				sb.WriteString(green.Render(line))
+				sb.WriteByte('\n')
 			case strings.HasPrefix(line, "Tasks "):
-				sb.WriteString(p.sty.Subtle.Render(line))
+								sb.WriteString("  ")
+				sb.WriteString(p.sty.Muted.Render(line))
+				sb.WriteByte('\n')
 			case strings.HasPrefix(line, "·"):
-				sb.WriteString(p.sty.Subtle.Render(line))
+								sb.WriteString("  ")
+				sb.WriteString(p.sty.Muted.Render(line))
+				sb.WriteByte('\n')
 			case strings.HasPrefix(line, "▸"):
+								sb.WriteString("  ")
 				sb.WriteString(p.sty.Teal.Render(line))
+				sb.WriteByte('\n')
 			case strings.HasPrefix(line, "✓"):
+								sb.WriteString("  ")
 				sb.WriteString(green.Render(line))
+				sb.WriteByte('\n')
 			default:
+								sb.WriteString("  ")
 				sb.WriteString(line)
+				sb.WriteByte('\n')
 			}
-			sb.WriteString("\n")
+			
 		}
 		p.cachedTodos = sb.String()
-		p.cachedTodosW = sepW
+		p.cachedTodosW = w
 	}
 	return p.cachedTodos
 }
 
 // -- output section ---------------------------------------------------------
 
-func (p *ProcessingItem) renderOutputSection(contentW, sepW int) string {
+func (p *ProcessingItem) renderOutputSection(w int) string {
 	text := strings.TrimSpace(p.OutputText())
 	if text == "" {
 		return ""
 	}
-	content := RenderFixed(WrapPlain(text, contentW), outputLines, true, p.sty.Subtle)
+	content := RenderFixed(WrapPlain(text, w), outputLines, true, p.sty.Base)
 	if content == "" {
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString("\n")
-	sep := p.sty.Teal.Render("── output " + strings.Repeat("─", sepW-lipgloss.Width("── output ")))
+
+	sep := p.sty.Primary.Render("── output " + strings.Repeat("─", w-lipgloss.Width("── output ")))
 	sb.WriteString(sep)
-	sb.WriteString("\n\n")
+	sb.WriteString("\n")
 	sb.WriteString(content)
+	
 	return sb.String()
 }
 
-// -- reasoning section ------------------------------------------------------
+// -- thinking section ------------------------------------------------------
 
-func (p *ProcessingItem) renderReasoningSection(contentW, sepW int) string {
-	if p.ReasoningText() == "" {
+func (p *ProcessingItem) renderThinkingSection(w int) string {
+	if p.ThinkingText() == "" {
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString("\n")
-	sep := p.sty.Blue.Render("── reasoning " + strings.Repeat("─", sepW-lipgloss.Width("── reasoning ")))
+
+	sep := p.sty.Muted.Render("── thinking " + strings.Repeat("─", w-lipgloss.Width("── thinking ")))
 	sb.WriteString(sep)
-	sb.WriteString("\n\n")
-	sb.WriteString(RenderFixed(WrapPlain(p.ReasoningText(), contentW), reasonLines, false, p.sty.Muted))
+	sb.WriteString("\n")
+	sb.WriteString(RenderFixed(WrapPlain(p.ThinkingText(), w), thinkLines, false, p.sty.Muted))
+	
 	return sb.String()
 }
+

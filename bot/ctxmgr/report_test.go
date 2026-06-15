@@ -3,6 +3,8 @@ package ctxmgr
 import (
 	"strings"
 	"testing"
+
+	"nekocode/common"
 )
 
 func TestBuildBar(t *testing.T) {
@@ -48,7 +50,7 @@ func TestFormatTokens(t *testing.T) {
 		{999, "999"},
 	}
 	for _, tt := range tests {
-		got := FormatTokens(tt.n)
+		got := common.FormatTokens(tt.n)
 		if got != tt.want {
 			t.Errorf("FormatTokens(%d) = %s, want %s", tt.n, got, tt.want)
 		}

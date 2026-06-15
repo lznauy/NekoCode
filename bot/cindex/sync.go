@@ -58,7 +58,7 @@ func (s *Syncer) addWatchDirs(dir string) error {
 			return nil
 		}
 		name := info.Name()
-		if ignoreDirs[name] || (strings.HasPrefix(name, ".") && name != ".") {
+		if ShouldSkipDir(name) {
 			return filepath.SkipDir
 		}
 		// Depth limit
@@ -94,7 +94,7 @@ func (s *Syncer) Start() {
 				if event.Op&fsnotify.Create != 0 {
 					if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
 						name := info.Name()
-						if !ignoreDirs[name] && !(strings.HasPrefix(name, ".") && name != ".") {
+						if !ShouldSkipDir(name) {
 							s.watcher.Add(event.Name)
 						}
 						continue // directory events don't need file-level processing
@@ -177,60 +177,7 @@ func (s *Syncer) handleFileChange(path string, op fsnotify.Op) {
 
 	if s.graph != nil {
 		s.graph.RemoveFileNodes(path)
-
-		// Compute package path from directory structure
-		relDir, _ := filepath.Rel(s.cwd, filepath.Dir(path))
-		if relDir == "." {
-			relDir = ""
-		}
-		pkgPath := relDir
-		if filepath.Ext(path) == ".go" && pkgPath == "" && len(nodes) > 0 {
-			pkgPath = nodes[0].PkgPath
-		}
-		for _, n := range nodes {
-			n.PkgPath = pkgPath
-		}
-
-		// Create file node for import edges
-		fileNode := &Node{
-			Name:    filepath.Base(path),
-			Kind:    "file",
-			File:    path,
-			PkgPath: pkgPath,
-		}
-		fileNodeID := s.graph.AddNode(fileNode)
-		s.indexer.db.SaveNode(fileNode)
-
-		// Add nodes and build parser-ID → graph-ID mapping
-		parserIDToGraphID := make(map[int64]int64)
-		for idx, n := range nodes {
-			n.ID = s.graph.AddNode(n)
-			parserIDToGraphID[int64(-(idx+1))] = n.ID
-			s.indexer.db.SaveNode(n)
-		}
-
-		// Fix edge FromID: convert negative parser markers to real graph IDs
-		for _, e := range edges {
-			if e.FromID < 0 {
-				if graphID, ok := parserIDToGraphID[e.FromID]; ok {
-					e.FromID = graphID
-				} else {
-					continue
-				}
-			}
-			// Import edges at file level: associate with file node
-			if e.FromID == 0 {
-				if e.Kind == EdgeImports {
-					e.FromID = fileNodeID
-				} else {
-					continue
-				}
-			}
-			e.ID = s.graph.AddEdge(e)
-			s.indexer.db.SaveEdge(e)
-		}
-
-		// Resolve cross-file call/import references
+		insertFileIntoGraph(s.graph, s.indexer.db, path, s.cwd, nodes, edges)
 		s.indexer.ResolveReferences(s.graph)
 	}
 

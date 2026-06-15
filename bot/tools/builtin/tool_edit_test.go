@@ -9,21 +9,53 @@ import (
 	"testing"
 
 	"nekocode/bot/tools"
+	"nekocode/bot/tools/hashline"
 )
 
-func TestEditHashline(t *testing.T) {
+func init() {
+	tools.SetGlobalSnapshotStore(hashline.NewSnapshotStore())
+}
+func TestEdit_InsertHeadEmptyFile(t *testing.T) {
+	// Regression: head-insert into an empty file used to panic because
+	// the context-after loop started at hunkEnd=0, hitting oldLines[-1].
+	td := t.TempDir()
+	e := &EditTool{}
+	p := filepath.Join(td, "empty.txt")
+	os.WriteFile(p, []byte(""), 0644)
+
+	hash := tools.GetGlobalSnapshotStore().Record(p, "")
+
+	patch := fmt.Sprintf(`*** Begin Patch
+[%s#%s]
+insert head:
++line1
+*** End Patch`, p, hash)
+
+	if _, err := e.Execute(context.Background(), map[string]any{"patch": patch}); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+
+	data, _ := os.ReadFile(p)
+	if string(data) != "line1\n" {
+		t.Errorf("expected 'line1\\n', got %q", string(data))
+	}
+}
+
+func TestEdit_Replace(t *testing.T) {
 	td := t.TempDir()
 	e := &EditTool{}
 	p := filepath.Join(td, "editme.txt")
 	os.WriteFile(p, []byte("line1\nline2\nline3\n"), 0644)
 
-	// Hashline: replace line 2.
-	h := tools.HashLine("line2")
-	out, err := e.Execute(context.Background(), map[string]any{
-		"path":       p,
-		"hashes":     []any{"2:" + h},
-		"new_string": "replaced",
-	})
+	hash := tools.GetGlobalSnapshotStore().Record(p, "line1\nline2\nline3\n")
+
+	patch := fmt.Sprintf(`*** Begin Patch
+[%s#%s]
+replace 2..2:
++replaced
+*** End Patch`, p, hash)
+
+	out, err := e.Execute(context.Background(), map[string]any{"patch": patch})
 	if err != nil {
 		t.Fatalf("edit: %v", err)
 	}
@@ -36,37 +68,21 @@ func TestEditHashline(t *testing.T) {
 	}
 }
 
-func TestEditHashline_Stale(t *testing.T) {
+func TestEdit_InsertAfter(t *testing.T) {
 	td := t.TempDir()
 	e := &EditTool{}
 	p := filepath.Join(td, "editme.txt")
 	os.WriteFile(p, []byte("line1\nline2\nline3\n"), 0644)
 
-	_, err := e.Execute(context.Background(), map[string]any{
-		"path":   p,
-		"hashes": []any{"2:xx"}, // non-existent hash
-	})
-	if err == nil {
-		t.Fatal("expected stale error")
-	}
-	if !strings.Contains(err.Error(), "Hashline stale") {
-		t.Errorf("expected stale error, got: %v", err)
-	}
-}
+	hash := tools.GetGlobalSnapshotStore().Record(p, "line1\nline2\nline3\n")
 
-func TestEditHashline_InsertAfter(t *testing.T) {
-	td := t.TempDir()
-	e := &EditTool{}
-	p := filepath.Join(td, "editme.txt")
-	os.WriteFile(p, []byte("line1\nline2\nline3\n"), 0644)
+	patch := fmt.Sprintf(`*** Begin Patch
+[%s#%s]
+insert after 2:
++inserted
+*** End Patch`, p, hash)
 
-	h := tools.HashLine("line2")
-	_, err := e.Execute(context.Background(), map[string]any{
-		"path":       p,
-		"hashes":     []any{"2:" + h},
-		"new_string": "inserted",
-		"op":         "insert_after",
-	})
+	_, err := e.Execute(context.Background(), map[string]any{"patch": patch})
 	if err != nil {
 		t.Fatalf("edit: %v", err)
 	}
@@ -76,18 +92,20 @@ func TestEditHashline_InsertAfter(t *testing.T) {
 	}
 }
 
-func TestEditHashline_Delete(t *testing.T) {
+func TestEdit_Delete(t *testing.T) {
 	td := t.TempDir()
 	e := &EditTool{}
 	p := filepath.Join(td, "editme.txt")
 	os.WriteFile(p, []byte("line1\nline2\nline3\n"), 0644)
 
-	h := tools.HashLine("line2")
-	_, err := e.Execute(context.Background(), map[string]any{
-		"path":   p,
-		"hashes": []any{"2:" + h},
-		"op":     "delete",
-	})
+	hash := tools.GetGlobalSnapshotStore().Record(p, "line1\nline2\nline3\n")
+
+	patch := fmt.Sprintf(`*** Begin Patch
+[%s#%s]
+delete 2
+*** End Patch`, p, hash)
+
+	_, err := e.Execute(context.Background(), map[string]any{"patch": patch})
 	if err != nil {
 		t.Fatalf("edit: %v", err)
 	}
@@ -97,96 +115,72 @@ func TestEditHashline_Delete(t *testing.T) {
 	}
 }
 
-func TestEditHashline_SequentialEdits(t *testing.T) {
+func TestEdit_StaleTag(t *testing.T) {
+	td := t.TempDir()
+	e := &EditTool{}
+	p := filepath.Join(td, "editme.txt")
+	os.WriteFile(p, []byte("line1\nline2\nline3\n"), 0644)
+
+	// Use a non-existent tag.
+	patch := fmt.Sprintf(`*** Begin Patch
+[%s#AAAAAAAA]
+replace 2..2:
++replaced
+*** End Patch`, p)
+
+	_, err := e.Execute(context.Background(), map[string]any{"patch": patch})
+	if err == nil {
+		t.Fatal("expected error for stale tag")
+	}
+	if !strings.Contains(err.Error(), "Edit rejected") && !strings.Contains(err.Error(), "no snapshot") {
+		t.Errorf("expected stale/snapshot error, got: %v", err)
+	}
+}
+
+func TestEdit_SequentialEdits(t *testing.T) {
 	td := t.TempDir()
 	e := &EditTool{}
 	p := filepath.Join(td, "seq.txt")
-	os.WriteFile(p, []byte("AA\nBB\nCC\nDD\nEE\nFF\nGG\nHH\n"), 0644)
+	content := "AA\nBB\nCC\nDD\nEE\nFF\nGG\nHH\n"
+	os.WriteFile(p, []byte(content), 0644)
 
-	// Edit 1: replace lines 2-3 (BB-CC) with 2 lines.
-	h2 := tools.HashLine("BB")
-	h3 := tools.HashLine("CC")
-	_, err := e.Execute(context.Background(), map[string]any{
-		"path": p, "hashes": []any{"2:" + h2, "3:" + h3},
-		"new_string": "X", // replace 2 lines with 1 → shifts line numbers
-	})
+	hash := tools.GetGlobalSnapshotStore().Record(p, content)
+
+	// Edit 1: replace lines 2-3 (BB-CC) with X.
+	patch1 := fmt.Sprintf(`*** Begin Patch
+[%s#%s]
+replace 2..3:
++X
+*** End Patch`, p, hash)
+	_, err := e.Execute(context.Background(), map[string]any{"patch": patch1})
 	if err != nil {
 		t.Fatalf("edit 1: %v", err)
 	}
 
-	// Edit 2: replace line "DD" using its hash. Still valid — same content, same hash.
-	hDD := tools.HashLine("DD")
-	_, err = e.Execute(context.Background(), map[string]any{
-		"path": p, "hashes": []any{"4:" + hDD},
-		"new_string": "ZZZ",
-	})
-	if err != nil {
-		t.Fatalf("edit 2 (after edit 1 changed line count): %v", err)
+	data, _ := os.ReadFile(p)
+	if string(data) != "AA\nX\nDD\nEE\nFF\nGG\nHH\n" {
+		t.Errorf("after edit 1: %q", string(data))
 	}
 
-	data, _ := os.ReadFile(p)
+	// Edit 2: replace DD (now line 3, but use fresh tag).
+	hash2 := tools.GetGlobalSnapshotStore().Record(p, string(data))
+	patch2 := fmt.Sprintf(`*** Begin Patch
+[%s#%s]
+replace 3..3:
++ZZZ
+*** End Patch`, p, hash2)
+	_, err = e.Execute(context.Background(), map[string]any{"patch": patch2})
+	if err != nil {
+		t.Fatalf("edit 2: %v", err)
+	}
+
+	data, _ = os.ReadFile(p)
 	if string(data) != "AA\nX\nZZZ\nEE\nFF\nGG\nHH\n" {
-		t.Errorf("got %q", string(data))
+		t.Errorf("after edit 2: %q", string(data))
 	}
 }
 
-func TestEditHashline_TrailingSeparator(t *testing.T) {
-	// Regression: AI may pass "9:___|" or "9:[___]" (hash+separator/brackets)
-	// for empty lines. The code must strip brackets and legacy separators before lookup.
-	td := t.TempDir()
-	e := &EditTool{}
-	p := filepath.Join(td, "readme.txt")
-	content := "<!--\n\nline2\n\nline4\n"
-	os.WriteFile(p, []byte(content), 0644)
-
-	h := tools.HashLine("") // ___ for empty line
-
-	// Legacy separator |
-	_, err := e.Execute(context.Background(), map[string]any{
-		"path":   p,
-		"hashes": []any{"2:" + h + "|"},
-		"op":     "delete",
-	})
-	if err != nil {
-		t.Fatalf("trailing | should not cause stale: %v", err)
-	}
-	os.WriteFile(p, []byte(content), 0644)
-
-	// Bracket format [___]
-	_, err = e.Execute(context.Background(), map[string]any{
-		"path":   p,
-		"hashes": []any{"2:[" + h + "]"},
-		"op":     "delete",
-	})
-	if err != nil {
-		t.Fatalf("bracketed hash [%s] should not cause stale: %v", h, err)
-	}
-}
-
-func TestEditHashline_CollisionResistant(t *testing.T) {
-	td := t.TempDir()
-	e := &EditTool{}
-	p := filepath.Join(td, "collision.txt")
-	// Multiple "}" lines — same content, same hash.
-	os.WriteFile(p, []byte("foo\n}\nbar\n}\nbaz\n"), 0644)
-
-	// Target the SECOND "}" (line 4), not the first (line 2).
-	h := tools.HashLine("}")
-	_, err := e.Execute(context.Background(), map[string]any{
-		"path": p, "hashes": []any{"4:" + h},
-		"new_string": "changed",
-	})
-	if err != nil {
-		t.Fatalf("collision edit: %v", err)
-	}
-	data, _ := os.ReadFile(p)
-	// Line 4 should be "changed", line 2 should still be "}".
-	if string(data) != "foo\n}\nbar\nchanged\nbaz\n" {
-		t.Errorf("collision failed: %q", string(data))
-	}
-}
-
-func TestEditHashline_FullFlow(t *testing.T) {
+func TestEdit_FullFlow(t *testing.T) {
 	td := t.TempDir()
 	e := &EditTool{}
 
@@ -194,17 +188,20 @@ func TestEditHashline_FullFlow(t *testing.T) {
 	for i := 1; i <= 50; i++ {
 		lines = append(lines, fmt.Sprintf("line %02d: some content here", i))
 	}
-	content := strings.Join(lines, "\n")
+	content := strings.Join(lines, "\n") + "\n"
 	p := filepath.Join(td, "big.txt")
 	os.WriteFile(p, []byte(content), 0644)
 
-	h20 := tools.HashLine(lines[19])
-	h25 := tools.HashLine(lines[24])
+	hash := tools.GetGlobalSnapshotStore().Record(p, content)
 
-	_, err := e.Execute(context.Background(), map[string]any{
-		"path": p, "hashes": []any{"20:" + h20, "25:" + h25},
-		"new_string": "new line A\nnew line B",
-	})
+	// Replace lines 20-25.
+	patch := fmt.Sprintf(`*** Begin Patch
+[%s#%s]
+replace 20..25:
++new line A
++new line B
+*** End Patch`, p, hash)
+	_, err := e.Execute(context.Background(), map[string]any{"patch": patch})
 	if err != nil {
 		t.Fatalf("edit 1 failed: %v", err)
 	}
@@ -216,16 +213,129 @@ func TestEditHashline_FullFlow(t *testing.T) {
 		t.Errorf("bad content prefix: %q", newContent[:100])
 	}
 
-	hNewB := tools.HashLine("new line B")
-	_, err = e.Execute(context.Background(), map[string]any{
-		"path": p, "hashes": []any{"21:" + hNewB},
-		"new_string": "edited line B",
-	})
+	// Edit 2: replace "new line B" using fresh tag.
+	hash2 := tools.GetGlobalSnapshotStore().Record(p, newContent)
+	patch2 := fmt.Sprintf(`*** Begin Patch
+[%s#%s]
+replace 21..21:
++edited line B
+*** End Patch`, p, hash2)
+	_, err = e.Execute(context.Background(), map[string]any{"patch": patch2})
 	if err != nil {
-		t.Fatalf("edit 2 (fresh hashes) failed: %v", err)
+		t.Fatalf("edit 2 failed: %v", err)
 	}
 	data, _ = os.ReadFile(p)
 	if !strings.Contains(string(data), "edited line B") {
 		t.Error("second edit should have replaced new line B")
+	}
+}
+
+func TestEdit_MultipleFiles(t *testing.T) {
+	td := t.TempDir()
+	e := &EditTool{}
+
+	aPath := filepath.Join(td, "a.txt")
+	bPath := filepath.Join(td, "b.txt")
+	os.WriteFile(aPath, []byte("aaa\n"), 0644)
+	os.WriteFile(bPath, []byte("bbb\n"), 0644)
+
+	hashA := tools.GetGlobalSnapshotStore().Record(aPath, "aaa\n")
+	hashB := tools.GetGlobalSnapshotStore().Record(bPath, "bbb\n")
+
+	patch := fmt.Sprintf(`*** Begin Patch
+[%s#%s]
+replace 1..1:
++AAA
+[%s#%s]
+replace 1..1:
++BBB
+*** End Patch`, aPath, hashA, bPath, hashB)
+
+	_, err := e.Execute(context.Background(), map[string]any{"patch": patch})
+	if err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+
+	dataA, _ := os.ReadFile(aPath)
+	dataB, _ := os.ReadFile(bPath)
+	if string(dataA) != "AAA\n" {
+		t.Errorf("a.txt: %q", string(dataA))
+	}
+	if string(dataB) != "BBB\n" {
+		t.Errorf("b.txt: %q", string(dataB))
+	}
+}
+
+func TestEdit_RollbackOnSecondFileFail(t *testing.T) {
+	td := t.TempDir()
+	e := &EditTool{}
+
+	aPath := filepath.Join(td, "a.txt")
+	bPath := filepath.Join(td, "b.txt")
+	os.WriteFile(aPath, []byte("old_a\n"), 0644)
+	os.WriteFile(bPath, []byte("old_b\n"), 0644)
+
+	hashA := tools.GetGlobalSnapshotStore().Record(aPath, "old_a\n")
+	hashB := tools.GetGlobalSnapshotStore().Record(bPath, "old_b\n")
+
+	// File A: valid edit. File B: bad line number (999) → apply fails.
+	patch := fmt.Sprintf(`*** Begin Patch
+[%s#%s]
+replace 1..1:
++new_a
+[%s#%s]
+replace 999..999:
++new_b
+*** End Patch`, aPath, hashA, bPath, hashB)
+
+	_, err := e.Execute(context.Background(), map[string]any{"patch": patch})
+	if err == nil {
+		t.Fatal("expected error for file B, got nil")
+	}
+
+	// File A must be rolled back to original content.
+	dataA, _ := os.ReadFile(aPath)
+	if string(dataA) != "old_a\n" {
+		t.Errorf("rollback failed: a.txt got %q, want 'old_a\\n'", string(dataA))
+	}
+	// File B untouched.
+	dataB, _ := os.ReadFile(bPath)
+	if string(dataB) != "old_b\n" {
+		t.Errorf("b.txt modified: %q", string(dataB))
+	}
+}
+
+
+func TestEdit_Revert(t *testing.T) {
+	td := t.TempDir()
+	e := &EditTool{}
+
+	filePath := filepath.Join(td, "revert_test.txt")
+	original := "line one\nline two\nline three\n"
+	os.WriteFile(filePath, []byte(original), 0644)
+
+	tag := tools.GetGlobalSnapshotStore().Record(filePath, hashline.NormalizeToLF(original))
+
+	// Edit the file (this also saves a .pre-edit snapshot).
+	_, err := e.Execute(context.Background(), map[string]any{
+		"patch": fmt.Sprintf("[%s#%s]\nreplace 1..1:\n+modified line one\n", filePath, tag),
+	})
+	if err != nil {
+		t.Fatalf("edit failed: %v", err)
+	}
+
+	// Revert via revert=true.
+	out, err := e.Execute(context.Background(), map[string]any{
+		"patch":  filePath,
+		"revert": true,
+	})
+	if err != nil {
+		t.Fatalf("revert failed: %v", err)
+	}
+	if !strings.Contains(out, "Reverted") {
+		t.Errorf("expected 'Reverted' in output, got %q", out)
+	}
+	if data, _ := os.ReadFile(filePath); string(data) != original {
+		t.Errorf("after revert: %q, want %q", string(data), original)
 	}
 }

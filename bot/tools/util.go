@@ -3,45 +3,16 @@ package tools
 
 import (
 	"fmt"
-	"hash/fnv"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"nekocode/bot/tools/hashline"
+	"nekocode/common"
 )
-
-const base62Chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-
-// HashLine returns a 4-character hash of the line content for hashline editing.
-// Empty lines return "____".
-func HashLine(s string) string {
-	if s == "" {
-		return "____"
-	}
-	h := fnv.New64a()
-	h.Write([]byte(s))
-	u := h.Sum64()
-	return string([]byte{
-		base62Chars[u%62],
-		base62Chars[(u/62)%62],
-		base62Chars[(u/(62*62))%62],
-		base62Chars[(u/(62*62*62))%62],
-	})
-}
-
-// AnnotateLines returns line hashes in the format "lineNo:hash" for editing.
-func AnnotateLines(content string) string {
-	lines := strings.Split(content, "\n")
-	var b strings.Builder
-	for i, line := range lines {
-		fmt.Fprintf(&b, "%d:%s", i+1, HashLine(line))
-		if i < len(lines)-1 {
-			b.WriteByte('\n')
-		}
-	}
-	return b.String()
-}
 
 var ansiRegex = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")
 
@@ -56,7 +27,7 @@ func StripAnsi(s string) string {
 func ValidatePath(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return "", fmt.Errorf("path resolution failed: %v", err)
+		return "", fmt.Errorf("path resolution failed: %w", err)
 	}
 	// Resolve symlinks to prevent escape via symlink indirection.
 	real, err := filepath.EvalSymlinks(abs)
@@ -72,12 +43,95 @@ func ValidatePath(path string) (string, error) {
 	return real, nil
 }
 
+// normalizePathKey normalizes a path for use as a cache key.
+// It resolves to absolute path and resolves symlinks, matching ValidatePath behavior.
+func normalizePathKey(path string) string {
+	if resolved, err := ValidatePath(path); err == nil {
+		return resolved
+	}
+	abs, _ := filepath.Abs(path)
+	return abs
+}
+
+// NormalizeText strips ANSI escapes and normalizes line endings to LF.
+func NormalizeText(text string) string {
+	text = StripAnsi(text)
+	return hashline.NormalizeToLF(text)
+}
+
+// ReadNormalizedFile reads a file, strips ANSI escapes, and normalizes line endings.
+// Returns the normalized text content.
+func ReadNormalizedFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return NormalizeText(string(data)), nil
+}
+
+// ReadSafeFile validates the path and reads the file, returning raw bytes.
+func ReadSafeFile(path string) ([]byte, error) {
+	safePath, err := ValidatePath(path)
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(safePath)
+}
+
+// ExtractPathsFromPatch pulls [filepath#TAG] paths from a hashline patch string.
+// The input can be string or any (for compatibility with map[string]any args).
+func ExtractPathsFromPatch(patch any) []string {
+	s, ok := patch.(string)
+	if !ok || s == "" {
+		return nil
+	}
+	var paths []string
+	rest := s
+	for {
+		start := strings.Index(rest, "[")
+		if start < 0 {
+			break
+		}
+		rest = rest[start+1:]
+		end := strings.IndexByte(rest, ']')
+		if end < 0 {
+			break
+		}
+		inner := rest[:end]
+		if hashIdx := strings.LastIndexByte(inner, '#'); hashIdx > 0 {
+			paths = append(paths, inner[:hashIdx])
+		}
+		rest = rest[end+1:]
+	}
+	return paths
+}
+
+// ExtractFirstPathFromPatch extracts the basename of the first file path
+// from a hashline patch string. Useful for display purposes.
+func ExtractFirstPathFromPatch(patch string) string {
+	paths := ExtractPathsFromPatch(patch)
+	if len(paths) > 0 {
+		return filepath.Base(paths[0])
+	}
+	return ""
+}
+
+// NewToolHTTPClient creates an HTTP client with the given timeout, sharing a
+// common transport for connection pooling.
 func NewToolHTTPClient(timeout time.Duration) *http.Client {
 	return &http.Client{
-		Transport: &http.Transport{
-			MaxIdleConns:    10,
-			IdleConnTimeout: 60 * time.Second,
-		},
-		Timeout: timeout,
+		Transport: common.SharedTransport,
+		Timeout:   timeout,
 	}
+}
+
+// RecordSnapshot records a file snapshot if GlobalSnapshotStore is set.
+// Returns the snapshot tag, or empty string if store is nil.
+// Record internally normalizes line endings before hashing; pre-normalization
+// by the caller is redundant.
+func RecordSnapshot(path, content string) string {
+	if store := GetGlobalSnapshotStore(); store != nil {
+		return store.Record(path, content)
+	}
+	return ""
 }

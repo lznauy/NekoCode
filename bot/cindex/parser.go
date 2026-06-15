@@ -6,11 +6,8 @@ import (
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/golang"
-	"github.com/smacker/go-tree-sitter/javascript"
-	"github.com/smacker/go-tree-sitter/python"
-	"github.com/smacker/go-tree-sitter/rust"
-	"github.com/smacker/go-tree-sitter/typescript/typescript"
+
+	"nekocode/bot/treesitter"
 )
 
 // langConfig holds tree-sitter language and query patterns.
@@ -19,85 +16,90 @@ type langConfig struct {
 	queries map[string]string // query name → pattern
 }
 
-var supportedLangs = map[string]langConfig{
-	".go": {
-		lang: golang.GetLanguage(),
-		queries: map[string]string{
-			"functions": `(function_declaration name: (identifier) @name) @func`,
-			"methods":   `(method_declaration name: (field_identifier) @name) @method`,
-			"types":     `(type_declaration (type_spec name: (type_identifier) @name) @type)`,
-			"structs":   `(type_declaration (type_spec name: (type_identifier) @name type: (struct_type))) @struct`,
-			"interfaces": `(type_declaration (type_spec name: (type_identifier) @name type: (interface_type))) @interface`,
-			"vars":      `(var_spec (identifier) @name) @var`,
-			"consts":    `(const_spec (identifier) @name) @const`,
-			"calls":     `(call_expression function: (identifier) @callee) @call`,
-			"method_calls": `(call_expression function: (selector_expression field: (field_identifier) @callee)) @call`,
-			"imports":   `(import_spec path: (interpreted_string_literal) @import_path) @import`,
+var supportedLangs = buildSupportedLangs()
+
+func buildSupportedLangs() map[string]langConfig {
+	L := treesitter.Languages
+	return map[string]langConfig{
+		".go": {
+			lang: L[".go"],
+			queries: map[string]string{
+				"functions":    `(function_declaration name: (identifier) @name) @func`,
+				"methods":      `(method_declaration name: (field_identifier) @name) @method`,
+				"types":        `(type_declaration (type_spec name: (type_identifier) @name) @type)`,
+				"structs":      `(type_declaration (type_spec name: (type_identifier) @name type: (struct_type))) @struct`,
+				"interfaces":   `(type_declaration (type_spec name: (type_identifier) @name type: (interface_type))) @interface`,
+				"vars":         `(var_spec (identifier) @name) @var`,
+				"consts":       `(const_spec (identifier) @name) @const`,
+				"calls":        `(call_expression function: (identifier) @callee) @call`,
+				"method_calls": `(call_expression function: (selector_expression field: (field_identifier) @callee)) @call`,
+				"imports":      `(import_spec path: (interpreted_string_literal) @import_path) @import`,
+			},
 		},
-	},
-	".js": {
-		lang: javascript.GetLanguage(),
-		queries: map[string]string{
-			"functions": `(function_declaration name: (identifier) @name) @func`,
-			"classes":   `(class_declaration name: (identifier) @name) @class`,
-			"vars":      `(lexical_declaration (variable_declarator (identifier) @name)) @var`,
-			"calls":     `(call_expression function: (identifier) @callee) @call`,
-			"method_calls": `(call_expression function: (member_expression property: (property_identifier) @callee)) @call`,
-			"imports":   `(import_statement source: (string) @import_path) @import`,
+		".js": {
+			lang: L[".js"],
+			queries: map[string]string{
+				"functions":    `(function_declaration name: (identifier) @name) @func`,
+				"classes":      `(class_declaration name: (identifier) @name) @class`,
+				"vars":         `(lexical_declaration (variable_declarator (identifier) @name)) @var`,
+				"calls":        `(call_expression function: (identifier) @callee) @call`,
+				"method_calls": `(call_expression function: (member_expression property: (property_identifier) @callee)) @call`,
+				"imports":      `(import_statement source: (string) @import_path) @import`,
+			},
 		},
-	},
-	".jsx": {
-		lang: javascript.GetLanguage(),
-		queries: map[string]string{
-			"functions": `(function_declaration name: (identifier) @name) @func`,
-			"classes":   `(class_declaration name: (identifier) @name) @class`,
-			"calls":     `(call_expression function: (identifier) @callee) @call`,
+		".jsx": {
+			lang: L[".jsx"],
+			queries: map[string]string{
+				"functions": `(function_declaration name: (identifier) @name) @func`,
+				"classes":   `(class_declaration name: (identifier) @name) @class`,
+				"calls":     `(call_expression function: (identifier) @callee) @call`,
+			},
 		},
-	},
-	".ts": {
-		lang: typescript.GetLanguage(),
-		queries: map[string]string{
-			"functions": `(function_declaration name: (identifier) @name) @func`,
-			"classes":   `(class_declaration name: (type_identifier) @name) @class`,
-			"interfaces": `(interface_declaration name: (type_identifier) @name) @interface`,
-			"vars":      `(lexical_declaration (variable_declarator (identifier) @name)) @var`,
-			"calls":     `(call_expression function: (identifier) @callee) @call`,
-			"method_calls": `(call_expression function: (member_expression property: (property_identifier) @callee)) @call`,
-			"imports":   `(import_statement source: (string) @import_path) @import`,
+		".ts": {
+			lang: L[".ts"],
+			queries: map[string]string{
+				"functions":    `(function_declaration name: (identifier) @name) @func`,
+				"classes":      `(class_declaration name: (type_identifier) @name) @class`,
+				"interfaces":   `(interface_declaration name: (type_identifier) @name) @interface`,
+				"vars":         `(lexical_declaration (variable_declarator (identifier) @name)) @var`,
+				"calls":        `(call_expression function: (identifier) @callee) @call`,
+				"method_calls": `(call_expression function: (member_expression property: (property_identifier) @callee)) @call`,
+				"imports":      `(import_statement source: (string) @import_path) @import`,
+			},
 		},
-	},
-	".tsx": {
-		lang: typescript.GetLanguage(),
-		queries: map[string]string{
-			"functions": `(function_declaration name: (identifier) @name) @func`,
-			"classes":   `(class_declaration name: (type_identifier) @name) @class`,
-			"calls":     `(call_expression function: (identifier) @callee) @call`,
+		".tsx": {
+			lang: L[".tsx"],
+			queries: map[string]string{
+				"functions": `(function_declaration name: (identifier) @name) @func`,
+				"classes":   `(class_declaration name: (type_identifier) @name) @class`,
+				"calls":     `(call_expression function: (identifier) @callee) @call`,
+			},
 		},
-	},
-	".py": {
-		lang: python.GetLanguage(),
-		queries: map[string]string{
-			"functions": `(function_definition name: (identifier) @name) @func`,
-			"classes":   `(class_definition name: (identifier) @name) @class`,
-			"calls":     `(call function: (identifier) @callee) @call`,
-			"method_calls": `(call function: (attribute attribute: (identifier) @callee)) @call`,
-			"imports":   `(import_statement name: (dotted_name) @import_path) @import`,
-			"import_from": `(import_from_statement module_name: (dotted_name) @import_path) @import`,
+		".py": {
+			lang: L[".py"],
+			queries: map[string]string{
+				"functions":    `(function_definition name: (identifier) @name) @func`,
+				"classes":      `(class_definition name: (identifier) @name) @class`,
+				"calls":        `(call function: (identifier) @callee) @call`,
+				"method_calls": `(call function: (attribute attribute: (identifier) @callee)) @call`,
+				"imports":      `(import_statement name: (dotted_name) @import_path) @import`,
+				"import_from":  `(import_from_statement module_name: (dotted_name) @import_path) @import`,
+			},
 		},
-	},
-	".rs": {
-		lang: rust.GetLanguage(),
-		queries: map[string]string{
-			"functions": `(function_item name: (identifier) @name) @func`,
-			"structs":   `(struct_item name: (type_identifier) @name) @struct`,
-			"enums":     `(enum_item name: (type_identifier) @name) @enum`,
-			"traits":    `(trait_item name: (type_identifier) @name) @trait`,
-			"impls":     `(impl_item type: (type_identifier) @name) @impl`,
-			"calls":     `(call_expression function: (identifier) @callee) @call`,
-			"method_calls": `(call_expression function: (field_expression field: (field_identifier) @callee)) @call`,
-			"uses":      `(use_wildcard) @use`,
+		".rs": {
+			lang: L[".rs"],
+			queries: map[string]string{
+				"functions":    `(function_item name: (identifier) @name) @func`,
+				"structs":      `(struct_item name: (type_identifier) @name) @struct`,
+				"enums":        `(enum_item name: (type_identifier) @name) @enum`,
+				"traits":       `(trait_item name: (type_identifier) @name) @trait`,
+				"impls":        `(impl_item type: (type_identifier) @name) @impl`,
+				"calls":        `(call_expression function: (identifier) @callee) @call`,
+				"method_calls": `(call_expression function: (field_expression field: (field_identifier) @callee)) @call`,
+				"uses":         `(use_wildcard) @use`,
+			},
 		},
-	},
+	}
 }
 
 // Parser extracts code symbols from source files using tree-sitter.
@@ -107,16 +109,13 @@ type Parser struct {
 
 // NewParser creates a new tree-sitter parser.
 func NewParser() *Parser {
-	p := &Parser{
-		parsers: make(map[string]*sitter.Parser),
-	}
-	// Pre-create parsers for supported languages
+	parsers := make(map[string]*sitter.Parser, len(supportedLangs))
 	for ext, cfg := range supportedLangs {
 		parser := sitter.NewParser()
 		parser.SetLanguage(cfg.lang)
-		p.parsers[ext] = parser
+		parsers[ext] = parser
 	}
-	return p
+	return &Parser{parsers: parsers}
 }
 
 // ParseFile parses a source file and extracts nodes and edges.

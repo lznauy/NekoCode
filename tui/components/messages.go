@@ -60,94 +60,43 @@ func (m *Messages) SetProcessing(on bool) {
 }
 
 func (m *Messages) SetSpinnerView(view string) {
-	m.mu.Lock()
-	if m.processingItem != nil {
-		m.processingItem.SetSpinnerView(view)
-		m.invalidateProcessing()
-	}
-	m.mu.Unlock()
+	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.SetSpinnerView(view) })
 }
 
 func (m *Messages) SetSkill(s string) {
-	m.mu.Lock()
-	if m.processingItem != nil {
-		m.processingItem.SetSkill(s)
-		m.invalidateProcessing()
-	}
-	m.mu.Unlock()
+	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.SetSkill(s) })
 }
 
 func (m *Messages) SetProcessingStatus(text string) {
-	m.mu.Lock()
-	if m.processingItem != nil {
-		m.processingItem.SetStatusText(text)
-		m.invalidateProcessing()
-	}
-	m.mu.Unlock()
+	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.SetStatusText(text) })
 }
 
-
 func (m *Messages) SetBlocks(blocks []block.ContentBlock) {
-	m.mu.Lock()
-	if m.processingItem != nil {
-		m.processingItem.SetBlocks(blocks)
-		m.invalidateProcessing()
-	}
-	m.mu.Unlock()
+	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.SetBlocks(blocks) })
 }
 
 func (m *Messages) SetTodos(text string) {
-	m.mu.Lock()
-	if m.processingItem != nil {
-		m.processingItem.SetTodos(text)
-		m.invalidateProcessing()
-	}
-	m.mu.Unlock()
+	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.SetTodos(text) })
 }
 
 func (m *Messages) ProcessStreamText(delta string) {
-	m.mu.Lock()
-	if m.processingItem != nil {
-		m.processingItem.AppendStreamText(delta)
-		m.invalidateProcessing()
-	}
-	m.mu.Unlock()
+	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.AppendStreamText(delta) })
 }
 
-func (m *Messages) ProcessReasoningText(delta string) {
-	m.mu.Lock()
-	if m.processingItem != nil {
-		m.processingItem.AppendReasoningText(delta)
-		m.invalidateProcessing()
-	}
-	m.mu.Unlock()
+func (m *Messages) ProcessThinkingText(delta string) {
+	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.AppendThinkingText(delta) })
 }
 
 func (m *Messages) ProcessToolBlock(b block.ContentBlock) {
-	m.mu.Lock()
-	if m.processingItem != nil {
-		m.processingItem.AddToolBlock(b)
-		m.invalidateProcessing()
-	}
-	m.mu.Unlock()
+	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.AddToolBlock(b) })
 }
 
 func (m *Messages) AddToolOutput(toolName, output string) {
-	m.mu.Lock()
-	if m.processingItem != nil {
-		m.processingItem.AddToolOutput(toolName, output)
-		m.invalidateProcessing()
-	}
-	m.mu.Unlock()
+	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.AddToolOutput(toolName, output) })
 }
 
 func (m *Messages) UpdateToolPreview(toolName, preview string) {
-	m.mu.Lock()
-	if m.processingItem != nil {
-		m.processingItem.UpdateToolPreview(toolName, preview)
-		m.invalidateProcessing()
-	}
-	m.mu.Unlock()
+	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.UpdateToolPreview(toolName, preview) })
 }
 
 func (m *Messages) AccumulatedText() string {
@@ -160,12 +109,7 @@ func (m *Messages) AccumulatedText() string {
 }
 
 func (m *Messages) AddThinkBlock(content string) {
-	m.mu.Lock()
-	if m.processingItem != nil {
-		m.processingItem.AddThinkBlock(content)
-		m.invalidateProcessing()
-	}
-	m.mu.Unlock()
+	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.AddThinkBlock(content) })
 }
 
 func (m *Messages) UpdateProcessing(fn func(p *processing.ProcessingItem)) {
@@ -177,13 +121,20 @@ func (m *Messages) UpdateProcessing(fn func(p *processing.ProcessingItem)) {
 	m.mu.Unlock()
 }
 
+func (m *Messages) AddSubAgent(id, subType string, colorIdx int) {
+	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.AddSubAgent(id, subType, colorIdx) })
+}
+
+func (m *Messages) RemoveSubAgent(id string) {
+	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.RemoveSubAgent(id) })
+}
+
+func (m *Messages) AddSubToolOutput(subID, toolName, output string) {
+	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.AddSubToolOutput(subID, toolName, output) })
+}
+
 func (m *Messages) ClearProcessing() {
-	m.mu.Lock()
-	if m.processingItem != nil {
-		m.processingItem.Clear()
-		m.invalidateProcessing()
-	}
-	m.mu.Unlock()
+	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.Clear() })
 }
 
 func (m *Messages) ProcessingBlocks() []block.ContentBlock {

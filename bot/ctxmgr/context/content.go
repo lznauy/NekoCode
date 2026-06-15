@@ -64,16 +64,16 @@ func (c *Content) AllTasksDone() bool {
 	return true
 }
 
+// HasTasks returns true when there are any todo items (regardless of status).
+func (c *Content) HasTasks() bool {
+	return len(c.TodoItems) > 0
+}
+
 func formatTodoItems(items []common.TodoItem) string {
 	if len(items) == 0 {
 		return ""
 	}
-	done := 0
-	for _, it := range items {
-		if it.Status == "completed" {
-			done++
-		}
-	}
+	done := common.CountCompleted(items)
 	if done == len(items) {
 		return "All " + strconv.Itoa(done) + " tasks complete"
 	}

@@ -48,7 +48,11 @@ func (m *Manager) AddAssistantToolCall(content, reasoning string, toolCalls []ty
 		ReasoningContent: reasoning,
 		ToolCalls:        toolCalls,
 	})
-	m.Tracker.AddNew(len("assistant") + len(content) + len(reasoning))
+	tcBytes := 0
+	for _, tc := range toolCalls {
+		tcBytes += len(tc.ID) + len(tc.Function.Name) + len(tc.Function.Arguments)
+	}
+	m.Tracker.AddNew(len("assistant") + len(content) + len(reasoning) + tcBytes)
 }
 
 type ToolResultMsg struct {
@@ -82,6 +86,11 @@ func (m *Manager) AddToolResultsBatch(results []ToolResultMsg) {
 func (m *Manager) Clear() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.clearInternal()
+}
+
+// clearInternal clears messages, todo, and compact boundary. Caller must hold mu.
+func (m *Manager) clearInternal() {
 	m.ctx.Messages = make([]types.Message, 0)
 	m.ctx.CompactBoundary = 0
 	m.ctx.Todo = ""

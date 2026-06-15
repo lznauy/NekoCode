@@ -1,13 +1,18 @@
 package compact
 
 import (
-	"nekocode/bot/debug"
+	"context"
 	"fmt"
 
-	"nekocode/bot/ctxmgr/context"
+	"nekocode/bot/debug"
+
+	ctxctx "nekocode/bot/ctxmgr/context"
 	"nekocode/bot/ctxmgr/token"
 	"nekocode/llm/types"
 )
+
+// defaultBudget is the fallback context window size when not configured.
+const defaultBudget = 64000
 
 // Summarizer is the function signature for LLM summarization.
 type Summarizer func(msgs []types.Message, prevSummary string) (string, error)
@@ -20,14 +25,15 @@ type Tracker interface {
 
 // Compactor holds references to the parent's state for compaction.
 type Compactor struct {
-	Ctx         *context.Content
+	Ctx           *ctxctx.Content
 	ContextWindow *int
-	Tracker     Tracker
+	Tracker       Tracker
 
 	CompactCount *int
 	TrimCount    *int
 
 	Summarizer Summarizer
+	CancelCtx  context.Context // cancellable context for LLM calls
 	Cfg        Config
 }
 
@@ -41,11 +47,17 @@ type Compactor struct {
 //	Layer 3: Microcompact        (surgical tool-result clearing)
 //	Layer 4: Context Collapsing  (LLM middle-segment → Archive)
 //	Layer 5: Auto-Compaction     (Head-Tail-Summary reconstruction)
-func (m *Compactor) AutoCompactIfNeeded() (Level, error) {
-	estTokens := m.visibleEstimatedTokens()
-	if t := m.Tracker.PromptEstimate(); t > estTokens {
-		estTokens = t
+// estimateTokens returns the higher of visibleEstimatedTokens and Tracker.PromptEstimate.
+func (m *Compactor) estimateTokens() int {
+	est := m.visibleEstimatedTokens()
+	if t := m.Tracker.PromptEstimate(); t > est {
+		return t
 	}
+	return est
+}
+
+func (m *Compactor) AutoCompactIfNeeded() (Level, error) {
+	estTokens := m.estimateTokens()
 	effectiveBudget := m.effectiveBudget()
 	cfg := m.effectiveConfig()
 	remaining := effectiveBudget - estTokens
@@ -71,6 +83,7 @@ func (m *Compactor) AutoCompactIfNeeded() (Level, error) {
 	}
 
 	// --- Layer 3: Microcompact ---
+	// Level ordering: Normal < Warning < MicroCompact < Compact < Blocking
 	if level <= LevelMicroCompact {
 		if cleared := m.MicroCompactIfNeeded(); cleared > 0 {
 			return LevelMicroCompact, nil
@@ -98,11 +111,7 @@ func (m *Compactor) AutoCompactIfNeeded() (Level, error) {
 
 // recheckBudget re-estimates tokens and returns the current level.
 func (m *Compactor) recheckBudget(effectiveBudget int, cfg Config) Level {
-	est := m.visibleEstimatedTokens()
-	if t := m.Tracker.PromptEstimate(); t > est {
-		est = t
-	}
-	return classifyLevel(effectiveBudget-est, cfg)
+	return classifyLevel(effectiveBudget-m.estimateTokens(), cfg)
 }
 
 // -- budget estimation -------------------------------------------------
@@ -132,46 +141,30 @@ func (m *Compactor) NeedsSummarization() bool {
 }
 
 func (m *Compactor) MicroCompactIfNeeded() int {
-	est := m.visibleEstimatedTokens()
-	if t := m.Tracker.PromptEstimate(); t > est {
-		est = t
-	}
-	if est < m.effectiveBudget()/2 {
+	if m.estimateTokens() < m.effectiveBudget()/2 {
 		return 0
 	}
 	return m.microCompact()
 }
 
-func (m *Compactor) ForceCompact() {
-	var compacted int
-	for i, msg := range m.Ctx.Messages {
-		if msg.Role == "tool" && msg.Content != ClearedMarker && m.isCompactableResult(i) {
-			(m.Ctx.Messages)[i].Content = ClearedMarker
-			compacted++
-		}
-	}
-	*m.CompactCount += compacted
-	debug.Log("force_compact: cleared %d tool results out of %d messages (%d total compactions)", compacted, len(m.Ctx.Messages), *m.CompactCount)
-}
-
-// effectiveBudget returns the token budget, defaulting to 64000 if unset.
+// effectiveBudget returns the token budget, defaulting to defaultBudget if unset.
 func (m *Compactor) effectiveBudget() int {
 	if *m.ContextWindow > 0 {
 		return *m.ContextWindow
 	}
-	return 64000
+	return defaultBudget
 }
 
 // effectiveConfig scales thresholds for the actual budget.
 func (m *Compactor) effectiveConfig() Config {
 	budget := *m.ContextWindow
 	if budget <= 0 {
-		budget = 64000
+		budget = defaultBudget
 	}
-	if budget <= 64000 {
+	if budget <= defaultBudget {
 		return m.Cfg
 	}
-	scale := float64(budget) / 64000.0
+	scale := float64(budget) / float64(defaultBudget)
 	return Config{
 		WarningBuffer:      int(float64(m.Cfg.WarningBuffer) * scale),
 		MicroCompactBuffer: int(float64(m.Cfg.MicroCompactBuffer) * scale),

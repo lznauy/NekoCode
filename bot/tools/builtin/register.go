@@ -16,7 +16,7 @@ func RegisterAll(r *tools.Registry, imageGenModels []config.ImageGenConfig) {
 	r.Register(&GrepTool{})
 	r.Register(NewWebSearchTool())
 	r.Register(NewWebFetchTool())
-	r.Register(NewTodoWriteTool())
+	r.Register(&TodoWriteTool{})
 	r.Register(NewTaskTool())
 
 	if len(imageGenModels) > 0 {

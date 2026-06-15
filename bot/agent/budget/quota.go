@@ -17,11 +17,11 @@ func ComputeQuota(usedTokens, contextWindow int) ToolQuota {
 	ratio := float64(usedTokens) / float64(contextWindow)
 	switch {
 	case ratio < 0.15:
-		return ToolQuota{MaxSlots: 4}
+		return ToolQuota{MaxSlots: 8}
 	case ratio < 0.30:
-		return ToolQuota{MaxSlots: 2}
+		return ToolQuota{MaxSlots: 4}
 	default:
-		return ToolQuota{MaxSlots: 1}
+		return ToolQuota{MaxSlots: 2}
 	}
 }
 
@@ -36,6 +36,7 @@ func (q *ToolQuota) consume() error {
 const quotaExhaustedMsg = `[配额] 本轮读取配额已达上限 (%d)。基于已有信息继续，不要重试。`
 
 // ConsumeTool routes by tool name. Returns error if quota exhausted.
+// Only consumes quota for information-gathering tools.
 func (q *ToolQuota) ConsumeTool(toolName string) error {
 	switch toolName {
 	case "read", "grep", "glob", "list":

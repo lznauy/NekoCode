@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"nekocode/common"
 	"nekocode/llm/types"
 )
 
@@ -41,8 +42,7 @@ type Meta struct {
 }
 
 func dir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".nekocode", "sessions")
+	return filepath.Join(common.NekocodeHome(), "sessions")
 }
 
 func New(cwd string) (*Snapshot, error) {
@@ -53,35 +53,50 @@ func New(cwd string) (*Snapshot, error) {
 		CreatedAt: now.Unix(),
 		UpdatedAt: now.Unix(),
 	}
-	d := filepath.Join(dir(), s.ID)
-	if err := os.MkdirAll(d, 0755); err != nil {
-		return nil, err
-	}
 	return s, s.Save()
 }
 
 func Load(id string) (*Snapshot, error) {
-	data, err := os.ReadFile(filepath.Join(dir(), id, "session.json"))
-	if err != nil {
-		return nil, err
-	}
-	var s Snapshot
-	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, err
-	}
-	return &s, nil
+	return common.ReadJSONFile[*Snapshot](filepath.Join(dir(), id, "session.json"))
 }
 
 func (s *Snapshot) Save() error {
 	s.UpdatedAt = time.Now().Unix()
 	d := filepath.Join(dir(), s.ID)
-	if err := os.MkdirAll(d, 0755); err != nil {
-		return err
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal session: %w", err)
 	}
-	data, _ := json.MarshalIndent(s, "", "  ")
-	return os.WriteFile(filepath.Join(d, "session.json"), data, 0644)
+	return common.WriteFileWithDir(filepath.Join(d, "session.json"), data, 0o644)
 }
 
+
+// sessionMeta is a lightweight struct for deserializing only metadata from
+// session.json, avoiding the cost of unmarshaling the full Messages array.
+type sessionMeta struct {
+	ID        string `json:"id"`
+	CWD       string `json:"cwd"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
+	Messages  []struct{} `json:"messages"` // only need len, not content
+}
+
+func loadMeta(id string) (Meta, error) {
+	var sm sessionMeta
+	path := filepath.Join(dir(), id, "session.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Meta{}, err
+	}
+	if err := json.Unmarshal(data, &sm); err != nil {
+		return Meta{}, err
+	}
+	return Meta{
+		ID: sm.ID, CWD: sm.CWD,
+		CreatedAt: sm.CreatedAt, UpdatedAt: sm.UpdatedAt,
+		MsgCount: len(sm.Messages),
+	}, nil
+}
 
 func List() []Meta {
 	entries, err := os.ReadDir(dir())
@@ -93,15 +108,11 @@ func List() []Meta {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		s, err := Load(e.Name())
+		m, err := loadMeta(e.Name())
 		if err != nil {
 			continue
 		}
-		out = append(out, Meta{
-			ID: s.ID, CWD: s.CWD,
-			CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt,
-			MsgCount: len(s.Messages),
-		})
+		out = append(out, m)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt > out[j].UpdatedAt })
 	return out

@@ -11,6 +11,13 @@ import (
 	"nekocode/common"
 )
 
+// Previewer is an optional interface for tools that can generate a preview
+// (e.g. a diff) before execution. Both PreparePreviews and ExecuteBatch use
+// this interface to produce preview content for the TUI.
+type Previewer interface {
+	Preview(args map[string]any) string
+}
+
 type Executor struct {
 	registry  *Registry
 	confirmFn common.ConfirmFunc
@@ -19,17 +26,51 @@ type Executor struct {
 	readFiles map[string]bool
 	readMu    sync.RWMutex
 	previewFn func(toolName string, args map[string]any, preview string)
+	fnMu      sync.RWMutex // protects confirmFn, phaseFn, previewFn (subagent engine mutates concurrently)
 }
 
 func NewExecutor(r *Registry) *Executor {
 	return &Executor{registry: r, readFiles: make(map[string]bool)}
 }
 
-func (e *Executor) SetConfirmFn(fn common.ConfirmFunc) { e.confirmFn = fn }
-func (e *Executor) ConfirmFn() common.ConfirmFunc     { return e.confirmFn }
-func (e *Executor) SetPhaseFn(fn common.PhaseFunc)      { e.phaseFn = fn }
-func (e *Executor) SetPlanMode(on bool)                 { e.planMode = on }
-func (e *Executor) SetPreviewFn(fn func(string, map[string]any, string)) { e.previewFn = fn }
+func (e *Executor) SetConfirmFn(fn common.ConfirmFunc) {
+	e.fnMu.Lock()
+	e.confirmFn = fn
+	e.fnMu.Unlock()
+}
+func (e *Executor) ConfirmFn() common.ConfirmFunc {
+	e.fnMu.RLock()
+	defer e.fnMu.RUnlock()
+	return e.confirmFn
+}
+func (e *Executor) SetPhaseFn(fn common.PhaseFunc) {
+	e.fnMu.Lock()
+	e.phaseFn = fn
+	e.fnMu.Unlock()
+}
+func (e *Executor) SetPlanMode(on bool) {
+	e.fnMu.Lock()
+	e.planMode = on
+	e.fnMu.Unlock()
+}
+func (e *Executor) SetPreviewFn(fn func(string, map[string]any, string)) {
+	e.fnMu.Lock()
+	e.previewFn = fn
+	e.fnMu.Unlock()
+}
+
+// PreparePreviews runs Preview() on each mutable tool call and stores the
+// result in Args["_preview"]. This allows callers to access previews before
+// ExecuteBatch runs (e.g. for tool_start callbacks).
+func (e *Executor) PreparePreviews(calls []ToolCallItem) {
+	for i, c := range calls {
+		if t, err := e.registry.Get(c.Name); err == nil {
+			if p, ok := t.(Previewer); ok {
+				calls[i].Args["_preview"] = p.Preview(c.Args)
+			}
+		}
+	}
+}
 
 func (e *Executor) ExecuteBatch(ctx context.Context, calls []ToolCallItem) []ToolCallResult {
 	var ro, mw []ToolCallItem
@@ -47,7 +88,7 @@ func (e *Executor) ExecuteBatch(ctx context.Context, calls []ToolCallItem) []Too
 	// Read-only: parallel.
 	if len(ro) > 0 {
 		var wg sync.WaitGroup
-		sem := make(chan struct{}, 10)
+		sem := make(chan struct{}, 16)
 		for i, c := range ro {
 			if ctx.Err() != nil {
 				results[n+i] = ToolCallResult{ID: c.ID, Name: c.Name, Error: ctx.Err().Error()}
@@ -68,11 +109,18 @@ func (e *Executor) ExecuteBatch(ctx context.Context, calls []ToolCallItem) []Too
 	// Mutable: sequential.
 	for i, c := range mw {
 		if t, err := e.registry.Get(c.Name); err == nil {
-			if p, ok := t.(interface{ Preview(map[string]any) string }); ok {
-				preview := p.Preview(c.Args)
-				c.Args["_preview"] = preview
-				if e.previewFn != nil {
-					e.previewFn(c.Name, c.Args, preview)
+			if p, ok := t.(Previewer); ok {
+				// Reuse preview from PreparePreviews if available.
+				preview, _ := c.Args["_preview"].(string)
+				if preview == "" {
+					preview = p.Preview(c.Args)
+					c.Args["_preview"] = preview
+				}
+				e.fnMu.RLock()
+				pfn := e.previewFn
+				e.fnMu.RUnlock()
+				if pfn != nil {
+					pfn(c.Name, c.Args, preview)
 				}
 			}
 		}
@@ -91,21 +139,30 @@ func (e *Executor) executeOne(ctx context.Context, tc ToolCallItem) ToolCallResu
 	if level == common.LevelForbidden {
 		return ToolCallResult{ID: tc.ID, Name: tc.Name, Error: "forbidden: " + tc.Name}
 	}
-	if e.phaseFn != nil {
-		e.phaseFn(common.PhaseRunning + " " + tc.Name)
+	e.fnMu.RLock()
+	pfn := e.phaseFn
+	cfn := e.confirmFn
+	pm := e.planMode
+	e.fnMu.RUnlock()
+	if pfn != nil {
+		pfn(common.PhaseRunning + " " + tc.Name)
 	}
-	if e.planMode && level >= common.LevelWrite {
+	if pm && level >= common.LevelWrite {
 		return ToolCallResult{ID: tc.ID, Name: tc.Name, Error: "plan mode: blocked"}
 	}
-	if level >= common.LevelWrite && e.confirmFn != nil && !e.confirmFn(common.ConfirmRequest{
-		ToolName: tc.Name, Args: tc.Args, Level: level, Response: make(chan bool, 1),
-	}) {
+	if level >= common.LevelWrite && cfn != nil && !cfn(common.NewConfirmRequest(tc.Name, confirmArgs(tc.Name, tc.Args), level)) {
 		return ToolCallResult{ID: tc.ID, Name: tc.Name, Error: "cancelled"}
 	}
 
+	paths := toolPaths(tc)
+
+	// Guard: tools that modify files must read them first. Bash is excluded
+	// because extracting target file paths from arbitrary shell commands is
+	// fragile — the DangerLevel confirmation system and forbidden-command
+	// blocklist provide the primary safety layer for bash.
 	if tc.Name == "write" || tc.Name == "edit" {
-		if p, _ := tc.Args["path"].(string); p != "" {
-			if resolved, err := resolvePath(p); err == nil {
+		for _, p := range paths {
+			if resolved, err := ValidatePath(p); err == nil {
 				if _, err := os.Stat(resolved); err == nil && !e.wasRead(resolved) {
 					return ToolCallResult{ID: tc.ID, Name: tc.Name,
 						Error: "file " + filepath.Base(resolved) + " has not been read yet"}
@@ -115,29 +172,29 @@ func (e *Executor) executeOne(ctx context.Context, tc ToolCallItem) ToolCallResu
 	}
 
 	var output string
-		var execErr error
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					execErr = fmt.Errorf("panic: %v", r)
-				}
-			}()
-			output, execErr = tool.Execute(ctx, tc.Args)
+	var execErr error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				execErr = fmt.Errorf("panic: %v", r)
+			}
 		}()
-		if execErr != nil {
-			return ToolCallResult{ID: tc.ID, Name: tc.Name, Error: execErr.Error()}
-		}
+		output, execErr = tool.Execute(ctx, tc.Args)
+	}()
+	if execErr != nil {
+		return ToolCallResult{ID: tc.ID, Name: tc.Name, Error: execErr.Error()}
+	}
 	output = truncateOutput(output)
 
 	// Track reads + invalidate cache.
-	if p, _ := tc.Args["path"].(string); p != "" {
-		if resolved, err := resolvePath(p); err == nil {
+	for _, p := range paths {
+		if resolved, err := ValidatePath(p); err == nil {
 			switch tc.Name {
 			case "read":
 				e.markRead(resolved)
-			case "edit", "write":
-				if GlobalFileCache != nil {
-					GlobalFileCache.Invalidate(resolved)
+			case "write", "edit":
+				if cache := GetGlobalFileCache(); cache != nil {
+					cache.Invalidate(resolved)
 				}
 			}
 		}
@@ -158,14 +215,7 @@ func (e *Executor) wasRead(path string) bool {
 	return e.readFiles[path]
 }
 
-func resolvePath(p string) (string, error) {
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return "", err
-	}
-	return filepath.EvalSymlinks(abs)
-}
-
+// Invariant: headLen + tailLen must be < maxLines.
 const (
 	maxLines = 2000
 	headLen  = 40
@@ -185,10 +235,43 @@ func truncateOutput(output string) string {
 		b.WriteString(lines[i])
 		b.WriteByte('\n')
 	}
-	fmt.Fprintf(&b, "\n[... %d lines truncated ...]\n\n", tailStart-headLen)
+	skipped := tailStart - headLen
+	if skipped > 0 {
+		fmt.Fprintf(&b, "\n[... %d lines truncated ...]\n\n", skipped)
+	}
 	for i := range len(lines) - tailStart {
 		b.WriteString(lines[tailStart+i])
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+// toolPaths extracts file paths from tool arguments.
+// For write/read: uses "path" key. For edit: parses the hashline patch DSL.
+
+// confirmArgs adds a "path" entry for tools that store the file path in
+// a non-standard argument name (e.g. edit uses "patch" not "path").
+func confirmArgs(name string, args map[string]any) map[string]any {
+	if name == "edit" {
+		paths := ExtractPathsFromPatch(args["patch"])
+		if len(paths) > 0 {
+			out := make(map[string]any, len(args)+1)
+			for k, v := range args {
+				out[k] = v
+			}
+			out["path"] = paths[0]
+			return out
+		}
+	}
+	return args
+}
+
+func toolPaths(tc ToolCallItem) []string {
+	if tc.Name == "edit" {
+		return ExtractPathsFromPatch(tc.Args["patch"])
+	}
+	if p, ok := tc.Args["path"].(string); ok && p != "" {
+		return []string{p}
+	}
+	return nil
 }

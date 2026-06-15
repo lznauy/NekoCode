@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"nekocode/common"
 	"nekocode/llm/types"
 )
 
@@ -13,8 +14,9 @@ const NO_TOOLS_PREAMBLE = `CRITICAL: Respond with TEXT ONLY. Do NOT call any too
 - Tool calls will be REJECTED and will waste your only turn — you will fail the task.
 `
 
-// BuildPrompt assembles a structured summarization prompt from messages.
-func BuildPrompt(msgs []types.Message, prevSummary string) string {
+// FormatMessages formats a slice of messages into [role]: content lines,
+// skipping empty/cleared entries and truncating long content.
+func FormatMessages(msgs []types.Message) string {
 	var b strings.Builder
 	for _, m := range msgs {
 		content := strings.TrimSpace(m.Content)
@@ -25,9 +27,14 @@ func BuildPrompt(msgs []types.Message, prevSummary string) string {
 		if m.Role == "tool" {
 			limit = 800
 		}
-		fmt.Fprintf(&b, "[%s]: %s\n", m.Role, truncateStr(content, limit))
+		fmt.Fprintf(&b, "[%s]: %s\n", m.Role, common.TruncateByRune(content, limit))
 	}
-	conversation := b.String()
+	return b.String()
+}
+
+// BuildPrompt assembles a structured summarization prompt from messages.
+func BuildPrompt(msgs []types.Message, prevSummary string) string {
+	conversation := FormatMessages(msgs)
 
 	template := NO_TOOLS_PREAMBLE + `
 You are a context summarization assistant for coding sessions.
@@ -88,10 +95,3 @@ func extractXMLBlock(raw, tag string) string {
 	return strings.TrimSpace(raw[start : start+end])
 }
 
-func truncateStr(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
-	}
-	return string(runes[:maxLen]) + "..."
-}

@@ -16,7 +16,7 @@ func newCompactor(msgs []types.Message, budget int, boundary int) *Compactor {
 	}
 }
 
-func TestIsCompactableResult_Read(t *testing.T) {
+func TestLookupAssistantTool_Read(t *testing.T) {
 	msgs := []types.Message{
 		{Role: "assistant", ToolCalls: []types.ToolCall{
 			{ID: "tc1", Function: types.FunctionCall{Name: "read"}},
@@ -24,12 +24,13 @@ func TestIsCompactableResult_Read(t *testing.T) {
 		{Role: "tool", ToolCallID: "tc1", Content: "content"},
 	}
 	cm := newCompactor(msgs, 64000, 0)
-	if !cm.isCompactableResult(1) {
+	idx, name := cm.lookupAssistantTool(1)
+	if idx < 0 || !compactableTools[name] {
 		t.Error("read result should be compactable")
 	}
 }
 
-func TestIsCompactableResult_UnknownTool(t *testing.T) {
+func TestLookupAssistantTool_UnknownTool(t *testing.T) {
 	msgs := []types.Message{
 		{Role: "assistant", ToolCalls: []types.ToolCall{
 			{ID: "tc1", Function: types.FunctionCall{Name: "custom_mcp_tool"}},
@@ -37,18 +38,20 @@ func TestIsCompactableResult_UnknownTool(t *testing.T) {
 		{Role: "tool", ToolCallID: "tc1", Content: "result"},
 	}
 	cm := newCompactor(msgs, 64000, 0)
-	if cm.isCompactableResult(1) {
+	idx, name := cm.lookupAssistantTool(1)
+	if idx >= 0 && compactableTools[name] {
 		t.Error("tool not in compactableTools should not be compactable")
 	}
 }
 
-func TestIsCompactableResult_NoToolCallID(t *testing.T) {
+func TestLookupAssistantTool_NoToolCallID(t *testing.T) {
 	msgs := []types.Message{
 		{Role: "tool", ToolCallID: "", Content: "orphan"},
 	}
 	cm := newCompactor(msgs, 64000, 0)
-	if cm.isCompactableResult(0) {
-		t.Error("result without ToolCallID should not be compactable")
+	idx, _ := cm.lookupAssistantTool(0)
+	if idx >= 0 {
+		t.Error("result without ToolCallID should not find assistant")
 	}
 }
 
@@ -67,37 +70,6 @@ func TestCompactableToolPriority(t *testing.T) {
 	}
 	if p := compactableToolPriority("bash", "short"); p != priorityLow {
 		t.Errorf("short bash = %d, want low(%d)", p, priorityLow)
-	}
-}
-
-func TestForceCompact(t *testing.T) {
-	msgs := []types.Message{
-		{Role: "assistant", ToolCalls: []types.ToolCall{
-			{ID: "tc1", Function: types.FunctionCall{Name: "read"}},
-		}},
-		{Role: "tool", ToolCallID: "tc1", Content: "content"},
-	}
-	cm := newCompactor(msgs, 64000, 0)
-	cm.ForceCompact()
-	if msgs[1].Content != ClearedMarker {
-		t.Errorf("ForceCompact should clear result, got %q", msgs[1].Content)
-	}
-	if *cm.CompactCount != 1 {
-		t.Errorf("CompactCount = %d, want 1", *cm.CompactCount)
-	}
-}
-
-func TestForceCompact_SkipsNonCompactable(t *testing.T) {
-	msgs := []types.Message{
-		{Role: "assistant", ToolCalls: []types.ToolCall{
-			{ID: "tc1", Function: types.FunctionCall{Name: "custom"}},
-		}},
-		{Role: "tool", ToolCallID: "tc1", Content: "keep me"},
-	}
-	cm := newCompactor(msgs, 64000, 0)
-	cm.ForceCompact()
-	if msgs[1].Content == ClearedMarker {
-		t.Error("non-compactable result should NOT be cleared")
 	}
 }
 

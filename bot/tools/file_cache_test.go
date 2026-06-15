@@ -14,34 +14,15 @@ func TestFileCache(t *testing.T) {
 	c := NewFileStateCache()
 
 	// Miss on empty cache.
-	if _, hit := c.Get(p, 1, 3); hit {
+	if _, hit := c.Lines(p); hit {
 		t.Error("expected miss on empty cache")
 	}
 
-	// Put lines + Get.
+	// Put lines + Lines.
 	lines := []string{"hello", "world", "foo", "bar", "baz"}
 	c.Put(p, lines, 1, 3)
-	hint, hit := c.Get(p, 1, 3)
-	if !hit || hint == "" {
-		t.Error("expected cache hit for covered range 1-3")
-	}
-
-	// Subset coverage: range 2-3 is within 1-3.
-	hint, hit = c.Get(p, 2, 3)
-	if !hit || hint == "" {
-		t.Error("expected cache hit for subset range 2-3")
-	}
-
-	// Partial overlap → miss.
-	if _, hit := c.Get(p, 2, 5); hit {
-		t.Error("expected miss for partially covered range 2-5")
-	}
-
-	// Add new range and verify merge.
-	c.Put(p, lines, 4, 5)
-	hint, hit = c.Get(p, 2, 4)
-	if !hit || hint == "" {
-		t.Error("expected hit after merging ranges 1-3 and 4-5")
+	if cached, ok := c.Lines(p); !ok || len(cached) != 5 {
+		t.Error("expected Lines() to return full cached content after Put")
 	}
 
 	// Lines() returns full content.
@@ -51,7 +32,7 @@ func TestFileCache(t *testing.T) {
 
 	// Invalidate.
 	c.Invalidate(p)
-	if _, hit := c.Get(p, 1, 2); hit {
+	if _, hit := c.Lines(p); hit {
 		t.Error("expected miss after invalidate")
 	}
 }
@@ -70,7 +51,7 @@ func TestFileCacheMerge(t *testing.T) {
 	sub.Put(p2, []string{"bbb"}, 1, 1)
 	main.Merge(sub)
 
-	if _, hit := main.Get(p2, 1, 1); !hit {
+	if _, hit := main.Lines(p2); !hit {
 		t.Error("expected hit after merge")
 	}
 }
