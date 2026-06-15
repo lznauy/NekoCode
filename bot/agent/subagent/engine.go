@@ -55,6 +55,7 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
 	startTime := time.Now()
 	var toolUseCount int
 	var totalTokens int
+	var sensitiveOps int
 
 	systemPrompt := cfg.AgentType.SystemPrompt
 	if cfg.AgentType.Name == "researcher" && cfg.Thoroughness == thoroughDeep {
@@ -124,7 +125,7 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
 
 	makeMeta := func() runMeta {
 		hit, miss := ctxMgr.Tracker.CacheStats()
-		return runMeta{totalTokens: totalTokens, toolUseCount: toolUseCount, durationMs: time.Since(startTime).Milliseconds(), cacheHitTokens: hit, cacheMissTokens: miss}
+		return runMeta{totalTokens: totalTokens, toolUseCount: toolUseCount, durationMs: time.Since(startTime).Milliseconds(), cacheHitTokens: hit, cacheMissTokens: miss, sensitiveOps: sensitiveOps}
 	}
 	for step := 0; ; step++ {
 		select {
@@ -165,6 +166,14 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
 		}
 
 		toolUseCount += len(calls)
+
+		// Check for sensitive operations before execution, so the safety
+		// classification reflects actual tool usage, not just the text output.
+		for _, c := range calls {
+			if isSensitiveCall(c) {
+				sensitiveOps++
+			}
+		}
 
 		var toolNames []string
 		for _, c := range calls {
@@ -221,38 +230,36 @@ type runMeta struct {
 	durationMs      int64
 	cacheHitTokens  int
 	cacheMissTokens int
+	sensitiveOps    int // count of tool calls touching sensitive paths/patterns
+}
+
+// newResult is the shared Result constructor. All public builders delegate here.
+func newResult(status Status, content string, meta runMeta, cls classification) *Result {
+	return &Result{
+		Status:         status,
+		Content:        content,
+		TotalTokens:    meta.totalTokens,
+		ToolUseCount:   meta.toolUseCount,
+		DurationMs:     meta.durationMs,
+		CacheHitTokens: meta.cacheHitTokens,
+		CacheMissTokens: meta.cacheMissTokens,
+		classification: cls,
+	}
 }
 
 // buildResult constructs a Result from a completed subagent run.
 func buildResult(rawOutput string, meta runMeta) *Result {
-	r := &Result{
-		Status: StatusCompleted, Content: rawOutput,
-		TotalTokens: meta.totalTokens, ToolUseCount: meta.toolUseCount, DurationMs: meta.durationMs,
-		CacheHitTokens: meta.cacheHitTokens, CacheMissTokens: meta.cacheMissTokens,
-	}
-	r.classification = classifyHandoff(rawOutput)
-	return r
+	return newResult(StatusCompleted, rawOutput, meta, classifyHandoff(rawOutput, meta))
 }
 
 // buildPartialResult creates a Result for interrupted/killed subagents.
 func buildPartialResult(lastText string, meta runMeta) *Result {
-	r := &Result{
-		Status: StatusPartial, Content: lastText,
-		TotalTokens: meta.totalTokens, ToolUseCount: meta.toolUseCount, DurationMs: meta.durationMs,
-		CacheHitTokens: meta.cacheHitTokens, CacheMissTokens: meta.cacheMissTokens,
-	}
-	r.classification = classUnavailable
-	return r
+	return newResult(StatusPartial, lastText, meta, classUnavailable)
 }
 
 // buildFailedResult creates a Result for subagents that produced no output.
 func buildFailedResult(errMsg string, meta runMeta) *Result {
-	return &Result{
-		Status: StatusFailed, Content: errMsg,
-		TotalTokens: meta.totalTokens, ToolUseCount: meta.toolUseCount, DurationMs: meta.durationMs,
-		CacheHitTokens: meta.cacheHitTokens, CacheMissTokens: meta.cacheMissTokens,
-		classification: classUnavailable,
-	}
+	return newResult(StatusFailed, errMsg, meta, classUnavailable)
 }
 
 func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []string, addTokens func(int, int), phase func(string)) ([]tools.ToolCallItem, string, error) {
@@ -334,5 +341,87 @@ func subAllExploration(calls []tools.ToolCallItem) bool {
 		}
 	}
 	return true
+}
+
+// isSensitiveCall checks whether a tool call touches sensitive files or
+// dangerous commands. Used to augment classifyHandoff with operation-level
+// awareness (not just text output scanning).
+func isSensitiveCall(c tools.ToolCallItem) bool {
+	switch c.Name {
+	case "bash":
+		cmd, _ := c.Args["command"].(string)
+		return isDangerousCommand(cmd)
+	case "read", "write", "edit":
+		paths := extractPaths(c)
+		for _, p := range paths {
+			if isSensitivePath(p) {
+				return true
+			}
+		}
+	case "grep":
+		pattern, _ := c.Args["pattern"].(string)
+		if isSensitivePath(pattern) {
+			return true
+		}
+		fallthrough
+	case "glob":
+		p, _ := c.Args["path"].(string)
+		if isSensitivePath(p) {
+			return true
+		}
+	}
+	return false
+}
+
+// extractPaths pulls file paths from tool args (supports "path" key and
+// hashline DSL for edit).
+func extractPaths(c tools.ToolCallItem) []string {
+	if p, ok := c.Args["path"].(string); ok && p != "" {
+		return []string{p}
+	}
+	if c.Name == "edit" {
+		if patch, ok := c.Args["patch"].(string); ok {
+			return tools.ExtractPathsFromPatch(patch)
+		}
+	}
+	return nil
+}
+
+// isSensitivePath matches file paths against known sensitive patterns.
+func isSensitivePath(p string) bool {
+	lower := strings.ToLower(p)
+	for _, f := range []string{
+		".env", ".env.local", ".env.production",
+		"credentials", "secrets", "password",
+		".git/config", ".gitconfig",
+		"id_rsa", "id_ed25519", "private key",
+		".claude/settings.json", ".claude/settings.local.json",
+		"/etc/shadow", "/etc/passwd",
+	} {
+		if strings.Contains(lower, f) {
+			return true
+		}
+	}
+	return false
+}
+
+// isDangerousCommand checks a shell command string for destructive patterns.
+func isDangerousCommand(cmd string) bool {
+	lower := strings.ToLower(cmd)
+	for _, pat := range []string{
+		"rm -rf", "rm -r", "rmdir",
+		"git push --force", "git push -f",
+		"git reset --hard",
+		"chmod 777", "chmod -r 777",
+		"> /dev/", "dd if=",
+		"mkfs.", "format ",
+		":(){ :|:& };:",
+		"curl", "wget",
+	} {
+		if strings.Contains(lower, pat) {
+			return true
+		}
+	}
+	return false
 }
 

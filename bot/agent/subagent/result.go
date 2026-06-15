@@ -36,7 +36,18 @@ func FormatResult(r *Result) string {
 	return r.Content
 }
 
-func classifyHandoff(rawOutput string) classification {
+// classifyHandoff inspects both the subagent's text output and its actual tool
+// operations (via meta.sensitiveOps) for dangerous patterns. This catches cases
+// where a subagent performed sensitive operations (reading .env, running rm,
+// etc.) but the text output doesn't mention the filenames or commands explicitly.
+func classifyHandoff(rawOutput string, meta runMeta) classification {
+	// Tool-call-based check: actual sensitive operations always trigger a warning,
+	// even if the text output looks harmless.
+	if meta.sensitiveOps > 0 {
+		return classWarn
+	}
+
+	// Text-based check: catch dangerous patterns in the raw output.
 	lower := strings.ToLower(rawOutput)
 	for _, cmd := range []string{
 		"rm -rf", "rm -r", "rmdir",

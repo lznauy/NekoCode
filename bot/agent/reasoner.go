@@ -176,7 +176,7 @@ func (a *Agent) forceSynthesize() string {
 	if fb := a.emergencySynthesize(); fb != "" {
 		return fb
 	}
-	return "Task completed but the model was unable to produce a final summary."
+	return "Unable to produce a final summary — the model is currently unavailable. The task's tool operations may have completed, but the results could not be synthesized. Please try again or check the conversation log for details."
 }
 
 func (a *Agent) trySynthesize() string {
@@ -216,11 +216,15 @@ func (a *Agent) streamSynthesize(ctx context.Context) (string, error) {
 	messages := a.ctxMgr.Build(false)
 	messages = append(messages, types.Message{Role: "user", Content: synthesizePrompt})
 
+	// Synthesis happens after the agent loop finishes (a.finished is already
+	// true), so CheckDone must NOT look at a.finished — it would abort every
+	// synthesis call and drop the LLM output. Context cancellation alone is
+	// sufficient: trySynthesize inherits the agent context (canceled on abort),
+	// and emergencySynthesize uses a 30s timeout.
 	result, err := tools.CallLLM(a.llmClient, tools.LLMCallOptions{
 		Ctx:            ctx,
 		Messages:       messages,
 		Callbacks:      a.streamCallbacks(),
-		CheckDone:      func() bool { return a.finished.Load() },
 		EstimatePrompt: true,
 	})
 	if err != nil {

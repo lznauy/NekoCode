@@ -70,6 +70,7 @@ func (b *Bot) SkillHint() (string, bool) {
 }
 
 func (b *Bot) RunAgent(input string, onStep func(action, toolName, toolArgs, output string)) (string, error) {
+	b.lastGuardrailWarned = 0 // reset per-run so guardrail can fire again for new conversations
 	ag := b.getAgent()
 	result := ag.Run(input, onStep)
 	ag.SetPlanMode(false)
@@ -117,7 +118,12 @@ func (b *Bot) SwitchModel(name string) (string, string, error) {
 		return "", "", fmt.Errorf("model %q not found. Available: %v", name, b.cfg.AllModelNames())
 	}
 
+	// Save old agent's token counters before initAgent replaces it,
+	// so session persistence doesn't lose accumulated stats.
+	oldPrompt, oldCompl := b.ag.TokenUsage()
+
 	b.initAgent()
+	b.ag.AddTokens(oldPrompt, oldCompl)
 	b.ctxMgr.ResetCache()
 
 	am := b.cfg.ActiveModelConfig()

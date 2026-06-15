@@ -57,16 +57,19 @@ var Default = Config{
 }
 
 func Load() (*Config, error) {
-	configPath := filepath.Join(common.NekocodeHome(), "config.json")
+	// Always copy Default so callers that mutate the config (e.g. SwitchModel)
+	// cannot pollute the package-level global.
+	cfg := Default
 
+	configPath := filepath.Join(common.NekocodeHome(), "config.json")
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return &Default, nil
+		return &cfg, nil
 	}
 
-	cfg := Default
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return &Default, nil
+		fmt.Fprintf(os.Stderr, "config: %s is malformed JSON (%v) — using defaults. Fix or delete the file to silence this warning.\n", configPath, err)
+		return &cfg, nil
 	}
 
 	// Validate Active points to an existing model.

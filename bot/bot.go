@@ -54,8 +54,9 @@ type Bot struct {
 	hookReg        *hooks.Registry
 	projCtx        string // cached project context for model switching
 	cindexMgr      *cindex.Manager
-	cwd            string // computed once in New()
-	mu             sync.Mutex
+	cwd                 string // computed once in New()
+	lastGuardrailWarned int    // tool result count at last guardrail injection
+	mu                  sync.Mutex
 }
 
 func New() *Bot {
@@ -302,7 +303,11 @@ func (b *Bot) initAgent() {
 				toolResults++
 			}
 		}
-		if toolResults > 40 {
+		// Only inject when the count crosses the threshold AND has grown
+		// significantly since the last injection. This prevents the guardrail
+		// from nagging the model on every single turn once 40 is reached.
+		if toolResults > 40 && toolResults-b.lastGuardrailWarned >= 10 {
+			b.lastGuardrailWarned = toolResults
 			msgs = append(msgs, types.Message{
 				Role:    "user",
 				Content: "[System] " + strconv.Itoa(toolResults) + " tool results accumulated. Check for unfinished sub-tasks — if any, continue with task. If all done, call task(verify) to validate, then report results.",

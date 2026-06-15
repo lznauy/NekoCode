@@ -72,7 +72,7 @@ func TestClassifyHandoff_Pass(t *testing.T) {
 		"Result: successfully added logging",
 		"I read through the codebase and found the bug.",
 	} {
-		if got := classifyHandoff(out); got != classPass {
+		if got := classifyHandoff(out, runMeta{}); got != classPass {
 			t.Errorf("classifyHandoff(%q) = %v, want classPass", out, got)
 		}
 	}
@@ -85,7 +85,7 @@ func TestClassifyHandoff_DangerousCommands(t *testing.T) {
 		"chmod 777 all",
 		"> /dev/sda",
 	} {
-		if got := classifyHandoff(c); got != classWarn {
+		if got := classifyHandoff(c, runMeta{}); got != classWarn {
 			t.Errorf("classifyHandoff(%q) = %v, want classWarn", c, got)
 		}
 	}
@@ -97,14 +97,28 @@ func TestClassifyHandoff_SensitiveFiles(t *testing.T) {
 		"Wrote credentials file",
 		"Read id_rsa",
 	} {
-		if got := classifyHandoff(c); got != classWarn {
+		if got := classifyHandoff(c, runMeta{}); got != classWarn {
 			t.Errorf("classifyHandoff(%q) = %v, want classWarn", c, got)
 		}
 	}
 }
 
 func TestClassifyHandoff_CaseInsensitive(t *testing.T) {
-	if got := classifyHandoff("Ran RM -RF /tmp"); got != classWarn {
+	if got := classifyHandoff("Ran RM -RF /tmp", runMeta{}); got != classWarn {
 		t.Error("should be case insensitive")
+	}
+}
+
+func TestClassifyHandoff_SensitiveOps(t *testing.T) {
+	// Harmless text but subagent actually touched sensitive files.
+	if got := classifyHandoff("I cleaned up the project directory", runMeta{sensitiveOps: 1}); got != classWarn {
+		t.Errorf("classifyHandoff with sensitiveOps>0 = %v, want classWarn", got)
+	}
+}
+
+func TestClassifyHandoff_SensitiveOpsZero(t *testing.T) {
+	// Dangerous text still caught even without sensitiveOps.
+	if got := classifyHandoff("I ran rm -rf /tmp", runMeta{}); got != classWarn {
+		t.Errorf("classifyHandoff with dangerous text = %v, want classWarn", got)
 	}
 }
