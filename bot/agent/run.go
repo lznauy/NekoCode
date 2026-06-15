@@ -36,7 +36,7 @@ type RunCallback func(action, toolName, toolArgs, output string)
 
 func (a *Agent) Run(input string, callback RunCallback) *RunResult {
 	a.Reset()
-	a.ctxMgr.Add("user", input)
+	a.ctxMgr.Add("user", input, "user")
 	state := &stepState{Input: input}
 
 	// UserSubmit hooks.
@@ -62,8 +62,14 @@ func (a *Agent) Run(input string, callback RunCallback) *RunResult {
 	if a.getCtx().Err() != nil || a.stopReason == hooks.StopInterrupted {
 		return &RunResult{FinalOutput: "Interrupted", Steps: a.step}
 	}
-	if a.stopReason == hooks.StopCompleted && a.lastText != "" {
-		return &RunResult{FinalOutput: a.lastText, Steps: a.step}
+	if a.stopReason == hooks.StopCompleted {
+		output := a.finalText
+		if output == "" {
+			output = a.lastText
+		}
+		if output != "" {
+			return &RunResult{FinalOutput: output, Steps: a.step}
+		}
 	}
 	return a.synthesizeAndReturn(callback)
 }
@@ -146,7 +152,7 @@ func (a *Agent) runTurn(state *stepState, callback RunCallback) (finished bool) 
 		a.consecutiveFailures = 0
 		var stopReason hooks.StopReason
 		var shouldStop bool
-		state, shouldStop, stopReason = a.executeAndFeedback(calls, reasoning, state, callback)
+		shouldStop, stopReason = a.executeAndFeedback(calls, reasoning, state, callback)
 		if shouldStop {
 			a.stopReason = stopReason
 			return true
@@ -186,6 +192,9 @@ func (a *Agent) handleText(reasoning *ReasoningResult, state *stepState, callbac
 			if r.Stop != nil {
 				a.stopReason = *r.Stop
 				a.lastText = reasoning.ActionInput
+				if recordable {
+					a.finalText = reasoning.ActionInput
+				}
 				return true
 			}
 			if r.Hint != nil {
@@ -199,6 +208,13 @@ func (a *Agent) handleText(reasoning *ReasoningResult, state *stepState, callbac
 						a.lastText = reasoning.ActionInput
 					}
 					return true
+				}
+				// consecutiveHints was just incremented. == 1 means this is the
+				// first hint in a chain (after Reset or tool-call reset). Save the
+				// text that triggered the hint as finalText so the user sees the
+				// substantive summary rather than subsequent hint reactions.
+				if recordable && a.consecutiveHints == 1 {
+					a.finalText = reasoning.ActionInput
 				}
 				// Save this turn's text before re-injecting, so the
 				// TUI stream accumulates it and handleDone can fall back.
@@ -221,6 +237,7 @@ func (a *Agent) handleText(reasoning *ReasoningResult, state *stepState, callbac
 	a.lastText = reasoning.ActionInput
 	if recordable {
 		a.ctxMgr.AddAssistantResponse(reasoning.ActionInput, a.lastReason)
+		a.finalText = reasoning.ActionInput
 	}
 	if callback != nil {
 		callback(reasoning.Action.String(), "", "", reasoning.ActionInput)
@@ -234,7 +251,7 @@ func (a *Agent) handleText(reasoning *ReasoningResult, state *stepState, callbac
 // consistently follow user-role instructions.
 func (a *Agent) injectHint(h *hooks.Hint) {
 	if h != nil {
-		a.ctxMgr.Add("user", "<system-reminder>\n[Hook: "+h.Type+"] "+h.Content+"\n</system-reminder>")
+		a.ctxMgr.Add("user", "<system-reminder>\n[Hook: "+h.Type+"] "+h.Content+"\n</system-reminder>", "hint")
 	}
 }
 
@@ -253,7 +270,7 @@ func (a *Agent) drainSteering() {
 	for {
 		select {
 		case msg := <-a.steering:
-			a.ctxMgr.Add("user", msg)
+			a.ctxMgr.Add("user", msg, "user")
 		default:
 			return
 		}

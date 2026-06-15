@@ -8,6 +8,8 @@ import (
 	"nekocode/bot/agent"
 	"nekocode/bot/command"
 
+	"nekocode/llm/types"
+
 	"nekocode/common"
 )
 
@@ -162,12 +164,17 @@ func (b *Bot) SessionMessages() []common.DisplayMessage {
 	isPersistent := func(name string) bool {
 		return name == "edit" || name == "write" || name == "bash"
 	}
-	isInternal := func(content string) bool {
-		return strings.Contains(content, "<hints>") ||
-			strings.Contains(content, "<skill") ||
-			strings.Contains(content, "Current working directory") ||
-			strings.Contains(content, "<system-reminder>") ||
-			strings.HasPrefix(content, "[Hook:")
+	isInternal := func(msg types.Message) bool {
+		// Tagged as internal by the framework.
+		if msg.Source == "hint" {
+			return true
+		}
+		// Legacy checks for sessions saved before Source field existed.
+		return strings.Contains(msg.Content, "<hints>") ||
+			strings.Contains(msg.Content, "<skill") ||
+			strings.Contains(msg.Content, "Current working directory") ||
+			strings.Contains(msg.Content, "<system-reminder>") ||
+			strings.HasPrefix(msg.Content, "[Hook:")
 	}
 
 	var out []common.DisplayMessage
@@ -176,7 +183,7 @@ func (b *Bot) SessionMessages() []common.DisplayMessage {
 		m := msgs[i]
 		switch m.Role {
 		case "user":
-			if !isInternal(m.Content) {
+			if !isInternal(m) {
 				out = append(out, common.DisplayMessage{Role: "user", Content: m.Content})
 			}
 			i++
@@ -213,7 +220,7 @@ func (b *Bot) SessionMessages() []common.DisplayMessage {
 				})
 			}
 		case "system":
-			if !isInternal(m.Content) {
+			if !isInternal(m) {
 				out = append(out, common.DisplayMessage{Role: "system", Content: m.Content})
 			}
 			i++

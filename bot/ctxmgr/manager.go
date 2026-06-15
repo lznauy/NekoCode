@@ -202,6 +202,12 @@ func (m *Manager) Build(withTools bool) []types.Message {
 	out = append(out, m.ctx.BuildLayer05()...)
 	out = append(out, m.filterValidMessages(m.ctx.Messages)...)
 	out = append(out, m.ctx.BuildLayer2()...)
+
+	// Strip internal Source field — LLM APIs may reject unknown fields.
+	// Build() returns copies of messages, so this does not affect ctx.Messages.
+	for i := range out {
+		out[i].Source = ""
+	}
 	return out
 }
 

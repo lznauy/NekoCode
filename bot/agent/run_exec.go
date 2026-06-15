@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func (a *Agent) executeAndFeedback(calls []tools.ToolCallItem, reasoning *ReasoningResult, state *stepState, callback RunCallback) (*stepState, bool, hooks.StopReason) {
+func (a *Agent) executeAndFeedback(calls []tools.ToolCallItem, reasoning *ReasoningResult, state *stepState, callback RunCallback) (bool, hooks.StopReason) {
 	if reasoning.TextContent != "" && callback != nil {
 		callback("think", "", "", reasoning.TextContent)
 	}
@@ -205,13 +205,11 @@ func (a *Agent) executeAndFeedback(calls []tools.ToolCallItem, reasoning *Reason
 				// Clear lastText to force synthesizeAndReturn so the TUI shows
 				// a proper answer instead of previous turn's intermediate text.
 				a.lastText = ""
-				ns := *state
-				return &ns, true, *r.Stop
+				return true, *r.Stop
 			}
 			a.injectHint(r.Hint)
 		}
 	}
 	a.step++
-	ns := *state
-	return &ns, false, hooks.StopCompleted
+	return false, hooks.StopCompleted
 }

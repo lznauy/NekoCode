@@ -51,6 +51,7 @@ type Agent struct {
 	stopReason        hooks.StopReason
 	exploration       *budget.ExplorationTracker
 	lastText          string
+	finalText         string // best output candidate; not overwritten by hint-chain reactions
 
 	consecutiveHints    int // PostTurn hint injections without tool progress
 	consecutiveFailures int // consecutive LLM call failures
@@ -156,6 +157,7 @@ func (a *Agent) Reset() {
 	a.stopReason = hooks.StopCompleted
 	a.lastReason = ""
 	a.lastText = ""
+	a.finalText = ""
 	a.consecutiveHints = 0
 	a.consecutiveFailures = 0
 	a.liveMu.Unlock()
