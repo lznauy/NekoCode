@@ -73,9 +73,6 @@ func ApplyEdits(text string, hunks []Hunk, resolver BlockResolver, path string) 
 		hunks = filtered
 	}
 
-	resolvedHunks := make([]Hunk, len(hunks))
-	copy(resolvedHunks, hunks)
-
 	// Validate all hunk ranges.
 	for _, h := range hunks {
 		if h.Kind == HunkInsert && (h.Cursor == "head" || h.Cursor == "tail") {
@@ -214,10 +211,14 @@ func ApplyEdits(text string, hunks []Hunk, resolver BlockResolver, path string) 
 	warnings = append(autoprefixWarnings, warnings...)
 
 	// Collapse runs of 3+ blank lines to 2 — keeps code tidy.
-	lines = collapseExcessBlankLines(lines)
+	var collapsedBlanks int
+	lines, collapsedBlanks = collapseExcessBlankLines(lines)
+	if collapsedBlanks > 0 {
+		warnings = append(warnings, fmt.Sprintf("collapsed %d excess blank line(s)", collapsedBlanks))
+	}
 
 	// Rebuild resolvedHunks from sorted to include boundary repair changes.
-	resolvedHunks = make([]Hunk, len(indexed))
+	resolvedHunks := make([]Hunk, len(indexed))
 	for i, ih := range indexed {
 		// Find the hunk in sorted by matching the original index.
 		// Since sorted may have different ordering, use the idx field
@@ -292,7 +293,7 @@ func RepairAfterInsertLandings(sorted []Hunk, fileLines []string) ([]Hunk, []str
 			if !strings.HasPrefix(indent, target) {
 				break
 			}
-			if targetedLines[line] && line != h.Start {
+			if targetedLines[line] {
 				break
 			}
 			landing = line
@@ -591,16 +592,19 @@ func resolveBlockHunks(hunks []Hunk, lines []string, resolver BlockResolver, pat
 
 // collapseExcessBlankLines reduces runs of three or more consecutive empty
 // lines to exactly two. Single and double blank lines are left untouched.
-func collapseExcessBlankLines(lines []string) []string {
+// Returns the modified slice and the number of lines collapsed.
+func collapseExcessBlankLines(lines []string) ([]string, int) {
 	if len(lines) < 3 {
-		return lines
+		return lines, 0
 	}
 	out := make([]string, 0, len(lines))
 	blankRun := 0
+	collapsed := 0
 	for _, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			blankRun++
 			if blankRun > 2 {
+				collapsed++
 				continue
 			}
 		} else {
@@ -608,5 +612,5 @@ func collapseExcessBlankLines(lines []string) []string {
 		}
 		out = append(out, line)
 	}
-	return out
+	return out, collapsed
 }
