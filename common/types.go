@@ -30,9 +30,10 @@ func (d DangerLevel) String() string {
 type CmdResult int
 
 const (
-	CmdNone      CmdResult = iota // no command matched, start agent
-	CmdHandled                     // command handled, no further action
-	CmdConfirming                  // command handled, wait for confirmation
+	CmdNone           CmdResult = iota // no command matched, start agent
+	CmdHandled                          // command handled, no further action
+	CmdConfirming                       // command handled, wait for confirmation
+	CmdSessionResumed                   // session resumed, TUI should reload messages
 )
 
 // BotStats carries runtime statistics from the bot to the TUI.
@@ -80,4 +81,20 @@ type SubSlot struct {
 	ID       string
 	SubType  string
 	ColorIdx int
+}
+
+// DisplayBlock carries a persistent tool result for TUI rendering.
+type DisplayBlock struct {
+	ToolName string
+	Content  string
+}
+
+// DisplayMessage is a lightweight message representation for the TUI layer
+// to reconstruct chat history from a restored session. Assistant messages
+// with tool calls carry their persistent tool results (edit/write/bash) as
+// Blocks and have empty Content (the text is internal reasoning).
+type DisplayMessage struct {
+	Role    string
+	Content string
+	Blocks  []DisplayBlock
 }

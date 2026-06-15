@@ -76,8 +76,8 @@ nekocode/
 │   │   └── log.go                  #     debug.Log（时间戳 + 来源 + subagent 标签 + 10MB rotate）
 │   ├── hooks/                      #   Hook 系统（事件驱动）
 │   │   ├── hooks.go                #     HookPoint / Hint / StopReason / Hook / Registry + Evaluate
-│   │   ├── keys.go                 #     事件 key 常量（8 个）
-│   │   ├── builtin.go              #     RegisterBuiltin（6 个内置 Hook）
+│   │   ├── keys.go                 #     事件 key 常量（13 个）
+│   │   ├── builtin.go              #     RegisterBuiltin（7 个内置 Hook）
 │   │   └── plugin.go               #     声明式 hooks（JSON 配置驱动，6 种事件类型）+ LoadPluginHooks
 │   ├── mcp/                        #   MCP 客户端
 │   │   ├── client.go               #     JSON-RPC 2.0 客户端 + Server 管理
@@ -302,20 +302,21 @@ type Tool interface {
 
 使用 `Registry` + `Snapshot` 模式：单一 `map[string]int64` 存储所有事件值，`map[string]string` 存储字符串值。通过 key 前缀约定语义（`counter:` 跨轮持久，`turn:` / `gauge:` / `flag:` / `value:` 由 Agent.Reset 或 ResetSession 重置）。
 
-### 内置 Hook（6 个）
+### 内置 Hook（7 个）
 
 | Hook | Point | 功能 |
 |------|-------|------|
-| quota | PreTurn | 配额告警，引导申请扩展 |
-| verification | PreTurn | 文件修改后提醒验证（flag 防重复） |
-| exploration_exhausted | PreTurn | 探索分数耗尽，强制行动 |
-| explore_cascade | PostTool | 连续 researcher 无产出 |
-| unfinished_work | PostTurn | 有未完成任务时阻止闲聊结束 |
-| garbled_circuit_breaker | PostTurn | 累计 3 次 garbled 则强制停止 |
+| quota | PreTurn | 读取配额不足时告警，引导优先实质性修改 |
+| verification | PostTurn | 有未完成任务但本轮无工具调用时提醒继续 |
+| exploration_exhausted | PreTurn | 探索调用 ≥10 且分数耗尽时强制行动 |
+| explore_cascade | PostTool | 本轮启动 ≥4 个 researcher 时提醒综合信息 |
+| tool_idle | PostTool | 连续 50 次只读工具调用后警告开始写代码 |
+| completion_quality | PostTurn | 任务全标完成但未修改文件时提醒 |
+| garbled_circuit_breaker | PostTurn | 累计 5 次 garbled 工具调用则强制停止 |
 
-### Hook 间抑制
+### 跨轮状态
 
-`explore_cascade` 触发时自动抑制 `exploration_low`。需要跨轮记忆的 Hook（verification、exploration、cascade）使用 flag 变量管理状态。
+`counter:` 前缀的 key 跨轮持久（仅 ResetSession 清除），`flag:` / `turn:` / `gauge:` / `value:` 前缀的 key 每轮 ResetTurn 清除。
 
 ## Plugin 系统
 

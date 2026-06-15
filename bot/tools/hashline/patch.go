@@ -28,14 +28,24 @@ const (
 	HunkInsert
 )
 
+// CursorType specifies where an insert hunk lands relative to its anchor.
+type CursorType int
+
+const (
+	CursorBefore CursorType = iota
+	CursorAfter
+	CursorHead
+	CursorTail
+)
+
 // Hunk represents a single edit operation within a file.
 type Hunk struct {
 	Kind    HunkKind
-	Start   int      // 1-based line number (or anchor for insert)
-	End     int      // inclusive end line (for ranges); equals Start for single-line
-	Cursor  string   // "before"/"after"/"head"/"tail" — only for HunkInsert
-	Block   bool     // true for "replace block N", "delete block N", "insert after block N"
-	Payload []string // +TEXT lines (for replace and insert)
+	Start   int        // 1-based line number (or anchor for insert)
+	End     int        // inclusive end line (for ranges); equals Start for single-line
+	Cursor  CursorType // only for HunkInsert
+	Block   bool       // true for "replace block N", "delete block N", "insert after block N"
+	Payload []string   // +TEXT lines (for replace and insert)
 }
 
 // ParsePatch parses a hashline DSL string into a Patch.
@@ -142,31 +152,63 @@ func mergeSamePathSections(files []FilePatch) ([]FilePatch, error) {
 	return merged, nil
 }
 
+// isHeaderLine reports whether line looks like a file section header:
+//   [path#TAG]  — canonical brackets
+//   path#TAG    — bare (LLMs often forget the brackets)
+func isHeaderLine(line string) bool {
+	if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+		return true
+	}
+	// Bare header: path ending with #XXXXXXXX (8 hex chars).
+	if idx := strings.LastIndex(line, "#"); idx >= 0 && len(line)-idx-1 == 8 {
+		for _, c := range line[idx+1:] {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+				return false
+			}
+		}
+		return idx > 0 // path part must be non-empty
+	}
+	return false
+}
+
+// parseHeader extracts path and file tag from a header line in either format.
+func parseHeader(line string) (path, tag string, err error) {
+	if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+		inner := line[1 : len(line)-1]
+		idx := strings.LastIndex(inner, "#")
+		if idx < 0 {
+			return "", "", fmt.Errorf("file header missing '#' separator: %q", line)
+		}
+		path = stripApplyPatchNoise(inner[:idx])
+		tag = inner[idx+1:]
+	} else {
+		idx := strings.LastIndex(line, "#")
+		path = stripApplyPatchNoise(line[:idx])
+		tag = line[idx+1:]
+	}
+	if len(tag) != 8 {
+		return "", "", fmt.Errorf("file tag must be 8 hex chars, got %q", tag)
+	}
+	return path, tag, nil
+}
+
 func parseFilePatch(lines []string, i int) (*FilePatch, int, error) {
 	line := strings.TrimSpace(lines[i])
 
-	if !strings.HasPrefix(line, "[") || !strings.HasSuffix(line, "]") {
+	if !isHeaderLine(line) {
 		return nil, i, fmt.Errorf("expected file header '[path#TAG]', got %q", line)
 	}
-	inner := line[1 : len(line)-1]
-	idx := strings.LastIndex(inner, "#")
-	if idx < 0 {
-		return nil, i, fmt.Errorf("file header missing '#' separator: %q", line)
+	path, tag, err := parseHeader(line)
+	if err != nil {
+		return nil, i, err
 	}
-	fp := &FilePatch{
-		Path:    stripApplyPatchNoise(inner[:idx]),
-		FileTag: inner[idx+1:],
-	}
-	if len(fp.FileTag) != 8 {
-		return nil, i, fmt.Errorf("file tag must be 8 hex chars, got %q", fp.FileTag)
-	}
+	fp := &FilePatch{Path: path, FileTag: tag}
 	i++
 
 	for i < len(lines) {
 		line := strings.TrimSpace(lines[i])
 
-		if line == "*** Abort" || line == "*** End Patch" ||
-			(strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]")) {
+		if line == "*** Abort" || line == "*** End Patch" || isHeaderLine(line) {
 			break
 		}
 
@@ -290,7 +332,7 @@ func parseInsertAfterBlockHunk(header string, lines []string, i int) (*Hunk, int
 	return &Hunk{
 		Kind:    HunkInsert,
 		Start:   n,
-		Cursor:  "after",
+		Cursor:  CursorAfter,
 		Block:   true,
 		Payload: payload,
 	}, newI, nil
@@ -354,29 +396,29 @@ func parseInsertHunk(header string, lines []string, i int) (*Hunk, int, error) {
 	spec = strings.TrimSuffix(spec, ":")
 	spec = strings.TrimSpace(spec)
 
-	var cursor string
+	var cursor CursorType
 	var anchor int
 
 	switch {
 	case spec == "head":
-		cursor = "head"
+		cursor = CursorHead
 		anchor = 0
 	case spec == "tail":
-		cursor = "tail"
+		cursor = CursorTail
 		anchor = 0
 	case strings.HasPrefix(spec, "head "):
 		return nil, i, fmt.Errorf("insert %q: head accepts no line number; use \"insert head:\"", spec)
 	case strings.HasPrefix(spec, "tail "):
 		return nil, i, fmt.Errorf("insert %q: tail accepts no line number; use \"insert tail:\"", spec)
 	case strings.HasPrefix(spec, "before "):
-		cursor = "before"
+		cursor = CursorBefore
 		n, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(spec, "before ")))
 		if err != nil {
 			return nil, i, fmt.Errorf("invalid insert anchor: %w", err)
 		}
 		anchor = n
 	case strings.HasPrefix(spec, "after "):
-		cursor = "after"
+		cursor = CursorAfter
 		n, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(spec, "after ")))
 		if err != nil {
 			return nil, i, fmt.Errorf("invalid insert anchor: %w", err)
@@ -469,7 +511,7 @@ func parsePayload(lines []string, i int) ([]string, int, error) {
 
 		// Stop at structural markers.
 		if trimmed == "*** Abort" || trimmed == "*** End Patch" ||
-			(strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]")) ||
+			isHeaderLine(trimmed) ||
 			strings.HasPrefix(trimmed, "replace ") ||
 			strings.HasPrefix(trimmed, "delete ") ||
 			strings.HasPrefix(trimmed, "insert ") {

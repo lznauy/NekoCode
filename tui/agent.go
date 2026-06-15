@@ -30,6 +30,9 @@ func (m *Model) startChat(value string) tea.Cmd {
 	switch cr {
 	case common.CmdConfirming:
 		return listenConfirm(m.confirmCh)
+	case common.CmdSessionResumed:
+		m.loadSessionMessages()
+		return nil
 	case common.CmdHandled:
 		return nil
 	}
@@ -168,5 +171,28 @@ func parseSubEvent(payload string) (subID string, colorIdx int) {
 	}
 	subID = payload
 	return
+}
+
+// loadSessionMessages populates the TUI message list from a restored session.
+func (m *Model) loadSessionMessages() {
+	for _, dm := range m.Bot.SessionMessages() {
+		var blocks []block.ContentBlock
+		for _, b := range dm.Blocks {
+			blocks = append(blocks, block.ContentBlock{
+				Type:      block.BlockTool,
+				ToolName:  b.ToolName,
+				Content:   b.Content,
+				Done:      true,
+				Collapsed: false, // persistent tools always expanded
+			})
+		}
+		m.Messages.AddMessage(message.ChatMessage{
+			Role:            dm.Role,
+			Content:         dm.Content,
+			RenderedContent: dm.Content,
+			Blocks:          blocks,
+		})
+	}
+	m.Messages.GotoBottom()
 }
 

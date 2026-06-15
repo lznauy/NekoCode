@@ -98,7 +98,7 @@ func sessionChainReplay(snap *Snapshot, currentText string, edits []Hunk, resolv
 
 	// Guard 2: anchor content must match.
 	for _, h := range edits {
-		if h.Kind == HunkInsert && (h.Cursor == "head" || h.Cursor == "tail") {
+		if h.Kind == HunkInsert && (h.Cursor == CursorHead || h.Cursor == CursorTail) {
 			continue
 		}
 		if !verifyAnchor(snapLines, currLines, h) {

@@ -18,6 +18,7 @@ type BotInterface interface {
 	Abort()
 	ProviderModel() (provider, model string)
 	SwitchModel(name string) (model, provider string, err error)
+	SessionMessages() []common.DisplayMessage
 }
 
 type notifyMsg struct {

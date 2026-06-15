@@ -119,7 +119,7 @@ func CollectAnchorLines(hunks []Hunk) []int {
 	seen := make(map[int]bool)
 	var result []int
 	for _, h := range hunks {
-		if h.Kind == HunkInsert && (h.Cursor == "head" || h.Cursor == "tail") {
+		if h.Kind == HunkInsert && (h.Cursor == CursorHead || h.Cursor == CursorTail) {
 			continue
 		}
 		n := h.Start

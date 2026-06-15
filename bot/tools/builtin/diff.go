@@ -12,45 +12,28 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Hunk sorting (shared by buildOldToNewMapping and formatHunkDiff)
+// Hunk sorting helpers
 // ---------------------------------------------------------------------------
 
-// hunkSortLess is the comparison function for sorting hunks by position.
+// sortHunksAscending sorts hunks in-place by ascending position for display.
 // Head-cursor inserts sort first, tail-cursor inserts sort last.
-func hunkSortLess(a, b hashline.Hunk) bool {
-	if a.Kind == hashline.HunkInsert && a.Cursor == "head" {
-		return true
-	}
-	if b.Kind == hashline.HunkInsert && b.Cursor == "head" {
-		return false
-	}
-	if a.Kind == hashline.HunkInsert && a.Cursor == "tail" {
-		return false
-	}
-	if b.Kind == hashline.HunkInsert && b.Cursor == "tail" {
-		return true
-	}
-	return a.Start < b.Start
-}
-
-// sortedHunksAsc returns a copy of hunks sorted by ascending position.
-func sortedHunksAsc(hunks []hashline.Hunk) []hashline.Hunk {
-	sorted := make([]hashline.Hunk, len(hunks))
-	copy(sorted, hunks)
-	sort.Slice(sorted, func(i, j int) bool {
-		return hunkSortLess(sorted[i], sorted[j])
+func sortHunksAscending(hunks []hashline.Hunk) {
+	sort.Slice(hunks, func(i, j int) bool {
+		a, b := hunks[i], hunks[j]
+		if a.Kind == hashline.HunkInsert && a.Cursor == hashline.CursorHead {
+			return true
+		}
+		if b.Kind == hashline.HunkInsert && b.Cursor == hashline.CursorHead {
+			return false
+		}
+		if a.Kind == hashline.HunkInsert && a.Cursor == hashline.CursorTail {
+			return false
+		}
+		if b.Kind == hashline.HunkInsert && b.Cursor == hashline.CursorTail {
+			return true
+		}
+		return a.Start < b.Start
 	})
-	return sorted
-}
-
-// sortedHunksDesc returns a copy of hunks sorted by descending position.
-func sortedHunksDesc(hunks []hashline.Hunk) []hashline.Hunk {
-	sorted := make([]hashline.Hunk, len(hunks))
-	copy(sorted, hunks)
-	sort.Slice(sorted, func(i, j int) bool {
-		return hunkSortLess(sorted[j], sorted[i])
-	})
-	return sorted
 }
 
 // ---------------------------------------------------------------------------
@@ -59,7 +42,7 @@ func sortedHunksDesc(hunks []hashline.Hunk) []hashline.Hunk {
 
 // formatEditResult returns the new tag + compact diff preview + full file
 // line-number view so the agent can chain edits to any region without re-reading.
-func formatEditResult(path string, oldText, newText string, hunks []hashline.Hunk, newTag string, recovered bool) string {
+func formatEditResult(path string, oldText, newText string, hunks []hashline.Hunk, newTag string, recovered bool, oldToNew map[int]int) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "[%s#%s]\n", path, newTag)
 
@@ -72,7 +55,7 @@ func formatEditResult(path string, oldText, newText string, hunks []hashline.Hun
 		return sb.String()
 	}
 
-	preview := buildDiffPreview(oldText, newText, hunks)
+	preview := buildDiffPreview(oldText, newText, hunks, oldToNew)
 	if preview == "" {
 		sb.WriteString("(no changes)\n")
 	} else {
@@ -83,7 +66,7 @@ func formatEditResult(path string, oldText, newText string, hunks []hashline.Hun
 	// see line numbers for any region, not just the diff context.
 	newLines := strings.Split(strings.TrimRight(newText, "\n"), "\n")
 	total := len(newLines)
-	changedSet := buildChangedLineSet(hunks, oldText, newText)
+	changedSet := buildChangedLineSet(hunks, oldText, newText, oldToNew)
 	const elideThreshold = 20 // unchanged runs longer than this get elided
 	const contextLines = 3    // context lines shown around each hunk
 	shown := make(map[int]bool)
@@ -149,23 +132,17 @@ func formatEditResult(path string, oldText, newText string, hunks []hashline.Hun
 	if lastShown > 0 && lastShown < total {
 		fmt.Fprintf(&sb, "… (%d lines)\n", total-lastShown)
 	}
-	fmt.Fprintf(&sb, "(total=%d lines)\n", total)
-	fmt.Fprintf(&sb, "Undo mistake: call edit with revert=true, patch=%q\n", path)
 	return sb.String()
 }
 
 // buildChangedLineSet returns the set of 1-based line numbers in the new file
 // that were affected by the given hunks.
-func buildChangedLineSet(hunks []hashline.Hunk, oldText, newText string) map[int]bool {
+func buildChangedLineSet(hunks []hashline.Hunk, oldText, newText string, oldToNew map[int]int) map[int]bool {
 	result := make(map[int]bool)
 	if len(hunks) == 0 {
 		return result
 	}
-	oldLines := strings.Split(strings.TrimRight(oldText, "\n"), "\n")
 	newLines := strings.Split(strings.TrimRight(newText, "\n"), "\n")
-
-	// Simulate the apply to produce old->new mapping.
-	oldToNew := buildOldToNewMapping(hunks, len(oldLines), oldLines)
 
 	for _, h := range hunks {
 		switch h.Kind {
@@ -261,13 +238,12 @@ func writeFullFileView(sb *strings.Builder, newText string, changedSet map[int]b
 		}
 		fmt.Fprintf(sb, "%s%d:%s\n", prefix, i+1, line)
 	}
-	fmt.Fprintf(sb, "Undo mistake: call edit with revert=true, patch=%q\n", path)
 }
 
 // buildDiffPreview generates a hunk-aware compact diff. Uses the parsed hunks
 // to produce clean del/ins blocks instead of relying on whole-file LCS, which
 // fragments when old and new text share scattered lines.
-func buildDiffPreview(oldText, newText string, hunks []hashline.Hunk) string {
+func buildDiffPreview(oldText, newText string, hunks []hashline.Hunk, oldToNew map[int]int) string {
 	oldText = strings.TrimRight(oldText, "\n")
 	newText = strings.TrimRight(newText, "\n")
 	oldLines := strings.Split(oldText, "\n")
@@ -275,87 +251,21 @@ func buildDiffPreview(oldText, newText string, hunks []hashline.Hunk) string {
 	if oldText == newText && len(oldLines) == len(newLines) {
 		return "(no changes)"
 	}
-	return formatHunkDiff(oldLines, newLines, hunks)
+	return formatHunkDiff(oldLines, newLines, hunks, oldToNew)
 }
 
-// buildOldToNewMapping simulates the edit apply to produce a
-// deterministic old-line → new-line mapping. Uses the same bottom-up
-// hunk order and after-insert landing shifts as ApplyEdits so context
-// line numbers in the diff preview are always correct.
-func buildOldToNewMapping(hunks []hashline.Hunk, oldLen int, oldLines []string) map[int]int {
-	type tracked struct{ orig int } // 0 = inserted
-	lines := make([]tracked, oldLen)
-	for i := range lines {
-		lines[i] = tracked{orig: i + 1}
-	}
-	sorted := sortedHunksDesc(hunks)
-	sorted, _ = hashline.RepairAfterInsertLandings(sorted, oldLines)
-	for _, h := range sorted {
-		switch h.Kind {
-		case hashline.HunkReplace:
-			start := h.Start - 1
-			if start < 0 {
-				start = 0
-			}
-			end := h.End
-			if end > len(lines) {
-				end = len(lines)
-			}
-			ins := make([]tracked, len(h.Payload))
-			lines = append(append(lines[:start], ins...), lines[end:]...)
-		case hashline.HunkDelete:
-			start := h.Start - 1
-			if start < 0 {
-				start = 0
-			}
-			end := h.End
-			if end > len(lines) {
-				end = len(lines)
-			}
-			lines = append(lines[:start], lines[end:]...)
-		case hashline.HunkInsert:
-			var idx int
-			switch h.Cursor {
-			case "head":
-				idx = 0
-			case "tail":
-				idx = len(lines)
-			case "before":
-				idx = h.Start - 1
-			case "after":
-				idx = h.Start
-			default:
-				idx = h.Start - 1
-			}
-			if idx < 0 {
-				idx = 0
-			}
-			if idx > len(lines) {
-				idx = len(lines)
-			}
-			ins := make([]tracked, len(h.Payload))
-			lines = append(append(lines[:idx], ins...), lines[idx:]...)
-		}
-	}
-	result := make(map[int]int)
-	for newIdx, l := range lines {
-		if l.orig > 0 {
-			result[l.orig] = newIdx + 1
-		}
-	}
-	return result
-}
-
-func formatHunkDiff(oldLines, newLines []string, hunks []hashline.Hunk) string {
+func formatHunkDiff(oldLines, newLines []string, hunks []hashline.Hunk, oldToNew map[int]int) string {
 	type outLine struct {
 		prefix string
 		text   string
 	}
 
-	// Build old->new mapping by simulating the actual apply.
-	oldToNew := buildOldToNewMapping(hunks, len(oldLines), oldLines)
-
-	sorted := sortedHunksAsc(hunks)
+	// Hunks are already resolved (post-apply). Sort ascending for display.
+	oldToNewVal := oldToNew
+	_ = oldToNewVal
+	sorted := make([]hashline.Hunk, len(hunks))
+	copy(sorted, hunks)
+	sortHunksAscending(sorted)
 
 	var out []outLine
 	const contextLines = 3
@@ -369,7 +279,7 @@ func formatHunkDiff(oldLines, newLines []string, hunks []hashline.Hunk) string {
 			ctxStart = 1
 		}
 		ctxBeforeEnd := h.Start
-		if h.Kind == hashline.HunkInsert && h.Cursor == "after" {
+		if h.Kind == hashline.HunkInsert && h.Cursor == hashline.CursorAfter {
 			ctxBeforeEnd = h.Start + 1 // include anchor line in context-before
 		}
 		for i := ctxStart; i < ctxBeforeEnd; i++ {
@@ -431,7 +341,7 @@ func formatHunkDiff(oldLines, newLines []string, hunks []hashline.Hunk) string {
 		hunkEnd := h.End
 		if h.Kind == hashline.HunkInsert {
 			hunkEnd = h.Start
-			if h.Cursor == "after" {
+			if h.Cursor == hashline.CursorAfter {
 				hunkEnd = h.Start + 1 // anchor stays before insert; skip it in context-after
 			}
 		}
@@ -478,17 +388,17 @@ func formatHunkDiff(oldLines, newLines []string, hunks []hashline.Hunk) string {
 // payload row of an insert hunk lands in the post-edit file.
 func computeInsertStart(h hashline.Hunk, oldToNew map[int]int, newLen int) int {
 	switch h.Cursor {
-	case "head":
+	case hashline.CursorHead:
 		return 1
-	case "tail":
+	case hashline.CursorTail:
 		return newLen - len(h.Payload) + 1
-	case "before":
+	case hashline.CursorBefore:
 		// Anchor content shifted down by len(Payload); insert lands before it.
 		if ns, ok := oldToNew[h.Start]; ok && ns > 0 {
 			return ns - len(h.Payload)
 		}
 		return h.Start
-	case "after":
+	case hashline.CursorAfter:
 		if ns, ok := oldToNew[h.Start]; ok && ns > 0 {
 			return ns + 1
 		}

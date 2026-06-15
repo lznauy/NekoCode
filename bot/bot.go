@@ -56,6 +56,7 @@ type Bot struct {
 	cindexMgr      *cindex.Manager
 	cwd                 string // computed once in New()
 	lastGuardrailWarned int    // tool result count at last guardrail injection
+	sessionResumed      bool   // set by sessions handler, consumed by ExecuteCommand
 	mu                  sync.Mutex
 }
 
@@ -375,6 +376,7 @@ func (b *Bot) initCommands() {
 			if err := b.ResumeSession(id); err != nil {
 				return fmt.Sprintf("Failed to resume session %s: %v", id, err), true
 			}
+			b.sessionResumed = true
 			return fmt.Sprintf("Resumed session %s (%d messages restored).", id, len(b.sess.Messages)), true
 		}
 		sessions := session.List()

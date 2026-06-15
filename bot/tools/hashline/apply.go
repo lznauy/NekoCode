@@ -12,6 +12,9 @@ type ApplyResult struct {
 	FirstChangedLine int
 	Warnings         []string
 	ResolvedHunks    []Hunk
+	// OldToNew maps old 1-based line numbers to new 1-based line numbers.
+	// Lines that were deleted have no entry (or map to 0).
+	OldToNew map[int]int
 }
 
 // BlockSpan represents the resolved line range of a code block.
@@ -51,7 +54,8 @@ func ApplyEdits(text string, hunks []Hunk, resolver BlockResolver, path string) 
 				hunks[hi].Payload[pi] = rest
 				if len(autoprefixWarnings) == 0 {
 					autoprefixWarnings = append(autoprefixWarnings,
-						"auto-prefixed bare body row(s) with '+'. Body rows must be '+TEXT' literal lines.")
+						"auto-prefixed bare body row(s) with '+': the model emitted body rows without the required '+' prefix. "+
+							"Body rows must be '+TEXT' literal lines, not bare content. NekoCode added the prefix automatically.")
 				}
 			}
 		}
@@ -83,7 +87,7 @@ func ApplyEdits(text string, hunks []Hunk, resolver BlockResolver, path string) 
 
 	// Validate all hunk ranges.
 	for _, h := range hunks {
-		if h.Kind == HunkInsert && (h.Cursor == "head" || h.Cursor == "tail") {
+		if h.Kind == HunkInsert && (h.Cursor == CursorHead || h.Cursor == CursorTail) {
 			continue
 		}
 		if h.Start < 1 || h.Start > len(lines) {
@@ -131,10 +135,10 @@ func ApplyEdits(text string, hunks []Hunk, resolver BlockResolver, path string) 
 	// head/tail inserts that share the same Start value (0).
 	sort.Slice(indexed, func(i, j int) bool {
 		a, b := indexed[i], indexed[j]
-		aHead := a.Kind == HunkInsert && a.Cursor == "head"
-		bHead := b.Kind == HunkInsert && b.Cursor == "head"
-		aTail := a.Kind == HunkInsert && a.Cursor == "tail"
-		bTail := b.Kind == HunkInsert && b.Cursor == "tail"
+		aHead := a.Kind == HunkInsert && a.Cursor == CursorHead
+		bHead := b.Kind == HunkInsert && b.Cursor == CursorHead
+		aTail := a.Kind == HunkInsert && a.Cursor == CursorTail
+		bTail := b.Kind == HunkInsert && b.Cursor == CursorTail
 
 		// Head inserts sort before everything else.
 		if aHead && !bHead {
@@ -165,6 +169,14 @@ func ApplyEdits(text string, hunks []Hunk, resolver BlockResolver, path string) 
 		sorted[i] = ih.Hunk
 	}
 
+		// Track original line identity parallel to the content slice.
+		// identities[i] = old 1-based line number at current position i,
+		// or 0 for inserted lines. After all edits we build OldToNew from it.
+		identities := make([]int, len(lines))
+		for i := range identities {
+			identities[i] = i + 1
+		}
+
 	// Apply hunks.
 	firstChanged := len(lines) + 1
 	var warnings []string
@@ -187,6 +199,14 @@ func ApplyEdits(text string, hunks []Hunk, resolver BlockResolver, path string) 
 			newLines = append(newLines, payload...)
 			newLines = append(newLines, lines[end:]...)
 			lines = newLines
+
+			zeros := make([]int, len(payload))
+			newIdentities := make([]int, 0, len(identities)+len(payload)-(end-start))
+			newIdentities = append(newIdentities, identities[:start]...)
+			newIdentities = append(newIdentities, zeros...)
+			newIdentities = append(newIdentities, identities[end:]...)
+			identities = newIdentities
+
 			if h.Start < firstChanged {
 				firstChanged = h.Start
 			}
@@ -198,6 +218,7 @@ func ApplyEdits(text string, hunks []Hunk, resolver BlockResolver, path string) 
 			start := h.Start - 1
 			end := h.End
 			lines = append(lines[:start], lines[end:]...)
+			identities = append(identities[:start], identities[end:]...)
 			if h.Start < firstChanged {
 				firstChanged = h.Start
 			}
@@ -205,13 +226,13 @@ func ApplyEdits(text string, hunks []Hunk, resolver BlockResolver, path string) 
 		case HunkInsert:
 			var idx int
 			switch h.Cursor {
-			case "head":
+			case CursorHead:
 				idx = 0
-			case "tail":
+			case CursorTail:
 				idx = len(lines)
-			case "before":
+			case CursorBefore:
 				idx = h.Start - 1
-			case "after":
+			case CursorAfter:
 				idx = h.Start
 			default:
 				idx = h.Start - 1
@@ -227,6 +248,14 @@ func ApplyEdits(text string, hunks []Hunk, resolver BlockResolver, path string) 
 			newLines = append(newLines, h.Payload...)
 			newLines = append(newLines, lines[idx:]...)
 			lines = newLines
+
+			zeros := make([]int, len(h.Payload))
+			newIdentities := make([]int, 0, len(identities)+len(h.Payload))
+			newIdentities = append(newIdentities, identities[:idx]...)
+			newIdentities = append(newIdentities, zeros...)
+			newIdentities = append(newIdentities, identities[idx:]...)
+			identities = newIdentities
+
 			if idx < firstChanged {
 				firstChanged = idx + 1
 			}
@@ -241,9 +270,23 @@ func ApplyEdits(text string, hunks []Hunk, resolver BlockResolver, path string) 
 
 	// Collapse runs of 3+ blank lines to 2 — keeps code tidy.
 	var collapsedBlanks int
-	lines, collapsedBlanks = collapseExcessBlankLines(lines)
+	var removedIndices []int
+	lines, collapsedBlanks, removedIndices = collapseExcessBlankLines(lines)
+	// Remove collapsed indices from identities (in descending order).
+	for i := len(removedIndices) - 1; i >= 0; i-- {
+		idx := removedIndices[i]
+		identities = append(identities[:idx], identities[idx+1:]...)
+	}
 	if collapsedBlanks > 0 {
 		warnings = append(warnings, fmt.Sprintf("collapsed %d excess blank line(s)", collapsedBlanks))
+	}
+
+	// Build old-to-new line mapping from the identity array.
+	oldToNew := make(map[int]int)
+	for newIdx, orig := range identities {
+		if orig > 0 {
+			oldToNew[orig] = newIdx + 1
+		}
 	}
 
 	// Rebuild resolvedHunks from sorted to include boundary repair changes.
@@ -260,6 +303,7 @@ func ApplyEdits(text string, hunks []Hunk, resolver BlockResolver, path string) 
 		FirstChangedLine: firstChanged,
 		Warnings:         warnings,
 		ResolvedHunks:    resolvedHunks,
+		OldToNew:         oldToNew,
 	}, nil
 }
 
@@ -283,7 +327,7 @@ func RepairAfterInsertLandings(sorted []Hunk, fileLines []string) ([]Hunk, []str
 			for l := h.Start; l <= h.End; l++ {
 				targetedLines[l] = true
 			}
-		} else if h.Kind == HunkInsert && h.Cursor != "head" && h.Cursor != "tail" {
+		} else if h.Kind == HunkInsert && h.Cursor != CursorHead && h.Cursor != CursorTail {
 			targetedLines[h.Start] = true
 		} else if h.Kind == HunkReplace {
 			for l := h.Start; l <= h.End; l++ {
@@ -295,7 +339,7 @@ func RepairAfterInsertLandings(sorted []Hunk, fileLines []string) ([]Hunk, []str
 	var warnings []string
 	for i := range sorted {
 		h := &sorted[i]
-		if h.Kind != HunkInsert || h.Cursor != "after" || h.Start < 1 || h.Start > len(fileLines) {
+		if h.Kind != HunkInsert || h.Cursor != CursorAfter || h.Start < 1 || h.Start > len(fileLines) {
 			continue
 		}
 		target, ok := bodyTargetIndent(h.Payload)
@@ -335,8 +379,10 @@ func RepairAfterInsertLandings(sorted []Hunk, fileLines []string) ([]Hunk, []str
 			origAnchor := h.Start
 			h.Start = landing
 			warnings = append(warnings, fmt.Sprintf(
-				"insert after %d: body indented shallower than anchor, landing shifted past %d closing line(s) to after %d",
-				origAnchor, crossed, landing))
+				"insert after %d: body indented shallower than anchor line %q, "+
+					"landing shifted past %d closing line(s) to after %d. "+
+					"Your insert anchor sits inside a nested block — next time anchor on a line at (or shallower than) the body's target depth.",
+				origAnchor, strings.TrimSpace(anchorText), crossed, landing))
 		}
 	}
 	return sorted, warnings
@@ -432,12 +478,59 @@ func repairBoundaries(allLines []string, h Hunk, payload []string) ([]string, []
 
 	var warnings []string
 	if leadCount > 0 {
+		stripped := payload[:leadCount]
 		payload = payload[leadCount:]
-		warnings = append(warnings, fmt.Sprintf("stripped %d duplicate leading context line(s)", leadCount))
+		msg := fmt.Sprintf(
+			"BOUNDARY REPAIR at replace %d..%d: stripped %d leading payload line(s) "+
+				"that already exist above the range.",
+			h.Start, h.End, leadCount)
+		msg += "\n  The stripped line(s):"
+		for _, line := range stripped {
+			msg += fmt.Sprintf("\n    %q", line)
+		}
+		msg += fmt.Sprintf(
+			"\n  Your replace range (%d..%d) may be too narrow — these lines belong inside the "+
+				"range, not outside it. Widen the range to include them, or use replace block %d "+
+				"to auto-detect the construct boundary instead of counting lines manually.",
+			h.Start, h.End, h.Start)
+		warnings = append(warnings, msg)
 	}
 	if trailCount > 0 {
+		stripped := payload[len(payload)-trailCount:]
 		payload = payload[:len(payload)-trailCount]
-		warnings = append(warnings, fmt.Sprintf("stripped %d duplicate trailing context line(s)", trailCount))
+
+		// Detect if stripped lines are structural: closing delimiters suggest
+		// the range missed the end of a block — strongly recommend replace block.
+		hasStructural := false
+		for _, line := range stripped {
+			if isStructuralCloser(line) {
+				hasStructural = true
+				break
+			}
+		}
+
+		msg := fmt.Sprintf(
+			"BOUNDARY REPAIR at replace %d..%d: stripped %d trailing payload line(s) "+
+				"that already exist below the range.",
+			h.Start, h.End, trailCount)
+		msg += "\n  The stripped line(s):"
+		for _, line := range stripped {
+			msg += fmt.Sprintf("\n    %q", line)
+		}
+		if hasStructural {
+			msg += fmt.Sprintf(
+				"\n  The stripped lines include structural closers (} ] )). "+
+					"Your range is too narrow — it ends before the block's closing delimiter. "+
+					"Use replace block %d instead of replace %d..%d to let the tool detect "+
+					"the full construct boundary automatically.",
+				h.Start, h.Start, h.End)
+		} else {
+			msg += fmt.Sprintf(
+				"\n  Your replace range (%d..%d) may end too early — these lines belong inside "+
+					"the range, not below it. Widen the range to include them.",
+				h.Start, h.End)
+		}
+		warnings = append(warnings, msg)
 	}
 	return payload, warnings
 }
@@ -621,7 +714,7 @@ func resolveBlockHunks(hunks []Hunk, lines []string, resolver BlockResolver, pat
 			result = append(result, Hunk{
 				Kind:    HunkInsert,
 				Start:   span.End,
-				Cursor:  "after",
+				Cursor:  CursorAfter,
 				Payload: h.Payload,
 			})
 		}
@@ -631,19 +724,23 @@ func resolveBlockHunks(hunks []Hunk, lines []string, resolver BlockResolver, pat
 
 // collapseExcessBlankLines reduces runs of three or more consecutive empty
 // lines to exactly two. Single and double blank lines are left untouched.
-// Returns the modified slice and the number of lines collapsed.
-func collapseExcessBlankLines(lines []string) ([]string, int) {
+// Returns the modified slice, the number of lines collapsed, and the 0-based
+// indices of removed lines in the original (pre-collapse) slice so callers can
+// synchronize parallel arrays (e.g. line identity tracking).
+func collapseExcessBlankLines(lines []string) ([]string, int, []int) {
 	if len(lines) < 3 {
-		return lines, 0
+		return lines, 0, nil
 	}
 	out := make([]string, 0, len(lines))
 	blankRun := 0
 	collapsed := 0
-	for _, line := range lines {
+	var removedIndices []int
+	for i, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			blankRun++
 			if blankRun > 2 {
 				collapsed++
+				removedIndices = append(removedIndices, i)
 				continue
 			}
 		} else {
@@ -651,5 +748,5 @@ func collapseExcessBlankLines(lines []string) ([]string, int) {
 		}
 		out = append(out, line)
 	}
-	return out, collapsed
+	return out, collapsed, removedIndices
 }

@@ -171,6 +171,10 @@ func (a *Agent) handleText(reasoning *ReasoningResult, state *stepState, callbac
 		a.consecutiveFailures = 0
 	}
 
+	// Only record normal text responses as assistant messages. Error and
+	// garbled-tool-call responses are not valid conversation content.
+	recordable := !reasoning.IsError && !reasoning.GarbledToolCall && reasoning.Action == ActionChat
+
 	if a.hookReg != nil {
 		if reasoning.GarbledToolCall {
 			a.hookReg.Inc(hooks.StoreRespGarbled)
@@ -193,7 +197,7 @@ func (a *Agent) handleText(reasoning *ReasoningResult, state *stepState, callbac
 				}
 				// Save this turn's text before re-injecting, so the
 				// TUI stream accumulates it and handleDone can fall back.
-				if reasoning.Action == ActionChat {
+				if recordable {
 					a.ctxMgr.AddAssistantResponse(reasoning.ActionInput, a.lastReason)
 					if callback != nil {
 						callback(reasoning.Action.String(), "", "", reasoning.ActionInput)
@@ -210,7 +214,7 @@ func (a *Agent) handleText(reasoning *ReasoningResult, state *stepState, callbac
 	a.stopReason = hooks.StopCompleted
 	a.step++
 	a.lastText = reasoning.ActionInput
-	if reasoning.Action == ActionChat {
+	if recordable {
 		a.ctxMgr.AddAssistantResponse(reasoning.ActionInput, a.lastReason)
 	}
 	if callback != nil {

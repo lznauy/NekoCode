@@ -174,6 +174,7 @@ func (p *ProcessingItem) finishToolBlock(subID, toolName, output string) {
 			isRevert := strings.Contains(output, "Reverted to pre-edit state")
 			if isError || isRevert {
 				b.Content = output
+				b.IsError = true
 			}
 		} else {
 			b.Content = output

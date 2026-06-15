@@ -19,6 +19,7 @@ type ContentBlock struct {
 	ToolArgs  string
 	Collapsed bool
 	Done      bool
+	IsError   bool   // true when the tool returned an error (used for rendering)
 	SubID     string // "" = main agent; non-empty = sub-agent UUID
 	SubColor  int    // -1 = main agent; 0-7 = sub-agent color index
 }

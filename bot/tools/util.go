@@ -78,7 +78,8 @@ func ReadSafeFile(path string) ([]byte, error) {
 	return os.ReadFile(safePath)
 }
 
-// ExtractPathsFromPatch pulls [filepath#TAG] paths from a hashline patch string.
+// ExtractPathsFromPatch pulls file paths from a hashline patch string.
+// Accepts both [path#TAG] (bracketed) and path#TAG (bare) headers.
 // The input can be string or any (for compatibility with map[string]any args).
 func ExtractPathsFromPatch(patch any) []string {
 	s, ok := patch.(string)
@@ -102,6 +103,37 @@ func ExtractPathsFromPatch(patch any) []string {
 			paths = append(paths, inner[:hashIdx])
 		}
 		rest = rest[end+1:]
+	}
+	// Also extract paths from bare path#TAG headers (LLMs often forget brackets).
+	paths = append(paths, extractBarePaths(s)...)
+	return paths
+}
+
+// extractBarePaths finds bare path#XXXXXXXX headers (8-char hex tag after #,
+// no brackets). Used as a fallback when the LLM omits [...] brackets.
+func extractBarePaths(s string) []string {
+	var paths []string
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		// Skip lines already handled by bracket extraction
+		if strings.HasPrefix(line, "[") {
+			continue
+		}
+		idx := strings.LastIndex(line, "#")
+		if idx <= 0 || len(line)-idx-1 != 8 {
+			continue
+		}
+		// Verify the tag is 8 hex chars
+		hex := true
+		for _, c := range line[idx+1:] {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+				hex = false
+				break
+			}
+		}
+		if hex {
+			paths = append(paths, line[:idx])
+		}
 	}
 	return paths
 }

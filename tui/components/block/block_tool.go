@@ -165,6 +165,11 @@ func renderEditPreview(content string, width int, sty *styles.Styles) string {
 			out.WriteByte('\n')
 			continue
 		}
+		// "---" separates the diff preview from the full file view
+		// (LLM reference). Stop rendering here.
+		if strings.TrimSpace(line) == "---" {
+			break
+		}
 
 		prefix := byte(' ')
 		text := line
@@ -224,6 +229,14 @@ func renderToolContent(b ContentBlock, contentW int, sty *styles.Styles) string 
 	case "read":
 		return sty.Muted.MaxWidth(contentW).Render(ParseReadOutput(b.Content))
 	case "edit":
+		// formatEditResult (diff.go) returns "[path#TAG]\n+NNN: ..." on
+		// success and goes through renderEditPreview.  Errors (e.g.
+		// "file X has not been read yet") are plain text — render them
+		// with sty.Muted like every other tool.  finishToolBlock sets
+		// IsError when the output does not start with "[".
+		if b.IsError {
+			return sty.Muted.MaxWidth(contentW).Render(b.Content)
+		}
 		return renderEditPreview(b.Content, contentW, sty)
 	case "bash":
 		c := strings.TrimSpace(b.Content)

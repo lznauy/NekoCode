@@ -117,7 +117,7 @@ func (t *EditTool) Preview(args map[string]any) string {
 			continue
 		}
 		cache.entries[safePath] = editCacheEntry{safePath, oldText, result}
-		preview := buildDiffPreview(oldText, result.Text, result.ResolvedHunks)
+		preview := buildDiffPreview(oldText, result.Text, result.ResolvedHunks, result.OldToNew)
 		if preview == "" {
 			continue
 		}
@@ -184,12 +184,35 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) (string, er
 
 	// Commit: write every prepared result to disk.
 	var results []string
+	var writeErrors []string
+	var writtenPaths []string
 	for _, pe := range prepared {
 		msg, err := t.commitResult(pe)
 		if err != nil {
-			return "", fmt.Errorf("[%s] %w", pe.safePath, err)
+			writeErrors = append(writeErrors, fmt.Sprintf("%s: %v", pe.safePath, err))
+		} else {
+			results = append(results, msg)
+			writtenPaths = append(writtenPaths, pe.safePath)
 		}
-		results = append(results, msg)
+	}
+	if len(writeErrors) > 0 {
+		var summary strings.Builder
+		summary.WriteString("Partial commit: some files written, some failed.\n")
+		for _, p := range writtenPaths {
+			summary.WriteString("  written: ")
+			summary.WriteString(p)
+			summary.WriteByte('\n')
+		}
+		for _, e := range writeErrors {
+			summary.WriteString("  failed: ")
+			summary.WriteString(e)
+			summary.WriteByte('\n')
+		}
+		if len(results) > 0 {
+			summary.WriteString("\nResults from successful writes:\n")
+			summary.WriteString(strings.Join(results, "\n"))
+		}
+		return summary.String(), fmt.Errorf("%d file(s) failed to write", len(writeErrors))
 	}
 	return strings.Join(results, "\n"), nil
 }
@@ -288,11 +311,11 @@ func (t *EditTool) commitResult(pe preflightResult) (string, error) {
 
 	newTag := tools.RecordSnapshot(pe.safePath, pe.result.Text)
 
-	msg := formatEditResult(pe.safePath, pe.normalizedBefore, pe.result.Text, pe.result.ResolvedHunks, newTag, pe.recovered)
+	msg := formatEditResult(pe.safePath, pe.normalizedBefore, pe.result.Text, pe.result.ResolvedHunks, newTag, pe.recovered, pe.result.OldToNew)
 
 	if len(pe.result.Warnings) > 0 {
 		for _, w := range pe.result.Warnings {
-			msg += "\n⚠ " + w
+			msg += "\n" + w
 		}
 	}
 

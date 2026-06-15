@@ -2,6 +2,7 @@ package bot
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"nekocode/bot/agent"
@@ -57,6 +58,10 @@ func (b *Bot) ExecuteCommand(input string) (string, common.CmdResult) {
 	b.confirmMu.Unlock()
 	if pending {
 		return resp, common.CmdConfirming
+	}
+	if b.sessionResumed {
+		b.sessionResumed = false
+		return resp, common.CmdSessionResumed
 	}
 	return resp, common.CmdHandled
 }
@@ -128,4 +133,90 @@ func (b *Bot) SwitchModel(name string) (string, string, error) {
 
 	am := b.cfg.ActiveModelConfig()
 	return am.Model, am.Provider, nil
+}
+
+// SessionMessages returns the restored chat history after a session resume.
+// Assistant turns with tool calls have their thinking text suppressed but
+// persistent tool results (edit/write/bash) are preserved as Blocks so the
+// TUI can render them — matching live streaming where FilterFinalBlocks
+// keeps edit/write/bash output. Read-only tools (read/grep/glob) are skipped.
+func (b *Bot) SessionMessages() []common.DisplayMessage {
+	snap := b.ctxMgr.Snapshot()
+	msgs := snap.Messages
+	if snap.CompactBoundary > 0 && snap.CompactBoundary < len(msgs) {
+		msgs = msgs[snap.CompactBoundary:]
+	}
+
+	// Map ToolCallID → tool name for pairing assistant ↔ tool results.
+	toolNames := make(map[string]string, len(msgs))
+	for _, m := range msgs {
+		if m.Role == "assistant" {
+			for _, tc := range m.ToolCalls {
+				if tc.ID != "" {
+					toolNames[tc.ID] = tc.Function.Name
+				}
+			}
+		}
+	}
+
+	isPersistent := func(name string) bool {
+		return name == "edit" || name == "write" || name == "bash"
+	}
+	isInternal := func(content string) bool {
+		return strings.Contains(content, "<hints>") ||
+			strings.Contains(content, "<skill") ||
+			strings.Contains(content, "Current working directory")
+	}
+
+	var out []common.DisplayMessage
+	i := 0
+	for i < len(msgs) {
+		m := msgs[i]
+		switch m.Role {
+		case "user":
+			out = append(out, common.DisplayMessage{Role: "user", Content: m.Content})
+			i++
+		case "assistant":
+			var blocks []common.DisplayBlock
+			if len(m.ToolCalls) > 0 {
+				// Consume subsequent tool results for persistent tools.
+				i++
+				for i < len(msgs) && msgs[i].Role == "tool" {
+					name := toolNames[msgs[i].ToolCallID]
+					if isPersistent(name) {
+						blocks = append(blocks, common.DisplayBlock{
+							ToolName: name,
+							Content:  msgs[i].Content,
+						})
+					}
+					i++
+				}
+			} else {
+				i++
+			}
+			content := m.Content
+			if len(m.ToolCalls) > 0 {
+				content = "" // thinking text, not final output
+			}
+			// Only emit when there is something to show — either a final
+			// reply or persistent tool blocks.  Read-only turns produce
+			// neither and would render as an empty "▐ Assistant".
+			if content != "" || len(blocks) > 0 {
+				out = append(out, common.DisplayMessage{
+					Role:    "assistant",
+					Content: content,
+					Blocks:  blocks,
+				})
+			}
+		case "system":
+			if !isInternal(m.Content) {
+				out = append(out, common.DisplayMessage{Role: "system", Content: m.Content})
+			}
+			i++
+		default:
+			// tool messages consumed by assistant loop above
+			i++
+		}
+	}
+	return out
 }
