@@ -142,7 +142,7 @@
 - 配置：`image_gen_models` 数组，支持多文生图模型扩展
 - `image_gen_models[].provider` 可切换不同文生图服务商
 
-### 77. 代码索引 (CIndex) ✅
+### 77. 代码索引 (Index) ✅
 - Tree-sitter 多语言解析（Go/JS/TS/Python/Rust），提取函数/方法/类/结构体/接口/变量/常量
 - 代码知识图谱：符号关系图（calls/contains/imports），跨文件引用解析
 - 5 种查询模式：skeleton（项目概览）、symbol（符号查找）、deps（包依赖）、file（文件搜索）、search（FTS5 全文搜索）
@@ -166,6 +166,14 @@
 - 编辑工具模糊匹配修复
 - 子 Agent 结果处理修复
 - Agent 循环稳定性改进
+
+## P1.5 — Agent 治理层
+
+### Agent Governance Layer 🟡
+- 已完成：ToolSemanticClassifier、AgentLedger、FinalCheck 基础规则、Hook Policy Action 骨架、PreToolUse BlockTool、PostTurn BlockFinal/RequireTool、verificationHook 硬化
+- 已完成：ctxmgr 自动压缩锁修复、Index stale/race 修复、ImageGen base64 保存、探索配额统一语义分类
+- 待推进：completion_quality / exploration_exhausted / tool_idle 迁移为 ledger + policy action；Plugin Hook 输出治理；System Prompt 分层瘦身
+- 详见 `docs/AGENT_GOVERNANCE.md`
 
 ## P2 — 生态与体验
 

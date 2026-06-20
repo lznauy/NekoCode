@@ -12,7 +12,8 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 
-	"nekocode/common")
+	"nekocode/common"
+)
 
 type Model struct {
 	Bot      BotInterface
@@ -25,11 +26,11 @@ type Model struct {
 	Height   int
 	Ready    bool
 
-	state            chatState
-	preConfirmState  chatState
-	processingStart  time.Time
-	processingPhase  string
-	activeSkill      string // skill activated this turn, shown in status bar
+	state           chatState
+	preConfirmState chatState
+	processingStart time.Time
+	processingPhase string
+	activeSkill     string // skill activated this turn, shown in status bar
 	Suggestions     *components.Suggestions
 	ConfirmBar      *components.ConfirmBar
 	Scrollbar       *components.Scrollbar
@@ -37,7 +38,7 @@ type Model struct {
 	notifyCh        chan string
 }
 
-const version = "0.3.1"
+const version = "0.3.2"
 
 func NewModel(b BotInterface) *Model {
 	sp := spinner.New()
@@ -46,8 +47,8 @@ func NewModel(b BotInterface) *Model {
 
 	prov, mod := b.ProviderModel()
 	m := &Model{
-		Bot:    b,
-		Header: components.NewHeader(80, prov, mod, version),
+		Bot:         b,
+		Header:      components.NewHeader(80, prov, mod, version),
 		Messages:    components.NewMessages(80, 14, &sty),
 		Input:       components.NewInput(80),
 		Splash:      components.NewSplash(80, 24, version),
@@ -142,9 +143,9 @@ func listenNotify(ch <-chan string) tea.Cmd {
 
 // Processing phases displayed in the status line during agent execution.
 const (
-	phaseSteer     = "Processing new input..."
-	PhaseReady     = common.PhaseReady
-	PhaseWaiting   = common.PhaseWaiting
+	phaseSteer   = "Processing new input..."
+	PhaseReady   = common.PhaseReady
+	PhaseWaiting = common.PhaseWaiting
 )
 
 func (m *Model) setPhase(p string) {

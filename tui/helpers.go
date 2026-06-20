@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"nekocode/bot/tools"
-
-	"nekocode/common")
+	"nekocode/common"
+)
 
 func formatBriefArgs(toolName, toolArgs string) string {
 	parse := func(s string) map[string]string {
@@ -41,15 +41,7 @@ func formatBriefArgs(toolName, toolArgs string) string {
 		return args["patch"]
 	case "bash":
 		cmd := args["command"]
-		// Only show the first line — heredocs and multi-line scripts
-		// pollute the tool block display.
-		if idx := strings.IndexAny(cmd, "\n\r"); idx >= 0 {
-			cmd = cmd[:idx] + "…"
-		}
-		if len(cmd) > 60 {
-			cmd = common.TruncateByRune(cmd, 57) + "…"
-		}
-		return cmd
+		return common.FormatCommandPreview(cmd, 96)
 	case "glob":
 		return args["pattern"]
 	case "grep":

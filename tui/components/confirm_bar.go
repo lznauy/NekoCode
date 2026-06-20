@@ -87,9 +87,9 @@ func (c *ConfirmBar) View(width, termHeight int) string {
 		Foreground(lipgloss.Color(styles.BtnNoFg)).
 		Padding(0, 2).
 		Render("[esc] no")
-	levelTag := c.sty.Yellow.Render("["+c.req.Level.String()+"]")
+	levelTag := c.sty.Yellow.Render("[" + c.req.Level.String() + "]")
 	if c.req.Level == common.LevelForbidden {
-		levelTag = c.sty.Red.Render("["+c.req.Level.String()+"]")
+		levelTag = c.sty.Red.Render("[" + c.req.Level.String() + "]")
 	}
 	prompt := "  " + levelTag + "  " + c.sty.Base.Render("Proceed?  ") + yesBtn + "  " + noBtn
 	promptW := lipgloss.Width(prompt)
@@ -128,8 +128,7 @@ func (c *ConfirmBar) formatDesc() string {
 	switch c.req.ToolName {
 	case "bash":
 		if cmd, ok := c.req.Args["command"].(string); ok && cmd != "" {
-			cmd = truncateCmd(cmd)
-			return cmd
+			return common.FormatCommandPreview(cmd, 600)
 		}
 	case "write":
 		if p, ok := c.req.Args["path"].(string); ok && p != "" {
@@ -205,23 +204,4 @@ func wrapText(text string, maxW int) []string {
 		}
 	}
 	return lines
-}
-
-// truncateCmd shortens a bash command for display in the confirm bar.
-func truncateCmd(cmd string) string {
-	const maxLen = 200
-	if len(cmd) <= maxLen {
-		return cmd
-	}
-	// Truncate at a natural boundary to avoid breaking quoted strings mid-token.
-	// Prefer the last space (or pipe/semicolon) before maxLen.
-	cut := maxLen - 3
-	for i := cut; i > maxLen-60 && i > 0; i-- {
-		b := cmd[i-1]
-		if b == ' ' || b == '|' || b == ';' || b == '&' {
-			cut = i
-			break
-		}
-	}
-	return cmd[:cut] + "..."
 }

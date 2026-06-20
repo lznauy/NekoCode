@@ -5,10 +5,10 @@ import (
 	"strings"
 
 	"nekocode/bot/agent"
-	"nekocode/bot/ctxmgr"
-	"nekocode/bot/prompt"
+	ctxmgr "nekocode/bot/contextmgr"
+	"nekocode/bot/extension/skill"
 	"nekocode/bot/hooks"
-	"nekocode/bot/skill"
+	"nekocode/bot/prompt"
 	"nekocode/bot/tools"
 	"nekocode/common"
 )
@@ -24,14 +24,14 @@ type SkillState struct {
 // Deps bundles services needed by registration and lifecycle operations.
 type Deps struct {
 	CtxMgr        *ctxmgr.Manager
-	Ag            func() *agent.Agent                                    // dynamic: returns current agent
+	Ag            func() *agent.Agent // dynamic: returns current agent
 	SkillReg      *skill.Registry
 	ToolRegistry  *tools.Registry
-	ContextWindow   int
-	GetConfigFn   func() (provider, model string)                       // dynamic config for /config and /model
-	ListModelsFn  func() []string                                       // available model names for /model
-	FreshStart    func() (string, error)                                // /new callback
-	SwitchModel   func(name string) (string, string, error)             // /model callback
+	ContextWindow int
+	GetConfigFn   func() (provider, model string)           // dynamic config for /config and /model
+	ListModelsFn  func() []string                           // available model names for /model
+	FreshStart    func() (string, error)                    // /new callback
+	SwitchModel   func(name string) (string, string, error) // /model callback
 }
 
 // RegisterAll wires built-in and dynamic slash commands.

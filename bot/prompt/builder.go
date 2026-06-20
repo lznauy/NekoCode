@@ -1,74 +1,23 @@
 package prompt
 
 import (
-	_ "embed"
-	"os"
-	"runtime"
-	"strings"
-	"time"
-
-	ctxfmt "nekocode/bot/ctxmgr/context"
+	"nekocode/bot/prompt/planmode"
+	systemprompt "nekocode/bot/prompt/system"
 )
 
-//go:embed system_zh.md
-var systemPrompt string
-
-type Builder struct {
-	staticPrefix string
-	cwd          string // set once at init, used on every Build() with fresh date
-}
+type Builder = systemprompt.Builder
 
 func NewBuilder(cwd string) *Builder {
-	return &Builder{staticPrefix: systemPrompt, cwd: cwd}
+	return systemprompt.NewBuilder(cwd)
 }
 
-func (b *Builder) Build() string {
-	var parts []string
-	if b.staticPrefix != "" {
-		parts = append(parts, b.staticPrefix)
-	}
-	if b.cwd != "" {
-		now := time.Now().Format("2006-01-02")
-		parts = append(parts, ctxfmt.FormatEnv(b.cwd, now, osRelease(), runtime.GOARCH))
-	}
-	return strings.Join(parts, "\n\n")
-}
-
-func osRelease() string {
-	data, err := os.ReadFile("/etc/os-release")
-	if err != nil {
-		return runtime.GOOS
-	}
-	for line := range strings.SplitSeq(string(data), "\n") {
-			if id, ok := strings.CutPrefix(line, "ID="); ok {
-				return strings.Trim(id, `"`)
-		}
-	}
-	return runtime.GOOS
+// AnalysisRules returns the analysis/review code-review rules. These should be
+// injected contextually when the task is code review, bug hunting, or analysis,
+// not forced into every turn's system prompt.
+func AnalysisRules() string {
+	return systemprompt.AnalysisRules()
 }
 
 func PlanModePrompt(task string) string {
-	return `<plan-mode>
-You are in PLAN MODE. You are a software architect performing READ-ONLY analysis.
-
-AVAILABLE TOOLS: read, grep, glob, list, web_search, web_fetch (read-only tools).
-BLOCKED: write, edit, bash (writing/modifying), task(executor).
-
-Your task:
-` + task + `
-
-WORKFLOW:
-1. Explore the codebase — understand the architecture, identify key files
-2. Design an implementation approach — step-by-step, with file paths
-3. Present your plan clearly:
-   - Summary of what needs to change
-   - Files to create / modify / delete (with paths)
-   - Step-by-step implementation order
-   - Risks, edge cases, and verification strategy
-   - Critical Files for Implementation (3-5 most important files)
-
-After presenting the plan, say "Ready to implement — approve?" or similar.
-Once the user approves, you will exit plan mode and can write code.
-Do NOT write any code in plan mode — design only.
-</plan-mode>`
+	return planmode.Prompt(task)
 }

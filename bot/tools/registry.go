@@ -26,7 +26,11 @@ func (r *Registry) Descriptors() []Descriptor {
 	list := r.Registry.List()
 	descs := make([]Descriptor, len(list))
 	for i, t := range list {
-		descs[i] = Descriptor{t.Name(), t.Description(), t.Parameters()}
+		descs[i] = Descriptor{
+			Name:        t.Name(),
+			Description: t.Description(),
+			Parameters:  t.Parameters(),
+		}
 	}
 	return descs
 }

@@ -1,18 +1,18 @@
 package tools
 
 import (
-	"nekocode/common"
 	"context"
+	"nekocode/common"
 	"testing"
 )
 
 type testTool struct{ name string }
 
-func (t *testTool) Name() string                                       { return t.name }
-func (t *testTool) Description() string                                { return "test" }
-func (t *testTool) Parameters() []Parameter                            { return nil }
-func (t *testTool) ExecutionMode(map[string]any) ExecutionMode         { return ModeParallel }
-func (t *testTool) DangerLevel(map[string]any) common.DangerLevel             { return common.LevelSafe }
+func (t *testTool) Name() string                                  { return t.name }
+func (t *testTool) Description() string                           { return "test" }
+func (t *testTool) Parameters() []Parameter                       { return nil }
+func (t *testTool) ExecutionMode(map[string]any) ExecutionMode    { return ModeParallel }
+func (t *testTool) DangerLevel(map[string]any) common.DangerLevel { return common.LevelSafe }
 func (t *testTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	return "ok", nil
 }

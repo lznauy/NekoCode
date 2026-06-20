@@ -45,4 +45,3 @@ func (d *AgentDef) ToAgentType() AgentType {
 		Tools:        d.Tools,
 	}
 }
-

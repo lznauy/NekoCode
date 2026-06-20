@@ -13,7 +13,7 @@ const (
 type classification int
 
 const (
-	classPass        classification = iota
+	classPass classification = iota
 	classWarn
 	classUnavailable
 )

@@ -2,8 +2,6 @@ package tools
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"nekocode/common"
@@ -17,8 +15,8 @@ func (t *forbiddenTool) DangerLevel(map[string]any) common.DangerLevel { return 
 // writeTool returns common.LevelWrite.
 type writeTool struct{ testTool }
 
-func (t *writeTool) DangerLevel(map[string]any) common.DangerLevel       { return common.LevelWrite }
-func (t *writeTool) ExecutionMode(map[string]any) ExecutionMode   { return ModeSequential }
+func (t *writeTool) DangerLevel(map[string]any) common.DangerLevel { return common.LevelWrite }
+func (t *writeTool) ExecutionMode(map[string]any) ExecutionMode    { return ModeSequential }
 
 func TestExecutorBatch(t *testing.T) {
 	r := NewRegistry()
@@ -48,6 +46,25 @@ func TestExecutorBatch(t *testing.T) {
 	})
 	if results[0].Error != "" || results[0].Output != "ok" {
 		t.Errorf("unexpected result: %+v", results[0])
+	}
+}
+
+func TestExecutorBatchPreservesCallOrderAcrossModes(t *testing.T) {
+	r := NewRegistry()
+	r.Register(&testTool{name: "read"})
+	r.Register(&writeTool{testTool{name: "write"}})
+	e := NewExecutor(r)
+
+	results := e.ExecuteBatch(context.Background(), []ToolCallItem{
+		{ID: "1", Name: "write", Args: map[string]any{"path": "a.go"}},
+		{ID: "2", Name: "read", Args: map[string]any{"path": "a.go"}},
+		{ID: "3", Name: "write", Args: map[string]any{"path": "b.go"}},
+	})
+
+	for i, wantID := range []string{"1", "2", "3"} {
+		if results[i].ID != wantID {
+			t.Fatalf("result %d has ID %q, want %q; results=%+v", i, results[i].ID, wantID, results)
+		}
 	}
 }
 
@@ -81,30 +98,19 @@ func TestExecutorConfirm(t *testing.T) {
 	}
 }
 
-func TestExecutorReadBeforeWrite(t *testing.T) {
-	td := t.TempDir()
-	p := filepath.Join(td, "existing.go")
-	os.WriteFile(p, []byte("package main"), 0644)
-
+func TestExecutorDoesNotOwnReadBeforeWriteGovernance(t *testing.T) {
 	r := NewRegistry()
 	r.Register(&testTool{name: "read"})
 	r.Register(&writeTool{testTool{name: "write"}})
 	e := NewExecutor(r)
 
-	// Write without read → blocked.
+	// Read-before-write is governed by agent ledger policy, not executor-local
+	// state. The executor must not reject a call solely because it lacks local
+	// read history, otherwise bash/read evidence recorded in the ledger is ignored.
 	results := e.ExecuteBatch(context.Background(), []ToolCallItem{
-		{ID: "1", Name: "write", Args: map[string]any{"path": p}},
+		{ID: "1", Name: "write", Args: map[string]any{"path": "existing.go"}},
 	})
-	if results[0].Error == "" {
-		t.Error("expected read-before-write error")
-	}
-
-	// Read then write → allowed.
-	results = e.ExecuteBatch(context.Background(), []ToolCallItem{
-		{ID: "2", Name: "read", Args: map[string]any{"path": p}},
-		{ID: "3", Name: "write", Args: map[string]any{"path": p}},
-	})
-	if results[1].Error != "" {
-		t.Errorf("write after read should succeed: %s", results[1].Error)
+	if results[0].Error != "" {
+		t.Errorf("executor should not apply read-before-write governance: %s", results[0].Error)
 	}
 }

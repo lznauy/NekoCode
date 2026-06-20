@@ -1,0 +1,155 @@
+// diff_hunks.go — hunk ordering and compact hunk diff rendering.
+
+package edit
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"nekocode/bot/tools/editdsl"
+)
+
+// sortHunksAscending sorts hunks in-place by ascending position for display.
+// Head-cursor inserts sort first, tail-cursor inserts sort last.
+func sortHunksAscending(hunks []editdsl.Hunk) {
+	sort.Slice(hunks, func(i, j int) bool {
+		a, b := hunks[i], hunks[j]
+		if a.Kind == editdsl.HunkInsert && a.Cursor == editdsl.CursorHead {
+			return true
+		}
+		if b.Kind == editdsl.HunkInsert && b.Cursor == editdsl.CursorHead {
+			return false
+		}
+		if a.Kind == editdsl.HunkInsert && a.Cursor == editdsl.CursorTail {
+			return false
+		}
+		if b.Kind == editdsl.HunkInsert && b.Cursor == editdsl.CursorTail {
+			return true
+		}
+		return a.Start < b.Start
+	})
+}
+
+func formatHunkDiff(oldLines, newLines []string, hunks []editdsl.Hunk, oldToNew map[int]int) string {
+	type outLine struct {
+		prefix string
+		text   string
+	}
+
+	sorted := make([]editdsl.Hunk, len(hunks))
+	copy(sorted, hunks)
+	sortHunksAscending(sorted)
+
+	var out []outLine
+	const contextLines = 3
+	shown := make(map[int]bool)
+	lastShown := 0
+
+	for _, h := range sorted {
+		ctxStart := h.Start - contextLines
+		if ctxStart < 1 {
+			ctxStart = 1
+		}
+		ctxBeforeEnd := h.Start
+		if h.Kind == editdsl.HunkInsert && h.Cursor == editdsl.CursorAfter {
+			ctxBeforeEnd = h.Start + 1
+		}
+		for i := ctxStart; i < ctxBeforeEnd; i++ {
+			if shown[i] {
+				continue
+			}
+			if lastShown > 0 && i > lastShown+1 {
+				gap := i - lastShown - 1
+				if gap >= 8 {
+					out = append(out, outLine{text: fmt.Sprintf("… (%d unchanged lines)", gap)})
+				}
+			}
+			newNo, ok := oldToNew[i]
+			if ok && newNo > 0 {
+				out = append(out, outLine{prefix: fmt.Sprintf(" %d:", newNo), text: oldLines[i-1]})
+			} else {
+				out = append(out, outLine{prefix: fmt.Sprintf(" %d:", i), text: oldLines[i-1]})
+			}
+			shown[i] = true
+			lastShown = i
+		}
+
+		switch h.Kind {
+		case editdsl.HunkReplace:
+			for l := h.Start; l <= h.End; l++ {
+				out = append(out, outLine{prefix: fmt.Sprintf("-%d:", l), text: safeGet(oldLines, l-1)})
+				shown[l] = true
+				lastShown = l
+			}
+			insStart := h.Start
+			if ns, ok := oldToNew[h.Start]; ok && ns > 0 {
+				insStart = ns
+			} else if h.Start > 1 {
+				if ns, ok := oldToNew[h.Start-1]; ok && ns > 0 {
+					insStart = ns + 1
+				}
+			}
+			for k, line := range h.Payload {
+				out = append(out, outLine{prefix: fmt.Sprintf("+%d:", insStart+k), text: line})
+			}
+
+		case editdsl.HunkDelete:
+			for l := h.Start; l <= h.End; l++ {
+				out = append(out, outLine{prefix: fmt.Sprintf("-%d:", l), text: safeGet(oldLines, l-1)})
+				shown[l] = true
+				lastShown = l
+			}
+
+		case editdsl.HunkInsert:
+			insStart := computeInsertStart(h, oldToNew, len(newLines))
+			for k, line := range h.Payload {
+				out = append(out, outLine{prefix: fmt.Sprintf("+%d:", insStart+k), text: line})
+			}
+		}
+
+		hunkEnd := h.End
+		if h.Kind == editdsl.HunkInsert {
+			hunkEnd = h.Start
+			if h.Cursor == editdsl.CursorAfter {
+				hunkEnd = h.Start + 1
+			}
+		}
+		if hunkEnd < 1 {
+			hunkEnd = 1
+		}
+		ctxEnd := hunkEnd + contextLines
+		if ctxEnd > len(oldLines) {
+			ctxEnd = len(oldLines)
+		}
+		for i := hunkEnd; i <= ctxEnd; i++ {
+			if shown[i] {
+				continue
+			}
+			if lastShown > 0 && i > lastShown+1 {
+				gap := i - lastShown - 1
+				if gap >= 8 {
+					out = append(out, outLine{text: fmt.Sprintf("… (%d unchanged lines)", gap)})
+				}
+			}
+			newNo, ok := oldToNew[i]
+			if ok && newNo > 0 {
+				out = append(out, outLine{prefix: fmt.Sprintf(" %d:", newNo), text: oldLines[i-1]})
+			} else {
+				out = append(out, outLine{prefix: fmt.Sprintf(" %d:", i), text: oldLines[i-1]})
+			}
+			shown[i] = true
+			lastShown = i
+		}
+	}
+
+	var sb strings.Builder
+	for _, l := range out {
+		if l.prefix == "" {
+			fmt.Fprintf(&sb, " %s\n", l.text)
+		} else {
+			fmt.Fprintf(&sb, "%s%s\n", l.prefix, l.text)
+		}
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}

@@ -1,9 +1,13 @@
 package budget
 
-import "fmt"
+import (
+	"fmt"
 
-// ToolQuota enforces per-turn limits on information-gathering tools (read/grep/glob/list),
-// scaled dynamically by context usage percentage.
+	"nekocode/bot/governance"
+)
+
+// ToolQuota enforces per-turn limits on exploratory/source-producing tool
+// calls, scaled dynamically by context usage percentage.
 type ToolQuota struct {
 	MaxSlots int
 	Used     int
@@ -38,8 +42,15 @@ const quotaExhaustedMsg = `[配额] 本轮读取配额已达上限 (%d)。基于
 // ConsumeTool routes by tool name. Returns error if quota exhausted.
 // Only consumes quota for information-gathering tools.
 func (q *ToolQuota) ConsumeTool(toolName string) error {
-	switch toolName {
-	case "read", "grep", "glob", "list":
+	if governance.ClassifyToolCall(toolName, nil).Exploratory {
+		return q.consume()
+	}
+	return nil
+}
+
+func (q *ToolQuota) ConsumeCall(toolName string, args map[string]any) error {
+	sem := governance.ClassifyToolCall(toolName, args)
+	if sem.Exploratory {
 		return q.consume()
 	}
 	return nil

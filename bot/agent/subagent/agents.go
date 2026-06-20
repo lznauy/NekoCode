@@ -22,7 +22,7 @@ func init() {
 	})
 	register(AgentType{
 		Name: "researcher", SystemPrompt: researcherPrompt,
-		Tools: []string{"read", "grep", "glob", "list", "web_search", "web_fetch"},
+		Tools:              []string{"read", "grep", "glob", "list", "web_search", "web_fetch"},
 		OmitProjectContext: true,
 	})
 }
