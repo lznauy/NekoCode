@@ -1,0 +1,66 @@
+app-id: org.nekocode.NekoCode
+runtime: org.gnome.Platform
+runtime-version: "50"
+sdk: org.gnome.Sdk
+command: nekocode-gui
+
+build-options:
+  build-args:
+    - --share=network
+    - --bind-mount=/run/build/nekocode-cache=@FLATPAK_CACHE_DIR@
+  env:
+    CGO_ENABLED: "1"
+    GOCACHE: /run/build/nekocode-cache/go-build
+    GOPATH: /run/build/nekocode-cache/gopath
+    GOMODCACHE: /run/build/nekocode-cache/go-mod
+    GOROOT: /run/build/nekocode/.toolchain
+    GOPROXY: https://goproxy.cn,https://proxy.golang.org,direct
+    npm_config_cache: /run/build/nekocode-cache/npm
+    npm_config_registry: "@NPM_REGISTRY@"
+    npm_config_fetch_retries: "3"
+    npm_config_fetch_retry_maxtimeout: "30000"
+    npm_config_fetch_timeout: "45000"
+
+finish-args:
+  - --share=ipc
+  - --socket=x11
+  - --socket=wayland
+  - --device=dri
+  - --share=network
+  - --filesystem=home
+  - --talk-name=org.freedesktop.portal.Desktop
+
+modules:
+  - name: nekocode
+    buildsystem: simple
+    build-commands:
+      - rm -rf src/node_modules src/gui/node_modules src/gui/dist src/build
+      - mkdir -p /run/build/nekocode-cache/go-build /run/build/nekocode-cache/gopath /run/build/nekocode-cache/go-mod /run/build/nekocode-cache/npm
+      - PATH="$PWD/.toolchain/bin:$PWD/.toolchain/node/bin:$PATH" go version
+      - PATH="$PWD/.toolchain/bin:$PWD/.toolchain/node/bin:$PATH" node --version
+      - PATH="$PWD/.toolchain/bin:$PWD/.toolchain/node/bin:$PATH" npm --version
+      - PATH="$PWD/.toolchain/bin:$PWD/.toolchain/node/bin:$PATH" npm --prefix src/gui config get registry
+      - timeout 900 env PATH="$PWD/.toolchain/bin:$PWD/.toolchain/node/bin:$PATH" npm --prefix src/gui ci --prefer-offline --no-audit --fund=false --progress=false --loglevel=http --timing
+      - cd src && PATH="$PWD/../.toolchain/bin:$PWD/../.toolchain/node/bin:$PATH" go mod download
+      - cd src && PATH="$PWD/../.toolchain/bin:$PWD/../.toolchain/node/bin:$PATH" go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+      - |
+        sed -i 's/"frontend:install": "npm install"/"frontend:install": "true"/' src/wails.json
+      - cd src && PATH="$PWD/../.toolchain/bin:$PWD/../.toolchain/node/bin:$PATH" /run/build/nekocode-cache/gopath/bin/wails build -clean -v 2
+      - install -Dm755 src/build/bin/nekocode-gui /app/bin/nekocode-gui
+      - install -Dm644 src/flatpak/org.nekocode.NekoCode.desktop /app/share/applications/org.nekocode.NekoCode.desktop
+      - install -Dm644 src/flatpak/org.nekocode.NekoCode.metainfo.xml /app/share/metainfo/org.nekocode.NekoCode.metainfo.xml
+      - install -Dm644 src/flatpak/org.nekocode.NekoCode.png /app/share/icons/hicolor/256x256/apps/org.nekocode.NekoCode.png
+      - chmod -R u+rwX /run/build/nekocode-cache src/build
+    sources:
+      - type: archive
+        url: https://go.dev/dl/go1.26.3.linux-amd64.tar.gz
+        sha256: 2b2cfc7148493da5e73981bffbf3353af381d5f93e789c82c79aff64962eb556
+        dest: .toolchain
+      - type: archive
+        url: https://nodejs.org/dist/v22.11.0/node-v22.11.0-linux-x64.tar.xz
+        sha256: 83bf07dd343002a26211cf1fcd46a9d9534219aad42ee02847816940bf610a72
+        dest: .toolchain/node
+        strip-components: 1
+      - type: dir
+        path: "@FLATPAK_SOURCE_DIR@"
+        dest: src

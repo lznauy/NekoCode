@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.nekocode.NekoCode</id>
+  <name>NekoCode</name>
+  <summary>Agent coding assistant</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="org.nekocode">
+    <name>NekoCode</name>
+  </developer>
+  <url type="homepage">https://github.com/nekocode/NekoCode</url>
+  <launchable type="desktop-id">org.nekocode.NekoCode.desktop</launchable>
+  <description>
+    <p>NekoCode is an agent coding assistant with a Wails desktop GUI and a separate terminal UI.</p>
+  </description>
+  <categories>
+    <category>Development</category>
+  </categories>
+  <content_rating type="oars-1.1" />
+</component>

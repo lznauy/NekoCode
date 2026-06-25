@@ -3,11 +3,11 @@ package snapshots
 import (
 	"context"
 
-	"nekocode/bot/tools/editdsl"
+	"nekocode/bot/tools/editcore"
 	"nekocode/bot/tools/execution"
 )
 
-func Record(store *editdsl.SnapshotStore, path, content string) string {
+func Record(store *editcore.SnapshotStore, path, content string) string {
 	if store == nil {
 		return ""
 	}

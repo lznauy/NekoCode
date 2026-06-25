@@ -1,4 +1,4 @@
-// EditTool — hashline DSL-based file editing.
+// EditTool — edit-aware JSON intent file editing.
 
 package edit
 
@@ -7,10 +7,8 @@ import (
 	_ "embed"
 	"fmt"
 	"path/filepath"
-	"strings"
 
 	"nekocode/bot/tools"
-	"nekocode/bot/tools/editdsl"
 	"nekocode/bot/tools/toolhelpers"
 )
 
@@ -34,80 +32,29 @@ func (t *EditTool) Description() string {
 func (t *EditTool) Parameters() []tools.Parameter {
 	return []tools.Parameter{
 		{Name: "patch", Type: "string", Required: true,
-			Description: "Hashline patch DSL. See tool description for format. When revert=true, use bare file path instead."},
+			Description: "JSON edit intent. When revert=true, use bare file path instead."},
 		{Name: "revert", Type: "boolean", Required: false,
 			Description: "Set to true to revert file to its pre-edit state. Patch should be the bare file path."},
 	}
 }
 
 // ---------------------------------------------------------------------------
-// types
-// ---------------------------------------------------------------------------
-
-// editCache holds Preview results for Execute to reuse.
-type editCache struct {
-	entries map[string]editCacheEntry
-}
-
-type editCacheEntry struct {
-	safePath         string
-	normalizedBefore string
-	result           *editdsl.ApplyResult
-}
-
-// ---------------------------------------------------------------------------
 // preview
 // ---------------------------------------------------------------------------
 
-// Preview reads files, applies edits to copies, returns a diff for TUI.
+// Preview reads files, applies the JSON intent to a copy, and returns a diff.
 func (t *EditTool) Preview(args map[string]any) string {
 	patchStr, _ := args["patch"].(string)
 	if patchStr == "" {
 		return ""
 	}
-	// Revert mode: patch is a bare file path, not a hashline DSL.
 	if rv, _ := args["revert"].(bool); rv {
 		return fmt.Sprintf("(revert: %s)", filepath.Base(patchStr))
 	}
-	patch, err := editdsl.ParsePatch(patchStr)
-	if err != nil {
-		return fmt.Sprintf("(parse error: %v)", err)
+	if !isJSONIntent(patchStr) {
+		return "(edit patch must be a JSON intent object; re-read the target range and retry)"
 	}
-
-	cache := &editCache{entries: make(map[string]editCacheEntry)}
-	var sb strings.Builder
-	var errs []string
-	for _, fp := range patch.Files {
-		safePath, err := tools.ValidatePath(fp.Path)
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", filepath.Base(fp.Path), err))
-			continue
-		}
-		oldText, err := tools.ReadNormalizedFile(safePath)
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", filepath.Base(fp.Path), err))
-			continue
-		}
-		result, err := editdsl.ApplyEdits(oldText, fp.Hunks, GlobalBlockResolver, safePath)
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", filepath.Base(fp.Path), err))
-			continue
-		}
-		cache.entries[safePath] = editCacheEntry{safePath, oldText, result}
-		preview := buildDiffPreview(oldText, result.Text, result.ResolvedHunks, result.OldToNew)
-		if preview == "" {
-			continue
-		}
-		sb.WriteString(preview)
-		sb.WriteByte('\n')
-	}
-	if len(errs) > 0 {
-		fmt.Fprintf(&sb, "\n(errors: %s)", strings.Join(errs, "; "))
-	}
-	if len(cache.entries) > 0 {
-		args["_editCache"] = cache
-	}
-	return sb.String()
+	return t.previewIntent(patchStr)
 }
 
 // ---------------------------------------------------------------------------
@@ -124,58 +71,8 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) (string, er
 	if rv, _ := args["revert"].(bool); rv {
 		return t.revertSnapshot(patchStr)
 	}
-
-	patch, err := editdsl.ParsePatch(patchStr)
-	if err != nil {
-		return "", fmt.Errorf("patch parse error: %w", err)
+	if !isJSONIntent(patchStr) {
+		return "", fmt.Errorf("edit patch must be a JSON intent object")
 	}
-	var cache *editCache
-	if c, ok := args["_editCache"]; ok {
-		cache, _ = c.(*editCache)
-	}
-	seen := make(map[string]bool)
-
-	// Preflight: validate and apply every file in memory before any write.
-	var prepared []preflightResult
-	for _, fp := range patch.Files {
-		pe, err := t.prepareOne(ctx, fp, cache, seen)
-		if err != nil {
-			return "", fmt.Errorf("[%s] %w", fp.Path, err)
-		}
-		prepared = append(prepared, *pe)
-	}
-
-	// Commit: write every prepared result to disk.
-	var results []string
-	var writeErrors []string
-	var writtenPaths []string
-	for _, pe := range prepared {
-		msg, err := t.commitResult(ctx, pe)
-		if err != nil {
-			writeErrors = append(writeErrors, fmt.Sprintf("%s: %v", pe.safePath, err))
-		} else {
-			results = append(results, msg)
-			writtenPaths = append(writtenPaths, pe.safePath)
-		}
-	}
-	if len(writeErrors) > 0 {
-		var summary strings.Builder
-		summary.WriteString("Partial commit: some files written, some failed.\n")
-		for _, p := range writtenPaths {
-			summary.WriteString("  written: ")
-			summary.WriteString(p)
-			summary.WriteByte('\n')
-		}
-		for _, e := range writeErrors {
-			summary.WriteString("  failed: ")
-			summary.WriteString(e)
-			summary.WriteByte('\n')
-		}
-		if len(results) > 0 {
-			summary.WriteString("\nResults from successful writes:\n")
-			summary.WriteString(strings.Join(results, "\n"))
-		}
-		return summary.String(), fmt.Errorf("%d file(s) failed to write", len(writeErrors))
-	}
-	return strings.Join(results, "\n"), nil
+	return t.executeIntent(ctx, patchStr)
 }

@@ -1,0 +1,113 @@
+@import 'tailwindcss';
+@import './theme.css';
+
+@theme {
+  --color-surface: var(--bg);
+  --color-surface-2: var(--bg2);
+  --color-surface-3: var(--bg3);
+  --color-border: var(--b);
+  --color-text: var(--t);
+  --color-text-2: var(--t2);
+  --color-text-3: var(--t3);
+  --color-primary: var(--bl);
+  --color-success: var(--gn);
+  --color-warning: var(--or);
+  --color-danger: var(--rd);
+  --color-accent: var(--pu);
+
+  --font-sans: var(--sans);
+  --font-mono: var(--mono);
+
+  --animate-blink: blink 1s step-end infinite;
+  --animate-slide-in: slide-in 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-pulse-soft: pulse-soft 1.8s ease-in-out infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+@keyframes slide-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 1; }
+}
+
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html, body, #root {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  html { min-height: 100dvh; }
+
+  body {
+    font-family: var(--sans);
+    line-height: 1.5;
+    color: var(--t);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  button, input, textarea, select {
+    font: inherit;
+  }
+
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--b) 70%, transparent);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--t3);
+  }
+
+  :focus-visible {
+    outline: 2px solid color-mix(in oklab, var(--bl) 78%, white);
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  .surface-shadow { box-shadow: var(--shadow); }
+}
+
+@utility scrollbar-gutter-stable {
+  scrollbar-gutter: stable;
+}
+
+@layer components {
+  .markdown { @apply text-sm leading-relaxed; }
+  .markdown p { @apply mb-2.5 last:mb-0; }
+  .markdown ul, .markdown ol { @apply my-2 pl-5; }
+  .markdown li { @apply mb-1 last:mb-0; }
+  .markdown ul > li { list-style: disc; }
+  .markdown ol > li { list-style: decimal; }
+  .markdown blockquote {
+    @apply my-3 border-l-[3px] border-primary/60 bg-primary/5 pl-3 pr-2 py-1.5 text-text-2 italic;
+  }
+  .markdown strong { @apply font-semibold text-text; }
+  .markdown a {
+    @apply text-primary underline decoration-primary/30 hover:decoration-primary transition-colors;
+  }
+  .markdown hr { @apply my-4 border-0 border-t border-border/60; }
+  .markdown table { @apply my-3 w-full border-collapse text-[13px]; }
+  .markdown th, .markdown td {
+    @apply border border-border/60 px-2.5 py-1.5 text-left;
+  }
+  .markdown th { @apply bg-surface-3 font-semibold text-text; }
+  .markdown h1 { @apply text-lg font-semibold mb-3; }
+  .markdown h2 { @apply text-base font-semibold mb-2; }
+  .markdown h3 { @apply text-sm font-semibold mb-1.5; }
+}

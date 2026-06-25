@@ -3,7 +3,7 @@ package textutil
 import (
 	"regexp"
 
-	"nekocode/bot/tools/editdsl"
+	"nekocode/bot/tools/editcore"
 )
 
 var ansiRegex = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")
@@ -16,5 +16,5 @@ func StripAnsi(s string) string {
 // NormalizeText strips ANSI escapes and normalizes line endings to LF.
 func NormalizeText(text string) string {
 	text = StripAnsi(text)
-	return editdsl.NormalizeToLF(text)
+	return editcore.NormalizeToLF(text)
 }

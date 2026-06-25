@@ -1,0 +1,41 @@
+/* NekoCode GUI theme tokens */
+:root {
+  --bg:  #111214;
+  --bg2: #191b1f;
+  --bg3: #23272d;
+
+  --t:  #ece8df;
+  --t2: #aaa69d;
+  --t3: #6f756f;
+
+  --b:  #343941;
+
+  --bl: #e8a84f;
+  --gn: #6fb59d;
+  --or: #d79047;
+  --rd: #d46d74;
+  --pu: #9b8be8;
+
+  --sans: system-ui, 'Noto Sans CJK SC', 'Noto Sans SC', 'Source Han Sans SC', 'WenQuanYi Micro Hei', 'Microsoft YaHei', 'DejaVu Sans', sans-serif;
+  --mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'DejaVu Sans Mono', ui-monospace, monospace;
+  --shadow: 0 12px 40px rgb(0 0 0 / 0.28);
+}
+
+[data-theme='light'] {
+  --bg:  #f5f3ee;
+  --bg2: #fffcf5;
+  --bg3: #ebe7de;
+
+  --t:  #24272a;
+  --t2: #646866;
+  --t3: #969386;
+
+  --b:  #d8d2c5;
+
+  --bl: #a96218;
+  --gn: #4f8d7e;
+  --or: #b96f2c;
+  --rd: #b94f5a;
+  --pu: #7663c9;
+  --shadow: 0 16px 44px rgb(36 39 42 / 0.12);
+}

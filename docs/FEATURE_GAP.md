@@ -6,45 +6,47 @@
 
 ## 一、复盘修正
 
-上一轮分析存在以下不准确之处，已在本报告中修正：
+本报告为 v0.3.2 版本的重新审查，修正了之前版本中的不准确之处：
 
 | 之前错误说法 | 实际情况 |
 |-------------|---------|
-| "没有 diff 工具" | `diff.go` 存在，但它是 edit 工具的内部辅助（hunk 排序 + diff 预览格式化），不是独立工具 |
-| "没有 skill 工具" | `bot/skill/tool_skill.go` 实现了 `SkillTool`，已在 `bot.go` 中注册 |
-| "没有 project_info 工具" | `bot/index/tool.go` 实现了 `ProjectInfoTool`，已在 `bot.go` 中注册 |
-| "没有流式 API" | `llm/types/types.go` 定义了 `ChatStream` 接口 + `StreamToken`/`StreamUsage`，Anthropic 和 OpenAI 客户端均已实现 `ChatStream` |
-| "没有 Markdown 渲染" | `tui/components/message/markdown.go` 使用 glamour 库渲染，支持 tokyo-night 主题 |
-| "没有 diff 视图" | TUI 有 diff 颜色常量（DiffGreen/DiffAddBg/DiffDelBg），edit 工具结果中展示 diff 预览 |
-| "没有鼠标支持" | `tui/view.go` 启用 `MouseModeCellMotion`，`messages.go` 处理滚轮事件 |
-| "没有 plan 模式" | `/plan` 命令已实现，`agent.SetPlanMode()` 存在 |
-| "MCP 只支持 Stdio" | 确认：当前 MCP 客户端仅支持 stdio 子进程模式，不支持 SSE/StreamableHTTP |
-| "没有长期记忆" | `bot/contextmgr/memory/memory.go` 实现了持久化记忆文件（5 段式 markdown），但非向量检索 |
+| "没有 diff 工具" | `diff.go` 存在，且已升级为结构化 diff 模型（`diff_model.go`），支持 TUI diff 内联预览 |
+| "没有 skill 工具" | `bot/extension/skill/tool_skill.go` 实现了 `SkillTool`，动态注册到 toolRegistry |
+| "没有 project_info 工具" | `bot/index/projecttool/tool.go` 实现了 `ProjectInfoTool`，条件注册 |
+| "没有流式 API" | `llm/types/types.go` 定义了 `ChatStream` 接口，Anthropic 和 OpenAI 客户端均已实现 |
+| "没有 Markdown 渲染" | `tui/components/message/markdown.go` 使用 chroma/glamour 库渲染 |
+| "没有 diff 视图" | TUI 有 diff 颜色常量，edit 工具结果中展示 diff 预览 + 结构化 diff 模型 |
+| "没有鼠标支持" | TUI 启用鼠标模式，消息列表支持滚轮 |
+| "没有 plan 模式" | `/plan` 命令完整实现，`agent.SetPlanMode()` 存在 |
+| "Tab 补全缺失" | TUI 输入框支持 Tab/Shift+Tab 命令补全 |
+| "没有 /help" | 已实现，含动态 skill 命令列表 |
+| "没有 /model /config /context 等命令" | 均已实现 |
+| "没有 edit 后 lint" | `edit_lint.go` 对 Go 文件执行 gofmt 语法检查 |
 
 ---
 
 ## 二、已实现功能总览
 
-### 工具系统（13 个内置工具 + 动态工具）
+### 工具系统（13 个内置工具 + 3 个条件/动态工具）
 
 | 工具 | 文件 | 说明 |
 |------|------|------|
 | `bash` | tool_bash.go | Shell 执行，三级危险分类（forbidden/destructive/write/safe），heredoc 剥离 |
-| `read` | tool_read.go | 文件读取（文本/图片/PDF），支持行范围，输出 `[path#TAG]` 格式 |
+| `read` | tool_read.go | 文件读取（文本/图片/PDF），支持行范围，输出 `[path#TAG]` + `VIEW` 元数据 |
 | `write` | tool_write.go | 文件创建/覆写，自动创建父目录 |
-| `edit` | tool_edit.go | hashline DSL 编辑，支持 replace/insert/delete，自动快照 + 撤销 |
+| `edit` | tool_edit.go | JSON intent 编辑，基于 Read VIEW 校验，支持 replace/insert/delete，自动快照 + 撤销 + gofmt lint |
 | `list` | tool_list.go | 目录列表 |
 | `tree` | tool_tree.go | 目录树，支持深度/条目限制 |
 | `glob` | tool_glob.go | 文件 glob 匹配，支持 `**` 递归 |
 | `grep` | tool_grep.go | 内容搜索（优先 rg，fallback grep），支持正则 + glob 过滤 + 上下文行 |
-| `web_search` | tool_websearch.go | 网页搜索（通过 Exa MCP API） |
+| `web_search` | tool_websearch.go | 网页搜索 |
 | `web_fetch` | tool_webfetch.go | 网页抓取，URL 验证 + 重定向限制 |
 | `todo_write` | tool_todo.go | 任务列表管理，支持 TUI 回调 |
 | `task` | tool_task.go | 子 Agent 调度（researcher/executor/verify） |
-| `image_gen` | tool_image_gen.go | 图片生成（多模型配置） |
-| `project_info` | index/tool.go | 代码索引查询（符号/文件/依赖/全文搜索） |
-| `skill` | skill/tool_skill.go | 技能加载工具 |
-| MCP 工具 | mcp/tool.go | 动态注册的 MCP 服务器工具 |
+| `project_info` | index/projecttool/tool.go | 代码索引查询（符号/文件/依赖/全文搜索）— 条件注册 |
+| `image_gen` | media/tool_image_gen.go | 图片生成（多模型配置）— 条件注册 |
+| `skill` | extension/skill/tool_skill.go | 技能加载工具 — 动态注册 |
+| MCP 工具 | extension/mcp/tool.go | 动态注册的 MCP 服务器工具 |
 
 ### Agent 系统
 
@@ -54,30 +56,32 @@
 - **子 Agent**：独立 Engine，支持 researcher/executor/verify 三种类型，文件缓存隔离
 - **预算管理**：ExplorationTracker 衰减分数机制（200 分起，工具扣分，edit 恢复）
 - **账本记录**：Ledger 追踪读取/修改文件、被阻止工具、验证结果
-- **策略分类**：Semantics 七维分类（Exploratory/Mutating/Verifying/SourceProducing/Delegating/Network/Risky）
+- **策略分类**：Semantics 分类（Exploratory/Mutating/Verifying/SourceProducing 等）
 - **安全防护**：maxAgentSteps=150、maxConsecutiveHints=3、maxConsecutiveFailures=5、maxFinalCheckHints=2
+- **Edit 后 Lint**：`.go` 文件编辑后自动 gofmt 检查，发现语法错误及时注入提示
 
 ### 上下文管理
 
 - **分层架构**：Layer 0（系统提示词 + 记忆）→ Layer 0.5（Archive 摘要）→ 消息层
 - **自动压缩**：Head-Tail-Summary 重建，保留最近 3 轮，旧消息 LLM 摘要
 - **Token 追踪**：估算 token 用量，触发自动压缩
-- **持久化记忆**：5 段式 markdown 文件（Tech Stack / Active Goals / Completed Tasks / Architecture Map / Preferences）
+- **持久化记忆**：结构化 markdown 文件（Tech Stack / Active Goals / Completed Tasks / Architecture Map / Preferences）
 - **子 Agent 上下文**：独立 Manager，可注入项目上下文 + 工作目录
 
 ### Hook 系统
 
 - **7 个 Hook 点**：PreTurn、PreToolUse、PostToolUse、PostTool、PostTurn、UserSubmit、Stop
 - **Hook 能力**：注入 Hint、阻止工具、要求工具、阻止最终输出、状态补丁
-- **内置 Hook**：`hooks/builtin.go` 实现治理规则
-- **插件 Hook**：支持从外部插件加载 Hook
+- **内置 Hook**：8 个（quota / verification / exploration_exhausted / exploration_guard / explore_cascade / progress_stall / completion_quality / garbled_circuit_breaker）
+- **插件 Hook**：支持从外部插件加载声明式 Hook
 
 ### TUI 界面
 
 - **框架**：Bubble Tea + Lipgloss
-- **Markdown 渲染**：glamour 库，tokyo-night 主题，按宽度缓存渲染器
-- **Diff 预览**：edit 工具结果中展示增删行（绿色/红色背景）
+- **Markdown 渲染**：chroma/glamour 库，tokyo-night 主题
+- **Diff 预览**：edit 工具结果中展示增删行（绿色/红色背景）+ 结构化 diff 模型
 - **鼠标支持**：滚轮滚动消息列表
+- **命令补全**：Tab/Shift+Tab 选择，`/` 弹出补全菜单
 - **组件**：消息列表、输入框、确认栏、滚动条、块渲染、处理状态、splash 屏
 - **子 Agent 显示**：颜色编码的子 Agent 状态
 
@@ -86,10 +90,11 @@
 - **代码索引**：tree-sitter 多语言解析 + 图数据库 + 符号/依赖/全文搜索
 - **插件系统**：manifest 解析 + 命令注册 + Hook 注册 + 子 Agent 注册
 - **技能系统**：bundled 技能 + 文件加载 + 工具化 + 上下文注入
-- **命令系统**：`/plan`、`/sessions`、`/export`、`/skill-name` 等
+- **命令系统**：`/plan`、`/sessions`、`/export`、`/model`、`/context` 等 13 个内置命令 + 动态 skill 命令
 - **MCP 客户端**：stdio 子进程模式，JSON-RPC 通信，工具发现
 - **LLM 层**：Anthropic + OpenAI 双协议，流式 API，重试机制
 - **配置**：provider/model/apiKey/baseURL + 图片生成模型配置
+- **结构化 Diff 模型**：`EDIT_PREVIEW_JSON_B64` base64 编码 diff，TUI 直接解析渲染
 
 ---
 
@@ -112,32 +117,33 @@
 #### 2. 权限系统缺失
 
 ```
-Claude Code 有 21.6k 行权限代码，NekoCode 完全没有：
-  ❌ 工具级权限控制（allow/deny/ask 三级）
+Claude Code 有 21.6k 行权限代码，NekoCode 目前仅有基础确认：
+  ✅ 工具级确认弹框（safe/modify/danger/blocked 四级）
+  ❌ allow/deny 规则持久化
   ❌ 权限规则匹配引擎
-  ❌ 权限更新/持久化
   ❌ 自动模式（auto-approve）
-  ❌ 权限 UI 交互
+  ❌ 权限 UI 交互（一次性记住选择）
 ```
 
-#### 3. 主入口过于简陋
+#### 3. CLI 主入口仍需完善
 
-```go
-// cmd/main.go — 仅 41 行
-当前：只支持 `nekocode`（TUI）和 `nekocode <args>`（非交互）
+```
+当前：TUI (cmd/nekocode-tui) + GUI (main.go) 两个入口
+已实现：
+  ✅ 双前端入口分离
+  ✅ 配置文件读取
 缺失：
   ❌ 子命令系统（init/config/run/doctor/update...）
-  ❌ 命令行参数解析（--model, --config, --debug, --provider...）
+  ❌ 命令行参数解析（--model, --config, --debug...）
   ❌ 版本信息（-v/--version）
   ❌ 帮助系统（-h/--help）
   ❌ 信号处理（优雅关闭 SIGINT/SIGTERM）
-  ❌ 配置文件指定（--config）
 ```
 
 #### 4. 工具种类不足
 
 ```
-已有 15 个工具，缺失的关键工具：
+已有 13 内置 + 3 条件/动态工具，缺失的关键工具：
   ❌ LSP 工具 — 跳转定义、查找引用、诊断
   ❌ notebook 编辑 — Jupyter notebook 支持
   ❌ ask_user_question — 向用户提问
@@ -145,7 +151,7 @@ Claude Code 有 21.6k 行权限代码，NekoCode 完全没有：
   ❌ MCP 资源工具 — list_mcp_resources / read_mcp_resource
   ❌ 定时任务 — schedule_cron
   ❌ config 工具 — 读写配置
-  ❌ 独立 diff 工具 — 代码变更对比（当前 diff.go 只是 edit 内部辅助）
+  ❌ 独立 diff 工具 — 代码变更对比（当前 diff.go 是 edit 内部辅助）
 ```
 
 ---
@@ -155,7 +161,7 @@ Claude Code 有 21.6k 行权限代码，NekoCode 完全没有：
 #### 5. TUI 功能不完整
 
 ```
-已有：Markdown 渲染、diff 预览、鼠标滚轮、基础组件
+已有：Markdown 渲染、diff 预览、鼠标滚轮、命令补全、基础组件
 缺失：
   ❌ 代码语法高亮 — glamour 不支持代码块语法高亮
   ❌ 文件树浏览器 — 无侧边栏文件浏览
@@ -170,41 +176,37 @@ Claude Code 有 21.6k 行权限代码，NekoCode 完全没有：
 #### 6. LLM 层功能不足
 
 ```
-已有：Anthropic + OpenAI 双协议、流式 API、重试机制
+已有：Anthropic + OpenAI 双协议、流式 API、重试机制、Thinking 跨协议控制
 缺失：
   ❌ 模型路由 — 无法按任务类型自动选择模型
   ❌ Fallback 机制 — API 失败时无法自动切换备用模型
   ❌ 并发控制/限流 — 无 API 调用速率限制
   ❌ 精确 token 计数 — 使用估算而非各模型专用 tokenizer
-  ❌ 更多模型支持 — 无 Google Gemini、Mistral、DeepSeek、本地模型
-  ❌ Prompt cache 支持 — 无 Anthropic prompt caching
+  ❌ Google Gemini 支持 — 目前仅支持 OpenAI/Anthropic 兼容协议
   ❌ 请求队列 — 无请求排队和优先级
 ```
 
 #### 7. 上下文管理不完整
 
 ```
-已有：Head-Tail-Summary 压缩、持久化记忆、token 追踪
+已有：Head-Tail-Summary 压缩、持久化记忆、token 追踪、五级预警
 缺失：
   ❌ 智能上下文裁剪 — 基于重要性/相关性而非简单按时间
   ❌ 分层上下文 — 项目级/文件级/代码块级结构
   ❌ RAG 集成 — 无向量数据库检索增强
   ❌ 上下文优先级排序 — 无相关性评分
-  ❌ 记忆自动更新 — 记忆需手动 /remember，无自动提取
+  ❌ 记忆自动更新 — 记忆需手动触发，无自动提取
 ```
 
-#### 8. 命令系统过于简单
+#### 8. 命令系统可扩展
 
 ```
-已有：/plan、/sessions、/export、/skill-name、MCP 工具命令
+已有：/help、/new、/clear、/stats、/summarize、/context、/config、/model、/plan、/plugin、/sessions、/export、动态 skill
 缺失：
-  ❌ Tab 补全
-  ❌ 命令帮助文档（/help）
   ❌ 命令别名
   ❌ 命令历史搜索
+  ❌ /review、/commit、/diff、/doctor、/cost、/status、/resume、/init 等
   ❌ 命令权限分级
-  ❌ 大量实用命令：/review、/commit、/diff、/doctor、/model、/config、
-     /theme、/clear、/cost、/stats、/status、/resume、/init 等
 ```
 
 ---
@@ -229,7 +231,7 @@ Claude Code 有 21.6k 行权限代码，NekoCode 完全没有：
 #### 10. 插件系统
 
 ```
-已有：manifest 解析 + 命令/Hook/Agent 注册
+已有：manifest 解析 + 命令/Hook/Agent 注册 + install/uninstall/enable/disable
 缺失：
   ❌ 插件市场/包管理
   ❌ 插件依赖管理
@@ -254,11 +256,9 @@ Claude Code 有 21.6k 行权限代码，NekoCode 完全没有：
 #### 12. 会话管理
 
 ```
-已有：创建 + 存储 + 查询
+已有：创建 + 存储 + 列出 + 恢复 + 导出
 缺失：
-  ❌ 会话恢复（中断后继续）
   ❌ 会话历史浏览
-  ❌ 会话导出/导入
   ❌ 会话分支/合并
   ❌ 会话自动过期清理
   ❌ 会话搜索
@@ -267,7 +267,7 @@ Claude Code 有 21.6k 行权限代码，NekoCode 完全没有：
 #### 13. 配置系统
 
 ```
-已有：基础 provider/model/apiKey/baseURL 配置
+已有：基础 provider/model/apiKey/baseURL 配置 + image_gen_models
 缺失：
   ❌ 热重载
   ❌ 分层覆盖（默认/用户/项目级）
@@ -297,10 +297,14 @@ Claude Code 有 21.6k 行权限代码，NekoCode 完全没有：
 
 相比 Claude Code，NekoCode 有以下亮点：
 
-1. **代码索引系统（index）** — 4,092 行，自研 tree-sitter 多语言解析 + 图数据库，支持符号搜索、依赖分析和全文搜索，Claude Code 依赖 LSP 无此独立能力
-2. **完善的测试覆盖** — 8,945 行测试代码（27.7%），69 个测试文件，Claude Code 几乎无测试
+1. **代码索引系统（index）** — 自研 tree-sitter 多语言解析 + 图数据库，支持符号搜索、依赖分析和全文搜索，Claude Code 依赖 LSP 无此独立能力
+2. **完善的测试覆盖** — 各模块均有测试代码，Claude Code 几乎无测试
 3. **Go 语言实现** — 编译为单一二进制，部署简单，性能优异，内存安全
 4. **架构清晰** — 模块边界明确，依赖关系简洁，易于理解和贡献
+5. **双前端架构** — TUI + GUI 共享 Bot 核心，BotInterface 12 方法解耦
+6. **Hook 系统成熟** — 7 事件点 + 8 内置 Hook + 声明式插件 Hook
+7. **纯 Go SQLite** — 零 CGO 依赖，简化交叉编译
+8. **Edit Lint 集成** — Go 文件编辑后自动 gofmt 检查，防止语法错误积累
 
 ---
 
@@ -309,20 +313,20 @@ Claude Code 有 21.6k 行权限代码，NekoCode 完全没有：
 ```
 P0（必须立即补齐，否则无法作为 AI 编程助手使用）：
   1. Bash 安全增强（AST 解析 + 路径约束 + 沙箱）
-  2. 权限系统（allow/deny/ask 三级 + 持久化）
+  2. 权限系统（allow/deny 持久化规则）
   3. 补充核心工具（LSP、ask_user_question、task 子工具）
-  4. 完善主入口（子命令 + 参数解析 + 帮助系统）
+  4. 完善 CLI 入口（子命令 + 参数解析 + 帮助系统）
 
 P1（影响核心体验，应尽快实现）：
   5. 代码语法高亮 + 文件树 + 多面板
   6. LLM 模型路由 + Fallback + 更多模型支持
   7. 智能上下文裁剪 + RAG 集成
-  8. 命令系统（补全 + 帮助 + 更多命令）
+  8. 更多命令（/review、/commit、/diff 等）
 
 P2（产品化完善，可逐步迭代）：
   9. MCP SSE/HTTP 传输 + OAuth
   10. 插件市场 + 沙箱隔离
-  11. 会话恢复 + 历史浏览
+  11. 会话分支 + 自动清理
   12. 主题系统 + 配置热重载
   13. 日志/监控/健康检查基础设施
 ```

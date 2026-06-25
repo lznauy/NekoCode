@@ -83,18 +83,31 @@ type SubSlot struct {
 	ColorIdx int
 }
 
-// DisplayBlock carries a persistent tool result for TUI rendering.
+// DisplayBlock carries a persistent tool result for TUI/GUI rendering.
+// Args holds the raw tool-call arguments JSON (e.g. bash command payload),
+// so GUI history views can render the actual command instead of only output.
 type DisplayBlock struct {
 	ToolName string
+	Args     string
 	Content  string
 }
 
-// DisplayMessage is a lightweight message representation for the TUI layer
+// ImageRef carries a generated image reference for GUI rendering.
+type ImageRef struct {
+	Path   string
+	URL    string
+	Width  int
+	Height int
+}
+
+// DisplayMessage is a lightweight message representation for the UI layer
 // to reconstruct chat history from a restored session. Assistant messages
 // with tool calls carry their persistent tool results (edit/write/bash) as
 // Blocks and have empty Content (the text is internal reasoning).
+// Images holds any generated image references (from image_gen etc.).
 type DisplayMessage struct {
 	Role    string
 	Content string
 	Blocks  []DisplayBlock
+	Images  []ImageRef
 }

@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	"nekocode/bot/governance"
-	"nekocode/bot/tools/editdsl"
+	"nekocode/bot/tools/editcore"
 )
 
 type ToolEvent struct {
@@ -156,7 +156,7 @@ func extractPaths(name string, args map[string]any) []string {
 			return []string{filepath.Clean(p)}
 		}
 	case "edit":
-		return cleanPaths(editdsl.ExtractPathsFromPatch(args["patch"]))
+		return cleanPaths(editcore.ExtractPathsFromPatch(args["patch"]))
 	case "bash":
 		cmd, _ := args["command"].(string)
 		return cleanPaths(extractBashReadPaths(cmd))

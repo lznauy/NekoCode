@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"strings"
 
-	"nekocode/bot/tools/editdsl"
+	"nekocode/bot/tools/editcore"
 )
 
 // buildChangedLineSet returns the set of 1-based line numbers in the new file
 // that were affected by the given hunks.
-func buildChangedLineSet(hunks []editdsl.Hunk, oldText, newText string, oldToNew map[int]int) map[int]bool {
+func buildChangedLineSet(hunks []editcore.Hunk, oldText, newText string, oldToNew map[int]int) map[int]bool {
 	result := make(map[int]bool)
 	if len(hunks) == 0 {
 		return result
@@ -20,15 +20,15 @@ func buildChangedLineSet(hunks []editdsl.Hunk, oldText, newText string, oldToNew
 
 	for _, h := range hunks {
 		switch h.Kind {
-		case editdsl.HunkReplace:
+		case editcore.HunkReplace:
 			for _, ni := range findNewLineRange(h, oldToNew, len(newLines)) {
 				if ni >= 1 && ni <= len(newLines) {
 					result[ni] = true
 				}
 			}
-		case editdsl.HunkDelete:
+		case editcore.HunkDelete:
 			// Deleted lines are gone, no new counterpart.
-		case editdsl.HunkInsert:
+		case editcore.HunkInsert:
 			for _, ni := range findNewLineRange(h, oldToNew, len(newLines)) {
 				if ni >= 1 && ni <= len(newLines) {
 					result[ni] = true
@@ -41,20 +41,20 @@ func buildChangedLineSet(hunks []editdsl.Hunk, oldText, newText string, oldToNew
 
 // findNewLineRange returns the 1-based line numbers in the new file that
 // correspond to a hunk's added or replaced payload lines.
-func findNewLineRange(h editdsl.Hunk, oldToNew map[int]int, newLen int) []int {
+func findNewLineRange(h editcore.Hunk, oldToNew map[int]int, newLen int) []int {
 	payloadLen := len(h.Payload)
 	if payloadLen == 0 {
 		return nil
 	}
 	switch h.Kind {
-	case editdsl.HunkInsert:
+	case editcore.HunkInsert:
 		start := computeInsertStart(h, oldToNew, newLen)
 		result := make([]int, payloadLen)
 		for i := 0; i < payloadLen; i++ {
 			result[i] = start + i
 		}
 		return result
-	case editdsl.HunkReplace:
+	case editcore.HunkReplace:
 		start, ok := oldToNew[h.Start]
 		if !ok || start < 1 {
 			return nil
@@ -113,18 +113,18 @@ func writeFullFileView(sb *strings.Builder, newText string, changedSet map[int]b
 
 // computeInsertStart returns the 1-based line number where the first payload
 // row of an insert hunk lands in the post-edit file.
-func computeInsertStart(h editdsl.Hunk, oldToNew map[int]int, newLen int) int {
+func computeInsertStart(h editcore.Hunk, oldToNew map[int]int, newLen int) int {
 	switch h.Cursor {
-	case editdsl.CursorHead:
+	case editcore.CursorHead:
 		return 1
-	case editdsl.CursorTail:
+	case editcore.CursorTail:
 		return newLen - len(h.Payload) + 1
-	case editdsl.CursorBefore:
+	case editcore.CursorBefore:
 		if ns, ok := oldToNew[h.Start]; ok && ns > 0 {
 			return ns - len(h.Payload)
 		}
 		return h.Start
-	case editdsl.CursorAfter:
+	case editcore.CursorAfter:
 		if ns, ok := oldToNew[h.Start]; ok && ns > 0 {
 			return ns + 1
 		}

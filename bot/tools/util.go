@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"nekocode/bot/tools/editdsl"
+	"nekocode/bot/tools/editcore"
 	"nekocode/bot/tools/netclient"
 	"nekocode/bot/tools/pathutil"
 	"nekocode/bot/tools/semantics"
@@ -38,11 +38,11 @@ func ReadSafeFile(path string) ([]byte, error) {
 }
 
 func ExtractPathsFromPatch(patch any) []string {
-	return editdsl.ExtractPathsFromPatch(patch)
+	return editcore.ExtractPathsFromPatch(patch)
 }
 
 func ExtractFirstPathFromPatch(patch string) string {
-	return editdsl.ExtractFirstPathFromPatch(patch)
+	return editcore.ExtractFirstPathFromPatch(patch)
 }
 
 func NewToolHTTPClient(timeout time.Duration) *http.Client {

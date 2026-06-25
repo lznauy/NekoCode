@@ -19,14 +19,14 @@ type Snapshot struct {
 	CreatedAt int64  `json:"created_at"`
 	UpdatedAt int64  `json:"updated_at"`
 
-	SystemPrompt    string        `json:"system_prompt"`
-	Skills          string        `json:"skills"`
-	Memory          string        `json:"memory"`
-	Archive         string        `json:"archive"`
+	SystemPrompt    string          `json:"system_prompt"`
+	Skills          string          `json:"skills"`
+	Memory          string          `json:"memory"`
+	Archive         string          `json:"archive"`
 	Messages        []types.Message `json:"messages"`
-	CompactBoundary int           `json:"compact_boundary"`
+	CompactBoundary int             `json:"compact_boundary"`
 
-	ContextWindow      int `json:"context_window"`
+	ContextWindow    int `json:"context_window"`
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 
@@ -47,17 +47,21 @@ func dir() string {
 
 func New(cwd string) (*Snapshot, error) {
 	now := time.Now()
-	s := &Snapshot{
+	return &Snapshot{
 		ID:        now.UTC().Format("20060102T150405"),
 		CWD:       cwd,
 		CreatedAt: now.Unix(),
 		UpdatedAt: now.Unix(),
-	}
-	return s, s.Save()
+	}, nil
 }
 
 func Load(id string) (*Snapshot, error) {
 	return common.ReadJSONFile[*Snapshot](filepath.Join(dir(), id, "session.json"))
+}
+
+// Delete removes a session directory and all its contents.
+func Delete(id string) error {
+	return os.RemoveAll(filepath.Join(dir(), id))
 }
 
 func (s *Snapshot) Save() error {
@@ -70,14 +74,13 @@ func (s *Snapshot) Save() error {
 	return common.WriteFileWithDir(filepath.Join(d, "session.json"), data, 0o644)
 }
 
-
 // sessionMeta is a lightweight struct for deserializing only metadata from
 // session.json, avoiding the cost of unmarshaling the full Messages array.
 type sessionMeta struct {
-	ID        string `json:"id"`
-	CWD       string `json:"cwd"`
-	CreatedAt int64  `json:"created_at"`
-	UpdatedAt int64  `json:"updated_at"`
+	ID        string     `json:"id"`
+	CWD       string     `json:"cwd"`
+	CreatedAt int64      `json:"created_at"`
+	UpdatedAt int64      `json:"updated_at"`
 	Messages  []struct{} `json:"messages"` // only need len, not content
 }
 

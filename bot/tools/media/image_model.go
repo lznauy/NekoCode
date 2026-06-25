@@ -3,10 +3,12 @@ package media
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"nekocode/bot/config"
 	"nekocode/bot/tools"
 	"nekocode/bot/tools/toolhelpers"
+	"nekocode/common"
 )
 
 func (t *ImageGenTool) resolveModel(args map[string]any) config.ImageGenConfig {
@@ -26,7 +28,7 @@ func (t *ImageGenTool) resolveModel(args map[string]any) config.ImageGenConfig {
 func resolveOutputDir(args map[string]any) (string, error) {
 	outputDir := toolhelpers.OptStringArg(args, "output_dir", "")
 	if outputDir == "" {
-		outputDir, _ = os.Getwd()
+		outputDir = filepath.Join(common.NekocodeHome(), "images")
 	}
 	safeOutputDir, err := tools.ValidatePath(outputDir)
 	if err != nil {

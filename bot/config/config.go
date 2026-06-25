@@ -20,19 +20,19 @@ type ModelConfig struct {
 
 type ImageGenConfig struct {
 	Name      string `json:"name"`
-	Provider  string `json:"provider"`            // e.g. "jimeng"
-	APIKey    string `json:"api_key"`             // Volcengine Access Key ID
-	SecretKey string `json:"secret_key"`          // Volcengine Secret Access Key
-	BaseURL   string `json:"base_url,omitempty"`  // default: https://visual.volcengineapi.com
-	Model     string `json:"model,omitempty"`     // default: jimeng_t2i_v31
+	Provider  string `json:"provider"`           // e.g. "jimeng"
+	APIKey    string `json:"api_key"`            // Volcengine Access Key ID
+	SecretKey string `json:"secret_key"`         // Volcengine Secret Access Key
+	BaseURL   string `json:"base_url,omitempty"` // default: https://visual.volcengineapi.com
+	Model     string `json:"model,omitempty"`    // default: jimeng_t2i_v31
 }
 
 type Config struct {
-	Active          string           `json:"active"`                     // name of the active model
-	ContextWindow   int              `json:"context_window"`
-	FlashModel      string           `json:"flash_model,omitempty"`      // cheap model for sub-tasks (subagents)
-	Models          []ModelConfig    `json:"models"`
-	ImageGenModels  []ImageGenConfig `json:"image_gen_models,omitempty"` // text-to-image models
+	Active         string           `json:"active"` // name of the active model
+	ContextWindow  int              `json:"context_window"`
+	FlashModel     string           `json:"flash_model,omitempty"` // cheap model for sub-tasks (subagents)
+	Models         []ModelConfig    `json:"models"`
+	ImageGenModels []ImageGenConfig `json:"image_gen_models,omitempty"` // text-to-image models
 }
 
 var Default = Config{

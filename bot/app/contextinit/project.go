@@ -44,7 +44,7 @@ func ApplyProjectContextAndIndex(target ContextTarget, opts Options) Result {
 	}
 	projectText := loadProjectText(opts.CWD)
 	if projectText != "" {
-		target.Add("system", projectText)
+		target.Add("system", projectText, "hint")
 	}
 
 	newIndexManager := opts.NewIndexManager
@@ -69,7 +69,7 @@ func injectSkeleton(target ContextTarget, mgr IndexManager, cwd string) {
 	}
 	if graph := mgr.Graph(); graph != nil {
 		if skeleton := graph.FormatSkeleton(cwd); skeleton != "" {
-			target.Add("system", skeleton)
+			target.Add("system", skeleton, "hint")
 		}
 	}
 }

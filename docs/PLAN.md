@@ -13,7 +13,7 @@
 ### 3. Diff 展示 ✅
 ### 4. 结构化内容块 (ContentBlock) ✅
 ### 5. TUI-Bot 解耦 ✅
-- `BotInterface` 接口（10 个方法，从 20 精简至 10）
+- `BotInterface` 接口（12 方法）
 
 ### 6. 项目感知上下文 ✅
 - NEKOCODE.md 自动发现 + @include 递归加载
@@ -53,7 +53,7 @@
 ### 34. 对话历史存取 ✅
 ### 35. NEKOCODE.md 项目上下文 ✅
 ### 36. 子包拆分：config + command ✅
-### 37. 工具实现重组：tools/builtin ✅
+### 37. 工具实现重组 ✅
 ### 38. TUI handlers 合并 ✅
 ### 39. Markdown 渲染移动 ✅
 ### 40. Bundled Skills ✅
@@ -77,8 +77,8 @@
 ### 58. Bot 生命周期管理 ✅
 
 ### 59. BotInterface 精简 ✅
-- 合并相似方法对（ProviderModel、Stats）、配置方法归入 Configure、PendingConfirm 并入 CmdResult
-- 总计：20 方法 → 10 方法
+- 合并相似方法、配置方法归入 Configure、PendingConfirm 并入 CmdResult
+- 总计：12 方法
 
 ### 60. 声明式 Hook 系统 ✅
 - 6 种事件类型，JSON 配置驱动（hooks.json），支持 tool name matcher + 变量展开
@@ -102,10 +102,10 @@
 - 自动换行、视觉行导航、viewport 稳定性修复
 
 ### 67. 子 Agent 结果简化 ✅
-- 删除结构化输出解析（~100 行），Result 结构体精简，FreeOutput 改为默认行为
+- 删除结构化输出解析，Result 结构体精简，FreeOutput 改为默认行为
 
 ### 68. ctxmgr 模块精简 ✅
-- 删除死方法和字段，提取 build.go，全局日志独立为 debug 包，81+ 单元测试
+- 删除死方法和字段，提取 build.go，全局日志独立为 debug 包
 
 ### 69. interface{} → any ✅
 - 全项目替换，零残留
@@ -140,7 +140,6 @@
 - 火山引擎 SigV4 签名 SDK 封装（`bot/sdk/`）
 - `image_gen` 工具：提交任务 → 轮询 → 下载保存本地
 - 配置：`image_gen_models` 数组，支持多文生图模型扩展
-- `image_gen_models[].provider` 可切换不同文生图服务商
 
 ### 77. 代码索引 (Index) ✅
 - Tree-sitter 多语言解析（Go/JS/TS/Python/Rust），提取函数/方法/类/结构体/接口/变量/常量
@@ -154,9 +153,10 @@
 - 替换 go-sqlite3（依赖 CGO）为 zombiezen.com/go/sqlite（纯 Go 实现）
 - 消除 C 编译器依赖，简化交叉编译，提升跨平台兼容性
 
-### 79. Hashline 编辑升级 ✅
-- Patch DSL 解析优化，编辑锚点稳定性提升
-- 3-way merge 恢复机制完善
+### 79. JSON Intent 编辑升级 ✅
+- Read 输出 VIEW 元数据，edit 使用 JSON intent 精确定位
+- 移除旧文本补丁暴露面，改为 ViewStore + 行 hash 校验
+- 同文件多点编辑、结构化 diff preview、安全 rebase 基础能力完善
 
 ### 80. TUI 升级 ✅
 - Bubble Tea v2 生态全面升级
@@ -167,19 +167,29 @@
 - 子 Agent 结果处理修复
 - Agent 循环稳定性改进
 
+### 82. 结构化 Diff 模型 ✅
+- `diff_model.go`：`EDIT_PREVIEW_JSON_B64` base64 编码结构化 diff
+- TUI 可直接解析渲染，替代纯文本 diff 预览
+- 支持 kind/line_no/text 三字段精确描述每行变更
+
+### 83. Edit Lint 集成 ✅
+- `edit_lint.go`：编辑 `.go` 文件后自动执行 gofmt 语法检查
+- 发现语法错误时注入 `[System]` 提示，防止错误积累
+- 框架可扩展支持其他语言的 linter
+
 ## P1.5 — Agent 治理层
 
 ### Agent Governance Layer 🟡
 - 已完成：ToolSemanticClassifier、AgentLedger、FinalCheck 基础规则、Hook Policy Action 骨架、PreToolUse BlockTool、PostTurn BlockFinal/RequireTool、verificationHook 硬化
 - 已完成：ctxmgr 自动压缩锁修复、Index stale/race 修复、ImageGen base64 保存、探索配额统一语义分类
-- 待推进：completion_quality / exploration_exhausted / tool_idle 迁移为 ledger + policy action；Plugin Hook 输出治理；System Prompt 分层瘦身
-- 详见 `docs/AGENT_GOVERNANCE.md`
+- 已完成：8 内置 Hook（quota / verification / exploration_exhausted / exploration_guard / explore_cascade / progress_stall / completion_quality / garbled_circuit_breaker）
+- 待推进：Plugin Hook 输出治理；System Prompt 分层瘦身
 
 ## P2 — 生态与体验
 
-### 82. 后台任务 + 进度
-### 83. Checkpoint / Undo
-### 84. 凭证管理
-### 85. 自动化测试
+### 84. 后台任务 + 进度
+### 85. Checkpoint / Undo
+### 86. 凭证管理
+### 87. 自动化测试
 - Agent 行为回归测试（mock LLM 响应）
 - 工具执行单元测试（mock 文件系统/shell）

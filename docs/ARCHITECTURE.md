@@ -10,8 +10,12 @@ NekoCode 是一个基于 Go 的终端 AI 助手，使用 Bubble Tea v2 构建 TU
 
 ```
 nekocode/
+├── main.go                         # Wails GUI 入口 + gui/dist embed
+├── wails.json                      # Wails 构建配置
 ├── cmd/
-│   └── main.go                     # 程序入口
+│   └── nekocode-tui/
+│       └── main.go                 # TUI 程序入口
+├── guiapp/                         # Wails 后端桥接实现
 ├── common/                         # 公共类型
 │   ├── types.go                    #   DangerLevel / TodoItem / BotStats / CmdResult / SubSlot
 │   ├── confirm.go                  #   ConfirmRequest / ConfirmFunc / PhaseFunc / TodoFunc
@@ -177,10 +181,10 @@ nekocode/
 │   │   │   ├── keys.go             #       内置 key 常量
 │   │   │   ├── types.go            #       内置 Hook 类型定义
 │   │   │   ├── quota.go            #       QuotaHook
-│   │   │   ├── verification.go     #       VerificationHook
+│   │   │   ├── verification.go     #       VerificationHook + GarbledCircuitBreaker
 │   │   │   ├── exploration.go      #       ExplorationExhaustedHook + ExplorationGuardHook
 │   │   │   ├── progress.go         #       ExploreCascadeHook + ProgressStallHook
-│   │   │   └── quality.go          #       CompletionQualityHook + GarbledCircuitBreaker
+│   │   │   └── quality.go          #       CompletionQualityHook
 │   │   └── plugin/                 #     声明式 Hook 实现
 │   │       ├── types.go            #       Point / Event / Hint / Result / Hook 类型
 │   │       ├── config.go           #       配置加载
@@ -275,6 +279,8 @@ nekocode/
 │   │   └── env.go                  #     环境变量
 │   ├── governance/                 #   工具语义分类
 │   │   └── semantics.go            #     Semantics（SourceProducing/Mutating/Verifying）
+│   ├── mcp/                        #   MCP 类型别名（→ extension/mcp）
+│   │   └── mcp.go                  #     类型别名 + NewClient / NewMCPTool
 │   ├── sdk/                        #   外部服务 SDK
 │   │   ├── volcengine_signer.go    #     火山引擎签名入口
 │   │   └── volcengine/             #     火山引擎 SigV4
@@ -305,14 +311,12 @@ nekocode/
 │       │   ├── state.go            #       状态管理
 │       │   ├── cache.go            #       缓存
 │       │   ├── cache_transfer.go   #       缓存传输
+│       │   ├── view_store.go       #       Read VIEW 注册与 edit 校验
+│       │   ├── view_transfer.go    #       ViewStore 主/子 Agent 同步
 │       │   └── ranges.go           #       范围管理
-│       ├── editdsl/                #     Hashline 编辑子系统
+│       ├── editcore/               #     编辑应用 primitives
 │       │   ├── types.go            #       类型定义
 │       │   ├── hash.go             #       文件内容哈希计算
-│       │   ├── patch.go            #       Patch DSL 解析
-│       │   ├── parse_payload.go    #       负载解析
-│       │   ├── parse_range.go      #       范围解析
-│       │   ├── parse_errors.go     #       错误处理
 │       │   ├── apply.go            #       编辑应用
 │       │   ├── apply_blocks.go     #       块编辑
 │       │   ├── apply_blanks.go     #       空行处理
@@ -327,7 +331,17 @@ nekocode/
 │       ├── filesystem/             #   文件系统工具
 │       │   ├── read/               #     tool_read
 │       │   ├── write/              #     tool_write
-│       │   ├── edit/               #     tool_edit（hashline 锚点 + block_resolver）
+│       │   ├── edit/               #     tool_edit（JSON intent + ViewStore 校验 + gofmt lint）
+│       │   │   ├── tool_edit.go    #       Edit 工具入口
+│       │   │   ├── intent.go       #       JSON intent 解析
+│       │   │   ├── block_resolver.go#      块解析
+│       │   │   ├── edit_commit.go  #       编辑提交
+│       │   │   ├── edit_lint.go    #       gofmt 语法检查
+│       │   │   ├── diff.go         #       Diff 生成
+│       │   │   ├── diff_hunks.go   #       Hunk 级别 diff
+│       │   │   ├── diff_lines.go   #       行级别 diff
+│       │   │   ├── diff_model.go   #       结构化 diff 模型
+│       │   │   └── edit_description.md#   工具描述
 │       │   ├── list/               #     tool_list
 │       │   ├── tree/               #     tool_tree
 │       │   └── search/             #     tool_glob + tool_grep
@@ -436,7 +450,7 @@ type BotInterface interface {
 New()
   ├── initConfig()        → config.Load() + prompt.NewBuilder()
   ├── initCtxMgr()        → contextmgr.New() + contextinit.ApplyProjectContextAndIndex()
-  ├── initToolRegistry()  → catalog.RegisterAll() + projecttool（条件注册）+ editdsl.InitBlockResolver()
+  ├── initToolRegistry()  → catalog.RegisterAll() + projecttool（条件注册）+ editcore.InitBlockResolver()
   ├── initHooks()         → hooks.RegisterBuiltin()
   ├── initPlugins()       → plugin.NewRegistry().LoadAll() → loadPluginExtensions()
   ├── initSkills()        → skill.NewRegistry() + bundled + Load()
@@ -549,7 +563,7 @@ type Tool interface {
 
 ### 工具注册
 
-`bot/tools/catalog/register.go` 中的 `RegisterAll()` 注册所有内置工具。`project_info` 在 `bot/app/init_tools.go` 中条件注册（需要 indexMgr 可用），`image_gen` 在 `RegisterAll` 中条件注册（需要 imageGenModels 非空），`skill` 在 `bot/app/init_extensions.go` 中动态注册。
+`bot/tools/catalog/register.go` 中的 `RegisterAll()` 注册所有内置工具（bash/read/write/list/tree/glob/edit/grep/web_search/web_fetch/todo_write/task）。`image_gen` 在 `RegisterAll` 中条件注册（需要 imageGenModels 非空），`project_info` 在 `bot/app/init_tools.go` 中条件注册（需要 indexMgr 可用），`skill` 在 `bot/app/init_extensions.go` 中动态注册。
 
 ### 内置工具
 
@@ -558,7 +572,7 @@ type Tool interface {
 | bash | Sequential | 智能分级（Safe～Forbidden） | `tools/shell/` |
 | read | Parallel | Safe | `tools/filesystem/read/` |
 | write | Sequential | Write | `tools/filesystem/write/` |
-| edit | Sequential | Write（hashline 锚点定位） | `tools/filesystem/edit/` |
+| edit | Sequential | Write（JSON intent + VIEW 锚点定位 + gofmt lint） | `tools/filesystem/edit/` |
 | list | Parallel | Safe | `tools/filesystem/list/` |
 | glob | Parallel | Safe | `tools/filesystem/search/` |
 | grep | Parallel | Safe | `tools/filesystem/search/` |
@@ -579,7 +593,7 @@ type Tool interface {
 | `core/` | Tool 接口 + 格式化 |
 | `runner/` | 工具执行引擎（单工具/批量/预览） |
 | `execution/` | 执行状态 + 缓存传输 |
-| `editdsl/` | Hashline 编辑 DSL（哈希/解析/应用/恢复/快照） |
+| `editcore/` | 编辑 primitives（哈希/应用/恢复/快照） |
 | `filesystem/{read,write,edit,list,tree,search}/` | 文件系统工具 |
 | `shell/` | Bash 执行 + 危险分级 |
 | `web/` | Web 搜索/抓取/HTML2MD |
@@ -658,9 +672,9 @@ PolicyExploreExhausted="policy:explore_exhausted"
 | quota | PreTurn | 读取配额不足时告警，引导优先实质性修改 |
 | verification | PostTurn | 有未完成任务但本轮无工具调用时提醒继续 |
 | exploration_exhausted | PreTurn | 探索调用 ≥10 且分数耗尽时强制行动 |
-| exploration_guard | PreTurn | 探索守卫（新增） |
+| exploration_guard | PreToolUse | 探索配额耗尽时阻止探索性工具 |
 | explore_cascade | PostTool | 本轮启动 ≥4 个 researcher 时提醒综合信息 |
-| progress_stall | PostTool | 连续 50 次只读工具调用后警告开始写代码（原 tool_idle） |
+| progress_stall | PostTool | 连续多轮无进展后警告开始写代码 |
 | completion_quality | PostTurn | 任务全标完成但未修改文件时提醒 |
 | garbled_circuit_breaker | PostTurn | 累计 5 次 garbled 工具调用则强制停止 |
 
@@ -688,6 +702,7 @@ PolicyExploreExhausted="policy:explore_exhausted"
 - Server 生命周期管理（启动/初始化/心跳/tool 列举/关闭）
 - `tools.Tool` 接口适配（MCPTool）
 - 危险等级可配置
+- `bot/mcp/` 提供类型别名，方便外部引用
 
 ## Skill 系统
 
@@ -778,7 +793,7 @@ Model
 | 工具系统 | `bot/tools/` | Tool 接口 + Executor + Registry + FileCache |
 | 工具注册 | `bot/tools/catalog/` | RegisterAll() 内置工具注册清单 |
 | 工具执行 | `bot/tools/runner/` | 执行引擎（单工具/批量/预览） |
-| 编辑 DSL | `bot/tools/editdsl/` | 编辑锚点 · 哈希计算 · Patch DSL · recovery |
+| 编辑 primitives | `bot/tools/editcore/` | Hunk 应用 · 哈希计算 · recovery |
 | 文件系统工具 | `bot/tools/filesystem/` | read/write/edit/list/tree/glob/grep |
 | Shell 工具 | `bot/tools/shell/` | bash 执行与风险分级 |
 | Web 工具 | `bot/tools/web/` | web_search/web_fetch/html2md |

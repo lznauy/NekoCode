@@ -7,37 +7,37 @@ import (
 	"sort"
 	"strings"
 
-	"nekocode/bot/tools/editdsl"
+	"nekocode/bot/tools/editcore"
 )
 
 // sortHunksAscending sorts hunks in-place by ascending position for display.
 // Head-cursor inserts sort first, tail-cursor inserts sort last.
-func sortHunksAscending(hunks []editdsl.Hunk) {
+func sortHunksAscending(hunks []editcore.Hunk) {
 	sort.Slice(hunks, func(i, j int) bool {
 		a, b := hunks[i], hunks[j]
-		if a.Kind == editdsl.HunkInsert && a.Cursor == editdsl.CursorHead {
+		if a.Kind == editcore.HunkInsert && a.Cursor == editcore.CursorHead {
 			return true
 		}
-		if b.Kind == editdsl.HunkInsert && b.Cursor == editdsl.CursorHead {
+		if b.Kind == editcore.HunkInsert && b.Cursor == editcore.CursorHead {
 			return false
 		}
-		if a.Kind == editdsl.HunkInsert && a.Cursor == editdsl.CursorTail {
+		if a.Kind == editcore.HunkInsert && a.Cursor == editcore.CursorTail {
 			return false
 		}
-		if b.Kind == editdsl.HunkInsert && b.Cursor == editdsl.CursorTail {
+		if b.Kind == editcore.HunkInsert && b.Cursor == editcore.CursorTail {
 			return true
 		}
 		return a.Start < b.Start
 	})
 }
 
-func formatHunkDiff(oldLines, newLines []string, hunks []editdsl.Hunk, oldToNew map[int]int) string {
+func formatHunkDiff(oldLines, newLines []string, hunks []editcore.Hunk, oldToNew map[int]int) string {
 	type outLine struct {
 		prefix string
 		text   string
 	}
 
-	sorted := make([]editdsl.Hunk, len(hunks))
+	sorted := make([]editcore.Hunk, len(hunks))
 	copy(sorted, hunks)
 	sortHunksAscending(sorted)
 
@@ -52,7 +52,7 @@ func formatHunkDiff(oldLines, newLines []string, hunks []editdsl.Hunk, oldToNew 
 			ctxStart = 1
 		}
 		ctxBeforeEnd := h.Start
-		if h.Kind == editdsl.HunkInsert && h.Cursor == editdsl.CursorAfter {
+		if h.Kind == editcore.HunkInsert && h.Cursor == editcore.CursorAfter {
 			ctxBeforeEnd = h.Start + 1
 		}
 		for i := ctxStart; i < ctxBeforeEnd; i++ {
@@ -76,7 +76,7 @@ func formatHunkDiff(oldLines, newLines []string, hunks []editdsl.Hunk, oldToNew 
 		}
 
 		switch h.Kind {
-		case editdsl.HunkReplace:
+		case editcore.HunkReplace:
 			for l := h.Start; l <= h.End; l++ {
 				out = append(out, outLine{prefix: fmt.Sprintf("-%d:", l), text: safeGet(oldLines, l-1)})
 				shown[l] = true
@@ -94,14 +94,14 @@ func formatHunkDiff(oldLines, newLines []string, hunks []editdsl.Hunk, oldToNew 
 				out = append(out, outLine{prefix: fmt.Sprintf("+%d:", insStart+k), text: line})
 			}
 
-		case editdsl.HunkDelete:
+		case editcore.HunkDelete:
 			for l := h.Start; l <= h.End; l++ {
 				out = append(out, outLine{prefix: fmt.Sprintf("-%d:", l), text: safeGet(oldLines, l-1)})
 				shown[l] = true
 				lastShown = l
 			}
 
-		case editdsl.HunkInsert:
+		case editcore.HunkInsert:
 			insStart := computeInsertStart(h, oldToNew, len(newLines))
 			for k, line := range h.Payload {
 				out = append(out, outLine{prefix: fmt.Sprintf("+%d:", insStart+k), text: line})
@@ -109,9 +109,9 @@ func formatHunkDiff(oldLines, newLines []string, hunks []editdsl.Hunk, oldToNew 
 		}
 
 		hunkEnd := h.End
-		if h.Kind == editdsl.HunkInsert {
+		if h.Kind == editcore.HunkInsert {
 			hunkEnd = h.Start
-			if h.Cursor == editdsl.CursorAfter {
+			if h.Cursor == editcore.CursorAfter {
 				hunkEnd = h.Start + 1
 			}
 		}

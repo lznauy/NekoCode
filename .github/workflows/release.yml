@@ -41,13 +41,13 @@ jobs:
           CGO_ENABLED: "1"
           CC: /tmp/zigcc
         run: |
-          go build -trimpath -ldflags="-s -w" -o dist/nekocode-linux-${GOARCH} ./cmd/
+          go build -trimpath -ldflags="-s -w" -o dist/nekocode-tui-linux-${GOARCH} ./cmd/nekocode-tui
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nekocode-linux-${{ matrix.goarch }}
-          path: dist/nekocode-linux-${{ matrix.goarch }}
+          name: nekocode-tui-linux-${{ matrix.goarch }}
+          path: dist/nekocode-tui-linux-${{ matrix.goarch }}
 
   build-darwin:
     strategy:
@@ -69,13 +69,13 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "1"
         run: |
-          go build -trimpath -ldflags="-s -w" -o dist/nekocode-darwin-${GOARCH} ./cmd/
+          go build -trimpath -ldflags="-s -w" -o dist/nekocode-tui-darwin-${GOARCH} ./cmd/nekocode-tui
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nekocode-darwin-${{ matrix.goarch }}
-          path: dist/nekocode-darwin-${{ matrix.goarch }}
+          name: nekocode-tui-darwin-${{ matrix.goarch }}
+          path: dist/nekocode-tui-darwin-${{ matrix.goarch }}
 
   release:
     needs: [build-linux, build-darwin]

@@ -37,3 +37,23 @@ func TestDisplayMessagesFiltersInternalMessages(t *testing.T) {
 		t.Fatalf("display messages = %+v, want visible user only", got)
 	}
 }
+
+func TestDisplayMessagesCarriesToolArgs(t *testing.T) {
+	msgs := []types.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []types.ToolCall{
+				{ID: "bash-call", Function: types.FunctionCall{Name: "bash", Arguments: `{"command":"ls -la"}`}},
+			},
+		},
+		{Role: "tool", ToolCallID: "bash-call", Content: "file.txt"},
+	}
+	got := DisplayMessages(msgs, 0)
+	if len(got) != 1 || len(got[0].Blocks) != 1 {
+		t.Fatalf("display messages = %+v, want one assistant bash block", got)
+	}
+	b := got[0].Blocks[0]
+	if b.ToolName != "bash" || b.Args != `{"command":"ls -la"}` {
+		t.Fatalf("block = %+v, want bash command args", b)
+	}
+}

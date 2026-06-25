@@ -1,9 +1,32 @@
 # NekoCode
+.agents/
 .claude/
+.codex/
 .nekocode/
 .understand-anything/
 
+# GUI build artifacts
+/.build/
+/.flatpak-builder/
+/node_modules/
+gui/dist/
+gui/node_modules/
+build/libsigwrap.so
+build-flatpak/
+nekocode.flatpak
+flatpak/.work/
+flatpak/.flatpak-builder/
+packaging/flatpak/.work/
+packaging/flatpak/.flatpak-builder/
+
+# nix build symlinks
+result
+result-dev
+
 # Go
+/nekocode
+/nekocode-gui
+/nekocode-tui
 *.exe
 *.test
 *.out

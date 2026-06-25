@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"strings"
 
-	"nekocode/bot/tools/editdsl"
+	"nekocode/bot/tools/editcore"
 )
 
 // formatEditResult returns the new tag + compact diff preview + full file
 // line-number view so the agent can chain edits to any region without re-reading.
-func formatEditResult(path string, oldText, newText string, hunks []editdsl.Hunk, newTag string, recovered bool, oldToNew map[int]int) string {
+func formatEditResult(path string, oldText, newText string, hunks []editcore.Hunk, newTag string, recovered bool, oldToNew map[int]int) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "[%s#%s]\n", path, newTag)
 
@@ -45,7 +45,7 @@ func formatEditResult(path string, oldText, newText string, hunks []editdsl.Hunk
 			lo = 1
 		}
 		hi := h.End + contextLines
-		if h.Kind == editdsl.HunkInsert {
+		if h.Kind == editcore.HunkInsert {
 			// show context around the insertion anchor
 			lo = h.Start - contextLines
 			if lo < 1 {
@@ -107,7 +107,7 @@ func formatEditResult(path string, oldText, newText string, hunks []editdsl.Hunk
 // buildDiffPreview generates a hunk-aware compact diff. Uses the parsed hunks
 // to produce clean del/ins blocks instead of relying on whole-file LCS, which
 // fragments when old and new text share scattered lines.
-func buildDiffPreview(oldText, newText string, hunks []editdsl.Hunk, oldToNew map[int]int) string {
+func buildDiffPreview(oldText, newText string, hunks []editcore.Hunk, oldToNew map[int]int) string {
 	oldText = strings.TrimRight(oldText, "\n")
 	newText = strings.TrimRight(newText, "\n")
 	oldLines := strings.Split(oldText, "\n")

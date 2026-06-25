@@ -15,7 +15,7 @@ type ReadTool struct {
 
 func (t *ReadTool) Name() string { return "read" }
 func (t *ReadTool) Description() string {
-	return "Read file contents (text, images, PDF). Absolute path required. Use startLine/endLine for range, max 500 lines. Output format: [path#TAG] header followed by lineNo:content lines. TAG is an 8-hex content hash for the edit tool."
+	return "Read file contents (text, images, PDF). Absolute path required. Use startLine/endLine for range, max 500 lines. Text output includes [path#TAG], a VIEW line with rev/window metadata for JSON edit intents, then clean lineNo:content lines."
 }
 
 func (t *ReadTool) Parameters() []tools.Parameter {

@@ -10,7 +10,7 @@ import (
 	"unicode/utf8"
 
 	"nekocode/bot/tools"
-	"nekocode/bot/tools/editdsl"
+	"nekocode/bot/tools/editcore"
 	"nekocode/bot/tools/toolhelpers"
 )
 
@@ -93,10 +93,17 @@ func formatReadOutput(ctx context.Context, path string, lines []string, startLin
 
 	fullText := strings.Join(lines, "\n")
 	tools.RecordSnapshotInContext(ctx, path, fullText)
-	tag := editdsl.ComputeFileHash(fullText)
+	tag := editcore.ComputeFileHash(fullText)
+	view := tools.FileView{}
+	if store := tools.ViewStoreFromContext(ctx); store != nil {
+		view = store.Register(path, lines, startLine, end)
+	}
 
 	var out strings.Builder
 	fmt.Fprintf(&out, "[%s#%s]\n", path, tag)
+	if view.WindowID != "" {
+		fmt.Fprintf(&out, "VIEW rev=%s window=%s lines=%d..%d total=%d\n", view.Revision, view.WindowID, view.StartLine, view.EndLine, view.TotalLines)
+	}
 	for i := range end - start {
 		idx := start + i
 		lineNo := startLine + i

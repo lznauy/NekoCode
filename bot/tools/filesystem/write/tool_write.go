@@ -18,7 +18,7 @@ func (t *WriteTool) Name() string { return "write" }
 func (t *WriteTool) Description() string {
 	return "Create or overwrite a file. Auto-creates parent dirs. " +
 		"For existing files, Read first to confirm current content — the governance layer tracks reads and warns if a file is written without prior Read. " +
-		"For partial changes, prefer Edit (hashline DSL) over Write — it produces minimal diffs and auto-snapshots for undo. " +
+		"For partial changes, prefer Edit JSON intents over Write — it produces minimal diffs and auto-snapshots for undo. " +
 		"Content escaping: use \\n for newlines, \\\" for quotes, \\\\ for backslashes."
 }
 
@@ -51,7 +51,7 @@ func (t *WriteTool) Execute(ctx context.Context, args map[string]any) (string, e
 	if err := os.WriteFile(safePath, []byte(content), mode); err != nil {
 		return "", fmt.Errorf("failed to write file: %w", err)
 	}
-	// Record snapshot for hashline edit recovery within the session.
+	// Record snapshot for read/edit continuity within the session.
 	tag := tools.RecordSnapshot(safePath, content)
 	if tag != "" {
 		return fmt.Sprintf("[%s#%s] Written (%d chars)", safePath, tag, len(content)), nil

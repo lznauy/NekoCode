@@ -23,6 +23,6 @@ jobs:
           exec zig cc -target native "$@"
           EOF
           chmod +x /tmp/zigcc
-      - run: CC=/tmp/zigcc go build ./...
-      - run: CC=/tmp/zigcc go test ./...
-      - run: CC=/tmp/zigcc go vet ./...
+      - run: CC=/tmp/zigcc go build ./cmd/nekocode-tui ./bot/... ./common/... ./llm/... ./tui/... ./guiapp
+      - run: CC=/tmp/zigcc go test ./bot/... ./common/... ./llm/... ./tui/... ./guiapp
+      - run: CC=/tmp/zigcc go vet ./cmd/nekocode-tui ./bot/... ./common/... ./llm/... ./tui/... ./guiapp

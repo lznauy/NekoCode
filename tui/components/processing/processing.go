@@ -10,13 +10,12 @@ import (
 )
 
 const (
-	thinkLines = 6 // fixed height for thinking section
+	thinkLines  = 6 // fixed height for thinking section
 	outputLines = 6 // fixed height for output section
 	maxActivity = 5 // max visible activity entries
 )
 
 type ProcessingItem struct {
-
 	sty          *styles.Styles
 	spinnerView  string
 	statusText   string
@@ -26,9 +25,9 @@ type ProcessingItem struct {
 	compactCount int
 	todos        string
 
-	blocks        []block.ContentBlock
+	blocks       []block.ContentBlock
 	thinkingText strings.Builder
-	outputText    strings.Builder
+	outputText   strings.Builder
 
 	cachedRender  string
 	cachedRenderW int
@@ -54,23 +53,41 @@ func NewProcessingItem(sty *styles.Styles) *ProcessingItem {
 	return &ProcessingItem{sty: sty, cachedTodosW: -1}
 }
 
-func (p *ProcessingItem) SetSpinnerView(view string)  { p.spinnerView = view; p.invalidateLight() }
-func (p *ProcessingItem) SetStatusText(text string)    { p.statusText = text; p.invalidateLight() }
+func (p *ProcessingItem) SetSpinnerView(view string) { p.spinnerView = view; p.invalidateLight() }
+func (p *ProcessingItem) SetStatusText(text string)  { p.statusText = text; p.invalidateLight() }
 func (p *ProcessingItem) SetTokens(prompt, completion int) {
-	p.tokenPrompt = prompt; p.tokenCompl = completion; p.invalidateLight()
+	p.tokenPrompt = prompt
+	p.tokenCompl = completion
+	p.invalidateLight()
 }
 func (p *ProcessingItem) SetCompactCount(n int) {
-	if p.compactCount != n { p.compactCount = n; p.invalidateLight() }
+	if p.compactCount != n {
+		p.compactCount = n
+		p.invalidateLight()
+	}
 }
 func (p *ProcessingItem) SetBlocks(blocks []block.ContentBlock) {
-	p.blocks = blocks; p.thinkingText.Reset(); p.outputText.Reset(); p.invalidate()
+	p.blocks = blocks
+	p.thinkingText.Reset()
+	p.outputText.Reset()
+	p.invalidate()
 }
 func (p *ProcessingItem) SetTodos(text string) {
-	if p.todos != text { p.todos = text; p.cachedTodosW = -1; p.invalidate() }
+	if p.todos != text {
+		p.todos = text
+		p.cachedTodosW = -1
+		p.invalidate()
+	}
 }
 
-func (p *ProcessingItem) AppendThinkingText(delta string) { p.thinkingText.WriteString(delta); p.invalidateLight() }
-func (p *ProcessingItem) AppendStreamText(delta string)    { p.outputText.WriteString(delta); p.invalidateLight() }
+func (p *ProcessingItem) AppendThinkingText(delta string) {
+	p.thinkingText.WriteString(delta)
+	p.invalidateLight()
+}
+func (p *ProcessingItem) AppendStreamText(delta string) {
+	p.outputText.WriteString(delta)
+	p.invalidateLight()
+}
 func (p *ProcessingItem) AddToolBlock(b block.ContentBlock) {
 	// Flush any accumulated stream text into a thought block before the
 	// tool block. Without this, LLM text that arrives between tool calls
@@ -107,10 +124,15 @@ func (p *ProcessingItem) setLastToolContent(toolName, output string) {
 }
 
 func (p *ProcessingItem) AddThinkBlock(content string) {
-	p.blocks = append(p.blocks, block.ContentBlock{Type: block.BlockThought, Content: content}); p.invalidate()
+	p.blocks = append(p.blocks, block.ContentBlock{Type: block.BlockThought, Content: content})
+	p.invalidate()
 }
 func (p *ProcessingItem) Clear() {
-	p.blocks = nil; p.todos = ""; p.thinkingText.Reset(); p.outputText.Reset(); p.invalidate()
+	p.blocks = nil
+	p.todos = ""
+	p.thinkingText.Reset()
+	p.outputText.Reset()
+	p.invalidate()
 }
 
 func (p *ProcessingItem) invalidate() {
@@ -129,7 +151,7 @@ func (p *ProcessingItem) Height(width int) int {
 
 func (p *ProcessingItem) Blocks() []block.ContentBlock { return p.blocks }
 
-func (p *ProcessingItem) OutputText() string    { return p.outputText.String() }
+func (p *ProcessingItem) OutputText() string   { return p.outputText.String() }
 func (p *ProcessingItem) ThinkingText() string { return p.thinkingText.String() }
 
 // AddSubAgent registers a new active sub-agent for header display.
@@ -166,14 +188,14 @@ func (p *ProcessingItem) finishToolBlock(subID, toolName, output string) {
 			continue
 		}
 		if toolName == "edit" {
-			// For successful edits, preserve the preview diff (already shown).
-			// For errors or reverts, replace with the output.
+			// Replace preview with final edit output so relocated/rebased edits
+			// render the exact committed diff.
 			// formatEditResult returns "[path#TAG]\n..." on success;
 			// errors do not start with "[".
 			isError := !strings.HasPrefix(output, "[")
 			isRevert := strings.Contains(output, "Reverted to pre-edit state")
+			b.Content = output
 			if isError || isRevert {
-				b.Content = output
 				b.IsError = true
 			}
 		} else {

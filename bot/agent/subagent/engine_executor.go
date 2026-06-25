@@ -21,6 +21,7 @@ func (e *Engine) newExecutor(cfg RunConfig) (*tools.Executor, func()) {
 	toolState := executor.ExecutionState()
 	if cfg.ToolState != nil {
 		toolState.FileCache.Seed(cfg.ToolState.FileCache)
+		toolState.ViewStore.Seed(cfg.ToolState.ViewStore)
 		if cfg.ToolState.SnapshotStore != nil {
 			toolState.SnapshotStore = cfg.ToolState.SnapshotStore
 		}
@@ -28,6 +29,9 @@ func (e *Engine) newExecutor(cfg RunConfig) (*tools.Executor, func()) {
 	return executor, func() {
 		if cfg.ToolState != nil && cfg.ToolState.FileCache != nil {
 			cfg.ToolState.FileCache.Merge(toolState.FileCache)
+		}
+		if cfg.ToolState != nil && cfg.ToolState.ViewStore != nil {
+			cfg.ToolState.ViewStore.Merge(toolState.ViewStore)
 		}
 	}
 }

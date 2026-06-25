@@ -1,0 +1,13 @@
+{
+  "name": "NekoCode",
+  "outputfilename": "nekocode-gui",
+  "frontend:dir": "gui",
+  "frontend:build": "npm run build",
+  "frontend:install": "npm install",
+  "frontend:dev:watcher": "npm run dev",
+  "build:tags": "webkit2_41",
+  "author": {
+    "name": "NekoCode",
+    "email": ""
+  }
+}

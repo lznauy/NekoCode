@@ -9,12 +9,12 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 
 	"nekocode/bot/tools"
-	"nekocode/bot/tools/editdsl"
+	"nekocode/bot/tools/editcore"
 	"nekocode/bot/treesitter"
 )
 
 // GlobalBlockResolver is the tree-sitter based block resolver shared by edit tools.
-var GlobalBlockResolver editdsl.BlockResolver
+var GlobalBlockResolver editcore.BlockResolver
 
 // blockNodeTypes are the AST node types considered "blocks" for resolution.
 // When the LLM says "replace block N", we find the smallest enclosing node
@@ -67,7 +67,7 @@ var blockNodeTypes = map[string]bool{
 func InitBlockResolver() {
 	langParsers := treesitter.NewParsers()
 
-	GlobalBlockResolver = func(path string, line int) (*editdsl.BlockSpan, error) {
+	GlobalBlockResolver = func(path string, line int) (*editcore.BlockSpan, error) {
 		ext := filepath.Ext(path)
 		parser, ok := langParsers[ext]
 		if !ok {
@@ -103,10 +103,10 @@ func InitBlockResolver() {
 
 // findEnclosingBlock walks the AST bottom-up to find the smallest block
 // node that contains the given 1-based line number.
-func findEnclosingBlock(root *sitter.Node, targetLine int) *editdsl.BlockSpan {
+func findEnclosingBlock(root *sitter.Node, targetLine int) *editcore.BlockSpan {
 	// Use a recursive search: find the deepest node of a block type
 	// whose range contains targetLine.
-	var best *editdsl.BlockSpan
+	var best *editcore.BlockSpan
 	var commentAnchored *sitter.Node // nearest comment whose next sibling is a block
 
 	var walk func(node *sitter.Node)
@@ -132,7 +132,7 @@ func findEnclosingBlock(root *sitter.Node, targetLine int) *editdsl.BlockSpan {
 		// If this is a block-type node, check if it's smaller than current best.
 		if blockNodeTypes[typeName] {
 			if best == nil || (endLine-startLine) < (best.End-best.Start) {
-				best = &editdsl.BlockSpan{Start: startLine, End: endLine}
+				best = &editcore.BlockSpan{Start: startLine, End: endLine}
 			}
 		}
 
@@ -151,7 +151,7 @@ func findEnclosingBlock(root *sitter.Node, targetLine int) *editdsl.BlockSpan {
 			if blockNodeTypes[next.Type()] {
 				sLine := int(next.StartPoint().Row) + 1
 				eLine := int(next.EndPoint().Row) + 1
-				best = &editdsl.BlockSpan{Start: sLine, End: eLine}
+				best = &editcore.BlockSpan{Start: sLine, End: eLine}
 			}
 		}
 	}

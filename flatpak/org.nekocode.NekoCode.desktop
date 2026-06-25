@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=NekoCode
+Comment=Agent coding assistant
+Exec=nekocode-gui
+Icon=org.nekocode.NekoCode
+Categories=Development;IDE;
+Terminal=false
+StartupNotify=true

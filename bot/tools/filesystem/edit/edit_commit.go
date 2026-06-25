@@ -1,7 +1,6 @@
 package edit
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -10,9 +9,17 @@ import (
 
 	"nekocode/bot/debug"
 	"nekocode/bot/tools"
-	"nekocode/bot/tools/editdsl"
+	"nekocode/bot/tools/editcore"
 	"nekocode/bot/tools/toolhelpers"
 )
+
+type preflightResult struct {
+	safePath         string
+	normalizedBefore string
+	result           *editcore.ApplyResult
+	lineEnding       string
+	origMode         os.FileMode
+}
 
 func snapshotUndoPath(safePath string) string {
 	h := sha256.Sum256([]byte(safePath))
@@ -38,31 +45,12 @@ func (t *EditTool) revertSnapshot(patchStr string) (string, error) {
 	return fmt.Sprintf("[%s#%s] Reverted to pre-edit state from %s\n", safePath, newTag, undoFile), nil
 }
 
-func (t *EditTool) commitResult(ctx context.Context, pe preflightResult) (string, error) {
-	finalText := editdsl.RestoreLineEndings(pe.result.Text, pe.lineEnding)
-	writeUndoSnapshot(pe)
-
-	if err := os.WriteFile(pe.safePath, []byte(finalText), pe.origMode); err != nil {
-		return "", fmt.Errorf("failed to write file: %w", err)
-	}
-
-	newTag := tools.RecordSnapshotInContext(ctx, pe.safePath, pe.result.Text)
-	msg := formatEditResult(pe.safePath, pe.normalizedBefore, pe.result.Text, pe.result.ResolvedHunks, newTag, pe.recovered, pe.result.OldToNew)
-	for _, w := range pe.result.Warnings {
-		msg += "\n" + w
-	}
-	if lint := lintFile(pe.safePath); lint != "" {
-		msg += "\n" + lint
-	}
-	return msg, nil
-}
-
 func writeUndoSnapshot(pe preflightResult) {
 	undoFile := snapshotUndoPath(pe.safePath)
 	if err := os.MkdirAll(filepath.Dir(undoFile), 0755); err != nil {
 		return
 	}
-	preEditContent := editdsl.RestoreLineEndings(pe.normalizedBefore, pe.lineEnding)
+	preEditContent := editcore.RestoreLineEndings(pe.normalizedBefore, pe.lineEnding)
 	if err := os.WriteFile(undoFile, []byte(preEditContent), 0644); err != nil {
 		debug.Log("edit: undo snapshot write failed: %v", err)
 	}
