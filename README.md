@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/chat.png" width="45%" alt="聊天界面">&nbsp;
+  <img src="docs/images/tui1.png" width="45%" alt="聊天界面">&nbsp;
   <img src="docs/images/gui1.png" width="45%" alt="GUI 界面">
 </p>
 
