@@ -40,6 +40,11 @@ pkgs.mkShell {
     export PATH="$PATH:$(go env GOPATH)/bin"
     export PKG_CONFIG_PATH="$PKG_CONFIG_PATH''${PKG_CONFIG_PATH:+:}$NIX_PKG_CONFIG_EXTRA"
 
+    # WebKitGTK 2.46+ Wayland 分数缩放 bug：1px 边框被舍入塌缩，强制 XWayland 绕过
+    if [ -z "$GDK_BACKEND" ] && [ -n "$WAYLAND_DISPLAY" ]; then
+      export GDK_BACKEND="x11"
+    fi
+
     echo "== NekoCode GUI dev shell =="
     echo "Go:    $(go version)"
     echo "Node:  $(node --version)"
