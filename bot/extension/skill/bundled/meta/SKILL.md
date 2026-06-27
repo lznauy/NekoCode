@@ -1,7 +1,6 @@
 ---
 name: skill-creator
 description: Create, review, or update SKILL.md files. Use when the user wants to write a new skill, improve an existing one, or audit a skill for issues.
-when_to_use: User says "write a skill", "create a skill", "review this skill", "check my SKILL.md", "audit my skill", or asks how to write effective skills.
 ---
 
 # Skill Creator
@@ -36,8 +35,7 @@ Write the SKILL.md with this structure:
 ```yaml
 ---
 name: <kebab-case>
-description: <one-line summary with trigger keywords>
-when_to_use: <when the model should auto-invoke>
+description: <one-line summary plus trigger guidance; this is what the model uses to decide when to invoke the skill>
 allowed-tools: [bash, read, write]  # if fork mode
 context: inline|fork
 agent: executor                      # if fork mode
@@ -77,8 +75,7 @@ Read the target SKILL.md file.
 Check each item:
 
 - [ ] `name` is kebab-case, short, descriptive
-- [ ] `description` contains trigger keywords users actually type
-- [ ] `when_to_use` gives clear auto-invoke guidance
+- [ ] `description` contains trigger keywords users actually type and clear auto-invoke guidance
 - [ ] Body has numbered steps, not abstract advice
 - [ ] Steps are concrete: reads specific files, runs specific commands
 - [ ] Output format is specified with examples
@@ -103,7 +100,7 @@ N issues: N critical, N warning, N info
 
 Severity levels:
 - **[!]** — missing required fields, broken references, unsafe allowed-tools
-- **[~]** — vague steps, missing when_to_use, description too generic
+- **[~]** — vague steps, description too generic
 - **[-]** — style issues, could be more concise, missing examples
 
 ---

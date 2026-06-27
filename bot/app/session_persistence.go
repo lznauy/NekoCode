@@ -10,7 +10,12 @@ import (
 
 func (b *Bot) saveSession() {
 	if b.sess == nil {
-		return
+		sess, err := session.New(b.cwd)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "session: %v — skipping session persistence\n", err)
+			return
+		}
+		b.sess = sess
 	}
 	snap := b.ctxMgr.Snapshot()
 	b.mu.Lock()

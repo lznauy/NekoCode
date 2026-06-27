@@ -5,7 +5,6 @@ import (
 	"nekocode/bot/index/projecttool"
 	"nekocode/bot/tools"
 	"nekocode/bot/tools/catalog"
-	edittool "nekocode/bot/tools/filesystem/edit"
 )
 
 func (b *Bot) initToolRegistry() {
@@ -15,8 +14,6 @@ func (b *Bot) initToolRegistry() {
 	if b.indexMgr != nil {
 		b.toolRegistry.Register(projecttool.NewProjectInfoTool(b.indexMgr))
 	}
-
-	edittool.InitBlockResolver()
 }
 
 func (b *Bot) initHooks() {

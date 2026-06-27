@@ -1,5 +1,5 @@
-// Package editcore provides deterministic edit primitives: content hashing,
-// hunk application with boundary repair, snapshots, and recovery helpers.
+// Package editcore provides shared edit primitives: content hashing,
+// line-ending normalization, and snapshots.
 package editcore
 
 import (
@@ -58,13 +58,4 @@ func RestoreLineEndings(text, lineEnding string) string {
 	// First normalize to LF, then convert to target.
 	text = NormalizeToLF(text)
 	return strings.ReplaceAll(text, "\n", lineEnding)
-}
-
-// StripBOM removes a leading UTF-8 BOM if present.
-// Returns the BOM (empty if none) and the cleaned text.
-func StripBOM(text string) (bom, clean string) {
-	if len(text) >= 3 && text[0] == 0xEF && text[1] == 0xBB && text[2] == 0xBF {
-		return text[:3], text[3:]
-	}
-	return "", text
 }

@@ -4,12 +4,14 @@ package debug
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
+
+	"nekocode/common"
 )
 
 const (
-	defaultLogDir  = "/tmp/nekocode"
 	defaultLogFile = "nekocode-debug.log"
 	maxSize        = 10 << 20
 )
@@ -57,5 +59,5 @@ func (l *Logger) Log(skip int, level, prefix, format string, args ...any) {
 }
 
 func defaultPath() string {
-	return defaultLogDir + "/" + defaultLogFile
+	return filepath.Join(common.NekocodeLogDir(), defaultLogFile)
 }

@@ -33,8 +33,10 @@ type Model struct {
 	activeSkill     string // skill activated this turn, shown in status bar
 	Suggestions     *components.Suggestions
 	ConfirmBar      *components.ConfirmBar
+	QuestionBar     *components.QuestionBar
 	Scrollbar       *components.Scrollbar
 	confirmCh       chan common.ConfirmRequest
+	questionCh      chan common.QuestionRequest
 	notifyCh        chan string
 }
 
@@ -55,11 +57,13 @@ func NewModel(b BotInterface) *Model {
 		Spinner:     sp,
 		Suggestions: components.NewSuggestions(&sty),
 		ConfirmBar:  components.NewConfirmBar(&sty),
+		QuestionBar: components.NewQuestionBar(&sty),
 		Scrollbar:   components.NewScrollbar(&sty),
 		Width:       80,
 		Height:      24,
 		state:       stateReady,
 		confirmCh:   make(chan common.ConfirmRequest),
+		questionCh:  make(chan common.QuestionRequest),
 		notifyCh:    make(chan string, 8),
 	}
 
@@ -77,6 +81,10 @@ func NewModel(b BotInterface) *Model {
 			}
 		},
 		m.confirmCh,
+		func(req common.QuestionRequest) common.QuestionReply {
+			m.questionCh <- req
+			return <-req.Response
+		},
 	)
 
 	return m
@@ -90,6 +98,9 @@ func (m *Model) resizeMessages() {
 	extra := 0
 	if m.state == stateConfirming {
 		extra += m.ConfirmBar.Height(m.Width, m.Height)
+	}
+	if m.state == stateQuestioning {
+		extra += m.QuestionBar.Height(m.Width, m.Height)
 	}
 	if m.Suggestions.Visible() {
 		extra += m.Suggestions.Height()
@@ -109,6 +120,7 @@ func (m *Model) transitionTo(state chatState) {
 		m.Messages.SetProcessing(false)
 		m.Input.SetSending(false)
 		m.ConfirmBar.Clear()
+		m.QuestionBar.Clear()
 	case stateProcessing:
 		m.processingStart = time.Now()
 		m.setPhase(PhaseWaiting)
@@ -128,6 +140,16 @@ func listenConfirm(ch <-chan common.ConfirmRequest) tea.Cmd {
 			return nil
 		}
 		return confirmMsg{req: req}
+	}
+}
+
+func listenQuestion(ch <-chan common.QuestionRequest) tea.Cmd {
+	return func() tea.Msg {
+		req, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return questionMsg{req: req}
 	}
 }
 

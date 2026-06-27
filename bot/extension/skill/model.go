@@ -5,7 +5,6 @@ package skill
 type Skill struct {
 	Name        string
 	Description string
-	WhenToUse   string
 	Content     string
 	Dir         string
 	Files       []string

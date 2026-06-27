@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"nekocode/bot/tools/textutil"
 )
 
 // ValidatePath resolves path against the current working directory.
@@ -33,14 +31,6 @@ func NormalizePathKey(path string) string {
 	}
 	abs, _ := filepath.Abs(path)
 	return abs
-}
-
-func ReadNormalizedFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	return textutil.NormalizeText(string(data)), nil
 }
 
 func ReadSafeFile(path string) ([]byte, error) {

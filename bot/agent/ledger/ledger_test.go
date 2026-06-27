@@ -57,7 +57,7 @@ func TestFinalCheckAllowsDocumentationOnlyChangesWithoutVerification(t *testing.
 	})
 	l.RecordTool(ToolEvent{
 		Name:      "edit",
-		Args:      map[string]any{"patch": `{"path":"docs/usage.md","base_revision":"A1","ops":[{"op":"replace","target":{"window_id":"W1_1_A1","start_line":1,"end_line":1},"content":"updated"}]}`},
+		Args:      map[string]any{"path": "docs/usage.md", "oldString": "old", "newString": "updated"},
 		Semantics: governance.ClassifyToolCall("edit", nil),
 	})
 

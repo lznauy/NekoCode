@@ -22,7 +22,7 @@ func TestMergeToolResultsPreservesOriginalCallOrder(t *testing.T) {
 	if len(results) != 3 {
 		t.Fatalf("results = %d, want 3", len(results))
 	}
-	if results[0].Output != "read ok" || results[1].Output != "blocked" || results[2].Output != "bash ok" {
+	if results[0].Output != "read ok" || results[1].Error != "blocked" || results[2].Output != "bash ok" {
 		t.Fatalf("unexpected result order: %+v", results)
 	}
 }
@@ -42,5 +42,17 @@ func TestEmitToolResultCallbacksUsesEffectiveOutput(t *testing.T) {
 	}
 	if gotOutput != "ok" {
 		t.Fatalf("callback output = %q, want ok", gotOutput)
+	}
+}
+
+func TestEmitToolResultCallbacksMarksErrors(t *testing.T) {
+	msgs := emitToolResultCallbacks(
+		[]tools.ToolCallItem{{ID: "1", Name: "bash", Args: map[string]any{"command": "false"}}},
+		[]tools.ToolCallResult{{ID: "1", Name: "bash", Error: "command failed: exit status 1"}},
+		nil,
+	)
+
+	if len(msgs) != 1 || msgs[0].Content != "command failed: exit status 1" || !msgs[0].IsError {
+		t.Fatalf("messages = %+v, want failed tool result with IsError", msgs)
 	}
 }

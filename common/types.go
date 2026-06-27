@@ -31,9 +31,9 @@ type CmdResult int
 
 const (
 	CmdNone           CmdResult = iota // no command matched, start agent
-	CmdHandled                          // command handled, no further action
-	CmdConfirming                       // command handled, wait for confirmation
-	CmdSessionResumed                   // session resumed, TUI should reload messages
+	CmdHandled                         // command handled, no further action
+	CmdConfirming                      // command handled, wait for confirmation
+	CmdSessionResumed                  // session resumed, TUI should reload messages
 )
 
 // BotStats carries runtime statistics from the bot to the TUI.
@@ -90,6 +90,7 @@ type DisplayBlock struct {
 	ToolName string
 	Args     string
 	Content  string
+	IsError  bool
 }
 
 // ImageRef carries a generated image reference for GUI rendering.

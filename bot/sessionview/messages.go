@@ -84,6 +84,7 @@ func displayAssistantMessage(msgs []types.Message, idx int, toolNames, toolArgs 
 					ToolName: name,
 					Args:     toolArgs[msgs[next].ToolCallID],
 					Content:  msgs[next].Content,
+					IsError:  msgs[next].IsError,
 				})
 			}
 			if isImageTool(name) {

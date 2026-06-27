@@ -52,37 +52,21 @@ func TestReadToolRecordsSnapshotInExecutionState(t *testing.T) {
 	}
 }
 
-func TestReadToolRegistersEditAwareView(t *testing.T) {
+func TestReadToolDoesNotEmitEditViewMetadata(t *testing.T) {
 	td := testutil.SetupTemp(t)
 	r := &ReadTool{}
 	p := filepath.Join(td, "a.go")
-	state := tools.NewExecutionState()
-	ctx := tools.WithExecutionState(context.Background(), state)
 
-	out, err := r.Execute(ctx, map[string]any{
+	out, err := r.Execute(context.Background(), map[string]any{
 		"path": p, "startLine": float64(1), "endLine": float64(3),
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(out, "\nVIEW rev=") || !strings.Contains(out, " window=W") {
-		t.Fatalf("expected VIEW metadata in read output, got:\n%s", out)
+	if strings.Contains(out, "\nVIEW rev=") || strings.Contains(out, " window=W") {
+		t.Fatalf("did not expect VIEW metadata in read output, got:\n%s", out)
 	}
-	if _, ok := state.ViewStore.Get(extractWindowID(out)); !ok {
-		t.Fatalf("expected view store to contain read window; output:\n%s", out)
+	if !strings.Contains(out, "[") || !strings.Contains(out, "#") || !strings.Contains(out, "1:package main") {
+		t.Fatalf("expected tag header and line output, got:\n%s", out)
 	}
-}
-
-func extractWindowID(out string) string {
-	for _, line := range strings.Split(out, "\n") {
-		if !strings.HasPrefix(line, "VIEW ") {
-			continue
-		}
-		for _, field := range strings.Fields(line) {
-			if strings.HasPrefix(field, "window=") {
-				return strings.TrimPrefix(field, "window=")
-			}
-		}
-	}
-	return ""
 }

@@ -187,6 +187,49 @@ func TestConfig_JSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSave_CreatesConfigFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	cfg := Config{
+		Active:        "default",
+		ContextWindow: 32000,
+		Models: []ModelConfig{
+			{Name: "default", Provider: "openai", Model: "gpt-4o-mini", Protocol: "openai"},
+		},
+	}
+
+	if err := Save(cfg); err != nil {
+		t.Fatalf("Save() returned error: %v", err)
+	}
+	if !Exists() {
+		t.Fatal("expected config file to exist")
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if loaded.Active != "default" || loaded.ContextWindow != 32000 {
+		t.Fatalf("unexpected saved config: %+v", loaded)
+	}
+}
+
+func TestValidate_DuplicateModelName(t *testing.T) {
+	cfg := Config{
+		Active:        "default",
+		ContextWindow: 32000,
+		Models: []ModelConfig{
+			{Name: "default", Provider: "openai", Model: "gpt-4o-mini"},
+			{Name: "default", Provider: "anthropic", Model: "claude-sonnet-4-5"},
+		},
+	}
+
+	if err := Validate(&cfg); err == nil {
+		t.Fatal("expected duplicate model name error")
+	}
+}
+
 func TestConfig_ModelsList(t *testing.T) {
 	cfg := Config{
 		Active: "default",

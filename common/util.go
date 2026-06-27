@@ -14,6 +14,18 @@ func NekocodeHome() string {
 	return filepath.Join(home, ".nekocode")
 }
 
+// NekocodeLogDir returns the user-level ~/.nekocode/logs directory path.
+// All runtime log output (debug logs, panic logs) should live here, not /tmp.
+func NekocodeLogDir() string {
+	return filepath.Join(NekocodeHome(), "logs")
+}
+
+// NekocodeDataDir returns a user-level ~/.nekocode/<subdir> data directory path.
+// Used for runtime artifacts that are not logs (edit undo snapshots, exports, ...).
+func NekocodeDataDir(subdir string) string {
+	return filepath.Join(NekocodeHome(), subdir)
+}
+
 // NekocodeDirs returns the project-level and user-level .nekocode/<subdir> directories.
 func NekocodeDirs(subdir string) []string {
 	var dirs []string

@@ -32,9 +32,9 @@
 | 工具 | 文件 | 说明 |
 |------|------|------|
 | `bash` | tool_bash.go | Shell 执行，三级危险分类（forbidden/destructive/write/safe），heredoc 剥离 |
-| `read` | tool_read.go | 文件读取（文本/图片/PDF），支持行范围，输出 `[path#TAG]` + `VIEW` 元数据 |
+| `read` | tool_read.go | 文件读取（文本/图片/PDF），支持行范围，输出 `[path#TAG]` 和行号内容 |
 | `write` | tool_write.go | 文件创建/覆写，自动创建父目录 |
-| `edit` | tool_edit.go | JSON intent 编辑，基于 Read VIEW 校验，支持 replace/insert/delete，自动快照 + 撤销 + gofmt lint |
+| `edit` | tool_edit.go | oldString/newString 内容锚定编辑，唯一匹配校验，自动快照 + 撤销 + gofmt lint |
 | `list` | tool_list.go | 目录列表 |
 | `tree` | tool_tree.go | 目录树，支持深度/条目限制 |
 | `glob` | tool_glob.go | 文件 glob 匹配，支持 `**` 递归 |

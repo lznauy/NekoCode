@@ -11,24 +11,23 @@ import (
 	"nekocode/bot/tools"
 	"nekocode/bot/tools/editcore"
 	"nekocode/bot/tools/toolhelpers"
+	"nekocode/common"
 )
 
 type preflightResult struct {
 	safePath         string
 	normalizedBefore string
-	result           *editcore.ApplyResult
 	lineEnding       string
-	origMode         os.FileMode
 }
 
 func snapshotUndoPath(safePath string) string {
 	h := sha256.Sum256([]byte(safePath))
 	hash := hex.EncodeToString(h[:])[:16]
-	return filepath.Join("/tmp/nekocode/snapshots", hash+"_"+filepath.Base(safePath)+".pre-edit")
+	return filepath.Join(common.NekocodeDataDir("snapshots"), hash+"_"+filepath.Base(safePath)+".pre-edit")
 }
 
-func (t *EditTool) revertSnapshot(patchStr string) (string, error) {
-	safePath, err := tools.ValidatePath(patchStr)
+func (t *EditTool) revertSnapshot(path string) (string, error) {
+	safePath, err := tools.ValidatePath(path)
 	if err != nil {
 		return "", fmt.Errorf("revert: invalid path: %w", err)
 	}
@@ -42,7 +41,7 @@ func (t *EditTool) revertSnapshot(patchStr string) (string, error) {
 		return "", fmt.Errorf("revert: write failed: %w", err)
 	}
 	newTag := tools.RecordSnapshot(safePath, string(preData))
-	return fmt.Sprintf("[%s#%s] Reverted to pre-edit state from %s\n", safePath, newTag, undoFile), nil
+	return fmt.Sprintf("[%s#%s]\nReverted to pre-edit state (latest snapshot).\nSnapshot: %s\nNote: edit keeps one latest pre-edit snapshot per file; repeated revert restores this same snapshot until another edit records a new one.\n", safePath, newTag, undoFile), nil
 }
 
 func writeUndoSnapshot(pe preflightResult) {

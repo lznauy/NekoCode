@@ -37,11 +37,6 @@ func extractPaths(c tools.ToolCallItem) []string {
 	if p, ok := c.Args["path"].(string); ok && p != "" {
 		return []string{p}
 	}
-	if c.Name == "edit" {
-		if patch, ok := c.Args["patch"].(string); ok {
-			return tools.ExtractPathsFromPatch(patch)
-		}
-	}
 	return nil
 }
 

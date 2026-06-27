@@ -23,6 +23,15 @@ type delta struct {
 	ToolCalls        []types.ToolCall `json:"tool_calls,omitempty"`
 }
 
+type apiMessage struct {
+	Role             string           `json:"role"`
+	Content          string           `json:"content,omitempty"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	Name             string           `json:"name,omitempty"`
+	ToolCalls        []types.ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string           `json:"tool_call_id,omitempty"`
+}
+
 type Client struct {
 	types.BaseClient
 	reasoningEffort string
@@ -139,7 +148,7 @@ func (c *Client) ChatStream(ctx context.Context, messages []types.Message, tools
 
 func (c *Client) buildBody(messages []types.Message, tools []types.ToolDef, stream bool) map[string]any {
 	body := map[string]any{
-		"model": c.Model, "messages": messages,
+		"model": c.Model, "messages": toAPIMessages(messages),
 		"max_tokens": c.GetMaxTokens(), "temperature": c.Temperature,
 		"stream": stream,
 	}
@@ -154,4 +163,19 @@ func (c *Client) buildBody(messages []types.Message, tools []types.ToolDef, stre
 		body["thinking"] = map[string]string{"type": "enabled"}
 	}
 	return body
+}
+
+func toAPIMessages(messages []types.Message) []apiMessage {
+	out := make([]apiMessage, 0, len(messages))
+	for _, m := range messages {
+		out = append(out, apiMessage{
+			Role:             m.Role,
+			Content:          m.Content,
+			ReasoningContent: m.ReasoningContent,
+			Name:             m.Name,
+			ToolCalls:        m.ToolCalls,
+			ToolCallID:       m.ToolCallID,
+		})
+	}
+	return out
 }

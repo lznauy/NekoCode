@@ -11,7 +11,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-
 func (m *Model) startChat(value string) tea.Cmd {
 	resp, cr := m.Bot.ExecuteCommand(value)
 	if cr != common.CmdNone && resp != "" {
@@ -58,6 +57,7 @@ func (m *Model) startAgent(value string) tea.Cmd {
 	return tea.Batch(
 		spinnerTick(),
 		listenConfirm(m.confirmCh),
+		listenQuestion(m.questionCh),
 		m.runAgent(value),
 	)
 }
@@ -195,4 +195,3 @@ func (m *Model) loadSessionMessages() {
 	}
 	m.Messages.GotoBottom()
 }
-

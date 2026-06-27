@@ -44,22 +44,3 @@ func TestNormalizeToLF(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
-
-func TestStripBOM(t *testing.T) {
-	bom, clean := StripBOM("\xEF\xBB\xBFhello")
-	if bom != "\xEF\xBB\xBF" {
-		t.Fatalf("expected BOM, got %q", bom)
-	}
-	if clean != "hello" {
-		t.Fatalf("expected 'hello', got %q", clean)
-	}
-	bom, clean = StripBOM("hello")
-	if bom != "" {
-		t.Fatalf("expected no BOM, got %q", bom)
-	}
-	if clean != "hello" {
-		t.Fatalf("expected 'hello', got %q", clean)
-	}
-}
-
-// ---------------------------------------------------------------------------

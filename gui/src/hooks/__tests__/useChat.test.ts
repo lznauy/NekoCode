@@ -65,18 +65,111 @@ describe('useChat', () => {
     act(() => {
       emit('agent:delta', { id: 1, delta: 'Hello', done: false })
     })
-    await waitFor(() => expect(result.current.msgs[1].text).toBe('Hello'))
+    await waitFor(() => expect(result.current.msgs[1].streamText).toBe('Hello'))
+    expect(result.current.msgs[1].text).toBe('')
     expect(result.current.msgs[1].streaming).toBe(true)
 
     act(() => {
       emit('agent:delta', { id: 1, delta: ' world', done: false })
     })
-    await waitFor(() => expect(result.current.msgs[1].text).toBe('Hello world'))
+    await waitFor(() => expect(result.current.msgs[1].streamText).toBe('Hello world'))
 
     act(() => {
       emit('agent:delta', { id: 1, delta: '', done: true })
     })
     await waitFor(() => expect(result.current.msgs[1].streaming).toBe(false))
+  })
+
+  it('keeps adjacent stream chunks on the same line', async () => {
+    const { result } = renderHook(() => useChat())
+
+    act(() => {
+      result.current.setText('stream')
+    })
+    act(() => {
+      result.current.send()
+    })
+    await waitFor(() => expect(result.current.msgs).toHaveLength(2))
+
+    act(() => {
+      emit('agent:delta', { id: 1, delta: 'checked package.json', done: false })
+      emit('agent:delta', { id: 1, delta: 'reading src/App.tsx', done: false })
+    })
+
+    await waitFor(() => expect(result.current.msgs[1].streamText).toBe('checked package.jsonreading src/App.tsx'))
+  })
+
+  it('separates temporary output at tool boundaries', async () => {
+    const { result } = renderHook(() => useChat())
+
+    act(() => {
+      result.current.setText('stream')
+    })
+    act(() => {
+      result.current.send()
+    })
+    await waitFor(() => expect(result.current.msgs).toHaveLength(2))
+
+    act(() => {
+      emit('agent:delta', { id: 1, delta: '先检查配置', done: false })
+      emit('agent:tool_start', { id: 'r1', toolName: 'read', args: '{"path":"a"}', preview: '', blocked: false })
+      emit('agent:delta', { id: 1, delta: '再检查入口', done: false })
+    })
+
+    await waitFor(() => expect(result.current.msgs[1].streamText).toBe('先检查配置\n再检查入口'))
+  })
+
+  it('replaces transient stream text with final done output', async () => {
+    const { result } = renderHook(() => useChat())
+
+    act(() => {
+      result.current.setText('finalize')
+    })
+    act(() => {
+      result.current.send()
+    })
+    await waitFor(() => expect(result.current.msgs).toHaveLength(2))
+
+    act(() => {
+      emit('agent:delta', { id: 1, delta: 'checking files', done: false })
+      emit('agent:todos', { items: [{ content: 'inspect', status: 'completed' }] })
+    })
+    await waitFor(() => expect(result.current.msgs[1].streamText).toBe('checking files'))
+    await waitFor(() => expect(result.current.msgs[1].todos).toHaveLength(1))
+
+    act(() => {
+      emit('agent:done', { output: 'Final answer', error: '' })
+    })
+
+    await waitFor(() => expect(result.current.msgs[1].text).toBe('Final answer'))
+    expect(result.current.msgs[1].streamText).toBe('')
+    expect(result.current.msgs[1].todos).toBeUndefined()
+    expect(result.current.msgs[1].phase).toBeUndefined()
+    expect(result.current.msgs[1].tokens).toBeUndefined()
+  })
+
+  it('keeps only persistent tool metadata after a successful run', async () => {
+    const { result } = renderHook(() => useChat())
+
+    act(() => {
+      result.current.setText('edit')
+    })
+    act(() => {
+      result.current.send()
+    })
+    await waitFor(() => expect(result.current.msgs).toHaveLength(2))
+
+    act(() => {
+      emit('agent:tool_start', { id: 'ls1', toolName: 'ls', args: '', preview: '', blocked: false })
+      emit('agent:tool_done', { id: 'ls1', toolName: 'ls', args: '', output: 'files', isError: false })
+      emit('agent:tool_start', { id: 'edit1', toolName: 'edit', args: '{"path":"a.go"}', preview: '+1:change', blocked: false })
+      emit('agent:tool_done', { id: 'edit1', toolName: 'edit', args: '{"path":"a.go"}', output: '[a.go#TAG]\n+1:change', isError: false })
+      emit('agent:done', { output: 'Done', error: '' })
+    })
+
+    await waitFor(() => expect(result.current.msgs[1].text).toBe('Done'))
+    expect(result.current.msgs[1].phase).toBe('ready')
+    expect(result.current.msgs[1].steps?.map((s) => s.toolName)).toEqual(['edit'])
   })
 
   it('adds tool steps to the current Run', async () => {
@@ -117,23 +210,73 @@ describe('useChat', () => {
     await waitFor(() => expect(result.current.msgs).toHaveLength(2))
 
     act(() => {
-      emit('agent:tool_start', { id: 't1', toolName: 'read', args: '{"path":"a"}', preview: 'preview-a', blocked: false })
+      emit('agent:tool_start', { id: 't1', toolName: 'ls', args: '{"path":"a"}', preview: 'preview-a', blocked: false })
       emit('agent:tool_start', { id: 't2', toolName: 'bash', args: '', preview: 'preview-b', blocked: false })
     })
     await waitFor(() => expect(result.current.msgs[1].steps).toHaveLength(2))
 
     act(() => {
-      emit('agent:tool_done', { id: 't1', toolName: 'read', args: '', output: 'content-a', isError: false })
+      emit('agent:tool_done', { id: 't1', toolName: 'ls', args: '', output: 'content-a', isError: false })
       emit('agent:tool_done', { id: 't2', toolName: 'bash', args: '', output: 'content-b', isError: false })
     })
     await waitFor(() => expect(result.current.msgs[1].steps![1].status).toBe('done'))
 
-    const readStep = result.current.msgs[1].steps!.find((s) => s.toolName === 'read')!
+    const readStep = result.current.msgs[1].steps!.find((s) => s.toolName === 'ls')!
     const bashStep = result.current.msgs[1].steps!.find((s) => s.toolName === 'bash')!
     expect(readStep.output).toBe('')
     expect(readStep.preview).toBeUndefined()
     expect(bashStep.output).toBe('content-b')
     expect(bashStep.preview).toBe('preview-b')
+  })
+
+  it('compacts successful read tools out of the visible step list', async () => {
+    const { result } = renderHook(() => useChat())
+
+    act(() => {
+      result.current.setText('inspect')
+    })
+    act(() => {
+      result.current.send()
+    })
+    await waitFor(() => expect(result.current.msgs).toHaveLength(2))
+
+    act(() => {
+      emit('agent:tool_start', { id: 'r1', toolName: 'read', args: '{"path":"a"}', preview: '', blocked: false })
+      emit('agent:tool_done', { id: 'r1', toolName: 'read', args: '{"path":"a"}', output: 'content', isError: false })
+    })
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 60))
+    })
+    expect(result.current.msgs[1].steps).toHaveLength(0)
+
+    act(() => {
+      emit('agent:tool_done', { id: 'r2', toolName: 'read', args: '{"path":"missing"}', output: 'not found', isError: true })
+    })
+
+    await waitFor(() => expect(result.current.msgs[1].steps).toHaveLength(1))
+    expect(result.current.msgs[1].steps![0].isError).toBe(true)
+  })
+
+  it('hides successful todo_write tool rows while keeping todos visible', async () => {
+    const { result } = renderHook(() => useChat())
+
+    act(() => {
+      result.current.setText('plan')
+    })
+    act(() => {
+      result.current.send()
+    })
+    await waitFor(() => expect(result.current.msgs).toHaveLength(2))
+
+    act(() => {
+      emit('agent:tool_start', { id: 'todo1', toolName: 'todo_write', args: '{}', preview: '', blocked: false })
+      emit('agent:tool_done', { id: 'todo1', toolName: 'todo_write', args: '{}', output: 'ok', isError: false })
+      emit('agent:todos', { items: [{ content: 'review', status: 'in_progress' }] })
+    })
+
+    await waitFor(() => expect(result.current.msgs[1].todos).toHaveLength(1))
+    expect(result.current.msgs[1].steps).toHaveLength(0)
   })
 
   it('uses final edit diff on success and error output on failure', async () => {

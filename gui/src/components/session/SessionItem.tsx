@@ -66,11 +66,11 @@ export function SessionItem({ session, active, onClick, onDelete }: SessionItemP
       className={cn(
         'group relative w-full rounded-lg border px-3 py-2.5 text-left transition-all active:scale-[0.99]',
         'border-transparent hover:border-border/80 hover:bg-surface-2',
-        active && 'bg-surface-3 border-border/70 shadow-sm',
+        active && 'bg-surface-3 border-primary/40',
       )}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className={cn('truncate text-[13px] font-medium', active ? 'text-text' : 'text-text-2 group-hover:text-text')}>
+        <span className={cn('truncate text-[13px] font-medium', active ? 'text-primary' : 'text-text-2 group-hover:text-text')}>
           {session.id}
         </span>
         <button

@@ -16,12 +16,14 @@
 //	agent:metrics       { prompt, completion, cacheHit, ... } — Run 结束时的统计
 //	agent:status        { status }                            — UI 顶层状态 (idle/thinking/running)
 //	agent:done          { output, error }                    — Run 完结
+//	agent:question      { id, questions }                     — 用户问题请求
 //	agent:step          {...}                                  — 兜底: 未分发的 action
 package guiapp
 
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -32,6 +34,7 @@ import (
 	"time"
 
 	"nekocode/bot"
+	botapp "nekocode/bot/app"
 	"nekocode/bot/session"
 	"nekocode/common"
 
@@ -55,6 +58,9 @@ type App struct {
 	confirmMu sync.Mutex
 	confirmCh chan common.ConfirmRequest
 	confs     map[string]common.ConfirmRequest // id -> req, 等待前端回复
+
+	questionMu sync.Mutex
+	questions  map[string]common.QuestionRequest
 }
 
 // NewApp 创建 App 实例，bot.Bot 在这里初始化以消除 startup/domReady 竞态。
@@ -63,6 +69,7 @@ func NewApp() *App {
 		bot:       bot.New(),
 		pending:   make(map[string][]string),
 		confs:     make(map[string]common.ConfirmRequest),
+		questions: make(map[string]common.QuestionRequest),
 		confirmCh: make(chan common.ConfirmRequest),
 	}
 }
@@ -102,13 +109,25 @@ func (a *App) DomReady(_ context.Context) {
 			"id":       id,
 			"toolName": req.ToolName,
 			"args":     compactConfirmArgs(req),
+			"preview":  confirmPreview(req),
 			"level":    int(req.Level),
 		})
 		// 阻塞等前端调 ReplyConfirm 写回。
 		resp := <-req.Response
 		return resp
 	}
-	a.bot.Configure(confirmFn, phaseFn, todoFn, nil, a.confirmCh)
+	questionFn := func(req common.QuestionRequest) common.QuestionReply {
+		id := uuid.NewString()
+		a.questionMu.Lock()
+		a.questions[id] = req
+		a.questionMu.Unlock()
+		runtime.EventsEmit(a.ctx, "agent:question", map[string]any{
+			"id":        id,
+			"questions": req.Questions,
+		})
+		return <-req.Response
+	}
+	a.bot.Configure(confirmFn, phaseFn, todoFn, nil, a.confirmCh, questionFn)
 }
 
 // compactConfirmArgs 提取确认弹窗需要显示的 args。
@@ -119,10 +138,17 @@ func compactConfirmArgs(req common.ConfirmRequest) map[string]any {
 		if p, ok := req.Args["path"].(string); ok {
 			m["path"] = p
 		}
-		if p, ok := req.Args["patch"].(string); ok && len(p) > 200 {
-			m["patch"] = p[:200] + "..."
-		} else {
-			m["patch"] = p
+		if old, ok := req.Args["oldString"].(string); ok {
+			m["oldString"] = truncateConfirmString(old)
+		}
+		if next, ok := req.Args["newString"].(string); ok {
+			m["newString"] = truncateConfirmString(next)
+		}
+		if replaceAll, ok := req.Args["replaceAll"].(bool); ok {
+			m["replaceAll"] = replaceAll
+		}
+		if revert, ok := req.Args["revert"].(bool); ok {
+			m["revert"] = revert
 		}
 	case "write":
 		if p, ok := req.Args["path"].(string); ok {
@@ -135,14 +161,31 @@ func compactConfirmArgs(req common.ConfirmRequest) map[string]any {
 		}
 	default:
 		for k, v := range req.Args {
+			if k == "_preview" {
+				continue
+			}
 			if s, ok := v.(string); ok && len(s) > 200 {
 				m[k] = s[:200] + "..."
-			} else if k == "patch" || k == "content" || k == "path" || k == "command" {
+			} else if k == "content" || k == "path" || k == "command" {
 				m[k] = v
 			}
 		}
 	}
 	return m
+}
+
+func truncateConfirmString(s string) string {
+	if len(s) > 200 {
+		return s[:200] + "..."
+	}
+	return s
+}
+
+func confirmPreview(req common.ConfirmRequest) string {
+	if p, ok := req.Args["_preview"].(string); ok {
+		return p
+	}
+	return ""
 }
 
 // ---------- 工具 id 关联 ----------
@@ -270,10 +313,7 @@ func (a *App) dispatchStep(action, toolName, toolArgs, output string) {
 		})
 	case "execute_tool":
 		id, _ := a.popPendingTool(toolName)
-		isError := false
-		if toolName == "edit" {
-			isError = !strings.HasPrefix(strings.TrimSpace(output), "[")
-		}
+		isError := isToolError(toolName, output)
 		runtime.EventsEmit(a.ctx, "agent:tool_done", map[string]any{
 			"toolName": toolName,
 			"args":     toolArgs,
@@ -306,6 +346,22 @@ func (a *App) dispatchStep(action, toolName, toolArgs, output string) {
 	}
 }
 
+func isToolError(toolName, output string) bool {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return false
+	}
+	if toolName == "edit" {
+		return !strings.HasPrefix(trimmed, "[")
+	}
+	return trimmed == "cancelled" ||
+		strings.HasPrefix(trimmed, "forbidden:") ||
+		strings.HasPrefix(trimmed, "plan mode:") ||
+		strings.HasPrefix(trimmed, "blocked") ||
+		strings.HasPrefix(trimmed, "command failed:") ||
+		strings.HasPrefix(trimmed, "command timed out")
+}
+
 func parseIntSafe(s string) int {
 	n := 0
 	for _, r := range s {
@@ -334,24 +390,35 @@ func (a *App) ProviderModel() string {
 	return p + "|" + m
 }
 
+func (a *App) GetConfig() botapp.ConfigSnapshot {
+	return a.bot.ConfigSnapshot()
+}
+
+func (a *App) SaveConfig(cfg botapp.ConfigSnapshot) (botapp.ConfigSnapshot, error) {
+	return a.bot.ApplyConfig(cfg)
+}
+
+func (a *App) GetSkillManagement() botapp.SkillManagementSnapshot {
+	return a.bot.SkillManagementSnapshot()
+}
+
+func (a *App) RefreshSkillManagement() botapp.SkillManagementSnapshot {
+	return a.bot.RefreshSkillManagement()
+}
+
+func (a *App) SetPluginEnabled(name string, enabled bool) (botapp.SkillManagementSnapshot, error) {
+	return a.bot.SetPluginEnabled(name, enabled)
+}
+
 // ---------- Session 管理 ----------
 
-// ListSessions 返回所有已落盘的会话元数据，如果为空则加上当前内存会话（不落盘）。
+// ListSessions 返回所有已落盘的会话元数据；未落盘的当前内存会话不显示在历史列表中。
 func (a *App) ListSessions() []session.Meta {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	list := session.List()
-	if len(list) == 0 {
-		// initSession 里已创建内存会话，返回其元数据（不落盘）。
-		if sid := a.bot.CurrentSessionID(); sid != "" {
-			return []session.Meta{{
-				ID:        sid,
-				CWD:       a.bot.CWD(),
-				CreatedAt: time.Now().Unix(),
-				UpdatedAt: time.Now().Unix(),
-				MsgCount:  0,
-			}}
-		}
+	if list == nil {
+		return []session.Meta{}
 	}
 	return list
 }
@@ -383,7 +450,7 @@ func (a *App) LoadSession(id string) ([]common.DisplayMessage, error) {
 	return a.bot.SessionMessages(), nil
 }
 
-// DeleteSession 删除指定会话。若删除的是当前会话，会后端内存里新建一个（不落盘）。
+// DeleteSession 删除指定会话。若删除的是当前会话，会清空上下文并等待下一次真实对话再创建会话。
 func (a *App) DeleteSession(id string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -393,12 +460,8 @@ func (a *App) DeleteSession(id string) error {
 	}
 
 	if a.bot.CurrentSessionID() == id {
-		sess, err := session.New(a.bot.CWD())
-		if err != nil {
-			return err
-		}
 		a.bot.ClearContext()
-		a.bot.SetSession(sess)
+		a.bot.SetSession(nil)
 	}
 
 	return nil
@@ -476,5 +539,22 @@ func (a *App) ReplyConfirm(id string, ok bool) {
 	a.confirmMu.Unlock()
 	if found {
 		req.Response <- ok
+	}
+}
+
+// ReplyQuestion 由前端调用，回复 agent 发起的问题。
+func (a *App) ReplyQuestion(id string, answersJSON string, rejected bool) {
+	a.questionMu.Lock()
+	req, found := a.questions[id]
+	if found {
+		delete(a.questions, id)
+	}
+	a.questionMu.Unlock()
+	if found {
+		var answers [][]string
+		if answersJSON != "" {
+			_ = json.Unmarshal([]byte(answersJSON), &answers)
+		}
+		req.Response <- common.QuestionReply{Answers: answers, Rejected: rejected}
 	}
 }

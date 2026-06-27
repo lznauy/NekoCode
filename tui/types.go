@@ -12,7 +12,7 @@ type BotInterface interface {
 	SkillHint() (string, bool)
 	Stats() common.BotStats
 	CommandNames() []string
-	Configure(confirmFn common.ConfirmFunc, phaseFn common.PhaseFunc, todoFn common.TodoFunc, notifyFn func(string), confirmCh chan common.ConfirmRequest)
+	Configure(confirmFn common.ConfirmFunc, phaseFn common.PhaseFunc, todoFn common.TodoFunc, notifyFn func(string), confirmCh chan common.ConfirmRequest, questionFn common.QuestionFunc)
 	SetCallbacks(textFn, reasonFn func(string))
 	Steer(msg string)
 	Abort()
@@ -31,6 +31,7 @@ const (
 	stateReady chatState = iota
 	stateProcessing
 	stateConfirming
+	stateQuestioning
 )
 
 type doneMsg struct {
@@ -42,4 +43,8 @@ type doneMsg struct {
 
 type confirmMsg struct {
 	req common.ConfirmRequest
+}
+
+type questionMsg struct {
+	req common.QuestionRequest
 }

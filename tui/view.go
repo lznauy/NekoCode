@@ -1,5 +1,6 @@
 // view.go — tea.View 视图布局组装。
 package tui
+
 import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -34,6 +35,11 @@ func (m *Model) View() tea.View {
 
 	if m.state == stateConfirming {
 		if bar := m.ConfirmBar.View(m.Width, m.Height); bar != "" {
+			parts = append(parts, bar)
+		}
+	}
+	if m.state == stateQuestioning {
+		if bar := m.QuestionBar.View(m.Width, m.Height); bar != "" {
 			parts = append(parts, bar)
 		}
 	}

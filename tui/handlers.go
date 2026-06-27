@@ -89,6 +89,44 @@ func (m *Model) handleConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up":
+		m.QuestionBar.Move(-1)
+		return m, nil
+	case "down", "tab":
+		m.QuestionBar.Move(1)
+		return m, nil
+	case "backspace":
+		m.QuestionBar.Backspace()
+		return m, nil
+	case "space":
+		if m.QuestionBar.CustomActive() {
+			m.QuestionBar.Type(" ")
+			return m, nil
+		}
+		m.QuestionBar.Toggle()
+		return m, nil
+	case "enter":
+		m.QuestionBar.Submit()
+	case "esc", "ctrl+c":
+		m.QuestionBar.Reject()
+	default:
+		if len([]rune(msg.String())) == 1 {
+			m.QuestionBar.Type(msg.String())
+		}
+		return m, nil
+	}
+	m.state = m.preConfirmState
+	m.resizeMessages()
+	if m.state == stateProcessing {
+		return m, tea.Batch(listenConfirm(m.confirmCh), listenQuestion(m.questionCh), spinnerTick())
+	}
+	return m, nil
+}
+
+// --- keys: question ---
+
 // --- keys: dispatch ---
 
 func (m *Model) handleKeyPress(msg tea.KeyPressMsg) tea.Cmd {
@@ -239,6 +277,10 @@ func (m *Model) handleSpinnerTick(msg spinner.TickMsg) tea.Cmd {
 	m.Spinner, _ = m.Spinner.Update(msg)
 
 	if m.state == stateConfirming {
+		m.Messages.SetSpinnerView("")
+		return nil
+	}
+	if m.state == stateQuestioning {
 		m.Messages.SetSpinnerView("")
 		return nil
 	}

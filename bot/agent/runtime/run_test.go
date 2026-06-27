@@ -243,6 +243,47 @@ func TestPreEditBlockReasonRequiresLedgerReadForExistingFile(t *testing.T) {
 	}
 }
 
+func TestPreEditBlockReasonAllowsEditWithSufficientAnchor(t *testing.T) {
+	a := newTestAgent()
+	path := t.TempDir() + "/target.go"
+	if err := os.WriteFile(path, []byte("package main\n\nfunc main() {\n\tmessage := \"hello\"\n\tprintln(message)\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tc := tools.ToolCallItem{Name: "edit", Args: map[string]any{
+		"path": path,
+		"oldString": strings.Join([]string{
+			"package main",
+			"",
+			"func main() {",
+			"\tmessage := \"hello\"",
+			"\tprintln(message)",
+			"}",
+		}, "\n"),
+		"newString": "package main\n",
+	}}
+	if got := a.preEditBlockReason(tc); got != "" {
+		t.Fatalf("expected sufficiently anchored edit to pass without read, got %q", got)
+	}
+}
+
+func TestPreEditBlockReasonBlocksEditWithShortAnchor(t *testing.T) {
+	a := newTestAgent()
+	path := t.TempDir() + "/target.go"
+	if err := os.WriteFile(path, []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tc := tools.ToolCallItem{Name: "edit", Args: map[string]any{
+		"path":      path,
+		"oldString": "main",
+		"newString": "app",
+	}}
+	if got := a.preEditBlockReason(tc); got == "" {
+		t.Fatal("expected short unread edit to be blocked")
+	}
+}
+
 func TestPreEditBlockReasonAllowsNewFile(t *testing.T) {
 	a := newTestAgent()
 	path := t.TempDir() + "/new.go"

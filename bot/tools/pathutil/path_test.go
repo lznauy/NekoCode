@@ -23,17 +23,3 @@ func TestValidatePath(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
-
-func TestReadNormalizedFile(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "a.txt")
-	if err := os.WriteFile(p, []byte("\x1b[31ma\r\nb\x1b[0m"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	got, err := ReadNormalizedFile(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "a\nb" {
-		t.Fatalf("ReadNormalizedFile() = %q", got)
-	}
-}

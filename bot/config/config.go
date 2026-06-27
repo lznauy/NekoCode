@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"nekocode/common"
 )
@@ -16,6 +17,15 @@ type ModelConfig struct {
 	Model    string `json:"model"`
 	BaseURL  string `json:"base_url,omitempty"`
 	Protocol string `json:"protocol,omitempty"`
+}
+
+func Path() string {
+	return filepath.Join(common.NekocodeHome(), "config.json")
+}
+
+func Exists() bool {
+	_, err := os.Stat(Path())
+	return err == nil
 }
 
 type ImageGenConfig struct {
@@ -61,7 +71,7 @@ func Load() (*Config, error) {
 	// cannot pollute the package-level global.
 	cfg := Default
 
-	configPath := filepath.Join(common.NekocodeHome(), "config.json")
+	configPath := Path()
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return &cfg, nil
@@ -88,6 +98,93 @@ func Load() (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+func Save(cfg Config) error {
+	if err := Validate(&cfg); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return common.WriteFileWithDir(Path(), data, 0o600)
+}
+
+func Validate(cfg *Config) error {
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if cfg.ContextWindow <= 0 {
+		cfg.ContextWindow = Default.ContextWindow
+	}
+	if len(cfg.Models) == 0 {
+		return fmt.Errorf("at least one model is required")
+	}
+
+	seen := make(map[string]bool, len(cfg.Models))
+	for i := range cfg.Models {
+		m := &cfg.Models[i]
+		m.Name = strings.TrimSpace(m.Name)
+		m.Provider = strings.TrimSpace(m.Provider)
+		m.APIKey = strings.TrimSpace(m.APIKey)
+		m.Model = strings.TrimSpace(m.Model)
+		m.BaseURL = strings.TrimSpace(m.BaseURL)
+		m.Protocol = strings.TrimSpace(m.Protocol)
+
+		if m.Name == "" {
+			return fmt.Errorf("model #%d name is required", i+1)
+		}
+		if seen[m.Name] {
+			return fmt.Errorf("duplicate model name %q", m.Name)
+		}
+		seen[m.Name] = true
+		if m.Provider == "" {
+			return fmt.Errorf("model %q provider is required", m.Name)
+		}
+		if m.Model == "" {
+			return fmt.Errorf("model %q model id is required", m.Name)
+		}
+		if m.Protocol != "" && m.Protocol != "openai" && m.Protocol != "anthropic" {
+			return fmt.Errorf("model %q protocol must be openai or anthropic", m.Name)
+		}
+	}
+
+	cfg.Active = strings.TrimSpace(cfg.Active)
+	if cfg.Active == "" {
+		cfg.Active = cfg.Models[0].Name
+	}
+	if !seen[cfg.Active] {
+		return fmt.Errorf("active model %q does not exist", cfg.Active)
+	}
+	cfg.FlashModel = strings.TrimSpace(cfg.FlashModel)
+	if cfg.FlashModel != "" && !seen[cfg.FlashModel] {
+		return fmt.Errorf("flash model %q does not exist", cfg.FlashModel)
+	}
+
+	imageSeen := make(map[string]bool, len(cfg.ImageGenModels))
+	for i := range cfg.ImageGenModels {
+		m := &cfg.ImageGenModels[i]
+		m.Name = strings.TrimSpace(m.Name)
+		m.Provider = strings.TrimSpace(m.Provider)
+		m.APIKey = strings.TrimSpace(m.APIKey)
+		m.SecretKey = strings.TrimSpace(m.SecretKey)
+		m.BaseURL = strings.TrimSpace(m.BaseURL)
+		m.Model = strings.TrimSpace(m.Model)
+		if m.Name == "" {
+			return fmt.Errorf("image model #%d name is required", i+1)
+		}
+		if imageSeen[m.Name] {
+			return fmt.Errorf("duplicate image model name %q", m.Name)
+		}
+		imageSeen[m.Name] = true
+		if m.Provider == "" {
+			return fmt.Errorf("image model %q provider is required", m.Name)
+		}
+	}
+
+	return nil
 }
 
 // ResolveModel looks up a named model. If found, returns its full config.

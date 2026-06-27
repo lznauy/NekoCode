@@ -59,7 +59,7 @@ description: first skill
 
 func TestBuildSkillListText(t *testing.T) {
 	skills := []*Skill{
-		{Name: "deploy", Description: "deploy app", WhenToUse: "when deploying"},
+		{Name: "deploy", Description: "deploy app when deploying"},
 		{Name: "review", Description: "review code"},
 	}
 
@@ -68,7 +68,7 @@ func TestBuildSkillListText(t *testing.T) {
 		t.Error("missing skill names")
 	}
 	if !strings.Contains(text, "when deploying") {
-		t.Error("missing when_to_use")
+		t.Error("missing description trigger guidance")
 	}
 
 	// Loaded filtering.

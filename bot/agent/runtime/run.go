@@ -72,7 +72,9 @@ func (a *Agent) Run(input string, callback RunCallback) *RunResult {
 		if output == "" {
 			output = a.lastText
 		}
-		if output != "" {
+		// 过滤系统内部消息：maxAgentSteps 耗尽时 lastText 可能为
+		// "[Agent stopped: ...]"，不应展示给用户。
+		if output != "" && !isSystemMessage(output) {
 			return &RunResult{FinalOutput: output, Steps: a.step}
 		}
 	}

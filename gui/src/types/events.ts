@@ -35,6 +35,7 @@ export interface Msg {
   id: string
   role: Role
   text: string
+  streamText?: string
   streaming: boolean
   // —— Run 形态 (仅 assistant 流式期填充) ——
   phase?: AgentPhase
@@ -44,6 +45,7 @@ export interface Msg {
   reasoningDone?: boolean
   todos?: TodoItem[]
   subagents?: SubAgent[]
+  activity?: { reads: number; searches: number; fetches: number; other: number }
   elapsedMs?: number
   compactCount?: number
   // —— 历史会话中携带的图片 ——
@@ -134,7 +136,26 @@ export interface ConfirmEvent {
   id: string
   toolName: string
   args: Record<string, unknown>
+  preview?: string
   level: number
+}
+
+export interface QuestionOption {
+  label: string
+  description?: string
+}
+
+export interface QuestionItem {
+  header?: string
+  question: string
+  options?: QuestionOption[]
+  multiple?: boolean
+  custom?: boolean
+}
+
+export interface QuestionEvent {
+  id: string
+  questions: QuestionItem[]
 }
 
 // 向后兼容: 旧的 agent:step 事件仍保留以兜底未分发的 action。

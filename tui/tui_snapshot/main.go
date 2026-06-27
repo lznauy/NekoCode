@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 
 	"nekocode/common"
-	"nekocode/tui/components/block"
 	components "nekocode/tui/components"
+	"nekocode/tui/components/block"
 	"nekocode/tui/components/message"
 	"nekocode/tui/components/processing"
 	"nekocode/tui/styles"
@@ -181,7 +181,7 @@ func renderEditBlock() string {
 }
 
 func renderEditMultiBlock() string {
-	diff := "[bot/tools/builtin/tool_edit.go#B7F2]\n 120:    desc := \"Edit text in files using pattern-based substitution...\"\n-120:    desc := \"Edit text in files using pattern-based substitution...\"\n+121:    desc := \"Edit files using a patch DSL. Each operation targets one file. Supports replace, insert, and delete. Returns a diff preview + new TAG for chaining.\"\n 125:    maxTokens := 5000\n-125:    maxTokens := 5000\n+126:    maxTokens := 8000"
+	diff := "[bot/tools/builtin/tool_edit.go#B7F2]\n 120:    desc := \"Edit text in files using simple replacements...\"\n-120:    desc := \"Edit text in files using simple replacements...\"\n+121:    desc := \"Edit files using oldString/newString content anchors. Returns a diff preview + new TAG for chaining.\"\n 125:    maxTokens := 5000\n-125:    maxTokens := 5000\n+126:    maxTokens := 8000"
 	b := block.ContentBlock{
 		Type:      block.BlockTool,
 		ToolName:  "edit",
@@ -282,7 +282,7 @@ func renderProcessingActive() string {
 	// Changes (edit) — formatHunkDiff format
 	p.AddToolBlock(block.ContentBlock{
 		Type: block.BlockTool, ToolName: "edit", ToolArgs: "tool_edit.go",
-		Content: "[tool_edit.go#E5F6]\n 318:    fmt.Println(\"Alice active:\", alice.Active)\n-318:    fmt.Println(\"Alice active:\", alice.Active)\n+319:    fmt.Println(\"Alice active status:\", alice.Active)",
+		Content:   "[tool_edit.go#E5F6]\n 318:    fmt.Println(\"Alice active:\", alice.Active)\n-318:    fmt.Println(\"Alice active:\", alice.Active)\n+319:    fmt.Println(\"Alice active status:\", alice.Active)",
 		Collapsed: false, Done: true,
 	})
 
@@ -303,7 +303,6 @@ func renderProcessingIdle() string {
 	return p.Render(width)
 }
 
-
 // ── Sub-Agent Processing ────────────────────────────────────────────────────
 
 func renderProcessingSubAgent() string {
@@ -314,8 +313,8 @@ func renderProcessingSubAgent() string {
 	p.SetSkill("refactor")
 
 	// Register two active sub-agents in header
-	p.AddSubAgent("a1b2", "researcher", 0)  // red: #e57373
-	p.AddSubAgent("c3d4", "executor", 3)    // orange: #ffb74d
+	p.AddSubAgent("a1b2", "researcher", 0) // red: #e57373
+	p.AddSubAgent("c3d4", "executor", 3)   // orange: #ffb74d
 
 	// Task list
 	p.SetTodos("Tasks 2/3\n· 分析代码结构\n▸ 修改edit工具\n✓ 重构run_exec.go")
@@ -350,7 +349,7 @@ func renderProcessingSubAgent() string {
 	})
 	p.AddToolBlock(block.ContentBlock{
 		Type: block.BlockTool, ToolName: "edit", ToolArgs: "run_exec.go",
-		Content: "[run_exec.go#G7H8]\n 82:    // Execute allowed tools\n-82:    // Execute allowed tools\n+82:    // Sub-agent lifecycle: inject callbacks",
+		Content:   "[run_exec.go#G7H8]\n 82:    // Execute allowed tools\n-82:    // Execute allowed tools\n+82:    // Sub-agent lifecycle: inject callbacks",
 		Collapsed: false, Done: true,
 		SubID: "c3d4", SubColor: 3,
 	})
@@ -374,7 +373,7 @@ func renderAssistantWithEdit() string {
 	m.SetBlocks([]block.ContentBlock{
 		{
 			Type: block.BlockTool, ToolName: "edit", ToolArgs: "tool_edit.go",
-			Content: "[bot/tools/builtin/tool_edit.go#C5E8]\n 120:    desc := \"Edit text in files using pattern-based substitution...\"\n-120:    desc := \"Edit text in files using pattern-based substitution...\"\n+121:    desc := \"Edit files using a patch DSL. Each operation targets one file...\"\n 125:    maxTokens := 5000\n-125:    maxTokens := 5000\n+126:    maxTokens := 8000",
+			Content:   "[bot/tools/builtin/tool_edit.go#C5E8]\n 120:    desc := \"Edit text in files using simple replacements...\"\n-120:    desc := \"Edit text in files using simple replacements...\"\n+121:    desc := \"Edit files using oldString/newString content anchors...\"\n 125:    maxTokens := 5000\n-125:    maxTokens := 5000\n+126:    maxTokens := 8000",
 			Collapsed: false, Done: true,
 		},
 	})

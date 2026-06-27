@@ -9,8 +9,6 @@ import (
 
 type FileStateCache = execution.FileStateCache
 type ExecutionState = execution.ExecutionState
-type ViewStore = execution.ViewStore
-type FileView = execution.FileView
 
 func NewExecutionState() *ExecutionState {
 	return execution.NewExecutionState()
@@ -32,10 +30,6 @@ func SnapshotStoreFromContext(ctx context.Context) *editcore.SnapshotStore {
 	return execution.SnapshotStoreFromContext(ctx)
 }
 
-func ViewStoreFromContext(ctx context.Context) *ViewStore {
-	return execution.ViewStoreFromContext(ctx)
-}
-
 // SetGlobalFileCache sets the global file state cache.
 func SetGlobalFileCache(c *FileStateCache) { execution.SetGlobalFileCache(c) }
 
@@ -48,16 +42,6 @@ func SetGlobalSnapshotStore(s *editcore.SnapshotStore) { execution.SetGlobalSnap
 // GetGlobalSnapshotStore returns the global snapshot store.
 func GetGlobalSnapshotStore() *editcore.SnapshotStore { return execution.GetGlobalSnapshotStore() }
 
-// SetGlobalViewStore sets the global edit-aware read view store.
-func SetGlobalViewStore(s *ViewStore) { execution.SetGlobalViewStore(s) }
-
-// GetGlobalViewStore returns the global edit-aware read view store.
-func GetGlobalViewStore() *ViewStore { return execution.GetGlobalViewStore() }
-
 func NewFileStateCache() *FileStateCache {
 	return execution.NewFileStateCache()
-}
-
-func NewViewStore() *ViewStore {
-	return execution.NewViewStore()
 }

@@ -1,50 +1,20 @@
-Edit files using JSON intents derived from Read VIEW metadata.
+Edit a file by replacing text anchored to the file's current content.
 
-Always Read the target range first. Read output contains:
+Parameters:
+- path: absolute file path.
+- oldString: exact text currently in the file.
+- newString: replacement text. Use an empty string to delete oldString.
+- replaceAll: optional. Defaults to false.
+- revert: optional. Restores the file to its pre-edit snapshot; only path is needed.
 
-[/abs/path/file.go#TAG]
-VIEW rev=TAG window=W1_20_ab12cd lines=1..20 total=80
-1:code
+Default behavior:
+- oldString must match exactly once.
+- If oldString matches multiple times, include more surrounding context.
+- If oldString is not found, edit only tries conservative fallback matching for line endings, surrounding blank lines, and line-trimmed text.
+- replaceAll=true replaces every exact match and does not use fallback matching.
 
-Use the VIEW rev as base_revision and the VIEW window as target.window_id. Do not copy hashes or VIEW text into file content.
+Prefer copying enough unchanged context into oldString to make the match unique. Do not use line numbers, read windows, revision tags, or structured edit intents.
 
-JSON intent format:
-
-{
-  "path": "/abs/path/file.go",
-  "base_revision": "TAG_FROM_READ",
-  "ops": [
-    {
-      "op": "replace",
-      "target": {"window_id": "W1_20_ab12cd", "start_line": 7, "end_line": 9},
-      "content": "new exact text"
-    }
-  ]
-}
-
-Delete example (removes lines 7-9, no content field):
-
-{
-  "path": "/abs/path/file.go",
-  "base_revision": "TAG_FROM_READ",
-  "ops": [
-    {
-      "op": "delete",
-      "target": {"window_id": "W1_20_ab12cd", "start_line": 7, "end_line": 9}
-    }
-  ]
-}
-
-Supported ops:
-- replace: replace target lines with content (content is required and must be non-empty)
-- delete: remove target lines entirely; do NOT include content field. Use this instead of replace with empty content.
-- insert_before: insert content before start_line
-- insert_after: insert content after end_line
-
-Rules:
-- One edit call targets one file. Multiple non-overlapping ops in that file are allowed.
-- Every op must target lines inside the same Read window it references.
-- Line numbers are the visible file line numbers from Read output.
-- If another edit changed the same file but your target lines are unchanged, edit may safely rebase and apply.
-- If edit reports conflict or unknown window, re-Read the target range and retry with fresh VIEW metadata.
-- For revert, call edit with revert=true and patch set to the bare file path.
+Constraints:
+- edit/write before Read: the governance layer tracks reads and warns if a file is written without prior Read. Always Read the file first to confirm current content before editing.
+- Snapshot: edit keeps only one latest pre-edit snapshot per file. Repeated revert restores this same snapshot until another edit records a new one.

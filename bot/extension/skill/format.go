@@ -27,9 +27,6 @@ func BuildSkillListText(skills []*Skill, loaded map[string]bool, contextWindow i
 			continue
 		}
 		entry := fmt.Sprintf("- **%s**: %s\n", sk.Name, sk.Description)
-		if sk.WhenToUse != "" {
-			entry += fmt.Sprintf("  When to use: %s\n", sk.WhenToUse)
-		}
 		entries = append(entries, entry)
 	}
 	if len(entries) == 0 {

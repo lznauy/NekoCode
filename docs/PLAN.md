@@ -93,7 +93,7 @@
 - 解析 Claude Code 格式的 agents/*.md（YAML frontmatter），插件通过注册表提供 agent
 
 ### 64. 全局调试日志 ✅
-- 统一 `/tmp/nekocode/nekocode-debug.log`，替代原 compact/log.go
+- 统一日志输出到 `~/.nekocode/logs/nekocode-debug.log`，替代原 compact/log.go
 
 ### 65. Context 统计优化 ✅
 - `/context` 命令彩色 bar + 精简统计摘要
@@ -153,10 +153,10 @@
 - 替换 go-sqlite3（依赖 CGO）为 zombiezen.com/go/sqlite（纯 Go 实现）
 - 消除 C 编译器依赖，简化交叉编译，提升跨平台兼容性
 
-### 79. JSON Intent 编辑升级 ✅
-- Read 输出 VIEW 元数据，edit 使用 JSON intent 精确定位
-- 移除旧文本补丁暴露面，改为 ViewStore + 行 hash 校验
-- 同文件多点编辑、结构化 diff preview、安全 rebase 基础能力完善
+### 79. 内容锚定编辑升级 ✅
+- edit 使用 oldString/newString 直接锚定当前文件内容
+- 移除 VIEW/windowId/baseRevision 协议和 ViewStore 链路
+- 保留结构化 diff preview、自动快照、撤销和 gofmt lint
 
 ### 80. TUI 升级 ✅
 - Bubble Tea v2 生态全面升级

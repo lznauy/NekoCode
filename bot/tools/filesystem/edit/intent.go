@@ -2,11 +2,9 @@ package edit
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 
@@ -15,269 +13,372 @@ import (
 	"nekocode/bot/tools/toolhelpers"
 )
 
-type editIntent struct {
-	Path         string     `json:"path"`
-	BaseRevision string     `json:"base_revision"`
-	Ops          []intentOp `json:"ops"`
+type editRequest struct {
+	Path       string
+	OldString  string
+	NewString  string
+	ReplaceAll bool
 }
 
-type intentOp struct {
-	Op      string       `json:"op"`
-	Target  intentTarget `json:"target"`
-	Content string       `json:"content"`
+type editPlan struct {
+	SafePath         string
+	NormalizedBefore string
+	NormalizedAfter  string
+	LineEnding       string
+	OrigMode         os.FileMode
+	Hunks            []editHunk
+	MatchKind        string
+	ReplaceAll       bool
 }
 
-type intentTarget struct {
-	WindowID  string `json:"window_id"`
-	StartLine int    `json:"start_line"`
-	EndLine   int    `json:"end_line"`
+type editHunk struct {
+	OldStart int
+	OldEnd   int
+	NewStart int
+	NewEnd   int
+	OldLines []string
+	NewLines []string
 }
 
-type resolvedIntent struct {
-	Ops       []intentOp
-	Relocated bool
+type textMatch struct {
+	Start int
+	End   int
+	Kind  string
+}
+
+type lineSpan struct {
+	StartByte int
+	EndByte   int
+	Lines     []string
 }
 
 var fileLocks sync.Map
 
-func isJSONIntent(patch string) bool {
-	return strings.HasPrefix(strings.TrimSpace(patch), "{")
+func (t *EditTool) previewEdit(args map[string]any) string {
+	plan, err := buildEditPlan(args)
+	if err != nil {
+		path, _ := args["path"].(string)
+		return fmt.Sprintf("(%s: %v)", filepath.Base(path), err)
+	}
+	preview := buildDiffPreview(plan.NormalizedBefore, plan.NormalizedAfter, plan.Hunks)
+	if plan.ReplaceAll {
+		preview = fmt.Sprintf("(%d replacements)\n%s", len(plan.Hunks), preview)
+	}
+	return appendStructuredDiff(preview, plan.SafePath)
 }
 
-func parseIntent(patch string) (*editIntent, error) {
-	var intent editIntent
-	if err := json.Unmarshal([]byte(patch), &intent); err != nil {
-		return nil, err
-	}
-	if intent.Path == "" {
-		return nil, fmt.Errorf("path is required")
-	}
-	if len(intent.Ops) == 0 {
-		return nil, fmt.Errorf("ops must contain at least one edit operation")
-	}
-	for i, op := range intent.Ops {
-		if op.Target.WindowID == "" {
-			return nil, fmt.Errorf("ops[%d].target.window_id is required", i)
-		}
-		if op.Target.StartLine < 1 {
-			return nil, fmt.Errorf("ops[%d].target.start_line must be >= 1", i)
-		}
-		if op.Target.EndLine == 0 {
-			op.Target.EndLine = op.Target.StartLine
-			intent.Ops[i] = op
-		}
-		if op.Target.EndLine < op.Target.StartLine {
-			return nil, fmt.Errorf("ops[%d] target end_line precedes start_line", i)
-		}
-		switch op.Op {
-		case "replace", "delete", "insert_before", "insert_after":
-		default:
-			return nil, fmt.Errorf("ops[%d].op must be replace, delete, insert_before, or insert_after", i)
-		}
-		if op.Op != "delete" && op.Content == "" {
-			return nil, fmt.Errorf("ops[%d].content is required for %s", i, op.Op)
-		}
-	}
-	return &intent, nil
-}
-
-func (t *EditTool) previewIntent(patch string) string {
-	intent, err := parseIntent(patch)
-	if err != nil {
-		return fmt.Sprintf("(intent parse error: %v)", err)
-	}
-	safePath, err := tools.ValidatePath(intent.Path)
-	if err != nil {
-		return fmt.Sprintf("(%s: %v)", filepath.Base(intent.Path), err)
-	}
-	oldText, err := tools.ReadNormalizedFile(safePath)
-	if err != nil {
-		return fmt.Sprintf("(%s: %v)", filepath.Base(safePath), err)
-	}
-	if err := validateNonOverlapping(intent.Ops); err != nil {
-		return fmt.Sprintf("(%s: %v)", filepath.Base(safePath), err)
-	}
-	hunks, err := intentHunks(intent.Ops)
-	if err != nil {
-		return fmt.Sprintf("(%s: %v)", filepath.Base(safePath), err)
-	}
-	result, err := editcore.ApplyEdits(oldText, hunks, GlobalBlockResolver, safePath)
-	if err != nil {
-		return fmt.Sprintf("(%s: %v)", filepath.Base(safePath), err)
-	}
-	return appendStructuredDiff(buildDiffPreview(oldText, result.Text, result.ResolvedHunks, result.OldToNew), safePath)
-}
-
-func (t *EditTool) executeIntent(ctx context.Context, patch string) (string, error) {
-	intent, err := parseIntent(patch)
-	if err != nil {
-		return "", fmt.Errorf("intent parse error: %w", err)
-	}
-	safePath, err := tools.ValidatePath(intent.Path)
+func (t *EditTool) executeEdit(ctx context.Context, args map[string]any) (string, error) {
+	req, err := parseEditRequest(args)
 	if err != nil {
 		return "", err
 	}
-
+	safePath, err := tools.ValidatePath(req.Path)
+	if err != nil {
+		return "", err
+	}
 	lock := lockForPath(safePath)
 	lock.Lock()
 	defer lock.Unlock()
 
-	data, err := tools.ReadSafeFile(safePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read file: %w", err)
-	}
-	origMode := toolhelpers.GetFileMode(safePath)
-	rawText := string(data)
-	lineEnding := editcore.DetectLineEnding(rawText)
-	normalizedBefore := tools.NormalizeText(rawText)
-	currentRevision := editcore.ComputeFileHash(normalizedBefore)
-	rebased := intent.BaseRevision != "" && currentRevision != intent.BaseRevision
-
-	lines := strings.Split(normalizedBefore, "\n")
-	resolved, err := resolveIntent(ctx, *intent, safePath, lines)
-	if err != nil {
-		if rebased {
-			return "", fmt.Errorf("[%s] conflict: base_revision %s is stale and target range cannot be safely replayed on current revision %s: %w", safePath, intent.BaseRevision, currentRevision, err)
-		}
-		return "", err
-	}
-	hunks, err := intentHunks(resolved.Ops)
+	args["path"] = safePath
+	plan, err := buildEditPlan(args)
 	if err != nil {
 		return "", err
 	}
-	result, err := editcore.ApplyEdits(normalizedBefore, hunks, GlobalBlockResolver, safePath)
-	if err != nil {
-		return "", fmt.Errorf("apply failed: %w", err)
-	}
-
 	pe := preflightResult{
-		safePath:         safePath,
-		normalizedBefore: normalizedBefore,
-		result:           result,
-		lineEnding:       lineEnding,
-		origMode:         origMode,
+		safePath:         plan.SafePath,
+		normalizedBefore: plan.NormalizedBefore,
+		lineEnding:       plan.LineEnding,
 	}
 	writeUndoSnapshot(pe)
-	finalText := editcore.RestoreLineEndings(result.Text, lineEnding)
-	if err := os.WriteFile(safePath, []byte(finalText), origMode); err != nil {
+	finalText := editcore.RestoreLineEndings(plan.NormalizedAfter, plan.LineEnding)
+	if err := os.WriteFile(plan.SafePath, []byte(finalText), plan.OrigMode); err != nil {
 		return "", fmt.Errorf("failed to write file: %w", err)
 	}
 	if cache := tools.FileCacheFromContext(ctx); cache != nil {
-		cache.Invalidate(safePath)
+		cache.Invalidate(plan.SafePath)
 	}
-	newTag := tools.RecordSnapshotInContext(ctx, safePath, result.Text)
-	msg := formatEditResult(safePath, normalizedBefore, result.Text, result.ResolvedHunks, newTag, false, result.OldToNew)
-	if rebased {
-		msg += "\n(rebased: base revision changed, target lines were unchanged)"
+	newTag := tools.RecordSnapshotInContext(ctx, plan.SafePath, plan.NormalizedAfter)
+	msg := formatEditResult(plan.SafePath, plan.NormalizedBefore, plan.NormalizedAfter, plan.Hunks, newTag)
+	if plan.ReplaceAll {
+		msg += fmt.Sprintf("\n(%d replacements)", len(plan.Hunks))
 	}
-	if resolved.Relocated {
-		msg += "\n(relocated: target content moved, uniquely re-anchored)"
+	if plan.MatchKind != "exact" {
+		msg += fmt.Sprintf("\n(matched via %s)", plan.MatchKind)
 	}
-	if store := tools.ViewStoreFromContext(ctx); store != nil {
-		newLines := strings.Split(result.Text, "\n")
-		view := store.Register(safePath, newLines, 1, len(newLines))
-		msg += fmt.Sprintf("\nVIEW rev=%s window=%s lines=%d..%d total=%d", view.Revision, view.WindowID, view.StartLine, view.EndLine, view.TotalLines)
-	}
-	for _, w := range result.Warnings {
-		msg += "\n" + w
-	}
-	if lint := lintFile(safePath); lint != "" {
+	if lint := lintFile(plan.SafePath); lint != "" {
 		msg += "\n" + lint
 	}
 	return msg, nil
 }
 
-func resolveIntent(ctx context.Context, intent editIntent, safePath string, lines []string) (resolvedIntent, error) {
-	if err := validateNonOverlapping(intent.Ops); err != nil {
-		return resolvedIntent{}, err
+func buildEditPlan(args map[string]any) (editPlan, error) {
+	req, err := parseEditRequest(args)
+	if err != nil {
+		return editPlan{}, err
 	}
-	store := tools.ViewStoreFromContext(ctx)
-	resolved := resolvedIntent{Ops: make([]intentOp, len(intent.Ops))}
-	for i, op := range intent.Ops {
-		r, err := store.ResolveRange(op.Target.WindowID, safePath, intent.BaseRevision, op.Target.StartLine, op.Target.EndLine, lines)
-		if err != nil {
-			return resolvedIntent{}, fmt.Errorf("ops[%d]: %w", i, err)
-		}
-		op.Target.StartLine = r.StartLine
-		op.Target.EndLine = r.EndLine
-		resolved.Ops[i] = op
-		resolved.Relocated = resolved.Relocated || r.Relocated
+	safePath, err := tools.ValidatePath(req.Path)
+	if err != nil {
+		return editPlan{}, err
 	}
-	if err := validateNonOverlapping(resolved.Ops); err != nil {
-		return resolvedIntent{}, fmt.Errorf("resolved ops overlap after relocation: %w", err)
+	data, err := tools.ReadSafeFile(safePath)
+	if err != nil {
+		return editPlan{}, fmt.Errorf("failed to read file: %w", err)
 	}
-	return resolved, nil
+	rawText := string(data)
+	lineEnding := editcore.DetectLineEnding(rawText)
+	before := editcore.NormalizeToLF(rawText)
+	oldString := editcore.NormalizeToLF(req.OldString)
+	newString := editcore.NormalizeToLF(req.NewString)
+
+	matches, err := findMatches(before, oldString, req.ReplaceAll)
+	if err != nil {
+		return editPlan{}, err
+	}
+	after, hunks := applyMatches(before, newString, matches)
+	return editPlan{
+		SafePath:         safePath,
+		NormalizedBefore: before,
+		NormalizedAfter:  after,
+		LineEnding:       lineEnding,
+		OrigMode:         toolhelpers.GetFileMode(safePath),
+		Hunks:            hunks,
+		MatchKind:        matches[0].Kind,
+		ReplaceAll:       req.ReplaceAll,
+	}, nil
 }
 
-func validateNonOverlapping(ops []intentOp) error {
-	type rg struct {
-		start int
-		end   int
-		idx   int
+func parseEditRequest(args map[string]any) (editRequest, error) {
+	path, _ := args["path"].(string)
+	if path == "" {
+		return editRequest{}, fmt.Errorf("path parameter is required")
 	}
-	ranges := make([]rg, 0, len(ops))
-	for i, op := range ops {
-		ranges = append(ranges, rg{start: op.Target.StartLine, end: op.Target.EndLine, idx: i})
+	oldString, _ := args["oldString"].(string)
+	if oldString == "" {
+		return editRequest{}, fmt.Errorf("oldString parameter is required")
 	}
-	sort.Slice(ranges, func(i, j int) bool { return ranges[i].start < ranges[j].start })
-	for i := 1; i < len(ranges); i++ {
-		if ranges[i].start <= ranges[i-1].end {
-			return fmt.Errorf("ops[%d] overlaps ops[%d]; split or use one wider replace", ranges[i].idx, ranges[i-1].idx)
-		}
-	}
-	return nil
+	newString, _ := args["newString"].(string)
+	replaceAll, _ := args["replaceAll"].(bool)
+	return editRequest{Path: path, OldString: oldString, NewString: newString, ReplaceAll: replaceAll}, nil
 }
 
-func intentHunks(ops []intentOp) ([]editcore.Hunk, error) {
-	hunks := make([]editcore.Hunk, 0, len(ops))
-	for _, op := range ops {
-		payload := splitIntentContent(op.Content)
-		switch op.Op {
-		case "replace":
-			hunks = append(hunks, editcore.Hunk{
-				Kind:    editcore.HunkReplace,
-				Start:   op.Target.StartLine,
-				End:     op.Target.EndLine,
-				Payload: payload,
-			})
-		case "delete":
-			hunks = append(hunks, editcore.Hunk{
-				Kind:  editcore.HunkDelete,
-				Start: op.Target.StartLine,
-				End:   op.Target.EndLine,
-			})
-		case "insert_before":
-			hunks = append(hunks, editcore.Hunk{
-				Kind:    editcore.HunkInsert,
-				Cursor:  editcore.CursorBefore,
-				Start:   op.Target.StartLine,
-				End:     op.Target.StartLine,
-				Payload: payload,
-			})
-		case "insert_after":
-			hunks = append(hunks, editcore.Hunk{
-				Kind:    editcore.HunkInsert,
-				Cursor:  editcore.CursorAfter,
-				Start:   op.Target.EndLine,
-				End:     op.Target.EndLine,
-				Payload: payload,
-			})
-		}
+func findMatches(text, oldString string, replaceAll bool) ([]textMatch, error) {
+	if oldString == "" {
+		return nil, fmt.Errorf("oldString parameter is required")
 	}
-	return hunks, nil
+	exact := exactMatches(text, oldString)
+	if replaceAll {
+		if len(exact) == 0 {
+			return nil, fmt.Errorf("oldString was not found")
+		}
+		return exact, nil
+	}
+	switch len(exact) {
+	case 1:
+		return exact, nil
+	case 0:
+		return fallbackMatches(text, oldString)
+	default:
+		return nil, ambiguousMatchError(text, exact, "oldString", true)
+	}
 }
 
-func splitIntentContent(content string) []string {
-	content = strings.ReplaceAll(content, "\r\n", "\n")
-	content = strings.ReplaceAll(content, "\r", "\n")
-	content = strings.TrimSuffix(content, "\n")
-	if content == "" {
+func exactMatches(text, needle string) []textMatch {
+	var matches []textMatch
+	offset := 0
+	for {
+		idx := strings.Index(text[offset:], needle)
+		if idx < 0 {
+			break
+		}
+		start := offset + idx
+		matches = append(matches, textMatch{Start: start, End: start + len(needle), Kind: "exact"})
+		offset = start + len(needle)
+	}
+	return matches
+}
+
+func fallbackMatches(text, oldString string) ([]textMatch, error) {
+	candidates := []string{
+		strings.Trim(oldString, "\n"),
+		strings.TrimSpace(oldString),
+	}
+	seen := map[string]bool{oldString: true}
+	for _, candidate := range candidates {
+		if candidate == "" || seen[candidate] {
+			continue
+		}
+		seen[candidate] = true
+		matches := exactMatches(text, candidate)
+		if len(matches) == 1 {
+			matches[0].Kind = "trimmed-exact"
+			return matches, nil
+		}
+		if len(matches) > 1 {
+			return nil, ambiguousMatchError(text, matches, "oldString fallback", false)
+		}
+	}
+	matches := trimLineMatches(text, oldString)
+	switch len(matches) {
+	case 1:
+		return matches, nil
+	case 0:
+		return nil, fmt.Errorf("oldString was not found")
+	default:
+		return nil, ambiguousMatchError(text, matches, "oldString fallback", false)
+	}
+}
+
+func ambiguousMatchError(text string, matches []textMatch, label string, mentionReplaceAll bool) error {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%s matched %d times:", label, len(matches))
+	limit := min(len(matches), 3)
+	for i := 0; i < limit; i++ {
+		lineNo := lineNumberAtOffset(text, matches[i].Start)
+		fmt.Fprintf(&sb, "\n- line %d: %s", lineNo, truncateMatchContext(lineAtOffset(text, matches[i].Start), 120))
+	}
+	if len(matches) > limit {
+		fmt.Fprintf(&sb, "\n- ... %d more matches", len(matches)-limit)
+	}
+	sb.WriteString("\nInclude more surrounding context to make oldString unique")
+	if mentionReplaceAll {
+		sb.WriteString(", or set replaceAll=true")
+	}
+	sb.WriteString(".")
+	return fmt.Errorf("%s", sb.String())
+}
+
+func trimLineMatches(text, oldString string) []textMatch {
+	spans := splitLineSpans(text)
+	needleLines := splitDiffLines(strings.Trim(oldString, "\n"))
+	if len(needleLines) == 0 || len(needleLines) > len(spans) {
 		return nil
 	}
-	return strings.Split(content, "\n")
+	for i, line := range needleLines {
+		needleLines[i] = strings.TrimSpace(line)
+	}
+	var matches []textMatch
+	for start := 0; start+len(needleLines) <= len(spans); start++ {
+		ok := true
+		for i := range needleLines {
+			if strings.TrimSpace(spans[start+i].Lines[0]) != needleLines[i] {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			last := spans[start+len(needleLines)-1]
+			matches = append(matches, textMatch{
+				Start: spans[start].StartByte,
+				End:   last.EndByte,
+				Kind:  "line-trim",
+			})
+		}
+	}
+	return matches
+}
+
+func applyMatches(text, replacement string, matches []textMatch) (string, []editHunk) {
+	var out strings.Builder
+	hunks := make([]editHunk, 0, len(matches))
+	cursor := 0
+	lineDelta := 0
+	for _, m := range matches {
+		out.WriteString(text[cursor:m.Start])
+		oldSegment := text[m.Start:m.End]
+		effectiveReplacement := replacementForMatch(replacement, oldSegment, m)
+		oldStart := lineNumberAtOffset(text, m.Start)
+		oldLines := splitDiffLines(oldSegment)
+		newLines := splitDiffLines(effectiveReplacement)
+		newStart := oldStart + lineDelta
+		hunks = append(hunks, editHunk{
+			OldStart: oldStart,
+			OldEnd:   oldStart + max(len(oldLines), 1) - 1,
+			NewStart: newStart,
+			NewEnd:   newStart + max(len(newLines), 1) - 1,
+			OldLines: oldLines,
+			NewLines: newLines,
+		})
+		out.WriteString(effectiveReplacement)
+		cursor = m.End
+		lineDelta += len(newLines) - len(oldLines)
+	}
+	out.WriteString(text[cursor:])
+	return out.String(), hunks
+}
+
+func replacementForMatch(replacement, oldSegment string, match textMatch) string {
+	if match.Kind == "line-trim" && strings.HasSuffix(oldSegment, "\n") && !strings.HasSuffix(replacement, "\n") {
+		return replacement + "\n"
+	}
+	return replacement
+}
+
+func splitLineSpans(text string) []lineSpan {
+	if text == "" {
+		return []lineSpan{{StartByte: 0, EndByte: 0, Lines: []string{""}}}
+	}
+	parts := strings.SplitAfter(text, "\n")
+	spans := make([]lineSpan, 0, len(parts))
+	offset := 0
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		line := strings.TrimSuffix(part, "\n")
+		spans = append(spans, lineSpan{
+			StartByte: offset,
+			EndByte:   offset + len(part),
+			Lines:     []string{line},
+		})
+		offset += len(part)
+	}
+	return spans
+}
+
+func splitDiffLines(text string) []string {
+	text = strings.TrimSuffix(text, "\n")
+	if text == "" {
+		return nil
+	}
+	return strings.Split(text, "\n")
+}
+
+func lineNumberAtOffset(text string, offset int) int {
+	if offset <= 0 {
+		return 1
+	}
+	if offset > len(text) {
+		offset = len(text)
+	}
+	return strings.Count(text[:offset], "\n") + 1
+}
+
+func lineAtOffset(text string, offset int) string {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(text) {
+		offset = len(text)
+	}
+	start := strings.LastIndex(text[:offset], "\n") + 1
+	endRel := strings.Index(text[offset:], "\n")
+	if endRel < 0 {
+		return text[start:]
+	}
+	return text[start : offset+endRel]
+}
+
+func truncateMatchContext(text string, maxRunes int) string {
+	text = strings.TrimSpace(text)
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	return string(runes[:maxRunes]) + "..."
 }
 
 func lockForPath(path string) *sync.Mutex {
-	v, _ := fileLocks.LoadOrStore(path, &sync.Mutex{})
-	return v.(*sync.Mutex)
+	actual, _ := fileLocks.LoadOrStore(path, &sync.Mutex{})
+	return actual.(*sync.Mutex)
 }

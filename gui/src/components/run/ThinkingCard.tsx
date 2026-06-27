@@ -1,7 +1,8 @@
 // ThinkingCard: reasoning 折叠块。
 // 默认收起; 顶栏极克制 (无大 border, 仅 summary 字号小化);
 // 展开后内部独立滚动避免占用对话区。
-import { useState } from 'react'
+// 流式期间渲染廉价 plaintext (避免每 ~33ms 重解析 markdown); 完成后切换 MarkdownBody。
+import { memo, useState } from 'react'
 import { MarkdownBody } from '../MarkdownBody'
 
 interface ThinkingCardProps {
@@ -9,7 +10,7 @@ interface ThinkingCardProps {
   done: boolean
 }
 
-export function ThinkingCard({ reasoning, done }: ThinkingCardProps) {
+export const ThinkingCard = memo(function ThinkingCard({ reasoning, done }: ThinkingCardProps) {
   const [open, setOpen] = useState(false)
   if (!reasoning.trim()) return null
 
@@ -28,8 +29,10 @@ export function ThinkingCard({ reasoning, done }: ThinkingCardProps) {
         </span>
       </summary>
       <div className="mt-1 max-h-[240px] overflow-y-auto border-l-2 border-accent/30 pl-3 text-[12.5px] text-text-2">
-        <MarkdownBody text={reasoning} />
+        {done
+          ? <MarkdownBody text={reasoning} />
+          : <div className="whitespace-pre-wrap [overflow-wrap:break-word]">{reasoning}</div>}
       </div>
     </details>
   )
-}
+})

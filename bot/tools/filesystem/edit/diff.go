@@ -1,95 +1,33 @@
-// diff.go — edit result formatting and diff preview orchestration.
-
 package edit
 
 import (
 	"fmt"
 	"strings"
-
-	"nekocode/bot/tools/editcore"
 )
 
-// formatEditResult returns the new tag + compact diff preview + full file
-// line-number view so the agent can chain edits to any region without re-reading.
-func formatEditResult(path string, oldText, newText string, hunks []editcore.Hunk, newTag string, recovered bool, oldToNew map[int]int) string {
+func formatEditResult(path string, oldText, newText string, hunks []editHunk, newTag string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "[%s#%s]\n", path, newTag)
-
-	if recovered {
-		// Recovery: hunks have snapshot line numbers that may not match the
-		// current file. Use simple line-by-line comparison to avoid panics.
-		changedSet := buildSimpleChangedSet(oldText, newText)
-		sb.WriteString("(recovered via 3-way merge)\n")
-		writeFullFileView(&sb, newText, changedSet, path)
-		return sb.String()
-	}
-
-	preview := buildDiffPreview(oldText, newText, hunks, oldToNew)
+	preview := buildDiffPreview(oldText, newText, hunks)
 	if preview == "" {
 		sb.WriteString("(no changes)\n")
 	} else {
 		sb.WriteString(preview)
 	}
 
-	// Append full-file line-number view (like read output) so the agent can
-	// see line numbers for any region, not just the diff context.
-	newLines := strings.Split(strings.TrimRight(newText, "\n"), "\n")
-	total := len(newLines)
-	changedSet := buildChangedLineSet(hunks, oldText, newText, oldToNew)
-	const elideThreshold = 20 // unchanged runs longer than this get elided
-	const contextLines = 3    // context lines shown around each hunk
-	shown := make(map[int]bool)
-	for _, h := range hunks {
-		lo := h.Start - contextLines
-		if lo < 1 {
-			lo = 1
-		}
-		hi := h.End + contextLines
-		if h.Kind == editcore.HunkInsert {
-			// show context around the insertion anchor
-			lo = h.Start - contextLines
-			if lo < 1 {
-				lo = 1
-			}
-			hi = h.Start + contextLines + len(h.Payload)
-		}
-		if hi > total {
-			hi = total
-		}
-		for l := lo; l <= hi; l++ {
-			shown[l] = true
-		}
-		// Mark changed lines in the shown set.
-		for cl := range changedSet {
-			shown[cl] = true
-		}
+	newLines := splitDiffLines(newText)
+	changedSet := buildChangedLineSet(hunks)
+	if len(newLines) == 0 {
+		return sb.String()
 	}
-	// If no hunks (shouldn't happen for a real edit, but be defensive), show all.
-	if len(hunks) == 0 {
-		for i := 1; i <= total; i++ {
-			shown[i] = true
-		}
-	}
-
 	sb.WriteString("\n---\n")
+	shown := shownLinesForHunks(hunks, len(newLines), 3)
 	var lastShown int
-	for line := 1; line <= total; line++ {
+	for line := 1; line <= len(newLines); line++ {
 		if !shown[line] {
 			continue
 		}
-		if lastShown > 0 && line > lastShown+1 {
-			gap := line - lastShown - 1
-			if gap > elideThreshold {
-				fmt.Fprintf(&sb, "… (%d unchanged lines)\n", gap)
-			} else {
-				for l := lastShown + 1; l < line; l++ {
-					fmt.Fprintf(&sb, " %d:%s\n", l, newLines[l-1])
-				}
-			}
-		} else if lastShown == 0 && line > 1 {
-			// Leading gap: lines 1..line-1 are not shown.
-			fmt.Fprintf(&sb, "… (%d lines)\n", line-1)
-		}
+		writeGap(&sb, lastShown, line)
 		prefix := " "
 		if changedSet[line] {
 			prefix = "*"
@@ -97,23 +35,86 @@ func formatEditResult(path string, oldText, newText string, hunks []editcore.Hun
 		fmt.Fprintf(&sb, "%s%d:%s\n", prefix, line, newLines[line-1])
 		lastShown = line
 	}
-	// Trailing gap: lines after lastShown.
-	if lastShown > 0 && lastShown < total {
-		fmt.Fprintf(&sb, "… (%d lines)\n", total-lastShown)
+	if lastShown > 0 && lastShown < len(newLines) {
+		fmt.Fprintf(&sb, "… (%d lines)\n", len(newLines)-lastShown)
 	}
 	return sb.String()
 }
 
-// buildDiffPreview generates a hunk-aware compact diff. Uses the parsed hunks
-// to produce clean del/ins blocks instead of relying on whole-file LCS, which
-// fragments when old and new text share scattered lines.
-func buildDiffPreview(oldText, newText string, hunks []editcore.Hunk, oldToNew map[int]int) string {
-	oldText = strings.TrimRight(oldText, "\n")
-	newText = strings.TrimRight(newText, "\n")
-	oldLines := strings.Split(oldText, "\n")
-	newLines := strings.Split(newText, "\n")
-	if oldText == newText && len(oldLines) == len(newLines) {
+func buildDiffPreview(oldText, newText string, hunks []editHunk) string {
+	if oldText == newText {
 		return "(no changes)"
 	}
-	return formatHunkDiff(oldLines, newLines, hunks, oldToNew)
+	oldLines := splitDiffLines(oldText)
+	var sb strings.Builder
+	shownOld := make(map[int]bool)
+	var lastShown int
+	for _, h := range hunks {
+		ctxStart := max(1, h.OldStart-3)
+		for line := ctxStart; line < h.OldStart && line <= len(oldLines); line++ {
+			if shownOld[line] {
+				continue
+			}
+			writeDiffGap(&sb, lastShown, line)
+			fmt.Fprintf(&sb, " %d:%s\n", line, oldLines[line-1])
+			shownOld[line] = true
+			lastShown = line
+		}
+		for i, line := range h.OldLines {
+			lineNo := h.OldStart + i
+			fmt.Fprintf(&sb, "-%d:%s\n", lineNo, line)
+			shownOld[lineNo] = true
+			lastShown = lineNo
+		}
+		for i, line := range h.NewLines {
+			fmt.Fprintf(&sb, "+%d:%s\n", h.NewStart+i, line)
+		}
+		ctxEnd := min(len(oldLines), h.OldEnd+3)
+		for line := h.OldEnd + 1; line <= ctxEnd; line++ {
+			if shownOld[line] {
+				continue
+			}
+			writeDiffGap(&sb, lastShown, line)
+			fmt.Fprintf(&sb, " %d:%s\n", line, oldLines[line-1])
+			shownOld[line] = true
+			lastShown = line
+		}
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+func shownLinesForHunks(hunks []editHunk, total, context int) map[int]bool {
+	shown := make(map[int]bool)
+	for _, h := range hunks {
+		start := max(1, h.NewStart-context)
+		end := min(total, max(h.NewEnd, h.NewStart)+context)
+		for line := start; line <= end; line++ {
+			shown[line] = true
+		}
+	}
+	return shown
+}
+
+func writeDiffGap(sb *strings.Builder, lastShown, next int) {
+	if lastShown > 0 && next > lastShown+1 {
+		gap := next - lastShown - 1
+		if gap >= 8 {
+			fmt.Fprintf(sb, " … (%d unchanged lines)\n", gap)
+		}
+	}
+}
+
+func writeGap(sb *strings.Builder, lastShown, next int) {
+	if lastShown == 0 {
+		if next > 1 {
+			fmt.Fprintf(sb, "… (%d lines)\n", next-1)
+		}
+		return
+	}
+	if next > lastShown+1 {
+		gap := next - lastShown - 1
+		if gap > 20 {
+			fmt.Fprintf(sb, "… (%d unchanged lines)\n", gap)
+		}
+	}
 }

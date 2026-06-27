@@ -28,6 +28,7 @@ type Message struct {
 	Name             string     `json:"name,omitempty"`
 	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string     `json:"tool_call_id,omitempty"`
+	IsError          bool       `json:"is_error,omitempty"`
 	Source           string     `json:"source,omitempty"` // internal: "user" | "hint" | "" (legacy); stripped before API call
 }
 

@@ -43,7 +43,7 @@ export function SessionSidebar({
   return (
     <aside className="flex h-full w-[272px] flex-col border-r border-border/80 bg-surface">
       <div className="flex h-[52px] items-center justify-between px-3">
-        <span className="text-[13px] font-semibold uppercase leading-none tracking-[0.14em] text-text-2">Sessions</span>
+        <span className="text-[13px] font-semibold leading-none text-text-2">会话</span>
         <div className="flex items-center gap-1">
           <NewSessionButton onClick={onCreate} />
           <button
@@ -63,16 +63,12 @@ export function SessionSidebar({
         )}
 
         {!loading && sessions.length === 0 && (
-          <div className="flex flex-col items-start gap-2 rounded-lg border border-border/60 bg-surface-2 px-3 py-4 text-text-3">
-            <p className="text-xs font-medium text-text-2">暂无会话</p>
-            <p className="text-[11px] leading-relaxed">创建一个新会话后，历史记录会显示在这里。</p>
-            <button
-              type="button"
-              onClick={onCreate}
-              className="mt-1 text-xs font-medium text-primary hover:underline"
-            >
-              新建会话
-            </button>
+          <div className="rounded-md bg-surface-2/70 px-3 py-4 text-text-3">
+            <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/12 text-primary">
+              <ClockIcon />
+            </div>
+            <p className="text-xs font-medium text-text-2">暂无历史</p>
+            <p className="mt-1 text-[11px] leading-relaxed">发送第一条消息后，新的 session 会自动保存在这里。</p>
           </div>
         )}
 
@@ -107,6 +103,26 @@ function ChevronLeftIcon() {
       aria-hidden
     >
       <path d="m15 18-6-6 6-6" />
+    </svg>
+  )
+}
+
+function ClockIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 8v5l3 2" />
+      <path d="M21 12a9 9 0 1 1-9-9" />
     </svg>
   )
 }

@@ -4,21 +4,23 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"time"
 )
 
-const panicLogDir = "/tmp/nekocode"
+func panicLogDir() string { return NekocodeLogDir() }
 
-// WritePanicLog writes a panic recovery log to /tmp/nekocode/.
+// WritePanicLog writes a panic recovery log to ~/.nekocode/logs/.
 // Call from defer/recover blocks in both cmd and TUI.
 func WritePanicLog(recoverVal any) {
 	stack := string(debug.Stack())
-	if err := os.MkdirAll(panicLogDir, 0755); err != nil {
+	dir := panicLogDir()
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create panic log dir: %v\n\nPANIC: %v\nStack:\n%s\n", err, recoverVal, stack)
 		return
 	}
-	logPath := fmt.Sprintf("%s/nekocode-panic-%d.log", panicLogDir, time.Now().Unix())
+	logPath := filepath.Join(dir, fmt.Sprintf("nekocode-panic-%d.log", time.Now().Unix()))
 	if err := os.WriteFile(logPath, fmt.Appendf(nil, "PANIC: %v\n\nStack:\n%s", recoverVal, stack), 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to write panic log: %v\n", err)
 	}

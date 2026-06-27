@@ -14,7 +14,7 @@ func TestDiscoverAndLoad(t *testing.T) {
 	os.WriteFile(filepath.Join(sd, "SKILL.md"), []byte(`---
 name: test-skill
 description: A test skill
-when_to_use: test trigger
+when_to_use: legacy trigger field should be ignored
 allowed-tools:
   - bash
   - read
@@ -45,9 +45,6 @@ This is the test skill body.
 	}
 	if sk.Description != "A test skill" {
 		t.Errorf("description = %q", sk.Description)
-	}
-	if sk.WhenToUse != "test trigger" {
-		t.Errorf("when_to_use = %q", sk.WhenToUse)
 	}
 	if sk.Context != "fork" || sk.AgentType != "executor" {
 		t.Errorf("context/agent mismatch")

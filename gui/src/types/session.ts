@@ -19,6 +19,7 @@ export interface DisplayBlock {
   ToolName: string
   Args: string
   Content: string
+  IsError?: boolean
 }
 
 export interface ImageRef {

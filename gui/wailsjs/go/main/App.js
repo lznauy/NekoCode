@@ -10,6 +10,14 @@ export function DeleteSession(arg1) {
   return window['go']['main']['App']['DeleteSession'](arg1);
 }
 
+export function GetConfig() {
+  return window['go']['main']['App']['GetConfig']();
+}
+
+export function GetSkillManagement() {
+  return window['go']['main']['App']['GetSkillManagement']();
+}
+
 export function ListSessions() {
   return window['go']['main']['App']['ListSessions']();
 }
@@ -30,10 +38,26 @@ export function ReadImageBase64(arg1) {
   return window['go']['main']['App']['ReadImageBase64'](arg1);
 }
 
+export function RefreshSkillManagement() {
+  return window['go']['main']['App']['RefreshSkillManagement']();
+}
+
 export function ReplyConfirm(arg1, arg2) {
   return window['go']['main']['App']['ReplyConfirm'](arg1, arg2);
 }
 
+export function ReplyQuestion(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ReplyQuestion'](arg1, arg2, arg3);
+}
+
+export function SaveConfig(arg1) {
+  return window['go']['main']['App']['SaveConfig'](arg1);
+}
+
 export function SendMessage(arg1) {
   return window['go']['main']['App']['SendMessage'](arg1);
+}
+
+export function SetPluginEnabled(arg1, arg2) {
+  return window['go']['main']['App']['SetPluginEnabled'](arg1, arg2);
 }

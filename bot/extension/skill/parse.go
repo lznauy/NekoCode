@@ -12,7 +12,6 @@ import (
 type frontmatter struct {
 	Name                   string   `yaml:"name"`
 	Description            string   `yaml:"description"`
-	WhenToUse              string   `yaml:"when_to_use"`
 	AllowedTools           []string `yaml:"allowed-tools"`
 	Context                string   `yaml:"context"`
 	Agent                  string   `yaml:"agent"`
@@ -32,7 +31,6 @@ func parseSkillContent(content string) (*Skill, error) {
 	return &Skill{
 		Name:                   fm.Name,
 		Description:            fm.Description,
-		WhenToUse:              fm.WhenToUse,
 		Content:                strings.TrimSpace(body),
 		Context:                fm.Context,
 		AgentType:              fm.Agent,

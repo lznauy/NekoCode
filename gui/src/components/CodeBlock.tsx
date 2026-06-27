@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 
 interface CodeBlockProps {
   lang: string
   code: string
 }
 
-export function CodeBlock({ lang, code }: CodeBlockProps) {
+export const CodeBlock = memo(function CodeBlock({ lang, code }: CodeBlockProps) {
   const [copied, setCopied] = useState(false)
 
   const handleCopy = () => {
@@ -32,4 +32,4 @@ export function CodeBlock({ lang, code }: CodeBlockProps) {
       </pre>
     </div>
   )
-}
+})

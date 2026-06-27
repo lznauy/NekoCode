@@ -19,7 +19,7 @@
   --font-mono: var(--mono);
 
   --animate-blink: blink 1s step-end infinite;
-  --animate-slide-in: slide-in 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-slide-in: slide-in 0.12s ease-out;
   --animate-pulse-soft: pulse-soft 1.8s ease-in-out infinite;
 }
 
@@ -28,8 +28,8 @@
 }
 
 @keyframes slide-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 @keyframes pulse-soft {
@@ -88,6 +88,66 @@
 }
 
 @layer components {
+  .field {
+    @apply h-9 w-full rounded-md border border-border/60 bg-surface-2 px-2.5 text-xs text-text transition-colors placeholder:text-text-3 hover:border-border focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .primary-button {
+    @apply inline-flex h-8 items-center justify-center rounded-md bg-primary px-3 text-xs font-semibold text-black transition-all hover:brightness-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100;
+  }
+
+  .secondary-button {
+    @apply inline-flex h-8 items-center justify-center rounded-md border border-border/60 bg-surface px-3 text-xs font-medium text-text-2 transition-all hover:bg-surface-3 hover:text-text active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100;
+  }
+
+  .danger-button {
+    @apply inline-flex h-7 items-center justify-center rounded-md px-2 text-[11px] font-medium text-danger transition-all hover:bg-danger/12 active:scale-95 disabled:cursor-not-allowed disabled:opacity-35 disabled:active:scale-100;
+  }
+
+  .icon-button {
+    @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-3 transition-all hover:bg-surface-3 hover:text-text active:scale-95;
+  }
+
+  .model-tooltip {
+    position: relative;
+  }
+
+  .model-tooltip::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    left: 0;
+    top: calc(100% + 6px);
+    z-index: 80;
+    width: max-content;
+    max-width: min(520px, calc(100vw - 2rem));
+    white-space: normal;
+    overflow-wrap: anywhere;
+    border: 1px solid color-mix(in oklab, var(--b) 70%, transparent);
+    border-radius: 6px;
+    background: #050607;
+    box-shadow: 0 12px 32px rgb(0 0 0 / 0.38);
+    color: #fff;
+    padding: 6px 8px;
+    font-size: 11px;
+    line-height: 1.35;
+    text-align: left;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-2px);
+    transition: opacity 0.12s ease, transform 0.12s ease;
+  }
+
+  .model-tooltip-top::after {
+    top: auto;
+    bottom: calc(100% + 6px);
+  }
+
+  .model-tooltip:hover::after,
+  .model-tooltip:focus-visible::after {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
   .markdown { @apply text-sm leading-relaxed; }
   .markdown p { @apply mb-2.5 last:mb-0; }
   .markdown ul, .markdown ol { @apply my-2 pl-5; }

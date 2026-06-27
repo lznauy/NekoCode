@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"time"
 
-	"nekocode/bot/tools/editcore"
 	"nekocode/bot/tools/netclient"
 	"nekocode/bot/tools/pathutil"
 	"nekocode/bot/tools/semantics"
@@ -29,20 +28,8 @@ func NormalizeText(text string) string {
 	return textutil.NormalizeText(text)
 }
 
-func ReadNormalizedFile(path string) (string, error) {
-	return pathutil.ReadNormalizedFile(path)
-}
-
 func ReadSafeFile(path string) ([]byte, error) {
 	return pathutil.ReadSafeFile(path)
-}
-
-func ExtractPathsFromPatch(patch any) []string {
-	return editcore.ExtractPathsFromPatch(patch)
-}
-
-func ExtractFirstPathFromPatch(patch string) string {
-	return editcore.ExtractFirstPathFromPatch(patch)
 }
 
 func NewToolHTTPClient(timeout time.Duration) *http.Client {

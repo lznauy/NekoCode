@@ -1,12 +1,13 @@
 // TasksList: Todo 进度列表。
 // 与卡片整体一致: 不再围 border, 用 border-l-warning/40 标识左侧色, 进度条主色继承。
 import type { TodoItem } from '../../types/events'
+import { memo } from 'react'
 
 interface TasksListProps {
   todos: TodoItem[]
 }
 
-export function TasksList({ todos }: TasksListProps) {
+export const TasksList = memo(function TasksList({ todos }: TasksListProps) {
   if (!todos || todos.length === 0) return null
   const total = todos.length
   const done = todos.filter((t) => t.status === 'completed').length
@@ -22,7 +23,7 @@ export function TasksList({ todos }: TasksListProps) {
         </span>
       </div>
       <div className="h-1 overflow-hidden rounded-full bg-surface-3">
-        <div className="h-full rounded-full bg-gradient-to-r from-warning to-success transition-all duration-500" style={{ width: `${pct}%` }} />
+        <div className="h-full rounded-full bg-gradient-to-r from-warning to-success" style={{ width: `${pct}%` }} />
       </div>
       <ul className="flex flex-col gap-0.5">
         {todos.map((t, i) => (
@@ -36,7 +37,7 @@ export function TasksList({ todos }: TasksListProps) {
       </ul>
     </div>
   )
-}
+})
 
 function statusGlyph(s: TodoItem['status']): string {
   switch (s) {

@@ -311,30 +311,16 @@ nekocode/
 │       │   ├── state.go            #       状态管理
 │       │   ├── cache.go            #       缓存
 │       │   ├── cache_transfer.go   #       缓存传输
-│       │   ├── view_store.go       #       Read VIEW 注册与 edit 校验
-│       │   ├── view_transfer.go    #       ViewStore 主/子 Agent 同步
 │       │   └── ranges.go           #       范围管理
-│       ├── editcore/               #     编辑应用 primitives
-│       │   ├── types.go            #       类型定义
+│       ├── editcore/               #     编辑共享 primitives
 │       │   ├── hash.go             #       文件内容哈希计算
-│       │   ├── apply.go            #       编辑应用
-│       │   ├── apply_blocks.go     #       块编辑
-│       │   ├── apply_blanks.go     #       空行处理
-│       │   ├── apply_boundary.go   #       边界修复
-│       │   ├── apply_delimiters.go #       分隔符处理
-│       │   ├── apply_landing.go    #       着陆逻辑
-│       │   ├── apply_types.go      #       类型
-│       │   ├── paths.go            #       路径
-│       │   ├── mismatch.go         #       不匹配处理
-│       │   ├── recovery.go         #       3-way merge 恢复
 │       │   └── snapshot.go         #       快照管理
 │       ├── filesystem/             #   文件系统工具
 │       │   ├── read/               #     tool_read
 │       │   ├── write/              #     tool_write
-│       │   ├── edit/               #     tool_edit（JSON intent + ViewStore 校验 + gofmt lint）
+│       │   ├── edit/               #     tool_edit（oldString/newString 内容锚定 + gofmt lint）
 │       │   │   ├── tool_edit.go    #       Edit 工具入口
-│       │   │   ├── intent.go       #       JSON intent 解析
-│       │   │   ├── block_resolver.go#      块解析
+│       │   │   ├── intent.go       #       内容锚定匹配与替换
 │       │   │   ├── edit_commit.go  #       编辑提交
 │       │   │   ├── edit_lint.go    #       gofmt 语法检查
 │       │   │   ├── diff.go         #       Diff 生成
@@ -450,7 +436,7 @@ type BotInterface interface {
 New()
   ├── initConfig()        → config.Load() + prompt.NewBuilder()
   ├── initCtxMgr()        → contextmgr.New() + contextinit.ApplyProjectContextAndIndex()
-  ├── initToolRegistry()  → catalog.RegisterAll() + projecttool（条件注册）+ editcore.InitBlockResolver()
+  ├── initToolRegistry()  → catalog.RegisterAll() + projecttool（条件注册）
   ├── initHooks()         → hooks.RegisterBuiltin()
   ├── initPlugins()       → plugin.NewRegistry().LoadAll() → loadPluginExtensions()
   ├── initSkills()        → skill.NewRegistry() + bundled + Load()
@@ -572,7 +558,7 @@ type Tool interface {
 | bash | Sequential | 智能分级（Safe～Forbidden） | `tools/shell/` |
 | read | Parallel | Safe | `tools/filesystem/read/` |
 | write | Sequential | Write | `tools/filesystem/write/` |
-| edit | Sequential | Write（JSON intent + VIEW 锚点定位 + gofmt lint） | `tools/filesystem/edit/` |
+| edit | Sequential | Write（oldString/newString 内容锚定 + gofmt lint） | `tools/filesystem/edit/` |
 | list | Parallel | Safe | `tools/filesystem/list/` |
 | glob | Parallel | Safe | `tools/filesystem/search/` |
 | grep | Parallel | Safe | `tools/filesystem/search/` |
@@ -593,7 +579,7 @@ type Tool interface {
 | `core/` | Tool 接口 + 格式化 |
 | `runner/` | 工具执行引擎（单工具/批量/预览） |
 | `execution/` | 执行状态 + 缓存传输 |
-| `editcore/` | 编辑 primitives（哈希/应用/恢复/快照） |
+| `editcore/` | 编辑共享 primitives（哈希/换行归一化/快照） |
 | `filesystem/{read,write,edit,list,tree,search}/` | 文件系统工具 |
 | `shell/` | Bash 执行 + 危险分级 |
 | `web/` | Web 搜索/抓取/HTML2MD |
@@ -793,7 +779,7 @@ Model
 | 工具系统 | `bot/tools/` | Tool 接口 + Executor + Registry + FileCache |
 | 工具注册 | `bot/tools/catalog/` | RegisterAll() 内置工具注册清单 |
 | 工具执行 | `bot/tools/runner/` | 执行引擎（单工具/批量/预览） |
-| 编辑 primitives | `bot/tools/editcore/` | Hunk 应用 · 哈希计算 · recovery |
+| 编辑 primitives | `bot/tools/editcore/` | 哈希计算 · 换行归一化 · snapshot |
 | 文件系统工具 | `bot/tools/filesystem/` | read/write/edit/list/tree/glob/grep |
 | Shell 工具 | `bot/tools/shell/` | bash 执行与风险分级 |
 | Web 工具 | `bot/tools/web/` | web_search/web_fetch/html2md |

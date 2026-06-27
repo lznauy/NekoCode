@@ -1,4 +1,4 @@
-// EditTool — edit-aware JSON intent file editing.
+// EditTool — content-anchored file editing.
 
 package edit
 
@@ -31,10 +31,16 @@ func (t *EditTool) Description() string {
 
 func (t *EditTool) Parameters() []tools.Parameter {
 	return []tools.Parameter{
-		{Name: "patch", Type: "string", Required: true,
-			Description: "JSON edit intent. When revert=true, use bare file path instead."},
+		{Name: "path", Type: "string", Required: true,
+			Description: "Absolute path to the file to edit."},
+		{Name: "oldString", Type: "string", Required: false,
+			Description: "Exact text to replace. Required unless revert=true."},
+		{Name: "newString", Type: "string", Required: false,
+			Description: "Replacement text. Use an empty string to delete oldString."},
+		{Name: "replaceAll", Type: "boolean", Required: false,
+			Description: "Replace every exact match of oldString. Defaults to false, which requires one unique match."},
 		{Name: "revert", Type: "boolean", Required: false,
-			Description: "Set to true to revert file to its pre-edit state. Patch should be the bare file path."},
+			Description: "Set to true to restore the file to its pre-edit snapshot."},
 	}
 }
 
@@ -42,19 +48,16 @@ func (t *EditTool) Parameters() []tools.Parameter {
 // preview
 // ---------------------------------------------------------------------------
 
-// Preview reads files, applies the JSON intent to a copy, and returns a diff.
+// Preview reads the file, applies the content-anchored edit to a copy, and returns a diff.
 func (t *EditTool) Preview(args map[string]any) string {
-	patchStr, _ := args["patch"].(string)
-	if patchStr == "" {
+	path, _ := args["path"].(string)
+	if path == "" {
 		return ""
 	}
 	if rv, _ := args["revert"].(bool); rv {
-		return fmt.Sprintf("(revert: %s)", filepath.Base(patchStr))
+		return fmt.Sprintf("(revert: %s)", filepath.Base(path))
 	}
-	if !isJSONIntent(patchStr) {
-		return "(edit patch must be a JSON intent object; re-read the target range and retry)"
-	}
-	return t.previewIntent(patchStr)
+	return t.previewEdit(args)
 }
 
 // ---------------------------------------------------------------------------
@@ -62,17 +65,14 @@ func (t *EditTool) Preview(args map[string]any) string {
 // ---------------------------------------------------------------------------
 
 func (t *EditTool) Execute(ctx context.Context, args map[string]any) (string, error) {
-	patchStr, ok := args["patch"].(string)
-	if !ok || patchStr == "" {
-		return "", fmt.Errorf("patch parameter is required")
+	path, ok := args["path"].(string)
+	if !ok || path == "" {
+		return "", fmt.Errorf("path parameter is required")
 	}
 
 	// Revert mode: restore file from pre-edit snapshot.
 	if rv, _ := args["revert"].(bool); rv {
-		return t.revertSnapshot(patchStr)
+		return t.revertSnapshot(path)
 	}
-	if !isJSONIntent(patchStr) {
-		return "", fmt.Errorf("edit patch must be a JSON intent object")
-	}
-	return t.executeIntent(ctx, patchStr)
+	return t.executeEdit(ctx, args)
 }

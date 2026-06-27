@@ -1,5 +1,6 @@
 // update.go — tea.Update 主循环消息分发。
 package tui
+
 import (
 	"nekocode/common"
 	"nekocode/tui/components"
@@ -33,7 +34,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinner.TickMsg:
 		return m, m.handleSpinnerTick(msg)
 
-
 	case doneMsg:
 		return m, m.handleDone(msg)
 
@@ -55,9 +55,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resizeMessages()
 		return m, nil
 
+	case questionMsg:
+		if msg.req.Response == nil {
+			m.state = stateReady
+			m.resizeMessages()
+			return m, nil
+		}
+		m.QuestionBar.SetRequest(&msg.req)
+		m.preConfirmState = m.state
+		m.state = stateQuestioning
+		m.resizeMessages()
+		return m, nil
+
 	case tea.KeyPressMsg:
 		if m.state == stateConfirming {
 			return m.handleConfirmKey(msg)
+		}
+		if m.state == stateQuestioning {
+			return m.handleQuestionKey(msg)
 		}
 		return m, m.handleKeyPress(msg)
 

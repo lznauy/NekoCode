@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
+import { memo } from 'react'
 import { safeReadImageBase64 } from '../../lib/wails'
 import type { UIImageRef } from '../../types/events'
 
@@ -11,7 +12,7 @@ interface ImageGridProps {
   images: UIImageRef[]
 }
 
-export function ImageGrid({ images }: ImageGridProps) {
+export const ImageGrid = memo(function ImageGrid({ images }: ImageGridProps) {
   const [loaded, setLoaded] = useState<LoadedImage[]>(images)
   const [lightbox, setLightbox] = useState<number | null>(null)
 
@@ -50,7 +51,7 @@ export function ImageGrid({ images }: ImageGridProps) {
             type="button"
             onClick={() => img.dataUri && setLightbox(idx)}
             disabled={!img.dataUri}
-            className="group relative aspect-[4/3] overflow-hidden rounded-xl border border-border/60 bg-surface-3 transition-colors hover:border-primary/40 disabled:cursor-default"
+            className="group relative aspect-[4/3] overflow-hidden rounded-xl border border-border/60 bg-surface-3 disabled:cursor-default"
           >
             {img.dataUri ? (
               <>
@@ -109,11 +110,11 @@ export function ImageGrid({ images }: ImageGridProps) {
             <img
               src={loaded[lightbox].dataUri}
               alt={loaded[lightbox].path}
-              className="max-h-[min(70vh,800px)] max-w-[min(80vw,1200px)] rounded-lg object-contain shadow-2xl"
+              className="max-h-[min(70vh,800px)] max-w-[min(80vw,1200px)] object-contain"
             />
           </div>
         </div>
       )}
     </div>
   )
-}
+})

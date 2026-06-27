@@ -16,7 +16,7 @@ func (b *Bot) RunAgent(input string, onStep func(action, toolName, toolArgs, out
 	return result.FinalOutput, result.Error
 }
 
-func (b *Bot) Configure(confirmFn common.ConfirmFunc, phaseFn common.PhaseFunc, todoFn common.TodoFunc, notifyFn func(string), confirmCh chan common.ConfirmRequest) {
+func (b *Bot) Configure(confirmFn common.ConfirmFunc, phaseFn common.PhaseFunc, todoFn common.TodoFunc, notifyFn func(string), confirmCh chan common.ConfirmRequest, questionFn common.QuestionFunc) {
 	b.confirmFn = confirmFn
 	b.phaseFn = phaseFn
 	b.todoFn = todoFn
@@ -24,12 +24,23 @@ func (b *Bot) Configure(confirmFn common.ConfirmFunc, phaseFn common.PhaseFunc, 
 	b.confirmCh = confirmCh
 	b.ag.SetConfirmFn(confirmFn)
 	b.ag.SetPhaseFn(phaseFn)
+	b.setQuestionFunc(questionFn)
 	b.ag.WireTodoWrite(func(items []common.TodoItem) {
 		b.ctxMgr.SetTodos(items)
 		if todoFn != nil {
 			todoFn(items)
 		}
 	})
+}
+
+func (b *Bot) setQuestionFunc(fn common.QuestionFunc) {
+	t, err := b.toolRegistry.Get("question")
+	if err != nil {
+		return
+	}
+	if qt, ok := t.(interface{ SetQuestionFunc(common.QuestionFunc) }); ok {
+		qt.SetQuestionFunc(fn)
+	}
 }
 
 func (b *Bot) SetCallbacks(textFn, reasonFn func(string)) {

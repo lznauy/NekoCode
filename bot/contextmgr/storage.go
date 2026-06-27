@@ -82,6 +82,7 @@ func (m *Manager) AddToolResultsBatch(results []ToolResultMsg) {
 			Role:       role,
 			Content:    content,
 			ToolCallID: r.Message.ToolCallID,
+			IsError:    r.Message.IsError,
 		})
 		m.Tracker.AddNew(len(role) + len(content) + len(r.Message.ToolCallID))
 	}

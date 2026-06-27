@@ -10,6 +10,7 @@ import (
 	treetool "nekocode/bot/tools/filesystem/tree"
 	writetool "nekocode/bot/tools/filesystem/write"
 	"nekocode/bot/tools/media"
+	"nekocode/bot/tools/question"
 	"nekocode/bot/tools/shell"
 	"nekocode/bot/tools/tasktool"
 	"nekocode/bot/tools/todo"
@@ -27,6 +28,7 @@ func RegisterAll(r *tools.Registry, imageGenModels []config.ImageGenConfig) {
 	r.Register(&searchtool.GrepTool{})
 	r.Register(web.NewWebSearchTool())
 	r.Register(web.NewWebFetchTool())
+	r.Register(question.NewTool())
 	r.Register(&todo.TodoWriteTool{})
 	r.Register(tasktool.NewTaskTool())
 

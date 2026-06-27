@@ -26,7 +26,7 @@ func (a *Agent) mergeToolResults(calls []tools.ToolCallItem, blocked map[int]str
 	execIdx := 0
 	for i := range calls {
 		if msg, ok := blocked[i]; ok {
-			results[i] = tools.ToolCallResult{ID: calls[i].ID, Name: calls[i].Name, Output: msg}
+			results[i] = tools.ToolCallResult{ID: calls[i].ID, Name: calls[i].Name, Error: msg}
 			if a.gov != nil {
 				a.gov.RecordToolCall(ToolCallInfo{Name: calls[i].Name, Args: calls[i].Args}, true, msg)
 			}
@@ -59,7 +59,7 @@ func emitToolResultCallbacks(calls []tools.ToolCallItem, results []tools.ToolCal
 	msgs := make([]types.Message, len(results))
 	for i, r := range results {
 		content := r.EffectiveOutput()
-		msgs[i] = types.Message{Content: content, ToolCallID: r.ID}
+		msgs[i] = types.Message{Content: content, ToolCallID: r.ID, IsError: r.Error != ""}
 		if callback != nil {
 			callback("execute_tool", r.Name, tools.FormatArgs(calls[i].Args), content)
 		}

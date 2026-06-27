@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"nekocode/bot/tools"
 	"nekocode/common"
 )
 
@@ -32,13 +31,8 @@ func formatBriefArgs(toolName, toolArgs string) string {
 			}
 		}
 		return p
-	case "write", "list", "tree":
+	case "write", "list", "tree", "edit":
 		return args["path"]
-	case "edit":
-		if p := tools.ExtractFirstPathFromPatch(args["patch"]); p != "" {
-			return p
-		}
-		return args["patch"]
 	case "bash":
 		cmd := args["command"]
 		return common.FormatCommandPreview(cmd, 96)

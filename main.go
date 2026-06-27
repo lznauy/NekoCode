@@ -5,6 +5,7 @@ import (
 	"embed"
 	"log"
 
+	botapp "nekocode/bot/app"
 	"nekocode/bot/session"
 	"nekocode/common"
 	"nekocode/guiapp"
@@ -51,6 +52,26 @@ func (a *App) ProviderModel() string {
 	return a.impl.ProviderModel()
 }
 
+func (a *App) GetConfig() botapp.ConfigSnapshot {
+	return a.impl.GetConfig()
+}
+
+func (a *App) SaveConfig(cfg botapp.ConfigSnapshot) (botapp.ConfigSnapshot, error) {
+	return a.impl.SaveConfig(cfg)
+}
+
+func (a *App) GetSkillManagement() botapp.SkillManagementSnapshot {
+	return a.impl.GetSkillManagement()
+}
+
+func (a *App) RefreshSkillManagement() botapp.SkillManagementSnapshot {
+	return a.impl.RefreshSkillManagement()
+}
+
+func (a *App) SetPluginEnabled(name string, enabled bool) (botapp.SkillManagementSnapshot, error) {
+	return a.impl.SetPluginEnabled(name, enabled)
+}
+
 func (a *App) ListSessions() []session.Meta {
 	return a.impl.ListSessions()
 }
@@ -73,6 +94,10 @@ func (a *App) ReadImageBase64(path string) (string, error) {
 
 func (a *App) ReplyConfirm(id string, ok bool) {
 	a.impl.ReplyConfirm(id, ok)
+}
+
+func (a *App) ReplyQuestion(id string, answersJSON string, rejected bool) {
+	a.impl.ReplyQuestion(id, answersJSON, rejected)
 }
 
 func main() {

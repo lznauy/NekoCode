@@ -3,12 +3,14 @@ package sessioncmd
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 
 	"nekocode/common"
 	"nekocode/llm/types"
 )
 
-const DefaultExportPath = "/tmp/nekocode/nekocode-context.json"
+// DefaultExportPath is the default context-export destination under ~/.nekocode/exports.
+var DefaultExportPath = filepath.Join(common.NekocodeDataDir("exports"), "nekocode-context.json")
 
 func ExportMessages(msgs []types.Message, path string) (string, error) {
 	if path == "" {

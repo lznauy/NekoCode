@@ -18,7 +18,7 @@ func (t *WriteTool) Name() string { return "write" }
 func (t *WriteTool) Description() string {
 	return "Create or overwrite a file. Auto-creates parent dirs. " +
 		"For existing files, Read first to confirm current content — the governance layer tracks reads and warns if a file is written without prior Read. " +
-		"For partial changes, prefer Edit JSON intents over Write — it produces minimal diffs and auto-snapshots for undo. " +
+		"For partial changes, prefer Edit with oldString/newString over Write — it produces minimal diffs and auto-snapshots for undo. " +
 		"Content escaping: use \\n for newlines, \\\" for quotes, \\\\ for backslashes."
 }
 
