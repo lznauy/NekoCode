@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"nekocode/bot/agent/gate"
 	"nekocode/bot/agent/ledger"
 	"nekocode/bot/hooks"
 )
@@ -79,7 +80,7 @@ func (a *Agent) applyFinalCheck(reasoning *ReasoningResult) bool {
 	a.lastText = reasoning.ActionInput
 
 	if a.gov.Gate == nil {
-		a.gov.Gate = NewResponseGate()
+		a.gov.Gate = gate.NewResponseGate()
 	}
 	retry, hint := a.gov.Gate.TryRetry(msg)
 	if !retry {
@@ -97,7 +98,7 @@ func (a *Agent) applyFinalPolicyBlock(reasoning *ReasoningResult, reason string)
 	a.lastText = reasoning.ActionInput
 
 	if a.gov == nil || a.gov.Gate == nil {
-		a.gov.Gate = NewResponseGate()
+		a.gov.Gate = gate.NewResponseGate()
 	}
 	retry, hint := a.gov.Gate.TryRetry(reason)
 	if !retry {

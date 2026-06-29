@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"nekocode/bot/agent/budget"
+	aggov "nekocode/bot/agent/governance"
 	"nekocode/bot/hooks"
 )
 
@@ -76,7 +77,6 @@ func (a *Agent) Run(input string, callback RunCallback) *RunResult {
 	return a.synthesizeAndReturn(callback)
 }
 
-
 func (a *Agent) evaluateStop() {
 	if a.gov != nil && a.gov.HookReg != nil {
 		for _, r := range a.gov.HookReg.Evaluate(hooks.Stop, "", false) {
@@ -98,7 +98,7 @@ func (a *Agent) runTurn(state *stepState, callback RunCallback) (finished bool) 
 
 	// —— PreTurn hooks ——
 	if a.gov != nil && a.gov.HookReg != nil {
-		a.gov.ResetTurnBetween(state.Input, ToolQuotaData{
+		a.gov.ResetTurnBetween(state.Input, aggov.QuotaData{
 			MaxSlots: state.quota.MaxSlots,
 			Used:     state.quota.Used,
 		})

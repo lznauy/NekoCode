@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	aggov "nekocode/bot/agent/governance"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/hooks"
 	"nekocode/bot/llm/types"
@@ -28,7 +29,7 @@ func (a *Agent) mergeToolResults(calls []tools.ToolCallItem, blocked map[int]str
 		if msg, ok := blocked[i]; ok {
 			results[i] = tools.ToolCallResult{ID: calls[i].ID, Name: calls[i].Name, Error: msg}
 			if a.gov != nil {
-				a.gov.RecordToolCall(ToolCallInfo{Name: calls[i].Name, Args: calls[i].Args}, true, msg)
+				a.gov.RecordToolCall(aggov.ToolCallInfo{Name: calls[i].Name, Args: calls[i].Args}, true, msg)
 			}
 			continue
 		}
@@ -46,7 +47,7 @@ func (a *Agent) recordExecutedToolCalls(calls []tools.ToolCallItem, blocked map[
 		if _, skip := blocked[i]; skip {
 			continue
 		}
-		a.gov.RecordToolCall(ToolCallInfo{
+		a.gov.RecordToolCall(aggov.ToolCallInfo{
 			Name:   tc.Name,
 			Args:   tc.Args,
 			Output: results[i].Output,

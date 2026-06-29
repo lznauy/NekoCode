@@ -34,8 +34,9 @@ import (
 	"time"
 
 	"nekocode/bot"
-	botapp "nekocode/bot/app"
+	botconfig "nekocode/bot/config"
 	"nekocode/bot/session"
+	botskill "nekocode/bot/skill"
 	"nekocode/common"
 
 	"github.com/google/uuid"
@@ -390,23 +391,23 @@ func (a *App) ProviderModel() string {
 	return p + "|" + m
 }
 
-func (a *App) GetConfig() botapp.ConfigSnapshot {
+func (a *App) GetConfig() botconfig.Snapshot {
 	return a.bot.ConfigSnapshot()
 }
 
-func (a *App) SaveConfig(cfg botapp.ConfigSnapshot) (botapp.ConfigSnapshot, error) {
+func (a *App) SaveConfig(cfg botconfig.Snapshot) (botconfig.Snapshot, error) {
 	return a.bot.ApplyConfig(cfg)
 }
 
-func (a *App) GetSkillManagement() botapp.SkillManagementSnapshot {
+func (a *App) GetSkillManagement() botskill.ManagementSnapshot {
 	return a.bot.SkillManagementSnapshot()
 }
 
-func (a *App) RefreshSkillManagement() botapp.SkillManagementSnapshot {
+func (a *App) RefreshSkillManagement() botskill.ManagementSnapshot {
 	return a.bot.RefreshSkillManagement()
 }
 
-func (a *App) SetPluginEnabled(name string, enabled bool) (botapp.SkillManagementSnapshot, error) {
+func (a *App) SetPluginEnabled(name string, enabled bool) (botskill.ManagementSnapshot, error) {
 	return a.bot.SetPluginEnabled(name, enabled)
 }
 

@@ -2,16 +2,12 @@ package app
 
 import (
 	"context"
-	"fmt"
 
 	"nekocode/bot/agent"
-	"nekocode/bot/agent/subagent"
-	"nekocode/bot/app/contextguard"
-	"nekocode/bot/app/taskwire"
-	"nekocode/bot/config"
+	"nekocode/bot/agent/runtime"
+	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/llm"
 	"nekocode/bot/llm/types"
-	"nekocode/bot/tools"
 )
 
 func (b *Bot) initAgent() {
@@ -29,45 +25,11 @@ func (b *Bot) initAgent() {
 	b.applyAgentCallbacks()
 
 	b.ag.SetContextTransform(func(msgs []types.Message) []types.Message {
-		return contextguard.ApplyToolResultGuardrail(msgs, &b.lastGuardrailWarned)
+		return ctxmgr.ApplyToolResultGuardrail(msgs, ctxmgr.ToolResultGuardrailOptions{
+			LastWarned: &b.lastGuardrailWarned,
+			Warning:    runtime.ToolResultWarning,
+		})
 	})
 
 	b.wireTaskTool(fm)
-}
-
-func (b *Bot) wireTaskTool(fm config.ModelConfig) {
-	subLLM := llm.NewClientWithProtocol(fm.Provider, fm.APIKey, fm.BaseURL, fm.Model, fm.Protocol)
-	engine := subagent.NewEngine(subLLM, b.toolRegistry, b.ctxMgr.MergeClient)
-
-	t, err := b.toolRegistry.Get("task")
-	if err != nil {
-		return
-	}
-	taskTool, ok := t.(tools.TaskRunnerTool)
-	if !ok {
-		return
-	}
-	taskTool.Wire(func(ctx context.Context, prompt, agentType, thoroughness string) (*tools.TaskResult, error) {
-		cfg, ok := taskwire.BuildRunConfig(taskwire.RunConfigInput{
-			Context:        ctx,
-			Prompt:         prompt,
-			AgentTypeName:  agentType,
-			Thoroughness:   thoroughness,
-			Cwd:            b.cwd,
-			ProjectContext: b.projCtx,
-			ContextWindow:  b.cfg.ContextWindow,
-			ConfirmFn:      b.ag.ConfirmFn(),
-			ToolState:      b.ag.ToolExecutionState(),
-			PhaseFn:        b.ag.PhaseFn(),
-			AddTokens:      b.ag.AddTokens,
-		})
-		if !ok {
-			return nil, fmt.Errorf("unknown sub-agent type: %s", agentType)
-		}
-		result, err := engine.Run(ctx, cfg)
-		if result != nil && (result.CacheHitTokens > 0 || result.CacheMissTokens > 0) {
-			b.ctxMgr.Tracker.RecordSubagent(result.TotalTokens, result.CacheHitTokens, result.CacheMissTokens)
-		}
-		return taskwire.ToTaskResult(result), err
-	})
 }

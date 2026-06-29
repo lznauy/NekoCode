@@ -8,13 +8,12 @@ import (
 	"nekocode/bot/command"
 	"nekocode/bot/config"
 	ctxmgr "nekocode/bot/contextmgr"
-	"nekocode/bot/extension/mcp"
-	"nekocode/bot/extension/plugin"
-	"nekocode/bot/extension/skill"
 	"nekocode/bot/hooks"
 	"nekocode/bot/index/service"
+	"nekocode/bot/plugin"
 	"nekocode/bot/prompt"
 	"nekocode/bot/session"
+	"nekocode/bot/skill"
 	"nekocode/bot/tools"
 	"nekocode/common"
 )
@@ -48,9 +47,8 @@ type botRuntime struct {
 }
 
 type extensionRuntime struct {
-	skillReg   *skill.Registry
-	pluginReg  *plugin.Registry
-	mcpClients map[string]*mcp.Client
+	skills  *skill.Manager
+	plugins *plugin.Manager
 }
 
 type callbackRuntime struct {
@@ -67,7 +65,7 @@ type confirmRuntime struct {
 }
 
 type sessionRuntime struct {
-	sess           *session.Snapshot
+	sessions       *session.Manager
 	sessionResumed bool
 }
 

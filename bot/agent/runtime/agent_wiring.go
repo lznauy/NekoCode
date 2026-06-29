@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	aggov "nekocode/bot/agent/governance"
 	"nekocode/bot/hooks"
 	"nekocode/bot/tools"
 
@@ -11,14 +12,14 @@ func (a *Agent) SetContextTransform(fn ContextTransform)   { a.transform = fn }
 func (a *Agent) SetStreamFn(fn StreamCallback)             { a.textFn = fn }
 func (a *Agent) SetReasoningStreamFn(fn ReasoningCallback) { a.reasonFn = fn }
 
-func (a *Agent) SetGovernanceManager(gov *GovManager) { a.gov = gov }
-func (a *Agent) GovernanceManager() *GovManager       { return a.gov }
+func (a *Agent) SetGovernanceManager(gov *aggov.Manager) { a.gov = gov }
+func (a *Agent) GovernanceManager() *aggov.Manager       { return a.gov }
 
 // SetHookRegistry wires the hook registry into the agent's govManager.
 // If no manager exists yet, one is created.
 func (a *Agent) SetHookRegistry(m *hooks.Registry) {
 	if a.gov == nil {
-		a.gov = NewGovernanceManager(m)
+		a.gov = aggov.NewManager(m)
 	} else {
 		a.gov.HookReg = m
 	}

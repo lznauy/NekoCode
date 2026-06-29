@@ -5,8 +5,9 @@ import (
 	"embed"
 	"log"
 
-	botapp "nekocode/bot/app"
+	botconfig "nekocode/bot/config"
 	"nekocode/bot/session"
+	botskill "nekocode/bot/skill"
 	"nekocode/common"
 	"nekocode/guiapp"
 
@@ -52,23 +53,23 @@ func (a *App) ProviderModel() string {
 	return a.impl.ProviderModel()
 }
 
-func (a *App) GetConfig() botapp.ConfigSnapshot {
+func (a *App) GetConfig() botconfig.Snapshot {
 	return a.impl.GetConfig()
 }
 
-func (a *App) SaveConfig(cfg botapp.ConfigSnapshot) (botapp.ConfigSnapshot, error) {
+func (a *App) SaveConfig(cfg botconfig.Snapshot) (botconfig.Snapshot, error) {
 	return a.impl.SaveConfig(cfg)
 }
 
-func (a *App) GetSkillManagement() botapp.SkillManagementSnapshot {
+func (a *App) GetSkillManagement() botskill.ManagementSnapshot {
 	return a.impl.GetSkillManagement()
 }
 
-func (a *App) RefreshSkillManagement() botapp.SkillManagementSnapshot {
+func (a *App) RefreshSkillManagement() botskill.ManagementSnapshot {
 	return a.impl.RefreshSkillManagement()
 }
 
-func (a *App) SetPluginEnabled(name string, enabled bool) (botapp.SkillManagementSnapshot, error) {
+func (a *App) SetPluginEnabled(name string, enabled bool) (botskill.ManagementSnapshot, error) {
 	return a.impl.SetPluginEnabled(name, enabled)
 }
 

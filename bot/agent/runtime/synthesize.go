@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"nekocode/bot/agent/reasoning"
 	"nekocode/bot/debug"
 	"nekocode/bot/llm/types"
 	"nekocode/bot/tools"
@@ -40,7 +41,7 @@ func (a *Agent) forceSynthesize() string {
 	a.ctxMgr.AutoCompactIfNeeded()
 	ctx, cancel := context.WithTimeout(a.getCtx(), 30*time.Second)
 	defer cancel()
-	if fb, _ := a.streamSynthesize(ctx); fb != "" && !isGarbledToolCall(fb) {
+	if fb, _ := a.streamSynthesize(ctx); fb != "" && !reasoning.IsGarbledToolCall(fb) {
 		return fb
 	}
 

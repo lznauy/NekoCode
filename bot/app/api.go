@@ -2,7 +2,6 @@ package app
 
 import (
 	"nekocode/bot/agent"
-	"nekocode/bot/app/apistate"
 	"nekocode/bot/command"
 	"nekocode/common"
 )
@@ -28,7 +27,7 @@ func (b *Bot) ExecuteCommand(input string) (string, common.CmdResult) {
 
 	pending := b.pendingConfirmation()
 	resumed := b.sessionResumed
-	result := apistate.CommandResult(pending, resumed)
+	result := commandResult(pending, resumed)
 	if resumed {
 		b.sessionResumed = false
 	}

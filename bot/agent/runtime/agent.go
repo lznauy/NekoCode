@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	aggov "nekocode/bot/agent/governance"
+	"nekocode/bot/agent/subslot"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/debug"
 	"nekocode/bot/hooks"
@@ -44,8 +46,8 @@ type agentDeps struct {
 	llmClient    types.LLM
 	toolRegistry *tools.Registry
 	executor     *tools.Executor
-	subSlotMgr   *SubSlotManager
-	gov          *GovManager
+	subSlotMgr   *subslot.Manager
+	gov          *aggov.Manager
 	transform    ContextTransform
 }
 
@@ -88,7 +90,7 @@ func New(ctx context.Context, ctxMgr *ctxmgr.Manager, llmClient types.LLM, toolR
 			llmClient:    llmClient,
 			toolRegistry: toolRegistry,
 			executor:     tools.NewExecutor(toolRegistry),
-			subSlotMgr:   NewSubSlotManager(),
+			subSlotMgr:   subslot.NewManager(),
 		},
 	}
 }

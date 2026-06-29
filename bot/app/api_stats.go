@@ -1,7 +1,6 @@
 package app
 
 import (
-	"nekocode/bot/app/apistate"
 	"nekocode/common"
 )
 
@@ -17,6 +16,6 @@ func (b *Bot) Stats() common.BotStats {
 		TurnPrompt: tp, TurnCompletion: tc,
 		ContextTokens: ag.ContextTokens(),
 		CompactCount:  compactCount,
-		Duration:      apistate.FormatDuration(d),
+		Duration:      common.FormatDuration(d),
 	}
 }

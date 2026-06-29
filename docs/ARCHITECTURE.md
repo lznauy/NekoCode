@@ -37,37 +37,14 @@ nekocode/
 │   │   ├── api_run.go              #     RunAgent / Configure / SetCallbacks
 │   │   ├── api_model.go            #     SwitchModel
 │   │   ├── api_stats.go            #     Stats
-│   │   ├── api_session_messages.go #     SessionMessages
-│   │   ├── init_agent.go           #     Agent 初始化 + wireTaskTool
-│   │   ├── init_context.go         #     Config / CtxMgr / Summarizer 初始化
+│   │   ├── init_agent.go           #     Agent 初始化
 │   │   ├── init_tools.go           #     ToolRegistry + Hooks 初始化
-│   │   ├── init_extensions.go      #     Skills / Plugins / MCP 初始化
-│   │   ├── init_commands.go        #     Session / Commands 初始化
-│   │   ├── session_persistence.go  #     saveSession / ResumeSession
-│   │   ├── plugin_commands.go      #     /plugin 命令注册
-│   │   ├── plugin_install.go       #     pluginInstall / pluginInstallLocal / pluginInstallAsync
-│   │   ├── plugin_manage.go        #     pluginUninstall / pluginEnable / pluginDisable / pluginInfo
-│   │   ├── plugin_confirm.go       #     插件安装确认流程
-│   │   ├── apistate/               #     API 状态辅助
-│   │   │   ├── command.go          #       CommandResult 判定
-│   │   │   └── stats.go            #       FormatDuration
-│   │   ├── contextguard/           #     上下文守卫
-│   │   │   └── tool_results.go     #       ApplyToolResultGuardrail
-│   │   ├── contextinit/            #     上下文初始化
-│   │   │   └── project.go          #       ApplyProjectContextAndIndex
-│   │   ├── pluginops/              #     插件操作
-│   │   │   ├── install.go          #       ParseInstallArgs / FetchRemotePreview
-│   │   │   └── manage.go           #       RequirePlugin / 格式化输出
-│   │   ├── pluginruntime/          #     插件运行时
-│   │   │   └── runtime.go          #       Load / Unload（Hooks/Tools/MCP 注册）
-│   │   ├── sessioncmd/             #     Session 命令
-│   │   │   ├── export.go           #       ExportMessages
-│   │   │   └── session_list.go     #       FormatSessionList / ResumeSuccess/Failed
-│   │   ├── sessionstate/           #     Session 状态
-│   │   │   └── snapshot.go         #       ApplyContextSnapshot / ManagerSnapshot
-│   │   └── taskwire/               #     子 Agent 任务接线
-│   │       ├── config.go           #       BuildRunConfig
-│   │       └── result.go           #       结果处理
+│   │   ├── init_commands.go        #     Commands 初始化
+│   │   ├── context.go              #     Config / CtxMgr / 项目上下文 / 上下文守卫
+│   │   ├── plugin.go               #     plugin.Manager 接线 + /plugin 命令转发
+│   │   ├── session.go              #     session.Manager 接线 + Session API/命令转发
+│   │   ├── task.go                 #     子 Agent 任务接线
+│   │   └── state.go                #     API 状态辅助
 │   ├── agent/                      #   Agent 循环
 │   │   ├── agent.go                #     package agent 入口（类型别名 → runtime）
 │   │   ├── runtime/                #     Agent 运行时核心
@@ -269,14 +246,19 @@ nekocode/
 │   │   └── planmode/               #     Plan Mode
 │   │       └── prompt.go           #       Plan Mode prompt
 │   ├── session/                    #   Session 管理
-│   │   └── session.go              #     Session 持久化
+│   │   ├── session.go              #     Snapshot / Meta 持久化
+│   │   └── manager.go              #     Session Manager / 导出 / 恢复 / 视图消息
 │   ├── sessionview/                #   Session 视图
 │   │   └── messages.go             #     DisplayMessages
-│   ├── plugincli/                  #   Plugin CLI 辅助
-│   │   ├── source.go               #     源解析
-│   │   ├── fetch.go                #     远程获取
-│   │   ├── format.go               #     格式化输出
-│   │   └── env.go                  #     环境变量
+│   ├── plugin/                     #   Plugin Manager + 源解析/格式化/远程获取
+│   │   ├── manager.go              #     生命周期 + runtime 编排
+│   │   ├── snapshot.go             #     GUI/API 插件快照
+│   │   ├── source.go               #     源解析 / env 展开
+│   │   ├── fetch.go                #     远程 plugin.json 获取
+│   │   └── format.go               #     插件展示文本
+│   ├── skill/                      #   Skill facade + GUI/API 快照
+│   │   ├── skill.go                #     extension/skill facade
+│   │   └── management.go           #     skill/plugin 管理快照聚合
 │   ├── governance/                 #   工具语义分类
 │   │   └── semantics.go            #     Semantics（SourceProducing/Mutating/Verifying）
 │   ├── mcp/                        #   MCP 类型别名（→ extension/mcp）
@@ -549,7 +531,7 @@ type Tool interface {
 
 ### 工具注册
 
-`bot/tools/catalog/register.go` 中的 `RegisterAll()` 注册所有内置工具（bash/read/write/list/tree/glob/edit/grep/web_search/web_fetch/todo_write/task）。`image_gen` 在 `RegisterAll` 中条件注册（需要 imageGenModels 非空），`project_info` 在 `bot/app/init_tools.go` 中条件注册（需要 indexMgr 可用），`skill` 在 `bot/app/init_extensions.go` 中动态注册。
+`bot/tools/catalog/register.go` 中的 `RegisterAll()` 注册所有内置工具（bash/read/write/list/tree/glob/edit/grep/web_search/web_fetch/todo_write/task）。`image_gen` 在 `RegisterAll` 中条件注册（需要 imageGenModels 非空），`project_info` 在 `bot/app/init_tools.go` 中条件注册（需要 indexMgr 可用），`skill` 在 `bot/app/plugin.go` 中动态注册。
 
 ### 内置工具
 
@@ -669,8 +651,11 @@ PolicyExploreExhausted="policy:explore_exhausted"
 `bot/extension/plugin/`：
 - 安装源：GitHub URL / user:repo / 本地路径
 - 扩展点：Skills / Agents / Hooks / MCP Servers
+- manifest / registry / 安装源模型
+
+`bot/plugin/`：
 - `/plugin install/list/uninstall/enable/disable/info`
-- 插件运行时加载通过 `bot/app/pluginruntime/` 实现
+- 插件运行时加载（Skills / Agents / Hooks / MCP）通过 `bot/plugin/manager.go` 实现
 
 ## 声明式 Hooks
 
@@ -698,6 +683,10 @@ PolicyExploreExhausted="policy:explore_exhausted"
 - 内置技能通过 `bundled/` go:embed
 - `skill` 工具动态注册到 toolRegistry
 - 插件可提供额外 Skill 目录
+
+`bot/skill/`：
+- 对外 facade + GUI/API 管理快照
+- `ManagementSnapshot` 聚合 skill registry 与 plugin snapshots
 
 ## 子 Agent 系统
 
@@ -788,9 +777,9 @@ Model
 | SDK | `bot/sdk/` | 外部服务 SDK（火山引擎 SigV4 签名） |
 | 上下文管理 | `bot/contextmgr/` | Build 管线 + 五级压缩 + token 估算 |
 | Session Memory | `bot/contextmgr/memory/` | Memory 文件持久化 |
-| Plugin 系统 | `bot/extension/plugin/` | 安装/卸载/生命周期 |
+| Plugin 系统 | `bot/plugin/`, `bot/extension/plugin/` | manager 编排 + manifest/registry |
 | MCP 客户端 | `bot/extension/mcp/` | JSON-RPC 2.0 |
-| Skill 系统 | `bot/extension/skill/` | YAML 技能加载 + 工具注册 |
+| Skill 系统 | `bot/skill/`, `bot/extension/skill/` | 管理快照/facade + YAML 技能加载 |
 | Hook 系统 | `bot/hooks/` | 事件驱动（7 种触发点）+ 声明式（plugin/） |
 | 内置 Hook | `bot/hooks/builtin/` | 8 个内置 Hook 实现 |
 | 声明式 Hook | `bot/hooks/plugin/` | JSON 配置驱动 Hook |
@@ -799,6 +788,5 @@ Model
 | 命令系统 | `bot/command/` | 斜杠命令解析 |
 | 调试日志 | `bot/debug/` | 全局 debug.Log（时间戳 + subagent 标签） |
 | 工具语义 | `bot/governance/` | Semantics 分类（SourceProducing/Mutating/Verifying） |
-| Plugin CLI | `bot/plugincli/` | 插件 CLI 辅助（源解析/格式化/远程获取） |
 | Session 视图 | `bot/sessionview/` | DisplayMessages 转换 |
 | TUI | `tui/` | Bubble Tea v2 组件化 |

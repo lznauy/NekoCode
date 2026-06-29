@@ -1,130 +1,3 @@
-export namespace app {
-	
-	export class ConfigSnapshot {
-	    path: string;
-	    exists: boolean;
-	    active: string;
-	    context_window: number;
-	    flash_model?: string;
-	    models: config.ModelConfig[];
-	    image_gen_models?: config.ImageGenConfig[];
-	
-	    static createFrom(source: any = {}) {
-	        return new ConfigSnapshot(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.path = source["path"];
-	        this.exists = source["exists"];
-	        this.active = source["active"];
-	        this.context_window = source["context_window"];
-	        this.flash_model = source["flash_model"];
-	        this.models = this.convertValues(source["models"], config.ModelConfig);
-	        this.image_gen_models = this.convertValues(source["image_gen_models"], config.ImageGenConfig);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class PluginSnapshot {
-	    name: string;
-	    version?: string;
-	    description?: string;
-	    source?: string;
-	    dir?: string;
-	    enabled: boolean;
-	    skills?: string[];
-	
-	    static createFrom(source: any = {}) {
-	        return new PluginSnapshot(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.version = source["version"];
-	        this.description = source["description"];
-	        this.source = source["source"];
-	        this.dir = source["dir"];
-	        this.enabled = source["enabled"];
-	        this.skills = source["skills"];
-	    }
-	}
-	export class SkillSnapshot {
-	    name: string;
-	    description?: string;
-	    dir?: string;
-	    files?: string[];
-	    loaded: boolean;
-	    source: string;
-	    plugin?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new SkillSnapshot(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.description = source["description"];
-	        this.dir = source["dir"];
-	        this.files = source["files"];
-	        this.loaded = source["loaded"];
-	        this.source = source["source"];
-	        this.plugin = source["plugin"];
-	    }
-	}
-	export class SkillManagementSnapshot {
-	    skills: SkillSnapshot[];
-	    plugins: PluginSnapshot[];
-	
-	    static createFrom(source: any = {}) {
-	        return new SkillManagementSnapshot(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.skills = this.convertValues(source["skills"], SkillSnapshot);
-	        this.plugins = this.convertValues(source["plugins"], PluginSnapshot);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-
-}
-
 export namespace common {
 	
 	export class DisplayBlock {
@@ -248,6 +121,77 @@ export namespace config {
 	        this.protocol = source["protocol"];
 	    }
 	}
+	export class Snapshot {
+	    path: string;
+	    exists: boolean;
+	    active: string;
+	    context_window: number;
+	    flash_model?: string;
+	    models: ModelConfig[];
+	    image_gen_models?: ImageGenConfig[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Snapshot(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.exists = source["exists"];
+	        this.active = source["active"];
+	        this.context_window = source["context_window"];
+	        this.flash_model = source["flash_model"];
+	        this.models = this.convertValues(source["models"], ModelConfig);
+	        this.image_gen_models = this.convertValues(source["image_gen_models"], ImageGenConfig);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
+export namespace plugin {
+	
+	export class Snapshot {
+	    name: string;
+	    version?: string;
+	    description?: string;
+	    source?: string;
+	    dir?: string;
+	    enabled: boolean;
+	    skills?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Snapshot(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.version = source["version"];
+	        this.description = source["description"];
+	        this.source = source["source"];
+	        this.dir = source["dir"];
+	        this.enabled = source["enabled"];
+	        this.skills = source["skills"];
+	    }
+	}
 
 }
 
@@ -272,6 +216,67 @@ export namespace session {
 	        this.updated_at = source["updated_at"];
 	        this.msg_count = source["msg_count"];
 	    }
+	}
+
+}
+
+export namespace skill {
+	
+	export class Snapshot {
+	    name: string;
+	    description?: string;
+	    dir?: string;
+	    files?: string[];
+	    loaded: boolean;
+	    source: string;
+	    plugin?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Snapshot(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.dir = source["dir"];
+	        this.files = source["files"];
+	        this.loaded = source["loaded"];
+	        this.source = source["source"];
+	        this.plugin = source["plugin"];
+	    }
+	}
+	export class ManagementSnapshot {
+	    skills: Snapshot[];
+	    plugins: plugin.Snapshot[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ManagementSnapshot(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.skills = this.convertValues(source["skills"], Snapshot);
+	        this.plugins = this.convertValues(source["plugins"], plugin.Snapshot);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	aggov "nekocode/bot/agent/governance"
 	"nekocode/bot/agent/ledger"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/governance"
@@ -18,7 +19,7 @@ func newTestAgent() *Agent {
 	ctxMgr := ctxmgr.NewSub("test", 128000, nil)
 	reg := tools.NewRegistry()
 	a := New(context.Background(), ctxMgr, nil, reg)
-	a.gov = NewGovernanceManager(hooks.NewRegistry())
+	a.gov = aggov.NewManager(hooks.NewRegistry())
 	hooks.RegisterBuiltin(a.gov.HookReg)
 	return a
 }

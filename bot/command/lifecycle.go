@@ -6,9 +6,9 @@ import (
 
 	"nekocode/bot/agent"
 	ctxmgr "nekocode/bot/contextmgr"
-	"nekocode/bot/extension/skill"
 	"nekocode/bot/hooks"
 	"nekocode/bot/prompt"
+	"nekocode/bot/skill"
 	"nekocode/bot/tools"
 	"nekocode/common"
 )
@@ -25,7 +25,7 @@ type SkillState struct {
 type Deps struct {
 	CtxMgr        *ctxmgr.Manager
 	Ag            func() *agent.Agent // dynamic: returns current agent
-	SkillReg      *skill.Registry
+	Skills        *skill.Manager
 	ToolRegistry  *tools.Registry
 	ContextWindow int
 	GetConfigFn   func() (provider, model string)           // dynamic config for /config and /model
@@ -51,17 +51,16 @@ func RegisterAll(p *Parser, deps Deps, st *SkillState) {
 	})
 
 	// /skill-name for each loaded skill.
-	for _, sk := range deps.SkillReg.List() {
+	for _, sk := range deps.Skills.List() {
 		name := sk.Name
 		p.Register(name, func(cmd *Command) (string, bool) {
-			sk, ok := deps.SkillReg.Get(name)
+			sk, ok := deps.Skills.Get(name)
 			if !ok {
 				return fmt.Sprintf("Skill %q not found.", name), true
 			}
 			st.MsgStart = deps.CtxMgr.Len()
 			deps.CtxMgr.Add("user", skill.FormatForContext(sk))
-			deps.SkillReg.MarkLoaded(name)
-			deps.CtxMgr.SetSkillList(skill.BuildSkillListText(deps.SkillReg.List(), deps.SkillReg.LoadedSet(), deps.ContextWindow))
+			deps.Skills.MarkLoaded(name)
 			if len(cmd.Args) == 0 {
 				st.MsgStart = -1
 				return fmt.Sprintf("Loaded skill %q.", name), true
@@ -77,8 +76,7 @@ func RegisterAll(p *Parser, deps Deps, st *SkillState) {
 	// Skill tool OnLoad callback.
 	if t, err := deps.ToolRegistry.Get("skill"); err == nil {
 		t.(*skill.SkillTool).SetOnLoad(func(name string) {
-			deps.SkillReg.MarkLoaded(name)
-			deps.CtxMgr.SetSkillList(skill.BuildSkillListText(deps.SkillReg.List(), deps.SkillReg.LoadedSet(), deps.ContextWindow))
+			deps.Skills.MarkLoaded(name)
 		})
 	}
 }
@@ -141,10 +139,9 @@ func ContextReport(ctxMgr *ctxmgr.Manager, toolDescs []tools.Descriptor) string 
 }
 
 // ForceFreshStart archives current conversation and starts a new session.
-func ForceFreshStart(ctxMgr *ctxmgr.Manager, skillReg *skill.Registry, hookReg *hooks.Registry, contextWindow int) (string, error) {
+func ForceFreshStart(ctxMgr *ctxmgr.Manager, skills *skill.Manager, hookReg *hooks.Registry) (string, error) {
 	count, oldTokens, _ := ctxMgr.Stats()
-	skillReg.ClearLoaded()
-	ctxMgr.SetSkillList(skill.BuildSkillListText(skillReg.List(), nil, contextWindow))
+	skills.ClearLoaded()
 	// Reset hook session state so guards like completionQualityHook
 	// don't carry stale flags across /new boundaries.
 	if hookReg != nil {
