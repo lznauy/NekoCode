@@ -14,12 +14,14 @@ const (
 	StoreExploreCalls   = "counter:explore_calls"
 	StoreHasEdits       = "turn:has_edits"
 	StoreRespGarbled    = "counter:garbled"
-	StoreLedgerModified = "gauge:ledger_modified"
-	StoreLedgerVerified = "gauge:ledger_verified"
-	StoreLedgerErrors   = "gauge:ledger_errors"
-	StoreLedgerBlocked  = "gauge:ledger_blocked"
-	StoreLedgerProgress = "turn:ledger_progress" // 1 if this turn added new evidence
-	StoreSessionStarted = "session:started"
+	StoreLedgerModified       = "gauge:ledger_modified"
+	StoreLedgerVerified       = "gauge:ledger_verified"
+	StoreLedgerErrors         = "gauge:ledger_errors"
+	StoreLedgerBlocked        = "gauge:ledger_blocked"
+	StoreLedgerNonDocModified = "gauge:ledger_nondoc_modified" // 1 if non-documentation files were modified
+	StoreLedgerProgress       = "turn:ledger_progress"          // 1 if this turn added new evidence
+	StoreFinalAnswerText      = "value:final_answer"            // current turn's assistant final-answer text
+	StoreSessionStarted       = "session:started"
 
 	CounterQuotaWarned     = "counter:quota_warned"
 	CounterVerifyInjected  = "counter:verify_injected"

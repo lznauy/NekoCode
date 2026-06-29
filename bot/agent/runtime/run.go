@@ -156,9 +156,7 @@ func (a *Agent) runTurn(state *stepState, callback RunCallback) (finished bool) 
 		// Tool calls mean the agent is making progress — reset hint counter.
 		a.consecutiveHints = 0
 		a.consecutiveFailures = 0
-		if a.gov != nil && a.gov.Gate != nil {
-			a.gov.Gate.Reset()
-		}
+		a.gate.Reset()
 		var stopReason hooks.StopReason
 		var shouldStop bool
 		shouldStop, stopReason = a.executeAndFeedback(calls, reasoning, state, callback)

@@ -40,3 +40,6 @@ var sectionHeaders = map[string]string{
 	"ArchMap":        "## Key Architecture Map",
 	"Preferences":    "## User Preferences",
 }
+
+// sectionOrder is the canonical write order for Build/Save (map iteration is unordered).
+var sectionOrder = []string{"TechStack", "ActiveGoals", "CompletedTasks", "ArchMap", "Preferences"}

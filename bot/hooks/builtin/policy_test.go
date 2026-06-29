@@ -159,3 +159,93 @@ func TestExploreCascadeHook(t *testing.T) {
 		t.Fatalf("4 researchers result = %+v, want cascade hint", r)
 	}
 }
+
+func TestFinalCheckHookRequiresVerificationForModifiedFiles(t *testing.T) {
+	hk := FinalCheckHook()
+	s := newState()
+	s.SetStr(StoreFinalAnswerText, "已完成修复。")
+	s.Set(StoreLedgerNonDocModified, 1)
+	s.Set(StoreLedgerVerified, 0)
+	if r := hk.On(s); r == nil || r.BlockFinal == nil {
+		t.Fatalf("modified unverified should block final, got %+v", r)
+	}
+
+	s2 := newState()
+	s2.SetStr(StoreFinalAnswerText, "已完成修复，但未验证。")
+	s2.Set(StoreLedgerNonDocModified, 1)
+	s2.Set(StoreLedgerVerified, 0)
+	if r := hk.On(s2); r != nil {
+		t.Fatalf("unverified disclosure should pass, got %+v", r)
+	}
+}
+
+func TestFinalCheckHookAllowsDocumentationOnlyChangesWithoutVerification(t *testing.T) {
+	hk := FinalCheckHook()
+	s := newState()
+	s.SetStr(StoreFinalAnswerText, "已更新文档。")
+	s.Set(StoreLedgerNonDocModified, 0)
+	s.Set(StoreLedgerVerified, 0)
+	if r := hk.On(s); r != nil {
+		t.Fatalf("documentation-only changes should not require verification, got %+v", r)
+	}
+}
+
+func TestFinalCheckHookRejectsUnsupportedTestClaimForDocumentationChanges(t *testing.T) {
+	hk := FinalCheckHook()
+	s := newState()
+	s.SetStr(StoreFinalAnswerText, "文档已更新，测试通过。")
+	s.Set(StoreLedgerNonDocModified, 0)
+	s.Set(StoreLedgerVerified, 0)
+	if r := hk.On(s); r == nil || r.BlockFinal == nil {
+		t.Fatalf("unsupported test claim should block, got %+v", r)
+	}
+}
+
+func TestFinalCheckHookRejectsUnsupportedTestClaim(t *testing.T) {
+	hk := FinalCheckHook()
+	s := newState()
+	s.SetStr(StoreFinalAnswerText, "测试通过。")
+	s.Set(StoreLedgerVerified, 0)
+	if r := hk.On(s); r == nil || r.BlockFinal == nil {
+		t.Fatalf("unsupported test claim should block, got %+v", r)
+	}
+}
+
+func TestFinalCheckHookUnreportedToolError(t *testing.T) {
+	hk := FinalCheckHook()
+	s := newState()
+	s.SetStr(StoreFinalAnswerText, "已完成修复。")
+	s.Set(StoreLedgerErrors, 2)
+	s.Set(StoreLedgerNonDocModified, 0)
+	if r := hk.On(s); r == nil || r.BlockFinal == nil {
+		t.Fatalf("unreported tool error should block, got %+v", r)
+	}
+
+	s2 := newState()
+	s2.SetStr(StoreFinalAnswerText, "已完成修复，但中途有一次失败。")
+	s2.Set(StoreLedgerErrors, 2)
+	if r := hk.On(s2); r != nil {
+		t.Fatalf("disclosed failure should pass, got %+v", r)
+	}
+}
+
+func TestFinalCheckHookEmptyTextIsSilent(t *testing.T) {
+	hk := FinalCheckHook()
+	s := newState()
+	s.Set(StoreLedgerNonDocModified, 1)
+	s.Set(StoreLedgerErrors, 5)
+	if r := hk.On(s); r != nil {
+		t.Fatalf("empty final answer text should be silent, got %+v", r)
+	}
+}
+
+func TestFinalCheckHookNegationNotTreatedAsClaim(t *testing.T) {
+	hk := FinalCheckHook()
+	s := newState()
+	s.SetStr(StoreFinalAnswerText, "测试未通过，需要继续修复。")
+	s.Set(StoreLedgerVerified, 0)
+	s.Set(StoreLedgerNonDocModified, 1)
+	if r := hk.On(s); r == nil || r.BlockFinal == nil || !strings.Contains(r.BlockFinal.Reason, "验证") {
+		t.Fatalf("negated test claim should not count as 'tests passed'; expected missing-verification block, got %+v", r)
+	}
+}

@@ -27,6 +27,11 @@ func (g *Manager) SyncLedgerToHooks() {
 	g.HookReg.Set(hooks.StoreLedgerVerified, verified)
 	g.HookReg.Set(hooks.StoreLedgerErrors, int64(len(snap.ToolErrors)))
 	g.HookReg.Set(hooks.StoreLedgerBlocked, int64(len(snap.BlockedTools)))
+	nonDoc := int64(0)
+	if snap.HasNonDocumentationModifications() {
+		nonDoc = 1
+	}
+	g.HookReg.Set(hooks.StoreLedgerNonDocModified, nonDoc)
 
 	curReads := len(snap.ReadFiles)
 	curModifies := len(snap.ModifiedFiles)
@@ -54,9 +59,6 @@ func (g *Manager) Reset() {
 	}
 	if g.HookReg != nil {
 		g.HookReg.ResetSession()
-	}
-	if g.Gate != nil {
-		g.Gate.Reset()
 	}
 	g.prevReads = 0
 	g.prevModifies = 0

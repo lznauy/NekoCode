@@ -1,7 +1,5 @@
 package contextmgr
 
-import "nekocode/bot/contextmgr/token"
-
 // RecordUsage, RecordCache, and ResetCache hold the read lock for the full
 // call so FreshStart (which replaces m.Tracker under write lock) cannot race.
 func (m *Manager) RecordUsage(prompt, completion int) {
@@ -25,6 +23,5 @@ func (m *Manager) ResetCache() {
 func (m *Manager) TokenUsage() (int, int) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	visible := m.visibleMessages()
-	return token.EstimateTokens(visible) + token.EstimateString(m.ctx.Archive), m.ContextWindow
+	return m.totalTokenEstimate(), m.ContextWindow
 }

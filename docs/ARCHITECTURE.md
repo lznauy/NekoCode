@@ -720,7 +720,7 @@ PolicyExploreExhausted="policy:explore_exhausted"
 
 ### Ledger（工具执行账本）
 
-`bot/agent/ledger/`：追踪所有工具执行事件，记录：
+`bot/agent/governance/ledger/`：追踪所有工具执行事件，记录：
 - `readFiles`：已读取文件集合
 - `modifiedFiles`：已修改文件集合
 - `blockedTools`：被阻止的工具调用
@@ -757,12 +757,12 @@ Model
 |------|------|------|
 | Bot 应用层 | `bot/app/` | 依赖注入 + 生命周期编排 + BotInterface 实现 |
 | Agent 循环 | `bot/agent/runtime/` | Reason→Execute→Feedback，中断，重试 |
-| 治理系统 | `bot/agent/governance/` | GovManager：HookReg + Ledger + Exploration + Gate |
-| 工具账本 | `bot/agent/ledger/` | 工具执行追踪（读/写/阻止/错误/验证） |
-| 响应门控 | `bot/agent/gate/` | 治理重试限制 |
-| 推理格式 | `bot/agent/reasoning/` | GarbledToolCall 检测 |
+| 治理系统 | `bot/agent/governance/` | Manager：HookReg + Ledger + Exploration |
+| 工具账本 | `bot/agent/governance/ledger/` | 工具执行追踪（读/写/阻止/错误/验证） |
+| 响应门控 | `bot/agent/runtime/gate.go` | 治理重试限制（内联于 runtime） |
+| 推理格式 | `bot/agent/runtime/reasoning.go` | GarbledToolCall 检测（内联于 runtime） |
 | 子 Agent | `bot/agent/subagent/` | 独立循环，3 种内置类型 + 插件扩展 |
-| 子槽位 | `bot/agent/subslot/` | 并发控制（8 槽位 + 颜色） |
+| 子槽位 | `bot/agent/runtime/subslot.go` | 并发控制（8 槽位 + 颜色，内联于 runtime） |
 | 预算配额 | `bot/agent/budget/` | 探索检测 + 工具配额 |
 | LLM 网关 | `llm/` | OpenAI/Anthropic 双协议，统一接口 |
 | 工具系统 | `bot/tools/` | Tool 接口 + Executor + Registry + FileCache |
@@ -783,7 +783,7 @@ Model
 | Hook 系统 | `bot/hooks/` | 事件驱动（7 种触发点）+ 声明式（plugin/） |
 | 内置 Hook | `bot/hooks/builtin/` | 8 个内置 Hook 实现 |
 | 声明式 Hook | `bot/hooks/plugin/` | JSON 配置驱动 Hook |
-| Tree-sitter | `bot/treesitter/` | 多语言解析器注册 + AST 查询 |
+| Tree-sitter | `bot/index/treesitter/` | 多语言解析器注册 + AST 查询 |
 | 代码索引 | `bot/index/` | SQLite + FTS5 + Tree-sitter 代码索引 |
 | 命令系统 | `bot/command/` | 斜杠命令解析 |
 | 调试日志 | `bot/debug/` | 全局 debug.Log（时间戳 + subagent 标签） |

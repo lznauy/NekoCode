@@ -12,14 +12,16 @@ func (f *File) Save() error {
 	defer f.mu.RUnlock()
 
 	var b strings.Builder
-	for _, key := range []string{"TechStack", "ActiveGoals", "CompletedTasks", "ArchMap", "Preferences"} {
+	for _, key := range sectionOrder {
 		header := sectionHeaders[key]
 		content := f.getField(key)
-		b.WriteString(header + "\n")
+		b.WriteString(header)
+		b.WriteString("\n")
 		if strings.TrimSpace(content) == "" {
 			b.WriteString("\n")
 		} else {
-			b.WriteString(content + "\n\n")
+			b.WriteString(content)
+			b.WriteString("\n\n")
 		}
 	}
 	return common.WriteFileWithDir(f.path, []byte(b.String()), 0o644)

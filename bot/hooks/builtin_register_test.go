@@ -7,8 +7,8 @@ func TestRegisterBuiltinRegistersExpectedHookSet(t *testing.T) {
 	RegisterBuiltin(r)
 
 	hooks := r.List()
-	if len(hooks) != 8 {
-		t.Fatalf("builtin hooks = %d, want 8", len(hooks))
+	if len(hooks) != 9 {
+		t.Fatalf("builtin hooks = %d, want 9", len(hooks))
 	}
 	want := map[string]bool{
 		"quota":                   true,
@@ -19,6 +19,7 @@ func TestRegisterBuiltinRegistersExpectedHookSet(t *testing.T) {
 		"progress_stall":          true,
 		"completion_quality":      true,
 		"garbled_circuit_breaker": true,
+		"final_check":             true,
 	}
 	for _, h := range hooks {
 		if !want[h.Name] {

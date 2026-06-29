@@ -1,11 +1,11 @@
 // Package treesitter provides shared tree-sitter language definitions
-// used by both the code indexer (index) and the block resolver (builtin).
+// used by the code indexer (index/parser).
 package treesitter
 
 import (
 	sitter "github.com/smacker/go-tree-sitter"
 
-	"nekocode/bot/treesitter/languages"
+	"nekocode/bot/index/treesitter/languages"
 )
 
 // Languages maps file extensions to their tree-sitter language objects.

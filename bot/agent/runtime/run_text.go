@@ -22,12 +22,6 @@ func (a *Agent) handleText(reasoning *ReasoningResult, state *stepState, callbac
 		return a.stopReason == hooks.StopCompleted || a.stopReason == hooks.StopInterrupted || a.stopReason == hooks.StopFormatError
 	}
 
-	if recordable {
-		if blocked := a.applyFinalCheck(reasoning); blocked {
-			return false
-		}
-	}
-
 	a.completeWithText(reasoning, recordable, callback)
 	return true
 }

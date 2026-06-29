@@ -7,7 +7,6 @@ import (
 	"time"
 
 	aggov "nekocode/bot/agent/governance"
-	"nekocode/bot/agent/subslot"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/debug"
 	"nekocode/bot/hooks"
@@ -46,7 +45,7 @@ type agentDeps struct {
 	llmClient    types.LLM
 	toolRegistry *tools.Registry
 	executor     *tools.Executor
-	subSlotMgr   *subslot.Manager
+	subSlotMgr   *subSlotManager
 	gov          *aggov.Manager
 	transform    ContextTransform
 }
@@ -74,6 +73,7 @@ type turnState struct {
 	consecutiveHints    int
 	consecutiveFailures int
 	pendingHints        []hooks.Hint
+	gate                *responseGate
 }
 
 func New(ctx context.Context, ctxMgr *ctxmgr.Manager, llmClient types.LLM, toolRegistry *tools.Registry) *Agent {
@@ -90,7 +90,10 @@ func New(ctx context.Context, ctxMgr *ctxmgr.Manager, llmClient types.LLM, toolR
 			llmClient:    llmClient,
 			toolRegistry: toolRegistry,
 			executor:     tools.NewExecutor(toolRegistry),
-			subSlotMgr:   subslot.NewManager(),
+			subSlotMgr:   newSubSlotManager(),
+		},
+		turnState: turnState{
+			gate: newResponseGate(),
 		},
 	}
 }
@@ -116,6 +119,7 @@ func (a *Agent) Steer(msg string) {
 	a.replaceCtx()
 	debug.Log("Steer: context replaced")
 }
+
 func (a *Agent) Abort() {
 	debug.Log("Abort: user interrupt requested")
 	a.finished.Store(true)

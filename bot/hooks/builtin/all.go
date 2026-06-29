@@ -10,5 +10,6 @@ func All() []Hook {
 		ProgressStallHook(),
 		CompletionQualityHook(),
 		GarbledCircuitBreaker(),
+		FinalCheckHook(),
 	}
 }

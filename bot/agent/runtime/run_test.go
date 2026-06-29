@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	aggov "nekocode/bot/agent/governance"
-	"nekocode/bot/agent/ledger"
+	"nekocode/bot/agent/governance/ledger"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/governance"
 	"nekocode/bot/hooks"

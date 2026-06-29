@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"nekocode/bot/agent/reasoning"
 	"nekocode/bot/debug"
 	"nekocode/bot/tools"
 
@@ -55,14 +54,14 @@ func (a *Agent) Reason(state *stepState) *ReasoningResult {
 		if errors.Is(err, context.Canceled) {
 			return &ReasoningResult{Thought: "User interrupted", Action: ActionChat, Interrupted: true}
 		}
-		if textContent != "" && !reasoning.IsGarbledToolCall(textContent) {
+		if textContent != "" && !isGarbledToolCall(textContent) {
 			return &ReasoningResult{Thought: "Truncated reply", Action: ActionChat, ActionInput: textContent}
 		}
 		return &ReasoningResult{Thought: "LLM call failed", Action: ActionChat, ActionInput: fmt.Sprintf("LLM call failed: %v", err), IsError: true}
 	}
 
 	if len(toolCalls) == 0 {
-		if reasoning.IsGarbledToolCall(textContent) {
+		if isGarbledToolCall(textContent) {
 			debug.Log("GarbledToolCall: XML leaked (len=%d)", len(textContent))
 			return &ReasoningResult{Thought: "Format correction", Action: ActionChat, GarbledToolCall: true}
 		}

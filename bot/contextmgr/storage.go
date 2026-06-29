@@ -6,20 +6,11 @@ import (
 	"nekocode/bot/llm/types"
 )
 
-func summary(s string) string {
-	const maxLen = 80
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
-
 func (m *Manager) Add(role, content string, source ...string) {
 	s := ""
 	if len(source) > 0 {
 		s = source[0]
 	}
-	debug.Log("add_msg: role=%s source=%s len=%d content=%q", role, s, len(content), summary(content))
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.ctx.Messages = append(m.ctx.Messages, types.Message{Role: role, Content: content, Source: s})

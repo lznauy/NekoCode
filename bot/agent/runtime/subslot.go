@@ -1,5 +1,4 @@
-// Package subslot manages sub-agent concurrency slots and color assignment.
-package subslot
+package runtime
 
 import (
 	"fmt"
@@ -10,26 +9,25 @@ import (
 
 const maxSubSlots = 8
 
-// Manager controls sub-agent concurrency and color assignment.
+// subSlotManager controls sub-agent concurrency and color assignment.
 // Max 8 concurrent sub-agents. Each gets an exclusive color index 0-7.
 // Acquire blocks when all 8 slots are occupied.
-type Manager struct {
+type subSlotManager struct {
 	mu     sync.Mutex
 	cond   *sync.Cond
 	slots  [maxSubSlots]*common.SubSlot
 	active int
 }
 
-// NewManager creates a new slot manager.
-func NewManager() *Manager {
-	m := &Manager{}
+func newSubSlotManager() *subSlotManager {
+	m := &subSlotManager{}
 	m.cond = sync.NewCond(&m.mu)
 	return m
 }
 
 // Acquire blocks until a free slot is available, then assigns it.
 // Returns the color index and sub-agent info. ok is always true.
-func (m *Manager) Acquire(id, subType string) (colorIdx int, ok bool) {
+func (m *subSlotManager) Acquire(id, subType string) (colorIdx int, ok bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -37,7 +35,6 @@ func (m *Manager) Acquire(id, subType string) (colorIdx int, ok bool) {
 		m.cond.Wait()
 	}
 
-	// Find first free slot.
 	for i := range m.slots {
 		if m.slots[i] == nil {
 			m.slots[i] = &common.SubSlot{ID: id, SubType: subType, ColorIdx: i}
@@ -50,7 +47,7 @@ func (m *Manager) Acquire(id, subType string) (colorIdx int, ok bool) {
 
 // Release frees the slot occupied by the given sub-agent ID.
 // Idempotent: releasing an unknown ID is a no-op.
-func (m *Manager) Release(id string) {
+func (m *subSlotManager) Release(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -64,29 +61,8 @@ func (m *Manager) Release(id string) {
 	}
 }
 
-// Active returns the current active sub-agent slots (for TUI rendering).
-func (m *Manager) Active() []common.SubSlot {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	var out []common.SubSlot
-	for _, s := range m.slots {
-		if s != nil {
-			out = append(out, *s)
-		}
-	}
-	return out
-}
-
-// Count returns the number of active sub-agents.
-func (m *Manager) Count() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.active
-}
-
 // String returns a debug representation.
-func (m *Manager) String() string {
+func (m *subSlotManager) String() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var ids []string

@@ -18,10 +18,7 @@ func (m *Manager) Len() int {
 func (m *Manager) Stats() (int, int, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	visible := m.visibleMessages()
-	return len(m.ctx.Messages),
-		token.EstimateTokens(visible) + token.EstimateString(m.ctx.Archive),
-		m.ctx.Archive != ""
+	return len(m.ctx.Messages), m.totalTokenEstimate(), m.ctx.Archive != ""
 }
 
 func (m *Manager) visibleMessages() []types.Message {
@@ -30,4 +27,10 @@ func (m *Manager) visibleMessages() []types.Message {
 		visible = visible[m.ctx.CompactBoundary:]
 	}
 	return visible
+}
+
+// totalTokenEstimate returns the estimated token count of visible messages
+// plus the archive. Shared by Stats() and TokenUsage().
+func (m *Manager) totalTokenEstimate() int {
+	return token.EstimateTokens(m.visibleMessages()) + token.EstimateString(m.ctx.Archive)
 }

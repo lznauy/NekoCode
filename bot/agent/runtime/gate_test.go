@@ -1,9 +1,9 @@
-package gate
+package runtime
 
 import "testing"
 
 func TestResponseGateRetryLimit(t *testing.T) {
-	g := &ResponseGate{MaxRetries: 2}
+	g := &responseGate{MaxRetries: 2}
 
 	if retry, hint := g.TryRetry("blocked"); !retry || hint != "blocked" {
 		t.Fatalf("first retry = (%v, %q), want true blocked", retry, hint)
@@ -17,7 +17,7 @@ func TestResponseGateRetryLimit(t *testing.T) {
 }
 
 func TestResponseGateReset(t *testing.T) {
-	g := NewResponseGate()
+	g := newResponseGate()
 	g.TryRetry("blocked")  // retries = 1
 	g.TryRetry("blocked")  // retries = 2, exhausted
 	g.Reset()

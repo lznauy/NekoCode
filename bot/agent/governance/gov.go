@@ -2,19 +2,14 @@ package governance
 
 import (
 	"nekocode/bot/agent/budget"
-	gatepkg "nekocode/bot/agent/gate"
-	"nekocode/bot/agent/ledger"
+	"nekocode/bot/agent/governance/ledger"
 	"nekocode/bot/hooks"
 )
-
-type GovManager = Manager
-type ResponseGate = gatepkg.ResponseGate
 
 type Manager struct {
 	HookReg     *hooks.Registry
 	Ledger      *ledger.Ledger
 	Exploration *budget.ExplorationTracker
-	Gate        *ResponseGate
 
 	prevReads         int
 	prevModifies      int
@@ -26,7 +21,6 @@ func NewManager(hookReg *hooks.Registry) *Manager {
 		HookReg:     hookReg,
 		Ledger:      ledger.New(),
 		Exploration: budget.NewExplorationTracker(),
-		Gate:        gatepkg.NewResponseGate(),
 	}
 }
 

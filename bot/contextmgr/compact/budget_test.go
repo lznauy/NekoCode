@@ -1,6 +1,7 @@
 package compact
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -8,7 +9,7 @@ import (
 func TestBudgetResult_GrepHeadTail(t *testing.T) {
 	var lines []string
 	for i := 0; i < 200; i++ {
-		lines = append(lines, "line "+itoa(i))
+		lines = append(lines, "line "+strconv.Itoa(i))
 	}
 	content := strings.Join(lines, "\n")
 	c, truncated := BudgetResult(content, "grep")
@@ -73,20 +74,6 @@ func TestBudgetResult_NonGrep(t *testing.T) {
 		}
 		if c != content {
 			t.Errorf("%s content changed", tool)
-		}
-	}
-}
-
-func TestItoa(t *testing.T) {
-	tests := []struct {
-		n    int
-		want string
-	}{
-		{0, "0"}, {1, "1"}, {10, "10"}, {100, "100"}, {9999, "9999"},
-	}
-	for _, tt := range tests {
-		if got := itoa(tt.n); got != tt.want {
-			t.Errorf("itoa(%d) = %q, want %q", tt.n, got, tt.want)
 		}
 	}
 }

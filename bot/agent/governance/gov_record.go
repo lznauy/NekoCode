@@ -1,7 +1,7 @@
 package governance
 
 import (
-	"nekocode/bot/agent/ledger"
+	"nekocode/bot/agent/governance/ledger"
 	semanticspkg "nekocode/bot/governance"
 	"nekocode/bot/hooks"
 )

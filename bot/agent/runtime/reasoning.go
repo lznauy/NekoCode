@@ -1,8 +1,11 @@
-package reasoning
+package runtime
 
 import "strings"
 
-func IsGarbledToolCall(text string) bool {
+// isGarbledToolCall detects when a model erroneously serializes tool calls
+// into the text content (as XML tags or bare JSON) instead of using the
+// structured tool_calls field. Such output is discarded to keep history clean.
+func isGarbledToolCall(text string) bool {
 	t := strings.TrimSpace(text)
 	if t == "" {
 		return false

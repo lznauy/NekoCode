@@ -1,8 +1,6 @@
 package runtime
 
 import (
-	"nekocode/bot/agent/gate"
-	"nekocode/bot/agent/ledger"
 	"nekocode/bot/hooks"
 )
 
@@ -12,6 +10,13 @@ func (a *Agent) applyPostTurnHooks(reasoning *ReasoningResult, recordable bool, 
 	}
 	if reasoning.GarbledToolCall {
 		a.gov.HookReg.Inc(hooks.StoreRespGarbled)
+	}
+	// Expose the final-answer text to PostTurn hooks (esp. final_check).
+	// Only recordable text (non-error, non-garbled chat) is governed.
+	if recordable {
+		a.gov.HookReg.SetStr(hooks.StoreFinalAnswerText, reasoning.ActionInput)
+	} else {
+		a.gov.HookReg.SetStr(hooks.StoreFinalAnswerText, "")
 	}
 
 	for _, r := range a.gov.HookReg.Evaluate(hooks.PostTurn, "", false) {
@@ -68,39 +73,13 @@ func (a *Agent) applyPostTurnHint(reasoning *ReasoningResult, hint *hooks.Hint, 
 	return true
 }
 
-func (a *Agent) applyFinalCheck(reasoning *ReasoningResult) bool {
-	if a.gov == nil || a.gov.Ledger == nil {
-		return false
-	}
-	issues := a.gov.CheckFinalAnswer(reasoning.ActionInput)
-	if len(issues) == 0 {
-		return false
-	}
-	msg := ledger.FormatIssues(issues)
-	a.lastText = reasoning.ActionInput
-
-	if a.gov.Gate == nil {
-		a.gov.Gate = gate.NewResponseGate()
-	}
-	retry, hint := a.gov.Gate.TryRetry(msg)
-	if !retry {
-		return false
-	}
-	a.injectHint(&hooks.Hint{Type: "final_check", Severity: "critical", Content: hint})
-	a.step++
-	return true
-}
-
 func (a *Agent) applyFinalPolicyBlock(reasoning *ReasoningResult, reason string) bool {
 	if reason == "" {
 		reason = PolicyBlockFinal
 	}
 	a.lastText = reasoning.ActionInput
 
-	if a.gov == nil || a.gov.Gate == nil {
-		a.gov.Gate = gate.NewResponseGate()
-	}
-	retry, hint := a.gov.Gate.TryRetry(reason)
+	retry, hint := a.gate.TryRetry(reason)
 	if !retry {
 		return false
 	}
