@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"nekocode/bot/llm/types"
 )
@@ -210,5 +211,75 @@ func TestClientCallToolNotStarted(t *testing.T) {
 	_, err := c.CallTool("test", nil)
 	if err == nil {
 		t.Error("should fail when server cannot start")
+	}
+}
+
+func TestClientListToolsTimeout(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "hang-list.go")
+	code := `package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"os"
+	"time"
+)
+
+func main() {
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		var req map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+			continue
+		}
+		method, _ := req["method"].(string)
+		id, _ := req["id"].(float64)
+		if method == "initialize" {
+			resp := map[string]any{
+				"jsonrpc": "2.0",
+				"id": id,
+				"result": map[string]any{
+					"protocolVersion": "2024-11-05",
+					"serverInfo": map[string]string{"name": "hang-list", "version": "1.0"},
+				},
+			}
+			out, _ := json.Marshal(resp)
+			fmt.Println(string(out))
+			continue
+		}
+		if method == "tools/list" {
+			time.Sleep(10 * time.Second)
+		}
+	}
+}
+`
+	if err := os.WriteFile(script, []byte(code), 0o644); err != nil {
+		t.Fatalf("write mock server: %v", err)
+	}
+
+	outPath := filepath.Join(dir, "hang-list")
+	build := exec.Command("go", "build", "-o", outPath, script)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build mock server: %v\n%s", err, out)
+	}
+
+	c := NewClient("hang-list", ServerConfig{Command: outPath})
+	c.requestTimeout = 50 * time.Millisecond
+	if err := c.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	start := time.Now()
+	_, err := c.ListTools()
+	if err == nil {
+		t.Fatal("ListTools should time out")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("ListTools took too long: %s", elapsed)
+	}
+	if c.cmd != nil {
+		t.Fatal("timed out MCP process should be cleared")
 	}
 }

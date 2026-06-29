@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { cn } from '../lib/classnames'
 import { isWailsEnvironment, safeGetConfig, safeSaveConfig } from '../lib/wails'
-import type { ConfigSnapshot, ImageGenConfig, ModelConfig } from '../types/config'
+import type { ConfigSnapshot, ImageGenConfig, MCPServerConfig, ModelConfig } from '../types/config'
 
 interface ConfigPanelProps {
   open: boolean
   onClose: () => void
   onSaved: () => void
+  initialTab?: ConfigTab
 }
 
 const emptyModel = (name: string): ModelConfig => ({
@@ -28,8 +29,26 @@ const emptyImageModel = (name: string): ImageGenConfig => ({
   model: 'jimeng_t2i_v31',
 })
 
-export function ConfigPanel({ open, onClose, onSaved }: ConfigPanelProps) {
+const emptyMcpServer = (): MCPServerConfig => ({
+  command: '',
+  args: [],
+  env: {},
+  dangerLevel: 'safe',
+  enabled: true,
+})
+
+export type ConfigTab = 'overview' | 'models' | 'mcp'
+
+const configTabs: Array<{ value: ConfigTab; label: string }> = [
+  { value: 'overview', label: '概览' },
+  { value: 'models', label: '模型' },
+  { value: 'mcp', label: 'MCP 服务' },
+]
+
+export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }: ConfigPanelProps) {
   const [cfg, setCfg] = useState<ConfigSnapshot | null>(null)
+  const [tab, setTab] = useState<ConfigTab>(initialTab)
+  const [selectedMcp, setSelectedMcp] = useState('')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -37,6 +56,7 @@ export function ConfigPanel({ open, onClose, onSaved }: ConfigPanelProps) {
 
   useEffect(() => {
     if (!open) return
+    setTab(initialTab)
     setLoading(true)
     setError('')
     setSaved(false)
@@ -56,13 +76,18 @@ export function ConfigPanel({ open, onClose, onSaved }: ConfigPanelProps) {
           ...next,
           models: next.models ?? [],
           image_gen_models: next.image_gen_models ?? [],
+          mcp_servers: next.mcp_servers ?? {},
         })
+        setSelectedMcp(Object.keys(next.mcp_servers ?? {})[0] ?? '')
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setLoading(false))
-  }, [open])
+  }, [initialTab, open])
 
   const validation = useMemo(() => validateConfig(cfg), [cfg])
+  const mcpEntries = Object.entries(cfg?.mcp_servers ?? {})
+  const enabledMcpCount = mcpEntries.filter(([, srv]) => srv.enabled).length
+  const selectedMcpEntry = mcpEntries.find(([name]) => name === selectedMcp) ?? mcpEntries[0]
 
   if (!open) return null
 
@@ -133,6 +158,64 @@ export function ConfigPanel({ open, onClose, onSaved }: ConfigPanelProps) {
     setSaved(false)
   }
 
+  const addMcpServer = () => {
+    setCfg((prev) => {
+      if (!prev) return prev
+      const name = nextName(Object.keys(prev.mcp_servers ?? {}), 'mcp')
+      setSelectedMcp(name)
+      return {
+        ...prev,
+        mcp_servers: {
+          ...(prev.mcp_servers ?? {}),
+          [name]: emptyMcpServer(),
+        },
+      }
+    })
+    setSaved(false)
+    setTab('mcp')
+  }
+
+  const renameMcpServer = (oldName: string, nextNameValue: string) => {
+    setCfg((prev) => {
+      if (!prev) return prev
+      const servers = { ...(prev.mcp_servers ?? {}) }
+      const value = servers[oldName]
+      delete servers[oldName]
+      servers[nextNameValue] = value
+      setSelectedMcp(nextNameValue)
+      return { ...prev, mcp_servers: servers }
+    })
+    setSaved(false)
+  }
+
+  const updateMcpServer = (name: string, patch: Partial<MCPServerConfig>) => {
+    setCfg((prev) => {
+      if (!prev) return prev
+      const current = prev.mcp_servers?.[name] ?? emptyMcpServer()
+      return {
+        ...prev,
+        mcp_servers: {
+          ...(prev.mcp_servers ?? {}),
+          [name]: { ...current, ...patch },
+        },
+      }
+    })
+    setSaved(false)
+  }
+
+  const removeMcpServer = (name: string) => {
+    setCfg((prev) => {
+      if (!prev) return prev
+      const servers = { ...(prev.mcp_servers ?? {}) }
+      delete servers[name]
+      if (selectedMcp === name) {
+        setSelectedMcp(Object.keys(servers)[0] ?? '')
+      }
+      return { ...prev, mcp_servers: servers }
+    })
+    setSaved(false)
+  }
+
   const save = async () => {
     if (!cfg || validation) return
     setSaving(true)
@@ -143,6 +226,7 @@ export function ConfigPanel({ open, onClose, onSaved }: ConfigPanelProps) {
         ...cfg,
         models: cfg.models.map(trimModel),
         image_gen_models: (cfg.image_gen_models ?? []).map(trimImageModel),
+        mcp_servers: trimMcpServers(cfg.mcp_servers ?? {}),
       })
       if (!savedCfg) {
         setError('保存失败：Wails 配置接口没有返回数据')
@@ -177,15 +261,34 @@ export function ConfigPanel({ open, onClose, onSaved }: ConfigPanelProps) {
           </button>
         </header>
 
+        <nav className="flex gap-1 border-b border-border/60 px-5 py-2">
+          {configTabs.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={cn(
+                'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-semibold transition-all active:scale-95',
+                tab === option.value ? 'bg-primary text-black' : 'bg-surface-3 text-text-2 hover:text-text',
+              )}
+              onClick={() => setTab(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </nav>
+
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           {loading && <div className="text-sm text-text-2">正在识别配置文件...</div>}
           {!loading && cfg && (
             <div className="space-y-4">
+              {tab === 'overview' && (
+                <>
               <section className="rounded-md border border-border/50 bg-surface px-4 py-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <StatusPill ok={cfg.exists} text={cfg.exists ? '已识别配置文件' : '未找到配置文件，保存后创建'} />
                   <span className="text-[11px] text-text-3">{cfg.models.length} 个文本模型</span>
                   <span className="text-[11px] text-text-3">{cfg.image_gen_models?.length ?? 0} 个图片模型</span>
+                  <span className="text-[11px] text-text-3">{mcpEntries.length} 个 MCP 服务</span>
                 </div>
               </section>
 
@@ -214,7 +317,16 @@ export function ConfigPanel({ open, onClose, onSaved }: ConfigPanelProps) {
                   />
                 </Field>
               </section>
+              <section className="grid gap-2 md:grid-cols-3">
+                <ConfigShortcut title="文本模型" detail={`${cfg.models.length} 个，当前 ${cfg.active || '未设置'}`} onClick={() => setTab('models')} />
+                <ConfigShortcut title="图片模型" detail={`${cfg.image_gen_models?.length ?? 0} 个可用配置`} onClick={() => setTab('models')} />
+                <ConfigShortcut title="MCP 服务" detail={`${enabledMcpCount}/${mcpEntries.length} 已启用`} onClick={() => setTab('mcp')} />
+              </section>
+                </>
+              )}
 
+              {tab === 'models' && (
+                <>
               <section>
                 <SectionTitle title="文本模型" action="添加模型" onAction={addModel} />
                 <div className="mt-2 space-y-2">
@@ -249,6 +361,50 @@ export function ConfigPanel({ open, onClose, onSaved }: ConfigPanelProps) {
                   )}
                 </div>
               </section>
+                </>
+              )}
+
+              {tab === 'mcp' && (
+                <section>
+                  <SectionTitle title="MCP 服务" action="添加 MCP 服务" onAction={addMcpServer} />
+                  <div className="mt-2 grid min-h-[360px] gap-3 md:grid-cols-[220px_minmax(0,1fr)]">
+                    <div className="rounded-md border border-border/50 bg-surface p-2">
+                      {mcpEntries.map(([name, server]) => (
+                        <button
+                          key={name}
+                          type="button"
+                          className={cn(
+                            'mb-1 grid w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-2 rounded-md px-2 py-2 text-left transition-all last:mb-0 active:scale-[0.99]',
+                            selectedMcpEntry?.[0] === name ? 'bg-primary/14 text-text' : 'text-text-2 hover:bg-surface-3 hover:text-text',
+                          )}
+                          onClick={() => setSelectedMcp(name)}
+                        >
+                          <span className={cn('h-2 w-2 rounded-full', server.enabled ? 'bg-success' : 'bg-text-3')} />
+                          <span className="min-w-0">
+                            <span className="block truncate text-xs font-semibold">{name}</span>
+                            <span className="mt-0.5 block truncate font-mono text-[10px] text-text-3">{server.command || '未配置 command'}</span>
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                    {selectedMcpEntry && (
+                      <McpServerCard
+                        key={selectedMcpEntry[0]}
+                        name={selectedMcpEntry[0]}
+                        server={selectedMcpEntry[1]}
+                        onRename={(nextNameValue) => renameMcpServer(selectedMcpEntry[0], nextNameValue)}
+                        onChange={(patch) => updateMcpServer(selectedMcpEntry[0], patch)}
+                        onRemove={() => removeMcpServer(selectedMcpEntry[0])}
+                      />
+                    )}
+                    {mcpEntries.length === 0 && (
+                      <div className="rounded-md border border-dashed border-border/70 bg-surface px-4 py-8 text-center text-xs text-text-3 md:col-span-2">
+                        暂无 MCP 服务配置
+                      </div>
+                    )}
+                  </div>
+                </section>
+              )}
             </div>
           )}
         </div>
@@ -332,12 +488,114 @@ function ImageModelCard({
   )
 }
 
+function McpServerCard({
+  name,
+  server,
+  onRename,
+  onChange,
+  onRemove,
+}: {
+  name: string
+  server: MCPServerConfig
+  onRename: (name: string) => void
+  onChange: (patch: Partial<MCPServerConfig>) => void
+  onRemove: () => void
+}) {
+  const [draftName, setDraftName] = useState(name)
+  useEffect(() => setDraftName(name), [name])
+  const argsText = (server.args ?? []).join('\n')
+  const envText = Object.entries(server.env ?? {})
+    .map(([key, value]) => `${key}=${value}`)
+    .join('\n')
+  const commitName = () => {
+    const next = draftName.trim()
+    if (next && next !== name) onRename(next)
+    else setDraftName(name)
+  }
+
+  return (
+    <div className="rounded-md border border-border/50 bg-surface px-4 py-3">
+      <div className="mb-3 flex items-center gap-2">
+        <span className={cn('h-2 w-2 rounded-full', server.enabled ? 'bg-success' : 'bg-text-3')} />
+        <span className="min-w-0 flex-1 truncate text-xs font-semibold text-text">{name || '未命名 MCP 服务'}</span>
+        <label className="inline-flex h-7 items-center gap-1.5 rounded-md bg-surface-3 px-2 text-[11px] text-text-2">
+          <input
+            type="checkbox"
+            className="h-3.5 w-3.5 accent-[var(--bl)]"
+            checked={server.enabled}
+            onChange={(e) => onChange({ enabled: e.target.checked })}
+          />
+          启用
+        </label>
+        <button className="danger-button" type="button" onClick={onRemove}>删除</button>
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field label="服务名称">
+          <input
+            className="field font-mono"
+            value={draftName}
+            onChange={(e) => setDraftName(e.target.value)}
+            onBlur={commitName}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur()
+            }}
+          />
+        </Field>
+        <Field label="危险等级">
+          <select
+            className="field"
+            value={server.dangerLevel || 'write'}
+            onChange={(e) => onChange({ dangerLevel: e.target.value as MCPServerConfig['dangerLevel'] })}
+          >
+            <option value="safe">safe</option>
+            <option value="write">write</option>
+            <option value="danger">danger</option>
+            <option value="forbidden">forbidden</option>
+          </select>
+        </Field>
+        <Field label="Command">
+          <input className="field font-mono" value={server.command} onChange={(e) => onChange({ command: e.target.value })} />
+        </Field>
+        <Field label="Args（每行一个）">
+          <textarea
+            className="field min-h-[84px] resize-y py-2 font-mono"
+            value={argsText}
+            onChange={(e) => onChange({ args: splitLines(e.target.value) })}
+          />
+        </Field>
+        <div className="md:col-span-2">
+          <Field label="Env（每行 KEY=VALUE）">
+            <textarea
+              className="field min-h-[84px] resize-y py-2 font-mono"
+              value={envText}
+              onChange={(e) => onChange({ env: parseEnvLines(e.target.value) })}
+            />
+          </Field>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="block min-w-0">
       <span className="mb-1 block text-[11px] font-medium text-text-3">{label}</span>
       {children}
     </label>
+  )
+}
+
+function ConfigShortcut({ title, detail, onClick }: { title: string; detail: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="rounded-md border border-border/50 bg-surface px-3 py-3 text-left transition-all hover:bg-surface-3 active:scale-[0.99]"
+      onClick={onClick}
+    >
+      <span className="block text-xs font-semibold text-text">{title}</span>
+      <span className="mt-1 block truncate text-[11px] text-text-3">{detail}</span>
+    </button>
   )
 }
 
@@ -375,6 +633,17 @@ function validateConfig(cfg: ConfigSnapshot | null): string {
   if (!names.has(cfg.active)) return '当前模型不在模型列表中'
   if (cfg.flash_model && !names.has(cfg.flash_model)) return 'Flash 模型不在模型列表中'
   if (!cfg.context_window || cfg.context_window <= 0) return '上下文窗口必须大于 0'
+  const mcpNames = new Set<string>()
+  for (const [rawName, srv] of Object.entries(cfg.mcp_servers ?? {})) {
+    const name = rawName.trim()
+    if (!name) return 'MCP 服务缺少名称'
+    if (mcpNames.has(name)) return `MCP 服务名称重复：${name}`
+    mcpNames.add(name)
+    if (!srv.command.trim()) return `${name} 缺少 command`
+    for (const key of Object.keys(srv.env ?? {})) {
+      if (!key.trim()) return `${name} 存在空 env key`
+    }
+  }
   return ''
 }
 
@@ -407,6 +676,53 @@ function trimImageModel(model: ImageGenConfig): ImageGenConfig {
     base_url: model.base_url?.trim(),
     model: model.model?.trim(),
   }
+}
+
+function trimMcpServers(servers: Record<string, MCPServerConfig>): Record<string, MCPServerConfig> {
+  const out: Record<string, MCPServerConfig> = {}
+  for (const [name, server] of Object.entries(servers)) {
+    const trimmedName = name.trim()
+    if (!trimmedName) continue
+    out[trimmedName] = {
+      command: server.command.trim(),
+      args: (server.args ?? []).map((arg) => arg.trim()).filter(Boolean),
+      env: trimEnv(server.env ?? {}),
+      dangerLevel: server.dangerLevel || 'write',
+      enabled: server.enabled,
+    }
+  }
+  return out
+}
+
+function splitLines(value: string): string[] {
+  return value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+}
+
+function parseEnvLines(value: string): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const line of value.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const idx = trimmed.indexOf('=')
+    if (idx < 0) {
+      env[trimmed] = ''
+    } else {
+      env[trimmed.slice(0, idx).trim()] = trimmed.slice(idx + 1).trim()
+    }
+  }
+  return env
+}
+
+function trimEnv(env: Record<string, string>): Record<string, string> | undefined {
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(env)) {
+    const trimmedKey = key.trim()
+    if (trimmedKey) out[trimmedKey] = value.trim()
+  }
+  return Object.keys(out).length ? out : undefined
 }
 
 function GearIcon() {

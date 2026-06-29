@@ -17,16 +17,21 @@ import type {
 interface SkillPanelProps {
   open: boolean
   onClose: () => void
+  onConfigureMcp?: () => void
 }
 
 type Tab = 'skills' | 'plugins' | 'mcp'
 type Filter = 'all' | 'loaded' | 'builtin' | 'local' | 'plugin'
+type PluginFilter = 'all' | 'enabled' | 'disabled'
+type McpFilter = 'all' | 'enabled' | 'disabled' | 'config' | 'plugin'
 
-export function SkillPanel({ open, onClose }: SkillPanelProps) {
+export function SkillPanel({ open, onClose, onConfigureMcp }: SkillPanelProps) {
   const [snapshot, setSnapshot] = useState<SkillManagementSnapshot | null>(null)
   const [tab, setTab] = useState<Tab>('skills')
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
+  const [pluginFilter, setPluginFilter] = useState<PluginFilter>('all')
+  const [mcpFilter, setMcpFilter] = useState<McpFilter>('all')
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [mutating, setMutating] = useState('')
@@ -74,22 +79,28 @@ export function SkillPanel({ open, onClose }: SkillPanelProps) {
   const filteredPlugins = useMemo(() => {
     const q = query.trim().toLowerCase()
     return plugins.filter((plugin) => {
+      if (pluginFilter === 'enabled' && !plugin.enabled) return false
+      if (pluginFilter === 'disabled' && plugin.enabled) return false
       if (!q) return true
       return [plugin.name, plugin.description, plugin.dir]
         .filter(Boolean)
         .some((value) => value!.toLowerCase().includes(q))
     })
-  }, [query, plugins])
+  }, [pluginFilter, query, plugins])
 
   const filteredMcp = useMemo(() => {
     const q = query.trim().toLowerCase()
     return mcpServers.filter((srv) => {
+      if (mcpFilter === 'enabled' && srv.status !== 'ready') return false
+      if (mcpFilter === 'disabled' && srv.status !== 'disabled') return false
+      if (mcpFilter === 'config' && srv.plugin !== '配置') return false
+      if (mcpFilter === 'plugin' && srv.plugin === '配置') return false
       if (!q) return true
       return [srv.name, srv.plugin, srv.command]
         .filter(Boolean)
         .some((value) => value!.toLowerCase().includes(q))
     })
-  }, [query, mcpServers])
+  }, [mcpFilter, query, mcpServers])
 
   if (!open) return null
 
@@ -200,11 +211,22 @@ export function SkillPanel({ open, onClose }: SkillPanelProps) {
               setQuery={setQuery}
               mutating={mutating}
               onToggle={togglePlugin}
+              filter={pluginFilter}
+              setFilter={setPluginFilter}
+              totalCount={plugins.length}
               enabledCount={enabledPluginCount}
             />
           )}
           {!loading && tab === 'mcp' && (
-            <McpView servers={filteredMcp} query={query} setQuery={setQuery} />
+            <McpView
+              servers={filteredMcp}
+              allServers={mcpServers}
+              query={query}
+              setQuery={setQuery}
+              filter={mcpFilter}
+              setFilter={setMcpFilter}
+              onConfigure={onConfigureMcp}
+            />
           )}
         </div>
 
@@ -294,6 +316,7 @@ function SkillsView(props: {
           </div>
         </div>
 
+        <ResultStrip shown={filteredSkills.length} total={metrics.total} query={query} onClear={() => setQuery('')} />
         <div className="max-h-[58vh] overflow-y-auto">
           {builtinSkills.length > 0 && <SkillGroup title="内置" skills={builtinSkills} />}
           {localSkills.length > 0 && <SkillGroup title="本地技能（独立安装）" skills={localSkills} />}
@@ -392,15 +415,18 @@ function PluginsView(props: {
   setQuery: (v: string) => void
   mutating: string
   onToggle: (plugin: PluginSnapshot) => void
+  filter: PluginFilter
+  setFilter: (v: PluginFilter) => void
+  totalCount: number
   enabledCount: number
 }) {
-  const { plugins, query, setQuery, mutating, onToggle, enabledCount } = props
+  const { plugins, query, setQuery, mutating, onToggle, filter, setFilter, totalCount, enabledCount } = props
   return (
     <div className="space-y-4">
       <section className="grid gap-2 md:grid-cols-3">
-        <Metric label="全部插件" value={plugins.length} tone="primary" />
+        <Metric label="全部插件" value={totalCount} tone="primary" />
         <Metric label="已启用" value={enabledCount} tone="success" />
-        <Metric label="已停用" value={plugins.length - enabledCount} tone="warning" />
+        <Metric label="已停用" value={totalCount - enabledCount} tone="warning" />
       </section>
       <section className="rounded-md border border-border/50 bg-surface">
         <div className="flex flex-col gap-2 border-b border-border/50 p-3 md:flex-row md:items-center">
@@ -413,7 +439,17 @@ function PluginsView(props: {
               placeholder="搜索插件名称、描述或路径"
             />
           </div>
+          <SegmentedFilter
+            value={filter}
+            options={[
+              { value: 'all', label: '全部' },
+              { value: 'enabled', label: '启用' },
+              { value: 'disabled', label: '停用' },
+            ]}
+            onChange={(value) => setFilter(value as PluginFilter)}
+          />
         </div>
+        <ResultStrip shown={plugins.length} total={totalCount} query={query} onClear={() => setQuery('')} />
         <div className="divide-y divide-border/40">
           {plugins.map((plugin) => (
             <PluginRow key={plugin.name} plugin={plugin} mutating={mutating} onToggle={onToggle} />
@@ -517,15 +553,35 @@ function bundleBadges(plugin: PluginSnapshot): Array<{ label: string; tone: stri
   return out
 }
 
-function McpView(props: { servers: MCPServerSnapshot[]; query: string; setQuery: (v: string) => void }) {
-  const { servers, query, setQuery } = props
-  const enabled = servers.filter((s) => s.pluginEnabled).length
+function McpView(props: {
+  servers: MCPServerSnapshot[]
+  allServers: MCPServerSnapshot[]
+  query: string
+  setQuery: (v: string) => void
+  filter: McpFilter
+  setFilter: (v: McpFilter) => void
+  onConfigure?: () => void
+}) {
+  const { servers, allServers, query, setQuery, filter, setFilter, onConfigure } = props
+  const configCount = allServers.filter((s) => s.plugin === '配置').length
+  const readyCount = allServers.filter((s) => s.status === 'ready').length
+  const errorCount = allServers.filter((s) => s.status === 'error').length
   return (
     <div className="space-y-4">
-      <section className="grid gap-2 md:grid-cols-3">
-        <Metric label="全部 MCP" value={servers.length} tone="primary" />
-        <Metric label="来源插件启用" value={enabled} tone="success" />
-        <Metric label="来源插件停用" value={servers.length - enabled} tone="warning" />
+      <section className="grid gap-2 md:grid-cols-4">
+        <Metric label="全部 MCP" value={allServers.length} tone="primary" />
+        <Metric label="Ready" value={readyCount} tone="success" />
+        <Metric label="异常" value={errorCount} tone="warning" />
+        <Metric label="配置来源" value={configCount} tone="accent" />
+      </section>
+      <section className="flex flex-col gap-2 rounded-md border border-border/50 bg-surface px-4 py-3 md:flex-row md:items-center">
+        <div className="min-w-0 flex-1">
+          <h3 className="text-xs font-semibold text-text">运行态 MCP 服务</h3>
+          <p className="mt-1 text-[11px] text-text-3">这里显示当前已发现的插件服务和配置服务；新增、修改命令或环境变量请进入配置。</p>
+        </div>
+        <button type="button" className="primary-button" onClick={onConfigure}>
+          配置 MCP 服务
+        </button>
       </section>
       <section className="rounded-md border border-border/50 bg-surface">
         <div className="flex flex-col gap-2 border-b border-border/50 p-3 md:flex-row md:items-center">
@@ -538,7 +594,19 @@ function McpView(props: { servers: MCPServerSnapshot[]; query: string; setQuery:
               placeholder="搜索 server 名称、来源插件或命令"
             />
           </div>
+          <SegmentedFilter
+            value={filter}
+            options={[
+              { value: 'all', label: '全部' },
+              { value: 'enabled', label: '可用' },
+              { value: 'disabled', label: '停用' },
+              { value: 'config', label: '配置' },
+              { value: 'plugin', label: '插件' },
+            ]}
+            onChange={(value) => setFilter(value as McpFilter)}
+          />
         </div>
+        <ResultStrip shown={servers.length} total={allServers.length} query={query} onClear={() => setQuery('')} />
         <div className="divide-y divide-border/40">
           {servers.map((srv) => (
             <McpRow key={`${srv.plugin}/${srv.name}`} server={srv} />
@@ -555,9 +623,15 @@ function McpRow({ server }: { server: MCPServerSnapshot }) {
   return (
     <div className="grid gap-2 px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
       <div className="min-w-0">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <span className="truncate text-xs font-semibold text-text">{server.name}</span>
+          <StatusBadge status={server.status} />
           <span className="shrink-0 rounded-sm bg-accent/12 px-1.5 py-0.5 text-[10px] text-accent">{server.plugin}</span>
+          {server.status === 'ready' && (
+            <span className="shrink-0 rounded-sm bg-success/10 px-1.5 py-0.5 text-[10px] text-success">
+              {server.toolCount ?? 0} tools
+            </span>
+          )}
           {server.dangerLevel && (
             <span className={cn('shrink-0 rounded-sm px-1.5 py-0.5 text-[10px]', dangerTone(server.dangerLevel))}>
               {server.dangerLevel}
@@ -566,9 +640,29 @@ function McpRow({ server }: { server: MCPServerSnapshot }) {
           {!server.pluginEnabled && <span className="shrink-0 rounded-sm bg-surface-3 px-1.5 py-0.5 text-[10px] text-text-3">插件已停用</span>}
         </div>
         <p className="mt-1 line-clamp-1 font-mono text-[11px] text-text-3">{cmd || '未配置命令'}</p>
+        {server.status === 'error' && server.error && (
+          <p className="mt-1 line-clamp-2 text-[11px] text-danger">{server.error}</p>
+        )}
       </div>
     </div>
   )
+}
+
+function StatusBadge({ status }: { status?: string }) {
+  const label = status || 'unknown'
+  return (
+    <span className={cn('shrink-0 rounded-sm px-1.5 py-0.5 text-[10px]', statusTone(label))}>
+      {label}
+    </span>
+  )
+}
+
+function statusTone(status: string): string {
+  if (status === 'ready') return 'bg-success/12 text-success'
+  if (status === 'error') return 'bg-danger/15 text-danger'
+  if (status === 'starting') return 'bg-primary/12 text-primary'
+  if (status === 'disabled') return 'bg-surface-3 text-text-3'
+  return 'bg-warning/12 text-warning'
 }
 
 function dangerTone(level: string): string {
@@ -589,6 +683,51 @@ function Metric({ label, value, tone }: { label: string; value: number | string;
     <div className="rounded-md border border-border/50 bg-surface px-3 py-2.5">
       <div className={cn('mb-2 inline-flex rounded-sm px-1.5 py-0.5 text-[10px]', toneClass)}>{label}</div>
       <div className="text-xl font-semibold leading-none text-text">{value}</div>
+    </div>
+  )
+}
+
+function ResultStrip({ shown, total, query, onClear }: { shown: number; total: number; query: string; onClear: () => void }) {
+  const hasQuery = query.trim().length > 0
+  return (
+    <div className="flex min-h-8 items-center gap-2 border-b border-border/40 px-3 text-[11px] text-text-3">
+      <span className="min-w-0 flex-1 truncate">
+        显示 {shown} / {total}
+        {hasQuery ? ` · 搜索 "${query.trim()}"` : ''}
+      </span>
+      {hasQuery && (
+        <button type="button" className="rounded-sm px-1.5 py-0.5 text-text-2 hover:bg-surface-3 hover:text-text" onClick={onClear}>
+          清空
+        </button>
+      )}
+    </div>
+  )
+}
+
+function SegmentedFilter({
+  value,
+  options,
+  onChange,
+}: {
+  value: string
+  options: Array<{ value: string; label: string }>
+  onChange: (value: string) => void
+}) {
+  return (
+    <div className="flex flex-wrap gap-1 rounded-md bg-surface-2 p-1">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          className={cn(
+            'h-7 rounded px-2 text-[11px] font-medium transition-all active:scale-95',
+            value === option.value ? 'bg-primary text-black' : 'text-text-3 hover:bg-surface-3 hover:text-text',
+          )}
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
     </div>
   )
 }

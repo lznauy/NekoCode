@@ -47,6 +47,9 @@ type MCPServerSnapshot struct {
 	Args          []string `json:"args,omitempty"`
 	DangerLevel   string   `json:"dangerLevel,omitempty"`
 	PluginEnabled bool     `json:"pluginEnabled"`
+	Status        string   `json:"status,omitempty"`
+	Error         string   `json:"error,omitempty"`
+	ToolCount     int      `json:"toolCount,omitempty"`
 }
 
 func BuildManagementSnapshot(reg *extskill.Registry, plugins []PluginSnapshot, mcp []MCPServerSnapshot) ManagementSnapshot {

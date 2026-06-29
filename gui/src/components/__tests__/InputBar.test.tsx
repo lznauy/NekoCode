@@ -7,7 +7,6 @@ function setup(overrides: Partial<Parameters<typeof InputBar>[0]> = {}) {
   const props = {
     text: '',
     busy: false,
-    model: '',
     textareaRef: createRef<HTMLTextAreaElement>(),
     onChange: vi.fn(),
     onSend: vi.fn(),
@@ -87,8 +86,4 @@ describe('InputBar', () => {
     expect(onTextareaChange).toHaveBeenCalledTimes(1)
   })
 
-  it('shows model text in footer', () => {
-    setup({ model: 'openai / gpt-4' })
-    expect(screen.getByText('openai / gpt-4')).toBeInTheDocument()
-  })
 })

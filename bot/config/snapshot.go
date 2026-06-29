@@ -1,13 +1,14 @@
 package config
 
 type Snapshot struct {
-	Path           string           `json:"path"`
-	Exists         bool             `json:"exists"`
-	Active         string           `json:"active"`
-	ContextWindow  int              `json:"context_window"`
-	FlashModel     string           `json:"flash_model,omitempty"`
-	Models         []ModelConfig    `json:"models"`
-	ImageGenModels []ImageGenConfig `json:"image_gen_models,omitempty"`
+	Path           string                     `json:"path"`
+	Exists         bool                       `json:"exists"`
+	Active         string                     `json:"active"`
+	ContextWindow  int                        `json:"context_window"`
+	FlashModel     string                     `json:"flash_model,omitempty"`
+	Models         []ModelConfig              `json:"models"`
+	ImageGenModels []ImageGenConfig           `json:"image_gen_models,omitempty"`
+	MCPServers     map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 }
 
 func NewSnapshot(cfg Config) Snapshot {
@@ -19,6 +20,7 @@ func NewSnapshot(cfg Config) Snapshot {
 		FlashModel:     cfg.FlashModel,
 		Models:         cfg.Models,
 		ImageGenModels: cfg.ImageGenModels,
+		MCPServers:     cfg.MCPServers,
 	}
 }
 
@@ -29,5 +31,6 @@ func (s Snapshot) Config() Config {
 		FlashModel:     s.FlashModel,
 		Models:         s.Models,
 		ImageGenModels: s.ImageGenModels,
+		MCPServers:     s.MCPServers,
 	}
 }

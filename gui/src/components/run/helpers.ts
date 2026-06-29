@@ -34,7 +34,27 @@ export function toolIcon(name: string): string {
 }
 
 export function prettyTool(name: string): string {
+  const mcp = mcpToolParts(name)
+  if (mcp) return `MCP · ${mcp.server}`
   return FANCY_NAMES[name] ?? (name || 'tool')
+}
+
+export function toolDetail(name: string): string {
+  const mcp = mcpToolParts(name)
+  return mcp?.tool ?? ''
+}
+
+export function isMCPTool(name: string): boolean {
+  return !!mcpToolParts(name)
+}
+
+function mcpToolParts(name: string): { server: string; tool: string } | null {
+  const idx = name.indexOf('__')
+  if (idx <= 0 || idx >= name.length - 2) return null
+  const server = name.slice(0, idx)
+  const tool = name.slice(idx + 2)
+  if (/\s/.test(server) || /\s/.test(tool)) return null
+  return { server, tool }
 }
 
 // 简洁参数: 单行截断。

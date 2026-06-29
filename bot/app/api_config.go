@@ -11,9 +11,6 @@ func (b *Bot) ConfigSnapshot() config.Snapshot {
 }
 
 func (b *Bot) ApplyConfig(snapshot config.Snapshot) (config.Snapshot, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	next := snapshot.Config()
 	if err := config.Validate(&next); err != nil {
 		return config.Snapshot{}, err
@@ -22,10 +19,24 @@ func (b *Bot) ApplyConfig(snapshot config.Snapshot) (config.Snapshot, error) {
 		return config.Snapshot{}, err
 	}
 
-	oldPrompt, oldCompl := b.ag.TokenUsage()
+	b.mu.Lock()
+	oldPrompt, oldCompl := 0, 0
+	if b.ag != nil {
+		oldPrompt, oldCompl = b.ag.TokenUsage()
+	}
 	b.cfg = &next
-	b.reinit()
-	b.ag.AddTokens(oldPrompt, oldCompl)
+	b.mu.Unlock()
+
+	go b.reloadRuntime(oldPrompt, oldCompl)
 
 	return config.NewSnapshot(next), nil
+}
+
+func (b *Bot) reloadRuntime(oldPrompt, oldCompl int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.reinit()
+	if b.ag != nil {
+		b.ag.AddTokens(oldPrompt, oldCompl)
+	}
 }

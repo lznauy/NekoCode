@@ -54,6 +54,9 @@ func skillMCPSnapshots(in []plugin.MCPServerSnapshot) []botskill.MCPServerSnapsh
 			Args:          append([]string(nil), s.Args...),
 			DangerLevel:   s.DangerLevel,
 			PluginEnabled: s.PluginEnabled,
+			Status:        s.Status,
+			Error:         s.Error,
+			ToolCount:     s.ToolCount,
 		})
 	}
 	return out

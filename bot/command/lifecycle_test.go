@@ -12,7 +12,7 @@ func TestEstimateToolDefTokens(t *testing.T) {
 			{Name: "path", Type: "string", Description: "file path"},
 		}},
 	}
-	n := estimateToolDefTokens(descs)
+	n := EstimateToolDefTokens(descs)
 	if n <= 0 {
 		t.Errorf("expected positive token count, got %d", n)
 	}

@@ -5,6 +5,7 @@ import (
 
 	"nekocode/bot/agent/subagent"
 	"nekocode/bot/command"
+	"nekocode/bot/config"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/debug"
 	"nekocode/bot/extension/mcp"
@@ -19,6 +20,8 @@ type extensionFacade struct {
 	skills     *skill.Manager
 	plugins    *plugin.Manager
 	mcpClients map[string]*mcp.Client
+	mcpHealth  map[string]mcpHealth
+	configMCP  []botskill.MCPServerSnapshot
 
 	ctxMgr        *ctxmgr.Manager
 	toolRegistry  *tools.Registry
@@ -26,6 +29,12 @@ type extensionFacade struct {
 	contextWindow int
 	cmdParser     *command.Parser
 	cb            *callbackBus
+}
+
+type mcpHealth struct {
+	Status    string
+	Error     string
+	ToolCount int
 }
 
 type extensionDeps struct {
@@ -45,6 +54,7 @@ func (e *extensionFacade) Init(d extensionDeps) {
 	e.cmdParser = d.CmdParser
 	e.cb = d.Callbacks
 	e.mcpClients = make(map[string]*mcp.Client)
+	e.mcpHealth = make(map[string]mcpHealth)
 }
 
 func (e *extensionFacade) InitSkills() {
@@ -99,6 +109,28 @@ func (e *extensionFacade) InitPlugins() {
 	e.plugins.LoadAll()
 }
 
+func (e *extensionFacade) InitConfigMCPServers(servers map[string]config.MCPServerConfig) {
+	e.configMCP = nil
+	for name, cfg := range servers {
+		snapshot := botskill.MCPServerSnapshot{
+			Name:          name,
+			Plugin:        "配置",
+			Command:       cfg.Command,
+			Args:          append([]string(nil), cfg.Args...),
+			DangerLevel:   cfg.DangerLevel,
+			PluginEnabled: cfg.Enabled,
+			Status:        "disabled",
+		}
+		e.configMCP = append(e.configMCP, snapshot)
+		if !cfg.Enabled {
+			continue
+		}
+		if err := e.registerConfigMCPServer(name, cfg); err != nil {
+			debug.Log("config mcp %s: %v", name, err)
+		}
+	}
+}
+
 func (e *extensionFacade) RegisterPluginCommands(p *command.Parser) {
 	p.Register("plugin", func(cmd *command.Command) (string, bool) {
 		if len(cmd.Args) == 0 {
@@ -141,6 +173,7 @@ func (e *extensionFacade) unregisterPluginAgentPath(path string) {
 
 func (e *extensionFacade) resetPluginMCPClients() {
 	e.mcpClients = make(map[string]*mcp.Client)
+	e.mcpHealth = make(map[string]mcpHealth)
 }
 
 func (e *extensionFacade) closePluginMCPServers() {
@@ -158,17 +191,55 @@ func (e *extensionFacade) registerPluginMCPServer(pluginDir, name string, cfg pl
 		old.Close()
 	}
 	e.mcpClients[name] = client
+	e.mcpHealth[name] = mcpHealth{Status: "starting"}
 
 	if err := client.Start(); err != nil {
+		e.mcpHealth[name] = mcpHealth{Status: "error", Error: err.Error()}
 		return fmt.Errorf("start: %w", err)
 	}
 	mcpTools, err := client.ListTools()
 	if err != nil {
+		_ = client.Close()
+		delete(e.mcpClients, name)
+		e.mcpHealth[name] = mcpHealth{Status: "error", Error: err.Error()}
 		return fmt.Errorf("list tools: %w", err)
 	}
 	for _, td := range mcpTools {
 		e.toolRegistry.Register(mcp.NewMCPTool(client, td, level))
 	}
+	e.mcpHealth[name] = mcpHealth{Status: "ready", ToolCount: len(mcpTools)}
+	return nil
+}
+
+func (e *extensionFacade) registerConfigMCPServer(name string, cfg config.MCPServerConfig) error {
+	level := mcp.ParseDangerLevel(cfg.DangerLevel)
+	client := mcp.NewClient(name, mcp.ServerConfig{
+		Command:     cfg.Command,
+		Args:        append([]string(nil), cfg.Args...),
+		Env:         cfg.Env,
+		DangerLevel: cfg.DangerLevel,
+	})
+	if old, exists := e.mcpClients[name]; exists {
+		old.Close()
+	}
+	e.mcpClients[name] = client
+	e.mcpHealth[name] = mcpHealth{Status: "starting"}
+
+	if err := client.Start(); err != nil {
+		e.mcpHealth[name] = mcpHealth{Status: "error", Error: err.Error()}
+		return fmt.Errorf("start: %w", err)
+	}
+	mcpTools, err := client.ListTools()
+	if err != nil {
+		_ = client.Close()
+		delete(e.mcpClients, name)
+		e.mcpHealth[name] = mcpHealth{Status: "error", Error: err.Error()}
+		return fmt.Errorf("list tools: %w", err)
+	}
+	for _, td := range mcpTools {
+		e.toolRegistry.Register(mcp.NewMCPTool(client, td, level))
+	}
+	e.mcpHealth[name] = mcpHealth{Status: "ready", ToolCount: len(mcpTools)}
 	return nil
 }
 
@@ -184,10 +255,31 @@ func (e *extensionFacade) unregisterPluginMCPServer(name string) {
 	}
 	client.Close()
 	delete(e.mcpClients, name)
+	delete(e.mcpHealth, name)
 }
 
 func (e *extensionFacade) SkillManagementSnapshot() botskill.ManagementSnapshot {
-	return e.skills.ManagementSnapshot(skillPluginSnapshots(e.plugins.Snapshots()), skillMCPSnapshots(e.plugins.MCPServers()))
+	mcpServers := skillMCPSnapshots(e.plugins.MCPServers())
+	mcpServers = append(mcpServers, e.configMCP...)
+	e.applyMCPHealth(mcpServers)
+	return e.skills.ManagementSnapshot(skillPluginSnapshots(e.plugins.Snapshots()), mcpServers)
+}
+
+func (e *extensionFacade) applyMCPHealth(servers []botskill.MCPServerSnapshot) {
+	for i := range servers {
+		if !servers[i].PluginEnabled {
+			servers[i].Status = "disabled"
+			continue
+		}
+		health, ok := e.mcpHealth[servers[i].Name]
+		if !ok {
+			servers[i].Status = "unknown"
+			continue
+		}
+		servers[i].Status = health.Status
+		servers[i].Error = health.Error
+		servers[i].ToolCount = health.ToolCount
+	}
 }
 
 func (e *extensionFacade) SetPluginEnabled(name string, enabled bool) (botskill.ManagementSnapshot, error) {

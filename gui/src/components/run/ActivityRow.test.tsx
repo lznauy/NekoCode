@@ -83,4 +83,24 @@ describe('ActivityRow', () => {
     expect(screen.queryByText('错误')).toBeNull()
     expect(screen.getByText('command was blocked by policy')).toBeInTheDocument()
   })
+
+  it('renders MCP calls with server and tool names plus output', () => {
+    const step: ToolStep = {
+      id: 'mcp-1',
+      toolName: 'nixos__search',
+      args: '{"query":"flakes"}',
+      output: 'flake documentation',
+      status: 'done',
+      isError: false,
+      collapsed: false,
+    }
+    const toggleStep = vi.fn()
+
+    render(<ActivityRow step={step} toggleStep={toggleStep} />)
+
+    expect(screen.getByText('MCP · nixos')).toBeInTheDocument()
+    expect(screen.getByText('search')).toBeInTheDocument()
+    expect(screen.getByText('query: "flakes"')).toBeInTheDocument()
+    expect(screen.getByText('flake documentation')).toBeInTheDocument()
+  })
 })

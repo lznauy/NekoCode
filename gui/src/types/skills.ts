@@ -33,6 +33,9 @@ export interface MCPServerSnapshot {
   args?: string[]
   dangerLevel?: string
   pluginEnabled: boolean
+  status?: 'ready' | 'error' | 'disabled' | 'starting' | 'unknown' | string
+  error?: string
+  toolCount?: number
 }
 
 export interface SkillManagementSnapshot {

@@ -3,7 +3,7 @@
 import { memo, useCallback, useId, useMemo, useRef } from 'react'
 import type { ToolStep } from '../../types/events'
 import { useScrollContainer } from '../MessageList'
-import { compactArgs, editSummary, pathFromArgs, prettyTool } from './helpers'
+import { compactArgs, editSummary, isMCPTool, pathFromArgs, prettyTool, toolDetail } from './helpers'
 import { EditDiff } from './EditDiff'
 
 interface ActivityRowProps {
@@ -60,6 +60,7 @@ export const ActivityRow = memo(function ActivityRow({ step, toggleStep }: Activ
   // hook 顺序: useMemo 必须无条件调用。
   const argsLabel = useMemo(() => compactArgs(step.args), [step.args])
   const editSum = useMemo(() => editSummary(content), [content])
+  const detailLabel = useMemo(() => toolDetail(step.toolName), [step.toolName])
 
   const isBlocked = step.status === 'blocked'
   const isExecutionError = step.isError && !isBlocked
@@ -107,6 +108,11 @@ export const ActivityRow = memo(function ActivityRow({ step, toggleStep }: Activ
           >
             {prettyTool(step.toolName)}
           </span>
+          {detailLabel && (
+            <span title={detailLabel} className="max-w-[12rem] shrink truncate font-mono text-[11px] text-text-2">
+              {detailLabel}
+            </span>
+          )}
           {argsLabel && (
             <span
               title={argsLabel}
@@ -148,6 +154,9 @@ function statusLabel(s: ToolStep): string {
 
 function ToolGlyph({ name }: { name: string }) {
   const common = { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2.1, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true }
+  if (isMCPTool(name)) {
+    return <svg {...common}><path d="M5 8h14" /><path d="M5 16h14" /><path d="M8 5v14" /><path d="M16 5v14" /></svg>
+  }
   switch (name) {
     case 'read':
     case 'tsread':

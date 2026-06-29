@@ -16,6 +16,14 @@ export interface ImageGenConfig {
   model?: string
 }
 
+export interface MCPServerConfig {
+  command: string
+  args?: string[]
+  env?: Record<string, string>
+  dangerLevel?: 'safe' | 'write' | 'danger' | 'forbidden' | ''
+  enabled: boolean
+}
+
 export interface ConfigSnapshot {
   path: string
   exists: boolean
@@ -24,4 +32,5 @@ export interface ConfigSnapshot {
   flash_model?: string
   models: ModelConfig[]
   image_gen_models?: ImageGenConfig[]
+  mcp_servers?: Record<string, MCPServerConfig>
 }

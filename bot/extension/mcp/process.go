@@ -41,9 +41,7 @@ func (c *Client) Start() error {
 	}
 
 	if err := c.initialize(); err != nil {
-		c.stdin.Close()
-		_ = c.cmd.Process.Kill()
-		c.cmd = nil
+		_ = c.stopProcessLocked()
 		return fmt.Errorf("initialize: %w", err)
 	}
 
@@ -54,7 +52,14 @@ func (c *Client) Start() error {
 func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.stopProcessLocked()
+}
 
+func (c *Client) stopProcessLocked() error {
+	return c.stopProcessLockedWithTimeout(2 * time.Second)
+}
+
+func (c *Client) stopProcessLockedWithTimeout(timeout time.Duration) error {
 	if c.cmd == nil || c.cmd.Process == nil {
 		return nil
 	}
@@ -68,7 +73,7 @@ func (c *Client) Close() error {
 
 	select {
 	case <-waitCh:
-	case <-time.After(2 * time.Second):
+	case <-time.After(timeout):
 		_ = c.cmd.Process.Kill()
 		<-waitCh
 	}

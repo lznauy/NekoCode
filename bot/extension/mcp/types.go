@@ -5,6 +5,7 @@ import (
 	"io"
 	"os/exec"
 	"sync"
+	"time"
 
 	"nekocode/bot/llm/types"
 )
@@ -43,12 +44,15 @@ type Client struct {
 	reqID  int64
 
 	tools []ToolDef
+
+	requestTimeout time.Duration
 }
 
 // NewClient creates an unstarted client.
 func NewClient(name string, cfg ServerConfig) *Client {
 	return &Client{
-		Name:   name,
-		Config: cfg,
+		Name:           name,
+		Config:         cfg,
+		requestTimeout: 15 * time.Second,
 	}
 }

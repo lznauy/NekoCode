@@ -18,6 +18,11 @@ type UI interface {
 	Abort()
 	ProviderModel() (provider, model string)
 	SwitchModel(name string) (model, provider string, err error)
+	ContextStatus() string
+	ContextReport() string
+	ContextSnapshot() common.ContextSnapshot
+	SelectSkill(name string) error
+	ClearSelectedSkill()
 	SessionMessages() []common.DisplayMessage
 }
 

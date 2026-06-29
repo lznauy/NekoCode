@@ -388,6 +388,34 @@ func (a *App) ProviderModel() string {
 	return p + "|" + m
 }
 
+func (a *App) SwitchModel(name string) (string, error) {
+	model, provider, err := a.bot.SwitchModel(name)
+	if err != nil {
+		return "", err
+	}
+	return provider + "|" + model, nil
+}
+
+func (a *App) ContextStatus() string {
+	return a.bot.ContextStatus()
+}
+
+func (a *App) ContextReport() string {
+	return a.bot.ContextReport()
+}
+
+func (a *App) ContextSnapshot() common.ContextSnapshot {
+	return a.bot.ContextSnapshot()
+}
+
+func (a *App) SelectSkill(name string) error {
+	return a.bot.SelectSkill(name)
+}
+
+func (a *App) ClearSelectedSkill() {
+	a.bot.ClearSelectedSkill()
+}
+
 func (a *App) GetConfig() botconfig.Snapshot {
 	return a.bot.ConfigSnapshot()
 }

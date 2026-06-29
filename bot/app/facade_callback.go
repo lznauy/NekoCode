@@ -85,6 +85,10 @@ func (c *callbackBus) applyAgentCallbacks() {
 		return
 	}
 	ag := c.getAgent()
+	c.applyAgentCallbacksTo(ag)
+}
+
+func (c *callbackBus) applyAgentCallbacksTo(ag *runtime.Agent) {
 	if ag == nil {
 		return
 	}

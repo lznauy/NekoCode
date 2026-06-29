@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"nekocode/common"
@@ -37,12 +38,21 @@ type ImageGenConfig struct {
 	Model     string `json:"model,omitempty"`    // default: jimeng_t2i_v31
 }
 
+type MCPServerConfig struct {
+	Command     string            `json:"command"`
+	Args        []string          `json:"args,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	DangerLevel string            `json:"dangerLevel,omitempty"`
+	Enabled     bool              `json:"enabled"`
+}
+
 type Config struct {
-	Active         string           `json:"active"` // name of the active model
-	ContextWindow  int              `json:"context_window"`
-	FlashModel     string           `json:"flash_model,omitempty"` // cheap model for sub-tasks (subagents)
-	Models         []ModelConfig    `json:"models"`
-	ImageGenModels []ImageGenConfig `json:"image_gen_models,omitempty"` // text-to-image models
+	Active         string                     `json:"active"` // name of the active model
+	ContextWindow  int                        `json:"context_window"`
+	FlashModel     string                     `json:"flash_model,omitempty"` // cheap model for sub-tasks (subagents)
+	Models         []ModelConfig              `json:"models"`
+	ImageGenModels []ImageGenConfig           `json:"image_gen_models,omitempty"` // text-to-image models
+	MCPServers     map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 }
 
 var Default = Config{
@@ -182,6 +192,51 @@ func Validate(cfg *Config) error {
 		if m.Provider == "" {
 			return fmt.Errorf("image model %q provider is required", m.Name)
 		}
+	}
+
+	if cfg.MCPServers != nil {
+		normalized := make(map[string]MCPServerConfig, len(cfg.MCPServers))
+		names := make([]string, 0, len(cfg.MCPServers))
+		for name := range cfg.MCPServers {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, rawName := range names {
+			name := strings.TrimSpace(rawName)
+			if name == "" {
+				return fmt.Errorf("mcp server name is required")
+			}
+			if _, exists := normalized[name]; exists {
+				return fmt.Errorf("duplicate mcp server name %q", name)
+			}
+			srv := cfg.MCPServers[rawName]
+			srv.Command = strings.TrimSpace(srv.Command)
+			srv.DangerLevel = strings.TrimSpace(srv.DangerLevel)
+			for i := range srv.Args {
+				srv.Args[i] = strings.TrimSpace(srv.Args[i])
+			}
+			if srv.Env != nil {
+				env := make(map[string]string, len(srv.Env))
+				for k, v := range srv.Env {
+					key := strings.TrimSpace(k)
+					if key == "" {
+						return fmt.Errorf("mcp server %q has empty env key", name)
+					}
+					env[key] = strings.TrimSpace(v)
+				}
+				srv.Env = env
+			}
+			if srv.Command == "" {
+				return fmt.Errorf("mcp server %q command is required", name)
+			}
+			switch strings.ToLower(srv.DangerLevel) {
+			case "", "safe", "modify", "write", "danger", "destructive", "blocked", "forbidden":
+			default:
+				return fmt.Errorf("mcp server %q dangerLevel must be safe, write, danger, or forbidden", name)
+			}
+			normalized[name] = srv
+		}
+		cfg.MCPServers = normalized
 	}
 
 	return nil

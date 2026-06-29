@@ -2,31 +2,61 @@ import { cn } from '../lib/classnames'
 import { LogoMark } from './LogoMark'
 import { ThemeToggle } from './ThemeToggle'
 import type { Theme } from '../hooks/useTheme'
+import type { ModelConfig } from '../types/config'
 
 interface TopBarProps {
   model: string
+  models?: ModelConfig[]
   busy: boolean
   theme: Theme
   onToggleTheme: () => void
+  onSwitchModel?: (name: string) => void
+  onOpenContext?: () => void
   onOpenConfig: () => void
   onOpenSkills: () => void
   onClose: () => void
 }
 
-export function TopBar({ model, busy, theme, onToggleTheme, onOpenConfig, onOpenSkills, onClose }: TopBarProps) {
+export function TopBar({ model, models = [], busy, theme, onToggleTheme, onSwitchModel, onOpenContext, onOpenConfig, onOpenSkills, onClose }: TopBarProps) {
   return (
     <header className="flex items-center gap-2 border-b border-border/60 bg-surface-2/95 px-5">
       <LogoMark size="sm" showWordmark />
       {model && (
-        <span
-          className="model-tooltip ml-2 max-w-[40vw] truncate rounded-md border border-border/60 bg-surface px-2 py-0.5 text-[10px] leading-none text-text-2"
-          data-tooltip={model}
-          tabIndex={0}
-        >
-          {model}
-        </span>
+        <div className="group relative ml-2">
+          <button
+            type="button"
+            className="model-tooltip max-w-[40vw] truncate rounded-md border border-border/60 bg-surface px-2 py-1 text-[10px] leading-none text-text-2 transition-all hover:border-primary/60 hover:text-text active:scale-95"
+            data-tooltip={model}
+          >
+            {model}
+          </button>
+          {models.length > 0 && (
+            <div className="invisible absolute left-0 top-full z-50 mt-1 w-56 rounded-md border border-border/70 bg-surface p-1 opacity-0 surface-shadow transition-all group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100">
+              {models.map((m) => (
+                <button
+                  key={m.name}
+                  type="button"
+                  onClick={() => onSwitchModel?.(m.name)}
+                  className="block w-full rounded px-2 py-1.5 text-left text-[11px] text-text-2 hover:bg-surface-3 hover:text-text"
+                >
+                  <span className="block truncate font-medium">{m.name}</span>
+                  <span className="block truncate font-mono text-[10px] text-text-3">{m.provider} / {m.model}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       )}
       <span className="flex-1" />
+      <button
+        type="button"
+        onClick={onOpenContext}
+        title="上下文状态"
+        aria-label="上下文状态"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-3 transition-all hover:bg-surface-3 hover:text-text active:scale-95"
+      >
+        <ContextIcon />
+      </button>
       <button
         type="button"
         onClick={onOpenSkills}
@@ -65,6 +95,18 @@ export function TopBar({ model, busy, theme, onToggleTheme, onOpenConfig, onOpen
         <CloseIcon />
       </button>
     </header>
+  )
+}
+
+function ContextIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M4 6h16" />
+      <path d="M4 12h10" />
+      <path d="M4 18h16" />
+      <path d="M18 10v4" />
+      <path d="M20 12h-4" />
+    </svg>
   )
 }
 

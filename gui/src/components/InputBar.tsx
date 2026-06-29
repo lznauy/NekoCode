@@ -1,25 +1,33 @@
 import { useCallback } from 'react'
+import { cn } from '../lib/classnames'
+import type { SkillSnapshot } from '../types/skills'
 
 interface InputBarProps {
   text: string
   busy: boolean
-  model: string
+  skills?: SkillSnapshot[]
+  selectedSkill?: string
   textareaRef: React.RefObject<HTMLTextAreaElement>
   onChange: (text: string) => void
   onSend: () => void
   onStop: () => void
   onTextareaChange: () => void
+  onSelectSkill?: (name: string) => void
+  onClearSkill?: () => void
 }
 
 export function InputBar({
   text,
   busy,
-  model,
+  skills = [],
+  selectedSkill,
   textareaRef,
   onChange,
   onSend,
   onStop,
   onTextareaChange,
+  onSelectSkill,
+  onClearSkill,
 }: InputBarProps) {
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -53,15 +61,42 @@ export function InputBar({
           className="mx-1 my-0.5 max-h-[180px] min-h-[24px] w-full resize-none bg-transparent text-sm leading-[1.5] text-text outline-none placeholder:text-text-3 disabled:opacity-40"
         />
         <div className="flex items-center gap-2 px-1">
-          {model && (
-            <span
-              className="model-tooltip model-tooltip-top max-w-[52vw] truncate rounded-md bg-surface-2 px-1.5 py-1 text-[10px] leading-none text-text-3 tabular-nums"
-              data-tooltip={model}
-              tabIndex={0}
+          <div className="group relative">
+            <button
+              type="button"
+              className={cn(
+                'rounded-md px-2 py-1 text-[11px] leading-none transition-all active:scale-95',
+                selectedSkill ? 'bg-primary/15 text-primary' : 'bg-surface-2 text-text-3 hover:bg-surface-3 hover:text-text',
+              )}
             >
-              {model}
-            </span>
-          )}
+              {selectedSkill ? `Skill: ${selectedSkill}` : 'Skill'}
+            </button>
+            <div className="invisible absolute bottom-full left-0 z-50 mb-1 max-h-72 w-72 overflow-y-auto rounded-md border border-border/70 bg-surface p-1 opacity-0 surface-shadow transition-all group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100">
+              {selectedSkill && (
+                <button
+                  type="button"
+                  onClick={onClearSkill}
+                  className="mb-1 block w-full rounded px-2 py-1.5 text-left text-[11px] text-danger hover:bg-danger/10"
+                >
+                  清除当前 Skill
+                </button>
+              )}
+              {skills.map((skill) => (
+                <button
+                  key={skill.name}
+                  type="button"
+                  onClick={() => onSelectSkill?.(skill.name)}
+                  className="block w-full rounded px-2 py-1.5 text-left hover:bg-surface-3"
+                >
+                  <span className="block truncate text-[12px] font-medium text-text">{skill.name}</span>
+                  <span className="line-clamp-1 text-[10px] text-text-3">{skill.description || skill.source}</span>
+                </button>
+              ))}
+              {skills.length === 0 && (
+                <div className="px-2 py-3 text-center text-[11px] text-text-3">暂无可用 skill</div>
+              )}
+            </div>
+          </div>
           <span className="hidden text-[10px] leading-none text-text-3 sm:inline">Enter 发送 · Shift+Enter 换行</span>
           <span className="flex-1" />
           {busy ? (

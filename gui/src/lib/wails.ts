@@ -1,6 +1,10 @@
 import { EventsOn, Quit } from '../../wailsjs/runtime/runtime'
 import {
   Abort,
+  ClearSelectedSkill,
+  ContextReport,
+  ContextSnapshot,
+  ContextStatus,
   DeleteSession,
   GetConfig,
   GetSkillManagement,
@@ -15,8 +19,11 @@ import {
   SaveConfig,
   SendMessage,
   SetPluginEnabled,
+  SelectSkill,
+  SwitchModel,
 } from '../../wailsjs/go/main/App'
 import type { ConfigSnapshot } from '../types/config'
+import type { ContextSnapshot as GUIContextSnapshot } from '../types/context'
 import type { DisplayMessage, SessionMeta } from '../types/session'
 import type { SkillManagementSnapshot as SkillManagement } from '../types/skills'
 
@@ -53,6 +60,54 @@ export function safeProviderModel(): Promise<string> {
     return ProviderModel()
   } catch {
     return Promise.resolve('')
+  }
+}
+
+export function safeSwitchModel(name: string): Promise<string> {
+  try {
+    return SwitchModel(name)
+  } catch {
+    return Promise.resolve('')
+  }
+}
+
+export function safeContextStatus(): Promise<string> {
+  try {
+    return ContextStatus()
+  } catch {
+    return Promise.resolve('')
+  }
+}
+
+export function safeContextReport(): Promise<string> {
+  try {
+    return ContextReport()
+  } catch {
+    return Promise.resolve('')
+  }
+}
+
+export function safeContextSnapshot(): Promise<GUIContextSnapshot | null> {
+  try {
+    return ContextSnapshot().then((snapshot: unknown) => snapshot as GUIContextSnapshot)
+  } catch {
+    return Promise.resolve(null)
+  }
+}
+
+export function safeSelectSkill(name: string): Promise<void> {
+  try {
+    return SelectSkill(name)
+  } catch {
+    return Promise.resolve()
+  }
+}
+
+export function safeClearSelectedSkill(): Promise<void> {
+  try {
+    return ClearSelectedSkill()
+  } catch {
+    return Promise.resolve()
   }
 }
 

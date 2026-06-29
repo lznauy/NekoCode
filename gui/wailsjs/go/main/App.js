@@ -6,6 +6,22 @@ export function Abort() {
   return window['go']['main']['App']['Abort']();
 }
 
+export function ClearSelectedSkill() {
+  return window['go']['main']['App']['ClearSelectedSkill']();
+}
+
+export function ContextReport() {
+  return window['go']['main']['App']['ContextReport']();
+}
+
+export function ContextSnapshot() {
+  return window['go']['main']['App']['ContextSnapshot']();
+}
+
+export function ContextStatus() {
+  return window['go']['main']['App']['ContextStatus']();
+}
+
 export function DeleteSession(arg1) {
   return window['go']['main']['App']['DeleteSession'](arg1);
 }
@@ -54,10 +70,18 @@ export function SaveConfig(arg1) {
   return window['go']['main']['App']['SaveConfig'](arg1);
 }
 
+export function SelectSkill(arg1) {
+  return window['go']['main']['App']['SelectSkill'](arg1);
+}
+
 export function SendMessage(arg1) {
   return window['go']['main']['App']['SendMessage'](arg1);
 }
 
 export function SetPluginEnabled(arg1, arg2) {
   return window['go']['main']['App']['SetPluginEnabled'](arg1, arg2);
+}
+
+export function SwitchModel(arg1) {
+  return window['go']['main']['App']['SwitchModel'](arg1);
 }

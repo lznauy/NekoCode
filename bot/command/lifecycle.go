@@ -144,7 +144,7 @@ func ContextStats(ctxMgr *ctxmgr.Manager) string {
 func ContextReport(ctxMgr *ctxmgr.Manager, toolDescs []tools.Descriptor) string {
 	r := ctxMgr.Report()
 	r.ToolDefCount = len(toolDescs)
-	r.ToolDefTokens = estimateToolDefTokens(toolDescs)
+	r.ToolDefTokens = EstimateToolDefTokens(toolDescs)
 	return ctxmgr.FormatContextReport(r)
 }
 
@@ -185,7 +185,7 @@ func ClearSkillContext(ctxMgr *ctxmgr.Manager, st *SkillState) {
 	st.MsgEnd = 0
 }
 
-func estimateToolDefTokens(descs []tools.Descriptor) int {
+func EstimateToolDefTokens(descs []tools.Descriptor) int {
 	n := 0
 	for _, d := range descs {
 		n += len(d.Name) + len(d.Description) + 80

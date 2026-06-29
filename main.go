@@ -53,6 +53,30 @@ func (a *App) ProviderModel() string {
 	return a.impl.ProviderModel()
 }
 
+func (a *App) SwitchModel(name string) (string, error) {
+	return a.impl.SwitchModel(name)
+}
+
+func (a *App) ContextStatus() string {
+	return a.impl.ContextStatus()
+}
+
+func (a *App) ContextReport() string {
+	return a.impl.ContextReport()
+}
+
+func (a *App) ContextSnapshot() common.ContextSnapshot {
+	return a.impl.ContextSnapshot()
+}
+
+func (a *App) SelectSkill(name string) error {
+	return a.impl.SelectSkill(name)
+}
+
+func (a *App) ClearSelectedSkill() {
+	a.impl.ClearSelectedSkill()
+}
+
 func (a *App) GetConfig() botconfig.Snapshot {
 	return a.impl.GetConfig()
 }

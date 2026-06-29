@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync/atomic"
+	"time"
 )
 
 type jsonrpcRequest struct {
@@ -82,9 +83,31 @@ func (c *Client) sendRequest(method string, params any) (json.RawMessage, error)
 		return nil, fmt.Errorf("write: %w", err)
 	}
 
-	line, err := c.stdout.ReadBytes('\n')
-	if err != nil {
-		return nil, fmt.Errorf("read: %w", err)
+	type readResult struct {
+		line []byte
+		err  error
+	}
+	readCh := make(chan readResult, 1)
+	go func() {
+		line, err := c.stdout.ReadBytes('\n')
+		readCh <- readResult{line: line, err: err}
+	}()
+
+	timeout := c.requestTimeout
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+
+	var line []byte
+	select {
+	case result := <-readCh:
+		if result.err != nil {
+			return nil, fmt.Errorf("read: %w", result.err)
+		}
+		line = result.line
+	case <-time.After(timeout):
+		c.stopProcessLockedWithTimeout(100 * time.Millisecond)
+		return nil, fmt.Errorf("%s timed out after %s", method, timeout)
 	}
 
 	var resp jsonrpcResponse

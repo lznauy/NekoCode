@@ -22,7 +22,7 @@ func (b *Bot) initAgent() {
 
 	b.ag = runtime.New(context.Background(), b.ctxMgr, llmClient, b.toolRegistry)
 	b.ag.SetHookRegistry(b.hookReg)
-	b.cb.applyAgentCallbacks()
+	b.cb.applyAgentCallbacksTo(b.ag)
 
 	b.ag.SetContextTransform(func(msgs []types.Message) []types.Message {
 		return ctxmgr.ApplyToolResultGuardrail(msgs, ctxmgr.ToolResultGuardrailOptions{

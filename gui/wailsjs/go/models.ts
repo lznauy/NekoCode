@@ -1,5 +1,103 @@
 export namespace common {
 	
+	export class ContextSegment {
+	    key: string;
+	    label: string;
+	    tokens: number;
+	    tone: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ContextSegment(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.label = source["label"];
+	        this.tokens = source["tokens"];
+	        this.tone = source["tone"];
+	    }
+	}
+	export class ContextSnapshot {
+	    budget: number;
+	    used: number;
+	    free: number;
+	    percentUsed: number;
+	    systemPrompt: number;
+	    toolDefTokens: number;
+	    todoText: number;
+	    skillList: number;
+	    messageTokens: number;
+	    toolDefCount: number;
+	    messageCount: number;
+	    userMessages: number;
+	    assistantMsgs: number;
+	    toolResults: number;
+	    archived: number;
+	    compactCount: number;
+	    trimCount: number;
+	    cacheHitTokens: number;
+	    cacheMissTokens: number;
+	    cacheHitRatio: number;
+	    subCount: number;
+	    subTokens: number;
+	    subCacheHit: number;
+	    subCacheMiss: number;
+	    governance: string;
+	    segments: ContextSegment[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ContextSnapshot(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.budget = source["budget"];
+	        this.used = source["used"];
+	        this.free = source["free"];
+	        this.percentUsed = source["percentUsed"];
+	        this.systemPrompt = source["systemPrompt"];
+	        this.toolDefTokens = source["toolDefTokens"];
+	        this.todoText = source["todoText"];
+	        this.skillList = source["skillList"];
+	        this.messageTokens = source["messageTokens"];
+	        this.toolDefCount = source["toolDefCount"];
+	        this.messageCount = source["messageCount"];
+	        this.userMessages = source["userMessages"];
+	        this.assistantMsgs = source["assistantMsgs"];
+	        this.toolResults = source["toolResults"];
+	        this.archived = source["archived"];
+	        this.compactCount = source["compactCount"];
+	        this.trimCount = source["trimCount"];
+	        this.cacheHitTokens = source["cacheHitTokens"];
+	        this.cacheMissTokens = source["cacheMissTokens"];
+	        this.cacheHitRatio = source["cacheHitRatio"];
+	        this.subCount = source["subCount"];
+	        this.subTokens = source["subTokens"];
+	        this.subCacheHit = source["subCacheHit"];
+	        this.subCacheMiss = source["subCacheMiss"];
+	        this.governance = source["governance"];
+	        this.segments = this.convertValues(source["segments"], ContextSegment);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class DisplayBlock {
 	    ToolName: string;
 	    Args: string;
@@ -99,6 +197,26 @@ export namespace config {
 	        this.model = source["model"];
 	    }
 	}
+	export class MCPServerConfig {
+	    command: string;
+	    args?: string[];
+	    env?: Record<string, string>;
+	    dangerLevel?: string;
+	    enabled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new MCPServerConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.command = source["command"];
+	        this.args = source["args"];
+	        this.env = source["env"];
+	        this.dangerLevel = source["dangerLevel"];
+	        this.enabled = source["enabled"];
+	    }
+	}
 	export class ModelConfig {
 	    name: string;
 	    provider: string;
@@ -129,6 +247,7 @@ export namespace config {
 	    flash_model?: string;
 	    models: ModelConfig[];
 	    image_gen_models?: ImageGenConfig[];
+	    mcp_servers?: Record<string, MCPServerConfig>;
 	
 	    static createFrom(source: any = {}) {
 	        return new Snapshot(source);
@@ -143,6 +262,7 @@ export namespace config {
 	        this.flash_model = source["flash_model"];
 	        this.models = this.convertValues(source["models"], ModelConfig);
 	        this.image_gen_models = this.convertValues(source["image_gen_models"], ImageGenConfig);
+	        this.mcp_servers = this.convertValues(source["mcp_servers"], MCPServerConfig, true);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -200,6 +320,9 @@ export namespace skill {
 	    args?: string[];
 	    dangerLevel?: string;
 	    pluginEnabled: boolean;
+	    status?: string;
+	    error?: string;
+	    toolCount?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new MCPServerSnapshot(source);
@@ -213,6 +336,9 @@ export namespace skill {
 	        this.args = source["args"];
 	        this.dangerLevel = source["dangerLevel"];
 	        this.pluginEnabled = source["pluginEnabled"];
+	        this.status = source["status"];
+	        this.error = source["error"];
+	        this.toolCount = source["toolCount"];
 	    }
 	}
 	export class PluginSnapshot {

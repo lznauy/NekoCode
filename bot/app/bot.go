@@ -18,9 +18,9 @@ type Bot struct {
 	botCore
 	botRuntime
 	sessionRuntime
-	ext        *extensionFacade
-	cb         *callbackBus
-	subWiring  *subagentWiring
+	ext       *extensionFacade
+	cb        *callbackBus
+	subWiring *subagentWiring
 	appLock
 }
 
@@ -94,6 +94,7 @@ func (b *Bot) reinit() {
 		GetAgent:      b.getAgent,
 	})
 	b.ext.InitPlugins()
+	b.ext.InitConfigMCPServers(b.cfg.MCPServers)
 	b.ext.InitSkills()
 	b.initAgent()
 	b.initSummarizer()
