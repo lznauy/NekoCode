@@ -101,6 +101,17 @@ func (m *Manager) SkillDirs() []string {
 	return m.reg.SkillDirs()
 }
 
+// MCPServers returns flattened MCP server snapshots for all installed plugins,
+// attributed to their source plugin and its current enabled state.
+func (m *Manager) MCPServers() []MCPServerSnapshot {
+	plugins := m.reg.List()
+	out := make([]MCPServerSnapshot, 0)
+	for _, p := range plugins {
+		out = append(out, MCPServersFor(p)...)
+	}
+	return out
+}
+
 func (m *Manager) Get(name string) (*Plugin, bool) {
 	return m.reg.Get(name)
 }

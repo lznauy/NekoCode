@@ -27,5 +27,5 @@ func (b *Bot) RefreshSkillManagement() botskill.ManagementSnapshot {
 }
 
 func (b *Bot) skillManagementSnapshot() botskill.ManagementSnapshot {
-	return b.skills.ManagementSnapshot(b.plugins.Snapshots())
+	return b.skills.ManagementSnapshot(b.plugins.Snapshots(), b.plugins.MCPServers())
 }

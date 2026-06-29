@@ -168,6 +168,28 @@ export namespace config {
 
 export namespace plugin {
 	
+	export class MCPServerSnapshot {
+	    name: string;
+	    plugin: string;
+	    command: string;
+	    args?: string[];
+	    dangerLevel?: string;
+	    pluginEnabled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new MCPServerSnapshot(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.plugin = source["plugin"];
+	        this.command = source["command"];
+	        this.args = source["args"];
+	        this.dangerLevel = source["dangerLevel"];
+	        this.pluginEnabled = source["pluginEnabled"];
+	    }
+	}
 	export class Snapshot {
 	    name: string;
 	    version?: string;
@@ -176,6 +198,11 @@ export namespace plugin {
 	    dir?: string;
 	    enabled: boolean;
 	    skills?: string[];
+	    skillNames?: string[];
+	    agents?: string[];
+	    commands?: string[];
+	    mcpServers?: string[];
+	    hasHooks?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Snapshot(source);
@@ -190,6 +217,11 @@ export namespace plugin {
 	        this.dir = source["dir"];
 	        this.enabled = source["enabled"];
 	        this.skills = source["skills"];
+	        this.skillNames = source["skillNames"];
+	        this.agents = source["agents"];
+	        this.commands = source["commands"];
+	        this.mcpServers = source["mcpServers"];
+	        this.hasHooks = source["hasHooks"];
 	    }
 	}
 
@@ -229,6 +261,7 @@ export namespace skill {
 	    files?: string[];
 	    loaded: boolean;
 	    source: string;
+	    sourceKind: string;
 	    plugin?: string;
 	
 	    static createFrom(source: any = {}) {
@@ -243,12 +276,14 @@ export namespace skill {
 	        this.files = source["files"];
 	        this.loaded = source["loaded"];
 	        this.source = source["source"];
+	        this.sourceKind = source["sourceKind"];
 	        this.plugin = source["plugin"];
 	    }
 	}
 	export class ManagementSnapshot {
 	    skills: Snapshot[];
 	    plugins: plugin.Snapshot[];
+	    mcp: plugin.MCPServerSnapshot[];
 	
 	    static createFrom(source: any = {}) {
 	        return new ManagementSnapshot(source);
@@ -258,6 +293,7 @@ export namespace skill {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.skills = this.convertValues(source["skills"], Snapshot);
 	        this.plugins = this.convertValues(source["plugins"], plugin.Snapshot);
+	        this.mcp = this.convertValues(source["mcp"], plugin.MCPServerSnapshot);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

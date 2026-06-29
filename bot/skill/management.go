@@ -9,8 +9,9 @@ import (
 )
 
 type ManagementSnapshot struct {
-	Skills  []Snapshot        `json:"skills"`
-	Plugins []plugin.Snapshot `json:"plugins"`
+	Skills  []Snapshot                 `json:"skills"`
+	Plugins []plugin.Snapshot          `json:"plugins"`
+	MCP     []plugin.MCPServerSnapshot `json:"mcp"`
 }
 
 type Snapshot struct {
@@ -20,13 +21,15 @@ type Snapshot struct {
 	Files       []string `json:"files,omitempty"`
 	Loaded      bool     `json:"loaded"`
 	Source      string   `json:"source"`
+	SourceKind  string   `json:"sourceKind"`
 	Plugin      string   `json:"plugin,omitempty"`
 }
 
-func BuildManagementSnapshot(reg *Registry, plugins []plugin.Snapshot) ManagementSnapshot {
+func BuildManagementSnapshot(reg *Registry, plugins []plugin.Snapshot, mcp []plugin.MCPServerSnapshot) ManagementSnapshot {
 	return ManagementSnapshot{
 		Skills:  BuildSnapshots(reg, plugins),
 		Plugins: plugins,
+		MCP:     mcp,
 	}
 }
 
@@ -37,7 +40,7 @@ func BuildSnapshots(reg *Registry, plugins []plugin.Snapshot) []Snapshot {
 	skills := reg.List()
 	out := make([]Snapshot, 0, len(skills))
 	for _, sk := range skills {
-		source, pluginName := SourceForDir(sk.Dir, plugins)
+		kind, source, pluginName := SourceForDir(sk.Dir, plugins)
 		files := append([]string(nil), sk.Files...)
 		sort.Strings(files)
 		out = append(out, Snapshot{
@@ -47,15 +50,23 @@ func BuildSnapshots(reg *Registry, plugins []plugin.Snapshot) []Snapshot {
 			Files:       files,
 			Loaded:      reg.IsLoaded(sk.Name),
 			Source:      source,
+			SourceKind:  kind,
 			Plugin:      pluginName,
 		})
 	}
 	return out
 }
 
-func SourceForDir(dir string, plugins []plugin.Snapshot) (string, string) {
+// SourceForDir classifies a skill directory into one of three kinds:
+//   - "builtin": embedded/bundled skill (empty dir)
+//   - "plugin":  lives under a plugin's skill directory
+//   - "local":   a standalone file-system skill (e.g. ~/.nekocode/skills/...)
+//
+// It returns (kind, label, pluginName). label is a Chinese display string
+// ("内置" / "插件" / "本地"); kind is the stable machine-readable value.
+func SourceForDir(dir string, plugins []plugin.Snapshot) (string, string, string) {
 	if dir == "" {
-		return "内置", ""
+		return "builtin", "内置", ""
 	}
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
@@ -68,9 +79,9 @@ func SourceForDir(dir string, plugins []plugin.Snapshot) (string, string) {
 				absSkillDir = skillDir
 			}
 			if absDir == absSkillDir || strings.HasPrefix(absDir, absSkillDir+string(filepath.Separator)) {
-				return "插件", p.Name
+				return "plugin", "插件", p.Name
 			}
 		}
 	}
-	return "本地", ""
+	return "local", "本地", ""
 }

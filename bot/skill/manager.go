@@ -136,8 +136,8 @@ func (m *Manager) RegisterTool() {
 	m.tools.Register(NewSkillTool(m.reg))
 }
 
-func (m *Manager) ManagementSnapshot(plugins []plugin.Snapshot) ManagementSnapshot {
-	return BuildManagementSnapshot(m.Registry(), plugins)
+func (m *Manager) ManagementSnapshot(plugins []plugin.Snapshot, mcp []plugin.MCPServerSnapshot) ManagementSnapshot {
+	return BuildManagementSnapshot(m.Registry(), plugins, mcp)
 }
 
 func (m *Manager) log(format string, args ...any) {
