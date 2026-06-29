@@ -103,12 +103,11 @@ func (a *Agent) callLLMForTool() ([]tools.ToolCallItem, string, error) {
 		}
 
 		result, err := tools.CallLLM(a.llmClient, tools.LLMCallOptions{
-			Ctx:            a.getCtx(),
-			Messages:       messages,
-			ToolDefs:       toolDefs,
-			Callbacks:      a.streamCallbacks(),
-			CheckDone:      func() bool { return a.finished.Load() },
-			EstimatePrompt: true,
+			Ctx:       a.getCtx(),
+			Messages:  messages,
+			ToolDefs:  toolDefs,
+			Callbacks: a.streamCallbacks(),
+			CheckDone: func() bool { return a.finished.Load() },
 		})
 		if err != nil {
 			return err

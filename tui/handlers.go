@@ -296,7 +296,7 @@ func (m *Model) handleSpinnerTick(msg spinner.TickMsg) tea.Cmd {
 		m.Messages.UpdateProcessing(func(p *processing.ProcessingItem) {
 			p.SetSpinnerView(spinnerView)
 			p.SetStatusText(statusText)
-			p.SetTokens(st.PromptTokens, st.CompletionTokens)
+			p.SetTokens(st.TurnPrompt, st.TurnCompletion)
 			p.SetCompactCount(st.CompactCount)
 		})
 

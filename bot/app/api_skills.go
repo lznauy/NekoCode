@@ -8,29 +8,19 @@ import (
 func (b *Bot) SkillManagementSnapshot() botskill.ManagementSnapshot {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.skillManagementSnapshot()
+	return b.ext.SkillManagementSnapshot()
 }
 
 func (b *Bot) SetPluginEnabled(name string, enabled bool) (botskill.ManagementSnapshot, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-
-	if _, err := b.plugins.SetEnabled(name, enabled); err != nil {
-		return botskill.ManagementSnapshot{}, err
-	}
-	return b.skillManagementSnapshot(), nil
+	return b.ext.SetPluginEnabled(name, enabled)
 }
 
 func (b *Bot) RefreshSkillManagement() botskill.ManagementSnapshot {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-
-	b.plugins.Reload()
-	return b.skillManagementSnapshot()
-}
-
-func (b *Bot) skillManagementSnapshot() botskill.ManagementSnapshot {
-	return b.skills.ManagementSnapshot(skillPluginSnapshots(b.plugins.Snapshots()), skillMCPSnapshots(b.plugins.MCPServers()))
+	return b.ext.RefreshSkillManagement()
 }
 
 func skillPluginSnapshots(in []plugin.Snapshot) []botskill.PluginSnapshot {

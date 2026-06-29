@@ -159,7 +159,7 @@ func (a *Agent) Reset() {
 	a.liveMu.Unlock()
 
 	a.finished.Store(false)
-	a.promptSnap = a.promptTok.Load()
+	a.promptSnap = int64(a.ContextTokens())
 	a.complSnap = a.complTok.Load()
 	a.startTime = time.Now()
 	if a.gov != nil {

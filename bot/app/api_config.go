@@ -24,13 +24,7 @@ func (b *Bot) ApplyConfig(snapshot config.Snapshot) (config.Snapshot, error) {
 
 	oldPrompt, oldCompl := b.ag.TokenUsage()
 	b.cfg = &next
-	b.initToolRegistry()
-	b.initHooks()
-	b.initPlugins()
-	b.initSkills()
-	b.initAgent()
-	b.initSummarizer()
-	b.initCommands()
+	b.reinit()
 	b.ag.AddTokens(oldPrompt, oldCompl)
 
 	return config.NewSnapshot(next), nil

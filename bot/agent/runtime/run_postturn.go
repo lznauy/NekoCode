@@ -24,6 +24,7 @@ func (a *Agent) applyPostTurnHooks(reasoning *ReasoningResult, recordable bool, 
 			a.stopReason = *r.Stop
 			a.lastText = reasoning.ActionInput
 			if recordable {
+				a.ctxMgr.AddAssistantResponse(reasoning.ActionInput, a.lastReason)
 				a.finalText = reasoning.ActionInput
 			}
 			return true
@@ -55,6 +56,10 @@ func (a *Agent) applyPostTurnHint(reasoning *ReasoningResult, hint *hooks.Hint, 
 			a.finalText = ""
 		} else {
 			a.lastText = reasoning.ActionInput
+			if recordable {
+				a.ctxMgr.AddAssistantResponse(reasoning.ActionInput, a.lastReason)
+				a.finalText = reasoning.ActionInput
+			}
 		}
 		return true
 	}

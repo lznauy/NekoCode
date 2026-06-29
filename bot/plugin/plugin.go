@@ -14,8 +14,4 @@ func DefaultDirs() []string { return ext.DefaultDirs() }
 
 func NewRegistry(baseDirs []string) *Registry { return ext.NewRegistry(baseDirs) }
 
-func ParseManifest(pluginDir string) (*Manifest, error) { return ext.ParseManifest(pluginDir) }
-
 func ParseManifestData(data []byte) (*Manifest, error) { return ext.ParseManifestData(data) }
-
-func HasManifest(dir string) bool { return ext.HasManifest(dir) }

@@ -1,8 +1,6 @@
 package sdk
 
 import (
-	"net/url"
-
 	"nekocode/bot/sdk/volcengine"
 )
 
@@ -16,9 +14,3 @@ func NewVolcSigner(accessKey, secretKey, region, service string) *VolcSigner {
 
 // SignResult holds the headers that must be set on the outgoing request.
 type SignResult = volcengine.SignResult
-
-// Sign produces a Volcengine Signature V4 for a POST request with JSON body.
-// Signed headers: content-type, host, x-content-sha256, x-date.
-func SignVolcengine(s *VolcSigner, method, path, host string, query url.Values, body []byte) (*SignResult, error) {
-	return s.Sign(method, path, host, query, body)
-}

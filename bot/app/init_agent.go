@@ -22,7 +22,7 @@ func (b *Bot) initAgent() {
 
 	b.ag = runtime.New(context.Background(), b.ctxMgr, llmClient, b.toolRegistry)
 	b.ag.SetHookRegistry(b.hookReg)
-	b.applyAgentCallbacks()
+	b.cb.applyAgentCallbacks()
 
 	b.ag.SetContextTransform(func(msgs []types.Message) []types.Message {
 		return ctxmgr.ApplyToolResultGuardrail(msgs, ctxmgr.ToolResultGuardrailOptions{
@@ -31,5 +31,5 @@ func (b *Bot) initAgent() {
 		})
 	})
 
-	b.wireTaskTool(fm)
+	b.subWiring.WireTaskTool(fm)
 }

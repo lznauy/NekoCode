@@ -36,11 +36,6 @@ func (m *Manager) Snapshots() []Snapshot {
 	return out
 }
 
-// SnapshotFor builds a Snapshot for a single plugin (used by tests and aggregation helpers).
-func SnapshotFor(p *Plugin) Snapshot {
-	return snapshotFor(p)
-}
-
 func snapshotFor(p *Plugin) Snapshot {
 	return Snapshot{
 		Name:        p.Name,

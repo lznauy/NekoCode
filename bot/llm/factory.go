@@ -6,11 +6,6 @@ import (
 	"nekocode/bot/llm/types"
 )
 
-// NewClient creates an LLM client using the OpenAI-compatible protocol.
-func NewClient(provider, apiKey, baseURL, model string) types.LLM {
-	return NewClientWithProtocol(provider, apiKey, baseURL, model, "openai")
-}
-
 // NewClientWithProtocol creates an LLM client with explicit protocol selection.
 // protocol: "openai" or "anthropic".
 func NewClientWithProtocol(provider, apiKey, baseURL, model, protocol string) types.LLM {

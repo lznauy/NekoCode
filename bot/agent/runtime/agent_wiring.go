@@ -48,11 +48,11 @@ func (a *Agent) AddTokens(prompt, completion int) {
 }
 
 func (a *Agent) TokenUsage() (prompt, completion int) {
-	return int(a.promptTok.Load()), int(a.complTok.Load())
+	return a.ContextTokens(), int(a.complTok.Load())
 }
 
 func (a *Agent) TurnTokenUsage() (prompt, completion int) {
-	return int(a.promptTok.Load() - a.promptSnap), int(a.complTok.Load() - a.complSnap)
+	return a.ContextTokens() - int(a.promptSnap), int(a.complTok.Load() - a.complSnap)
 }
 
 func (a *Agent) ContextTokens() int {

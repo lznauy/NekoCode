@@ -52,10 +52,9 @@ func (a *Agent) streamSynthesize(ctx context.Context) (string, error) {
 	messages = append(messages, types.Message{Role: "user", Content: synthesizePrompt})
 
 	result, err := tools.CallLLM(a.llmClient, tools.LLMCallOptions{
-		Ctx:            ctx,
-		Messages:       messages,
-		Callbacks:      a.streamCallbacks(),
-		EstimatePrompt: true,
+		Ctx:       ctx,
+		Messages:  messages,
+		Callbacks: a.streamCallbacks(),
 	})
 	if err != nil {
 		return "", err

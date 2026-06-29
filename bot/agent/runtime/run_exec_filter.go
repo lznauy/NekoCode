@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"nekocode/bot/debug"
+	"nekocode/bot/governance"
 	"nekocode/bot/hooks"
 	"nekocode/bot/tools"
 )
@@ -109,7 +110,7 @@ func (a *Agent) preEditBlockReason(tc tools.ToolCallItem) string {
 	if _, err := os.Stat(resolved); err != nil {
 		return ""
 	}
-	return "你正在修改 " + targetPath + "，但 ledger 中没有该文件的读取记录。请先 Read 确认当前内容，确认差异后再 edit/write。"
+	return governance.ReadBeforeWriteWarning(targetPath)
 }
 
 func hasSufficientEditAnchor(args map[string]any) bool {

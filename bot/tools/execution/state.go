@@ -54,14 +54,8 @@ func SnapshotStoreFromContext(ctx context.Context) *editcore.SnapshotStore {
 var globalFileCache *FileStateCache
 var globalSnapshotStore *editcore.SnapshotStore
 
-// SetGlobalFileCache sets the global file state cache.
-func SetGlobalFileCache(c *FileStateCache) { globalFileCache = c }
-
 // GetGlobalFileCache returns the global file state cache.
 func GetGlobalFileCache() *FileStateCache { return globalFileCache }
-
-// SetGlobalSnapshotStore sets the global snapshot store.
-func SetGlobalSnapshotStore(s *editcore.SnapshotStore) { globalSnapshotStore = s }
 
 // GetGlobalSnapshotStore returns the global snapshot store.
 func GetGlobalSnapshotStore() *editcore.SnapshotStore { return globalSnapshotStore }

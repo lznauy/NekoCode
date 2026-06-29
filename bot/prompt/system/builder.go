@@ -12,9 +12,6 @@ import (
 //go:embed system_zh.md
 var systemPrompt string
 
-//go:embed analysis_rules_zh.md
-var analysisRulesZH string
-
 type Builder struct {
 	staticPrefix string
 	cwd          string
@@ -58,8 +55,4 @@ func (b *Builder) Build() string {
 		parts = append(parts, ctxfmt.FormatEnv(b.cwd, date, osRel(), runtime.GOARCH))
 	}
 	return strings.Join(parts, "\n\n")
-}
-
-func AnalysisRules() string {
-	return analysisRulesZH
 }

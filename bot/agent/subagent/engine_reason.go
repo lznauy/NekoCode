@@ -15,29 +15,23 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 	var reasoningContent string
 
 	toolDefs := e.filteredToolDefs(allowed)
-	firstAttempt := true
 	err := llm.Retry(ctx, llm.DefaultRetryConfig, func() error {
 		result, err := tools.CallLLM(e.llmClient, tools.LLMCallOptions{
 			Ctx:      ctx,
 			Messages: mgr.Build(true),
 			ToolDefs: toolDefs,
-			Callbacks: tools.StreamCallbacks{
-				OnPhase: phase,
-				AddTokens: func(p, c int) {
-					if addTokens != nil {
-						addTokens(p, c)
-					}
-				},
+		Callbacks: tools.StreamCallbacks{
+			OnPhase: phase,
+			AddTokens: func(p, c int) {
+				if addTokens != nil {
+					addTokens(p, c)
+				}
 			},
-			CheckDone:      func() bool { return false },
-			EstimatePrompt: firstAttempt,
+		},
+			CheckDone: func() bool { return false },
 		})
 		if err != nil {
 			return err
-		}
-
-		if firstAttempt {
-			firstAttempt = false
 		}
 
 		textContent = result.Text

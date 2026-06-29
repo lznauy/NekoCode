@@ -8,38 +8,6 @@ func RegisterBuiltin(r *Registry) {
 	}
 }
 
-func quotaHook() Hook {
-	return adaptBuiltinHook(hookbuiltin.QuotaHook())
-}
-
-func verificationHook() Hook {
-	return adaptBuiltinHook(hookbuiltin.VerificationHook())
-}
-
-func explorationExhaustedHook() Hook {
-	return adaptBuiltinHook(hookbuiltin.ExplorationExhaustedHook())
-}
-
-func explorationGuardHook() Hook {
-	return adaptBuiltinHook(hookbuiltin.ExplorationGuardHook())
-}
-
-func exploreCascadeHook() Hook {
-	return adaptBuiltinHook(hookbuiltin.ExploreCascadeHook())
-}
-
-func progressStallHook() Hook {
-	return adaptBuiltinHook(hookbuiltin.ProgressStallHook())
-}
-
-func completionQualityHook() Hook {
-	return adaptBuiltinHook(hookbuiltin.CompletionQualityHook())
-}
-
-func garbledCircuitBreaker() Hook {
-	return adaptBuiltinHook(hookbuiltin.GarbledCircuitBreaker())
-}
-
 func adaptBuiltinHook(h hookbuiltin.Hook) Hook {
 	return Hook{
 		Name:  h.Name,

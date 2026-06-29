@@ -42,10 +42,9 @@ type LLMCallResult struct {
 
 // LLMCallOptions configures a single LLM call.
 type LLMCallOptions struct {
-	Ctx            context.Context
-	Messages       []types.Message
-	ToolDefs       []types.ToolDef
-	Callbacks      StreamCallbacks
-	CheckDone      func() bool
-	EstimatePrompt bool
+	Ctx       context.Context
+	Messages  []types.Message
+	ToolDefs  []types.ToolDef
+	Callbacks StreamCallbacks
+	CheckDone func() bool
 }

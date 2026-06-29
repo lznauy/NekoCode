@@ -8,24 +8,19 @@ import (
 	"nekocode/bot/command"
 	"nekocode/bot/config"
 	ctxmgr "nekocode/bot/contextmgr"
-	"nekocode/bot/extension/mcp"
 	"nekocode/bot/hooks"
 	"nekocode/bot/index/service"
-	"nekocode/bot/plugin"
 	"nekocode/bot/prompt"
-	"nekocode/bot/session"
-	"nekocode/bot/skill"
 	"nekocode/bot/tools"
-	"nekocode/common"
 )
 
 type Bot struct {
 	botCore
 	botRuntime
-	extensionRuntime
-	callbackRuntime
-	confirmRuntime
 	sessionRuntime
+	ext        *extensionFacade
+	cb         *callbackBus
+	subWiring  *subagentWiring
 	appLock
 }
 
@@ -47,28 +42,8 @@ type botRuntime struct {
 	hookReg      *hooks.Registry
 }
 
-type extensionRuntime struct {
-	skills     *skill.Manager
-	plugins    *plugin.Manager
-	mcpClients map[string]*mcp.Client
-}
-
-type callbackRuntime struct {
-	confirmFn common.ConfirmFunc
-	phaseFn   common.PhaseFunc
-	todoFn    common.TodoFunc
-	notifyFn  func(string)
-	confirmCh chan common.ConfirmRequest
-}
-
-type confirmRuntime struct {
-	confirmMu      sync.Mutex
-	pendingConfirm bool
-}
-
 type sessionRuntime struct {
-	sessions       *session.Manager
-	sessionResumed bool
+	sess *sessionFacade
 }
 
 type appLock struct {
@@ -81,14 +56,46 @@ func New() *Bot {
 
 	b.initConfig()
 	b.initCtxMgr()
+	b.cmdParser = command.NewParser()
+	b.skillState = &command.SkillState{MsgStart: -1}
+	b.initSession()
+	b.reinit()
+
+	return b
+}
+
+// reinit rebuilds the runtime facades, agent, summarizer, and commands.
+// Called from New() for initial setup and from ApplyConfig() for hot reload.
+func (b *Bot) reinit() {
 	b.initToolRegistry()
 	b.initHooks()
-	b.initPlugins()
-	b.initSkills()
-	b.initSession()
+	b.cb = &callbackBus{}
+	b.cb.Init(callbackDeps{
+		ToolRegistry: b.toolRegistry,
+		CtxMgr:       b.ctxMgr,
+		GetAgent:     b.getAgent,
+	})
+	b.ext = &extensionFacade{}
+	b.ext.Init(extensionDeps{
+		CtxMgr:        b.ctxMgr,
+		ToolRegistry:  b.toolRegistry,
+		HookReg:       b.hookReg,
+		ContextWindow: b.cfg.ContextWindow,
+		CmdParser:     b.cmdParser,
+		Callbacks:     b.cb,
+	})
+	b.subWiring = &subagentWiring{}
+	b.subWiring.Init(subagentWiringDeps{
+		ToolRegistry:  b.toolRegistry,
+		CtxMgr:        b.ctxMgr,
+		CWD:           b.cwd,
+		ProjectCtx:    b.projCtx,
+		ContextWindow: b.cfg.ContextWindow,
+		GetAgent:      b.getAgent,
+	})
+	b.ext.InitPlugins()
+	b.ext.InitSkills()
 	b.initAgent()
 	b.initSummarizer()
 	b.initCommands()
-
-	return b
 }

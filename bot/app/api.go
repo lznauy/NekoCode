@@ -25,12 +25,8 @@ func (b *Bot) ExecuteCommand(input string) (string, common.CmdResult) {
 	}
 	resp, _ := b.cmdParser.Execute(cmd)
 
-	pending := b.pendingConfirmation()
-	resumed := b.sessionResumed
-	result := commandResult(pending, resumed)
-	if resumed {
-		b.sessionResumed = false
-	}
+	resumed := b.sess.DrainResumed()
+	result := commandResult(b.cb.pendingConfirmation(), resumed)
 	return resp, result
 }
 

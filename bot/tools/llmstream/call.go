@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"regexp"
 
-	"nekocode/bot/contextmgr/token"
 	"nekocode/bot/llm/types"
 )
 
@@ -20,13 +19,6 @@ func CallLLM(client types.LLM, opts LLMCallOptions) (*LLMCallResult, error) {
 			return nil, err
 		default:
 			return nil, fmt.Errorf("chat stream failed")
-		}
-	}
-
-	if opts.EstimatePrompt {
-		est := token.EstimateTokens(opts.Messages)
-		if opts.Callbacks.AddTokens != nil {
-			opts.Callbacks.AddTokens(est, 0)
 		}
 	}
 

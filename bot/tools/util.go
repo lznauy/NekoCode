@@ -20,10 +20,6 @@ func ValidatePath(path string) (string, error) {
 	return pathutil.ValidatePath(path)
 }
 
-func normalizePathKey(path string) string {
-	return pathutil.NormalizePathKey(path)
-}
-
 func NormalizeText(text string) string {
 	return textutil.NormalizeText(text)
 }

@@ -22,13 +22,3 @@ var Languages = map[string]*sitter.Language{
 	".rs":  rust.GetLanguage(),
 }
 
-// NewParsers creates a pre-initialized tree-sitter parser for each supported language.
-func NewParsers() map[string]*sitter.Parser {
-	parsers := make(map[string]*sitter.Parser, len(Languages))
-	for ext, lang := range Languages {
-		parser := sitter.NewParser()
-		parser.SetLanguage(lang)
-		parsers[ext] = parser
-	}
-	return parsers
-}

@@ -262,8 +262,8 @@ func (a *App) SendMessage(input string) {
 
 		stats := a.bot.Stats()
 		runtime.EventsEmit(a.ctx, "agent:metrics", map[string]any{
-			"prompt":       stats.PromptTokens,
-			"completion":   stats.CompletionTokens,
+			"prompt":       stats.TurnPrompt,
+			"completion":   stats.TurnCompletion,
 			"cacheHit":     0,
 			"cacheMiss":    0,
 			"elapsedMs":    time.Since(start).Milliseconds(),
