@@ -9,9 +9,7 @@ import (
 )
 
 func (b *Bot) unblockConfirm() {
-	b.confirmMu.Lock()
-	b.pendingConfirm = false
-	b.confirmMu.Unlock()
+	b.setPendingConfirmation(false)
 	if b.confirmCh != nil {
 		select {
 		case b.confirmCh <- common.ConfirmRequest{Response: nil}:
@@ -27,9 +25,7 @@ func (b *Bot) confirmInstall(source string, p *plugin.Plugin, isRemote bool) boo
 		return false
 	}
 	result := b.confirmFn(common.NewConfirmRequest("/plugin install", map[string]any{"source": source, "summary": summary}, common.LevelWrite))
-	b.confirmMu.Lock()
-	b.pendingConfirm = false
-	b.confirmMu.Unlock()
+	b.setPendingConfirmation(false)
 	if !result && b.notifyFn != nil {
 		b.notifyFn(fmt.Sprintf("Install cancelled: %s", source))
 	}

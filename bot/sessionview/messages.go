@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"strings"
 
+	"nekocode/bot/llm/types"
 	"nekocode/common"
-	"nekocode/llm/types"
 )
 
 // reImagePath matches image file paths in image_gen output.

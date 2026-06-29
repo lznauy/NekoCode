@@ -3,7 +3,7 @@ package contextmgr
 import (
 	"nekocode/bot/contextmgr/compact"
 	"nekocode/bot/debug"
-	"nekocode/llm/types"
+	"nekocode/bot/llm/types"
 )
 
 func summary(s string) string {

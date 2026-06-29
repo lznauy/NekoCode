@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"nekocode/bot/llm/types"
 	"nekocode/common"
-	"nekocode/llm/types"
 )
 
 func TestNew(t *testing.T) {

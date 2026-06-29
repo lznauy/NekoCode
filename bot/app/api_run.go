@@ -17,20 +17,8 @@ func (b *Bot) RunAgent(input string, onStep func(action, toolName, toolArgs, out
 }
 
 func (b *Bot) Configure(confirmFn common.ConfirmFunc, phaseFn common.PhaseFunc, todoFn common.TodoFunc, notifyFn func(string), confirmCh chan common.ConfirmRequest, questionFn common.QuestionFunc) {
-	b.confirmFn = confirmFn
-	b.phaseFn = phaseFn
-	b.todoFn = todoFn
-	b.notifyFn = notifyFn
-	b.confirmCh = confirmCh
-	b.ag.SetConfirmFn(confirmFn)
-	b.ag.SetPhaseFn(phaseFn)
+	b.configureCallbacks(confirmFn, phaseFn, todoFn, notifyFn, confirmCh)
 	b.setQuestionFunc(questionFn)
-	b.ag.WireTodoWrite(func(items []common.TodoItem) {
-		b.ctxMgr.SetTodos(items)
-		if todoFn != nil {
-			todoFn(items)
-		}
-	})
 }
 
 func (b *Bot) setQuestionFunc(fn common.QuestionFunc) {

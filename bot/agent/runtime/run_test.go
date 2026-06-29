@@ -10,15 +10,15 @@ import (
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/governance"
 	"nekocode/bot/hooks"
+	"nekocode/bot/llm/types"
 	"nekocode/bot/tools"
-	"nekocode/llm/types"
 )
 
 func newTestAgent() *Agent {
 	ctxMgr := ctxmgr.NewSub("test", 128000, nil)
 	reg := tools.NewRegistry()
 	a := New(context.Background(), ctxMgr, nil, reg)
-	a.gov = newGovManager(hooks.NewRegistry())
+	a.gov = NewGovernanceManager(hooks.NewRegistry())
 	hooks.RegisterBuiltin(a.gov.HookReg)
 	return a
 }

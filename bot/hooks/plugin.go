@@ -37,12 +37,40 @@ func adaptPluginResult(r *hookplugin.Result) *Result {
 	if r == nil {
 		return nil
 	}
-	if r.Hint == nil {
-		return &Result{}
+	out := &Result{}
+	if r.Hint != nil {
+		out.Hint = &Hint{
+			Type:     r.Hint.Type,
+			Severity: r.Hint.Severity,
+			Content:  r.Hint.Content,
+		}
 	}
-	return &Result{Hint: &Hint{
-		Type:     r.Hint.Type,
-		Severity: r.Hint.Severity,
-		Content:  r.Hint.Content,
-	}}
+	if r.Stop != nil {
+		sr := StopReason(r.Stop.Reason)
+		out.Stop = &sr
+	}
+	if r.BlockTool != nil {
+		out.BlockTool = &BlockTool{
+			Tool:   r.BlockTool.Tool,
+			Reason: r.BlockTool.Reason,
+		}
+	}
+	if r.RequireTool != nil {
+		out.RequireTool = &RequireTool{
+			Tool:   r.RequireTool.Tool,
+			Reason: r.RequireTool.Reason,
+		}
+	}
+	if r.BlockFinal != nil {
+		out.BlockFinal = &BlockFinal{
+			Reason: r.BlockFinal.Reason,
+		}
+	}
+	if r.StatePatch != nil {
+		out.StatePatch = &StatePatch{
+			Ints:    r.StatePatch.Ints,
+			Strings: r.StatePatch.Strings,
+		}
+	}
+	return out
 }

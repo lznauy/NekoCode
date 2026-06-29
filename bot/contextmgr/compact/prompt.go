@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"nekocode/bot/llm/types"
 	"nekocode/common"
-	"nekocode/llm/types"
 )
 
 // NO_TOOLS_PREAMBLE prevents the summarizer model from making tool calls.

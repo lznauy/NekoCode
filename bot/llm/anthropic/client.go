@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"nekocode/llm/types"
+	"nekocode/bot/llm/types"
 )
 
 type Client struct {

@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
+	"nekocode/bot/llm/types"
 	"nekocode/common"
-	"nekocode/llm/types"
 )
 
 // Content is the single source of truth for everything sent to the LLM

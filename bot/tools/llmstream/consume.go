@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
+	"nekocode/bot/llm/types"
 	"nekocode/common"
-	"nekocode/llm/types"
 )
 
 // ConsumeStream reads tokens from tokenCh and populates s.

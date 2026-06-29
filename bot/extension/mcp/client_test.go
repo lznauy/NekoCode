@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"nekocode/llm/types"
+	"nekocode/bot/llm/types"
 )
 
 // startMockMCP builds and starts a minimal MCP server that responds to

@@ -16,31 +16,39 @@ func makePluginHook(point Point, eventType, pluginRoot string, eh eventHook, req
 			if requireError && !e.Error {
 				return nil
 			}
-			return runFirstPluginAction(pluginRoot, eventType, eh.Hooks)
+			return runFirstPluginAction(pluginRoot, eventType, e, eh.Hooks)
 		},
 	}
 }
 
-func runFirstPluginAction(pluginRoot, eventType string, actions []hookAction) *Result {
+func runFirstPluginAction(pluginRoot, eventType string, event Event, actions []hookAction) *Result {
 	for _, action := range actions {
-		if action.Type != "command" {
-			continue
-		}
-		output, truncated, runErr := runPluginCommand(pluginRoot, action)
-		if runErr != nil {
-			return pluginErrorResult(eventType, action.Command, runErr)
-		}
+		switch action.Type {
+		case "command":
+			output, truncated, runErr := runPluginCommand(pluginRoot, action)
+			if runErr != nil {
+				return pluginErrorResult(eventType, action.Command, runErr)
+			}
 
-		trimmed := strings.TrimSpace(output)
-		if trimmed == "" {
-			continue
+			trimmed := strings.TrimSpace(output)
+			if trimmed == "" {
+				continue
+			}
+			if schemaErr := validatePluginOutput(action.OutputSchema, trimmed); schemaErr != nil {
+				return &Result{Hint: &Hint{Type: "plugin_schema_error", Severity: "info",
+					Content: formatPluginOutput(eventType, action.Command, schemaErr.Error(), false)}}
+			}
+			return &Result{Hint: &Hint{Type: "plugin_output", Severity: "info",
+				Content: formatPluginOutput(eventType, action.Command, trimmed, truncated)}}
+		case "js":
+			result, err := runPluginJS(pluginRoot, event, action)
+			if err != nil {
+				return pluginErrorResult(eventType, jsActionName(action), err)
+			}
+			if result != nil {
+				return result
+			}
 		}
-		if schemaErr := validatePluginOutput(action.OutputSchema, trimmed); schemaErr != nil {
-			return &Result{Hint: &Hint{Type: "plugin_schema_error", Severity: "info",
-				Content: formatPluginOutput(eventType, action.Command, schemaErr.Error(), false)}}
-		}
-		return &Result{Hint: &Hint{Type: "plugin_output", Severity: "info",
-			Content: formatPluginOutput(eventType, action.Command, trimmed, truncated)}}
 	}
 	return nil
 }

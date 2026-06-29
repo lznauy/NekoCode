@@ -3,10 +3,11 @@ package subagent
 import (
 	"context"
 
+	"nekocode/bot/agent/runtime"
 	ctxmgr "nekocode/bot/contextmgr"
+	"nekocode/bot/llm/types"
 	"nekocode/bot/tools"
 	"nekocode/common"
-	"nekocode/llm/types"
 )
 
 func (e *Engine) newExecutor(cfg RunConfig) (*tools.Executor, func()) {
@@ -70,7 +71,7 @@ func applyReadOnlySpiralGuard(ctxMgr *ctxmgr.Manager, calls []tools.ToolCallItem
 	if tools.IsAllExploratory(calls) {
 		state.readOnlyStreak++
 		if state.readOnlyStreak >= 3 {
-			ctxMgr.Add("user", "[System] You've been reading without acting. Summarize your findings now — don't read any more files.")
+			ctxMgr.Add("user", runtime.GuardReadOnlySpiral, "system")
 			state.readOnlyStreak = 0
 		}
 		return

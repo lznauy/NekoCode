@@ -3,8 +3,8 @@ package runtime
 import (
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/hooks"
+	"nekocode/bot/llm/types"
 	"nekocode/bot/tools"
-	"nekocode/llm/types"
 )
 
 func (a *Agent) executeAllowedTools(allowed []tools.ToolCallItem, callback RunCallback) []tools.ToolCallResult {

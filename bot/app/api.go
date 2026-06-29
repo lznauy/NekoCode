@@ -26,9 +26,7 @@ func (b *Bot) ExecuteCommand(input string) (string, common.CmdResult) {
 	}
 	resp, _ := b.cmdParser.Execute(cmd)
 
-	b.confirmMu.Lock()
-	pending := b.pendingConfirm
-	b.confirmMu.Unlock()
+	pending := b.pendingConfirmation()
 	resumed := b.sessionResumed
 	result := apistate.CommandResult(pending, resumed)
 	if resumed {

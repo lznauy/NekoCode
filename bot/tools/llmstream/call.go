@@ -6,7 +6,7 @@ import (
 	"regexp"
 
 	"nekocode/bot/contextmgr/token"
-	"nekocode/llm/types"
+	"nekocode/bot/llm/types"
 )
 
 var ansiRegex = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")

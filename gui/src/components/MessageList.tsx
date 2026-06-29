@@ -20,6 +20,9 @@ interface MessageListProps {
 // 布局: 外层 scroll 容器沿用原 max-w-[980px] 居中 + padding; 内部 spacer
 // (height = 总高度) 撑出可滚动总长, 每条消息用 absolute + translateY 定位,
 // 与 gap-4 无关 (消息自身已有 margin/gap 兜底由 MessageItem 包裹结构决定)。
+//
+// overflow-anchor:none 关闭浏览器原生 Scroll Anchoring (流式时内容在下方持续
+// 增高, 锚定会自动下滚 scrollTop), 把跟随决策权交还 useAutoScroll。
 export const MessageList = memo(forwardRef<HTMLDivElement, MessageListProps>(
   function MessageList({ msgs, endRef, onPromptSelect, toggleStep }, ref) {
     const scrollRef = useRef<HTMLDivElement>(null)
@@ -46,7 +49,8 @@ const virtualizer = useVirtualizer({
     return (
       <div
         ref={scrollRef}
-        className="mx-auto flex w-full max-w-[980px] flex-1 overflow-y-auto px-5 py-6 scrollbar-gutter-stable"
+        className="mx-auto flex w-full max-w-[980px] flex-1 overflow-y-auto overflow-anchor-none px-5 py-6 scrollbar-gutter-stable"
+        style={{ overflowAnchor: 'none' }}
       >
         {msgs.length === 0 ? (
           <EmptyState onPromptSelect={onPromptSelect} />

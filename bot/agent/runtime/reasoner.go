@@ -19,6 +19,17 @@ const (
 	ActionExecuteTool
 )
 
+func (a ActionType) String() string {
+	switch a {
+	case ActionChat:
+		return "chat"
+	case ActionExecuteTool:
+		return "execute_tool"
+	default:
+		return "unknown"
+	}
+}
+
 type ReasoningResult struct {
 	Thought         string
 	Action          ActionType
@@ -55,7 +66,7 @@ func (a *Agent) Reason(state *stepState) *ReasoningResult {
 			return &ReasoningResult{Thought: "Format correction", Action: ActionChat, GarbledToolCall: true}
 		}
 		if textContent == "" {
-			textContent = "Sorry, I couldn't determine what to do"
+			textContent = FallbackNoAction
 		}
 		return &ReasoningResult{Thought: "Direct reply", Action: ActionChat, ActionInput: textContent}
 	}
@@ -76,17 +87,6 @@ func (a *Agent) Reason(state *stepState) *ReasoningResult {
 	return &ReasoningResult{
 		Thought: "Parallel tool calls: " + strings.Join(names, ", "),
 		Action:  ActionExecuteTool, ToolCalls: toolCalls, TextContent: textContent,
-	}
-}
-
-func (a ActionType) String() string {
-	switch a {
-	case ActionChat:
-		return "chat"
-	case ActionExecuteTool:
-		return "execute_tool"
-	default:
-		return "unknown"
 	}
 }
 

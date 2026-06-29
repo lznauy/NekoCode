@@ -2,30 +2,28 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"nekocode/bot/debug"
+	"nekocode/bot/llm/types"
 	"nekocode/bot/tools"
-	"nekocode/llm/types"
 )
 
 const synthesizePrompt = "Based on the information collected above, provide a final answer. Do NOT call any more tools. Output your conclusion directly."
 
-func (a *Agent) forceSynthesize() string {
-	if text := a.trySynthesize(); text != "" {
-		return text
+func (a *Agent) synthesizeAndReturn(callback RunCallback) *RunResult {
+	output := a.forceSynthesize()
+	a.ctxMgr.AddAssistantResponse(output, "")
+	if callback != nil {
+		callback("chat", "", "", output)
 	}
-	debug.Log("forceSynthesize: primary path failed, attempting emergency fallback")
-	if fb := a.emergencySynthesize(); fb != "" {
-		return fb
-	}
-	return "Unable to produce a final summary — the model is currently unavailable. The task's tool operations may have completed, but the results could not be synthesized. Please try again or check the conversation log for details."
+	return &RunResult{FinalOutput: output, Steps: a.step}
 }
 
-func (a *Agent) trySynthesize() string {
+func (a *Agent) forceSynthesize() string {
+	// Primary: LLM with retry.
 	var text string
-	err := withRetry(a.getCtx(), func() error {
+	_ = withRetry(a.getCtx(), func() error {
 		result, err := a.streamSynthesize(a.getCtx())
 		if err != nil {
 			return err
@@ -33,23 +31,20 @@ func (a *Agent) trySynthesize() string {
 		text = result
 		return nil
 	})
-	if err != nil && errors.Is(err, context.Canceled) {
-		return ""
+	if text != "" {
+		return text
 	}
-	return text
-}
 
-func (a *Agent) emergencySynthesize() string {
+	// Emergency: auto-compact, 30s timeout, no retry, discard garbled.
+	debug.Log("forceSynthesize: primary path failed, attempting emergency fallback")
 	a.ctxMgr.AutoCompactIfNeeded()
-
 	ctx, cancel := context.WithTimeout(a.getCtx(), 30*time.Second)
 	defer cancel()
-
-	text, _ := a.streamSynthesize(ctx)
-	if isGarbledToolCall(text) {
-		return ""
+	if fb, _ := a.streamSynthesize(ctx); fb != "" && !isGarbledToolCall(fb) {
+		return fb
 	}
-	return text
+
+	return FallbackSynthesize
 }
 
 func (a *Agent) streamSynthesize(ctx context.Context) (string, error) {

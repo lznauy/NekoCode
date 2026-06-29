@@ -16,15 +16,6 @@ func (a *Agent) applyTurnHints(hints []hooks.Hint) {
 	a.ctxMgr.SetHints(hooks.FormatHints(hints))
 }
 
-func (a *Agent) synthesizeAndReturn(callback RunCallback) *RunResult {
-	output := a.forceSynthesize()
-	a.ctxMgr.AddAssistantResponse(output, "")
-	if callback != nil {
-		callback("chat", "", "", output)
-	}
-	return &RunResult{FinalOutput: output, Steps: a.step}
-}
-
 func (a *Agent) drainSteering() {
 	for {
 		select {

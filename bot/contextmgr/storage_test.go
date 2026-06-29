@@ -3,7 +3,7 @@ package contextmgr
 import (
 	"testing"
 
-	"nekocode/llm/types"
+	"nekocode/bot/llm/types"
 )
 
 func newManager() *Manager {

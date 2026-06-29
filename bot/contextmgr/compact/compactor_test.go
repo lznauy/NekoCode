@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"nekocode/bot/contextmgr/context"
-	"nekocode/llm/types"
+	"nekocode/bot/llm/types"
 )
 
 type testTracker struct{ promptEst, total int }

@@ -1,8 +1,8 @@
 package tools
 
 import (
+	"nekocode/bot/llm/types"
 	"nekocode/bot/tools/llmstream"
-	"nekocode/llm/types"
 )
 
 type StreamCallbacks = llmstream.StreamCallbacks

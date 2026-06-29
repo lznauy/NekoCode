@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"sort"
 
+	"nekocode/bot/llm/types"
 	"nekocode/bot/tools/core"
-	"nekocode/llm/types"
 )
 
 // CollectToolCalls converts accumulated tool call deltas into ToolCallItems.

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"nekocode/llm/types"
+	"nekocode/bot/llm/types"
 )
 
 func TestApplyToolResultGuardrailInjectsWarning(t *testing.T) {

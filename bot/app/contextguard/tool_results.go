@@ -1,9 +1,8 @@
 package contextguard
 
 import (
-	"strconv"
-
-	"nekocode/llm/types"
+	"nekocode/bot/agent/runtime"
+	"nekocode/bot/llm/types"
 )
 
 const (
@@ -23,7 +22,8 @@ func ApplyToolResultGuardrailWithLimits(messages []types.Message, lastWarned *in
 	*lastWarned = toolResults
 	return append(messages, types.Message{
 		Role:    "user",
-		Content: ToolResultWarning(toolResults),
+		Content: runtime.ToolResultWarning(toolResults),
+		Source:  "system",
 	})
 }
 
@@ -37,6 +37,3 @@ func CountToolResults(messages []types.Message) int {
 	return count
 }
 
-func ToolResultWarning(count int) string {
-	return "[System] " + strconv.Itoa(count) + " tool results accumulated. Check for unfinished sub-tasks — if any, continue with task. If all done, call task(verify) to validate, then report results."
-}

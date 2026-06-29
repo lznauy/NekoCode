@@ -8,7 +8,7 @@ import (
 
 	ctxctx "nekocode/bot/contextmgr/context"
 	"nekocode/bot/contextmgr/token"
-	"nekocode/llm/types"
+	"nekocode/bot/llm/types"
 )
 
 // defaultBudget is the fallback context window size when not configured.

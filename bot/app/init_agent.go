@@ -9,10 +9,9 @@ import (
 	"nekocode/bot/app/contextguard"
 	"nekocode/bot/app/taskwire"
 	"nekocode/bot/config"
+	"nekocode/bot/llm"
+	"nekocode/bot/llm/types"
 	"nekocode/bot/tools"
-	"nekocode/common"
-	"nekocode/llm"
-	"nekocode/llm/types"
 )
 
 func (b *Bot) initAgent() {
@@ -27,19 +26,7 @@ func (b *Bot) initAgent() {
 
 	b.ag = agent.New(context.Background(), b.ctxMgr, llmClient, b.toolRegistry)
 	b.ag.SetHookRegistry(b.hookReg)
-
-	if b.confirmFn != nil {
-		b.ag.SetConfirmFn(b.confirmFn)
-	}
-	if b.phaseFn != nil {
-		b.ag.SetPhaseFn(b.phaseFn)
-	}
-	if b.todoFn != nil {
-		b.ag.WireTodoWrite(func(items []common.TodoItem) {
-			b.ctxMgr.SetTodos(items)
-			b.todoFn(items)
-		})
-	}
+	b.applyAgentCallbacks()
 
 	b.ag.SetContextTransform(func(msgs []types.Message) []types.Message {
 		return contextguard.ApplyToolResultGuardrail(msgs, &b.lastGuardrailWarned)

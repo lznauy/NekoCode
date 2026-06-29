@@ -16,7 +16,7 @@ import (
 	ctxctx "nekocode/bot/contextmgr/context"
 	"nekocode/bot/contextmgr/memory"
 	"nekocode/bot/contextmgr/token"
-	"nekocode/llm/types"
+	"nekocode/bot/llm/types"
 )
 
 type Manager struct {

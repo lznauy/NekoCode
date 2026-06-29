@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"nekocode/bot/debug"
+	"nekocode/bot/llm/types"
 	"nekocode/bot/tools"
-	"nekocode/llm/types"
 )
 
 const (

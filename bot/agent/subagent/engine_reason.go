@@ -4,9 +4,9 @@ import (
 	"context"
 
 	ctxmgr "nekocode/bot/contextmgr"
+	"nekocode/bot/llm"
+	"nekocode/bot/llm/types"
 	"nekocode/bot/tools"
-	"nekocode/llm"
-	"nekocode/llm/types"
 )
 
 func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []string, addTokens func(int, int), phase func(string)) ([]tools.ToolCallItem, string, error) {

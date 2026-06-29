@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"nekocode/bot/llm/types"
 	"nekocode/common"
-	"nekocode/llm/types"
 )
 
 type Snapshot struct {

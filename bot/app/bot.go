@@ -20,31 +20,59 @@ import (
 )
 
 type Bot struct {
+	botCore
+	botRuntime
+	extensionRuntime
+	callbackRuntime
+	confirmRuntime
+	sessionRuntime
+	appLock
+}
+
+type botCore struct {
 	cfg                 *config.Config
 	ctxMgr              *ctxmgr.Manager
 	cmdParser           *command.Parser
 	skillState          *command.SkillState
-	ag                  *agent.Agent
-	sess                *session.Snapshot
-	skillReg            *skill.Registry
-	pluginReg           *plugin.Registry
-	mcpClients          map[string]*mcp.Client
-	confirmFn           common.ConfirmFunc
-	phaseFn             common.PhaseFunc
-	todoFn              common.TodoFunc
-	notifyFn            func(string)
-	confirmCh           chan common.ConfirmRequest
-	confirmMu           sync.Mutex
-	pendingConfirm      bool
 	promptBuilder       *prompt.Builder
-	toolRegistry        *tools.Registry
-	hookReg             *hooks.Registry
 	projCtx             string
 	indexMgr            *service.Manager
 	cwd                 string
 	lastGuardrailWarned int
-	sessionResumed      bool
-	mu                  sync.Mutex
+}
+
+type botRuntime struct {
+	ag           *agent.Agent
+	toolRegistry *tools.Registry
+	hookReg      *hooks.Registry
+}
+
+type extensionRuntime struct {
+	skillReg   *skill.Registry
+	pluginReg  *plugin.Registry
+	mcpClients map[string]*mcp.Client
+}
+
+type callbackRuntime struct {
+	confirmFn common.ConfirmFunc
+	phaseFn   common.PhaseFunc
+	todoFn    common.TodoFunc
+	notifyFn  func(string)
+	confirmCh chan common.ConfirmRequest
+}
+
+type confirmRuntime struct {
+	confirmMu      sync.Mutex
+	pendingConfirm bool
+}
+
+type sessionRuntime struct {
+	sess           *session.Snapshot
+	sessionResumed bool
+}
+
+type appLock struct {
+	mu sync.Mutex
 }
 
 func New() *Bot {

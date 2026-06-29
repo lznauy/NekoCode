@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"nekocode/llm/types"
+	"nekocode/bot/llm/types"
 )
 
 func TestExtractXMLBlock(t *testing.T) {

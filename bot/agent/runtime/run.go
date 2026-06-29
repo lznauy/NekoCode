@@ -19,10 +19,6 @@ const maxConsecutiveHints = 3
 // failures (after retries). Beyond this the LLM is likely broken.
 const maxConsecutiveFailures = 5
 
-// maxFinalCheckHints limits governance retries so a model that ignores final
-// answer checks cannot loop forever.
-const maxFinalCheckHints = 2
-
 type RunResult struct {
 	FinalOutput string
 	Error       error
@@ -54,7 +50,8 @@ func (a *Agent) Run(input string, callback RunCallback) *RunResult {
 	for !a.finished.Load() {
 		if a.step >= maxAgentSteps {
 			a.stopReason = hooks.StopCompleted
-			a.lastText = "[Agent stopped: reached maximum step limit]"
+			a.lastText = ""
+			a.finalText = ""
 			break
 		}
 		if finished := a.runTurn(state, callback); finished {
@@ -65,23 +62,20 @@ func (a *Agent) Run(input string, callback RunCallback) *RunResult {
 	a.evaluateStop()
 
 	if a.getCtx().Err() != nil || a.stopReason == hooks.StopInterrupted {
-		return &RunResult{FinalOutput: "Interrupted", Steps: a.step}
+		return &RunResult{FinalOutput: MsgInterrupted, Steps: a.step}
 	}
 	if a.stopReason == hooks.StopCompleted {
 		output := a.finalText
 		if output == "" {
 			output = a.lastText
 		}
-		// 过滤系统内部消息：maxAgentSteps 耗尽时 lastText 可能为
-		// "[Agent stopped: ...]"，不应展示给用户。
-		if output != "" && !isSystemMessage(output) {
+		if output != "" {
 			return &RunResult{FinalOutput: output, Steps: a.step}
 		}
 	}
 	return a.synthesizeAndReturn(callback)
 }
 
-// logGovernanceSummary is defer-called. Deleted in Phase 3 (now in govManager).
 
 func (a *Agent) evaluateStop() {
 	if a.gov != nil && a.gov.HookReg != nil {
@@ -135,9 +129,9 @@ func (a *Agent) runTurn(state *stepState, callback RunCallback) (finished bool) 
 	a.drainSteering()
 	if a.getCtx().Err() != nil {
 		a.stopReason = hooks.StopInterrupted
-		a.lastText = "Interrupted"
+		a.lastText = MsgInterrupted
 		if callback != nil {
-			callback("chat", "", "", "Interrupted")
+			callback("chat", "", "", MsgInterrupted)
 		}
 		return true
 	}

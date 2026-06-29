@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
-	"nekocode/llm/anthropic"
-	"nekocode/llm/openai"
+	"nekocode/bot/llm/anthropic"
+	"nekocode/bot/llm/openai"
 )
 
 func TestOpenAIClient(t *testing.T) {

@@ -2,6 +2,8 @@ package gate
 
 import "nekocode/bot/debug"
 
+const defaultMaxRetries = 2
+
 // ResponseGate prevents governance internal signals from leaking into
 // the model's visible assistant output. It tracks retries for final-answer
 // blocks and enforces a hard limit.
@@ -9,8 +11,6 @@ type ResponseGate struct {
 	MaxRetries int
 	retries    int
 }
-
-const defaultMaxRetries = 2
 
 // NewResponseGate creates a gate with the default retry limit.
 func NewResponseGate() *ResponseGate {
@@ -30,5 +30,4 @@ func (g *ResponseGate) TryRetry(reason string) (retry bool, hint string) {
 	return true, reason
 }
 
-func (g *ResponseGate) Reset()       { g.retries = 0 }
-func (g *ResponseGate) Retries() int { return g.retries }
+func (g *ResponseGate) Reset() { g.retries = 0 }

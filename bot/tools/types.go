@@ -1,8 +1,8 @@
 package tools
 
 import (
+	"nekocode/bot/llm/types"
 	"nekocode/bot/tools/core"
-	"nekocode/llm/types"
 )
 
 type ExecutionMode = core.ExecutionMode

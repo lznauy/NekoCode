@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"nekocode/llm/types"
+	"nekocode/bot/llm/types"
 )
 
 func TestBuildBodyOmitsInternalToolErrorFlag(t *testing.T) {

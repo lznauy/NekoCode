@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	ctxmgr "nekocode/bot/contextmgr"
+	"nekocode/bot/llm/types"
 	"nekocode/bot/session"
-	"nekocode/llm/types"
 )
 
 func TestApplyContextSnapshot(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"sync"
 
-	"nekocode/llm/types"
+	"nekocode/bot/llm/types"
 )
 
 // ServerConfig defines how to launch an MCP server.

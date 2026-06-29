@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"nekocode/llm/types"
+	"nekocode/bot/llm/types"
 )
 
 func ToToolDefs(descs []Descriptor) []types.ToolDef {

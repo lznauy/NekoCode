@@ -29,6 +29,8 @@ type eventHook struct {
 type hookAction struct {
 	Type         string          `json:"type"`
 	Command      string          `json:"command"`
+	Code         string          `json:"code,omitempty"`
+	Path         string          `json:"path,omitempty"`
 	Timeout      int             `json:"timeout,omitempty"`
 	OutputSchema json.RawMessage `json:"output_schema,omitempty"`
 }

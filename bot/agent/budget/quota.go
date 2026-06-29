@@ -6,6 +6,8 @@ import (
 	"nekocode/bot/governance"
 )
 
+const quotaExhaustedMsg = `[配额] 本轮读取配额已达上限 (%d)。基于已有信息继续，不要重试。`
+
 // ToolQuota enforces per-turn limits on exploratory/source-producing tool
 // calls, scaled dynamically by context usage percentage.
 type ToolQuota struct {
@@ -36,8 +38,6 @@ func (q *ToolQuota) consume() error {
 	}
 	return nil
 }
-
-const quotaExhaustedMsg = `[配额] 本轮读取配额已达上限 (%d)。基于已有信息继续，不要重试。`
 
 // ConsumeTool routes by tool name. Returns error if quota exhausted.
 // Only consumes quota for information-gathering tools.

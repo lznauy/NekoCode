@@ -3,7 +3,7 @@ package sessionview
 import (
 	"testing"
 
-	"nekocode/llm/types"
+	"nekocode/bot/llm/types"
 )
 
 func TestDisplayMessagesKeepsPersistentToolBlocks(t *testing.T) {

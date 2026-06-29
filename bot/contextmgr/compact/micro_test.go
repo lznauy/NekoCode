@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"nekocode/bot/contextmgr/context"
-	"nekocode/llm/types"
+	"nekocode/bot/llm/types"
 )
 
 func newCompactor(msgs []types.Message, budget int, boundary int) *Compactor {

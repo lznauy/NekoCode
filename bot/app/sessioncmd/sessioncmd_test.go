@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"nekocode/bot/llm/types"
 	"nekocode/bot/session"
-	"nekocode/llm/types"
 )
 
 func TestFormatSessionList(t *testing.T) {

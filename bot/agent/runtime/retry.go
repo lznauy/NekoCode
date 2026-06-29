@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"nekocode/bot/debug"
-	"nekocode/llm"
+	"nekocode/bot/llm"
 )
 
 func withRetry(ctx context.Context, fn func() error) error {

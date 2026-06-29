@@ -18,9 +18,11 @@ func TestResponseGateRetryLimit(t *testing.T) {
 
 func TestResponseGateReset(t *testing.T) {
 	g := NewResponseGate()
-	g.TryRetry("blocked")
+	g.TryRetry("blocked")  // retries = 1
+	g.TryRetry("blocked")  // retries = 2, exhausted
 	g.Reset()
-	if g.Retries() != 0 {
-		t.Fatalf("retries = %d, want 0", g.Retries())
+	// After reset, TryRetry should allow again as if fresh
+	if retry, _ := g.TryRetry("blocked"); !retry {
+		t.Fatal("after reset, first TryRetry should succeed")
 	}
 }

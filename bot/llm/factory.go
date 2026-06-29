@@ -1,9 +1,9 @@
 package llm
 
 import (
-	"nekocode/llm/anthropic"
-	"nekocode/llm/openai"
-	"nekocode/llm/types"
+	"nekocode/bot/llm/anthropic"
+	"nekocode/bot/llm/openai"
+	"nekocode/bot/llm/types"
 )
 
 // NewClient creates an LLM client using the OpenAI-compatible protocol.

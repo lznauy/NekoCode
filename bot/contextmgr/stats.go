@@ -2,7 +2,7 @@ package contextmgr
 
 import (
 	"nekocode/bot/contextmgr/token"
-	"nekocode/llm/types"
+	"nekocode/bot/llm/types"
 )
 
 func (m *Manager) Len() int {

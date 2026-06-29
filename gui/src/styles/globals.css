@@ -87,6 +87,10 @@
   scrollbar-gutter: stable;
 }
 
+@utility overflow-anchor-none {
+  overflow-anchor: none;
+}
+
 @layer components {
   .field {
     @apply h-9 w-full rounded-md border border-border/60 bg-surface-2 px-2.5 text-xs text-text transition-colors placeholder:text-text-3 hover:border-border focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-60;

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"nekocode/llm"
-	"nekocode/llm/types"
+	"nekocode/bot/llm"
+	"nekocode/bot/llm/types"
 )
 
 const (

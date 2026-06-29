@@ -22,7 +22,35 @@ type Hint struct {
 }
 
 type Result struct {
-	Hint *Hint
+	Hint        *Hint
+	Stop        *StopResult
+	BlockTool   *BlockToolResult
+	RequireTool *RequireToolResult
+	BlockFinal  *BlockFinalResult
+	StatePatch  *StatePatchResult
+}
+
+type StopResult struct {
+	Reason string
+}
+
+type BlockToolResult struct {
+	Tool   string
+	Reason string
+}
+
+type RequireToolResult struct {
+	Tool   string
+	Reason string
+}
+
+type BlockFinalResult struct {
+	Reason string
+}
+
+type StatePatchResult struct {
+	Ints    map[string]int64  `json:"ints"`
+	Strings map[string]string `json:"strings"`
 }
 
 type Hook struct {

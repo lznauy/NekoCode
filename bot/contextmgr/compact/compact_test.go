@@ -3,7 +3,7 @@ package compact
 import (
 	"testing"
 
-	"nekocode/llm/types"
+	"nekocode/bot/llm/types"
 )
 
 func TestCountMessagesForLastNTurns(t *testing.T) {

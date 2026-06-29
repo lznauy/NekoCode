@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"nekocode/llm/types"
+	"nekocode/bot/llm/types"
 )
 
 type streamChunk struct {

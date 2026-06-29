@@ -1,8 +1,7 @@
 package runtime
 
 import (
-	"fmt"
-
+	"nekocode/bot/agent/ledger"
 	"nekocode/bot/hooks"
 )
 
@@ -29,7 +28,7 @@ func (a *Agent) applyPostTurnHooks(reasoning *ReasoningResult, recordable bool, 
 		if r.RequireTool != nil {
 			reason := r.RequireTool.Reason
 			if r.RequireTool.Tool != "" {
-				reason = "必须先调用 " + r.RequireTool.Tool + "：" + reason
+				reason = PolicyRequireTool(r.RequireTool.Tool, reason)
 			}
 			return a.applyFinalPolicyBlock(reasoning, reason)
 		}
@@ -46,7 +45,8 @@ func (a *Agent) applyPostTurnHint(reasoning *ReasoningResult, hint *hooks.Hint, 
 		a.step++
 		a.stopReason = hooks.StopCompleted
 		if reasoning.IsError || reasoning.GarbledToolCall {
-			a.lastText = fmt.Sprintf("[Agent stopped: %d consecutive hints without progress]", a.consecutiveHints)
+			a.lastText = ""
+			a.finalText = ""
 		} else {
 			a.lastText = reasoning.ActionInput
 		}
@@ -63,6 +63,47 @@ func (a *Agent) applyPostTurnHint(reasoning *ReasoningResult, hint *hooks.Hint, 
 	}
 	a.lastText = reasoning.ActionInput
 	a.injectHint(hint)
+	a.step++
+	return true
+}
+
+func (a *Agent) applyFinalCheck(reasoning *ReasoningResult) bool {
+	if a.gov == nil || a.gov.Ledger == nil {
+		return false
+	}
+	issues := a.gov.CheckFinalAnswer(reasoning.ActionInput)
+	if len(issues) == 0 {
+		return false
+	}
+	msg := ledger.FormatIssues(issues)
+	a.lastText = reasoning.ActionInput
+
+	if a.gov.Gate == nil {
+		a.gov.Gate = NewResponseGate()
+	}
+	retry, hint := a.gov.Gate.TryRetry(msg)
+	if !retry {
+		return false
+	}
+	a.injectHint(&hooks.Hint{Type: "final_check", Severity: "critical", Content: hint})
+	a.step++
+	return true
+}
+
+func (a *Agent) applyFinalPolicyBlock(reasoning *ReasoningResult, reason string) bool {
+	if reason == "" {
+		reason = PolicyBlockFinal
+	}
+	a.lastText = reasoning.ActionInput
+
+	if a.gov == nil || a.gov.Gate == nil {
+		a.gov.Gate = NewResponseGate()
+	}
+	retry, hint := a.gov.Gate.TryRetry(reason)
+	if !retry {
+		return false
+	}
+	a.injectHint(&hooks.Hint{Type: "policy_block", Severity: "critical", Content: hint})
 	a.step++
 	return true
 }

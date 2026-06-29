@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
+	"nekocode/bot/llm/types"
 	"nekocode/bot/tools/core"
-	"nekocode/llm/types"
 )
 
 // StreamCallbacks holds per-token callbacks for ConsumeStream.

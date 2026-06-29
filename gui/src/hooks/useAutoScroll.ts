@@ -8,31 +8,25 @@ export interface UseAutoScrollReturn {
 }
 
 // 自动滚动到最新内容：
-// - 发消息/新回复到达时，若用户接近底部则跟随。
-// - 用户手动向上翻阅时暂停跟随，回到接近底部时自动恢复。
-// - 通过 scroll 事件区分用户意图: 程序滚动直接设置容器 scrollTop，同时
-//   标记 isProgrammaticScroll 让下一次 scroll 事件跳过意图判定。
-// - 使用双 rAF 保证 @tanstack/react-virtual 测量完成后再落位。
+// - 每次 deps 变化（流式增长 / 新消息），仅当用户当前在底部附近（<100px）才滚
+// - 用户向上滚 → 不在底部 → 下次 deps 变化自然不跟
+// - follow() 在 send 时强制跟随（独立的双 rAF，不经过 deps effect）
+// - 不追踪状态、不区分用户/程序滚动——只问一句话："现在在底部吗？"
 export function useAutoScroll(deps: DependencyList): UseAutoScrollReturn {
   const containerRef = useRef<HTMLDivElement>(null!)
   const endRef = useRef<HTMLDivElement>(null!)
   const rafRef = useRef<number | null>(null)
-  const isProgrammatic = useRef(false)
-  const shouldFollowRef = useRef(true)
 
   const scrollToBottom = useCallback(() => {
     const el = containerRef.current
     if (!el) return
-    isProgrammatic.current = true
-    // 双 rAF 已等虚拟机测量完成，此处 scrollHeight 已反映真实内容高度。
     el.scrollTop = el.scrollHeight
   }, [])
 
+  // send 时强制滚动，独立于 deps effect 的 nearBottom 判断
   const follow = useCallback(() => {
-    shouldFollowRef.current = true
     if (rafRef.current !== null) return
     rafRef.current = requestAnimationFrame(() => {
-      // 第二帧等虚拟机测量落定
       rafRef.current = requestAnimationFrame(() => {
         rafRef.current = null
         scrollToBottom()
@@ -40,25 +34,14 @@ export function useAutoScroll(deps: DependencyList): UseAutoScrollReturn {
     })
   }, [scrollToBottom])
 
+  // 每次 deps 变化：仅当用户**此刻**在底部附近时才滚到底部
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
 
-    const handleScroll = () => {
-      if (isProgrammatic.current) {
-        isProgrammatic.current = false
-        return
-      }
-      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100
-      shouldFollowRef.current = nearBottom
-    }
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100
+    if (!nearBottom) return
 
-    el.addEventListener('scroll', handleScroll, { passive: true })
-    return () => el.removeEventListener('scroll', handleScroll)
-  }, [])
-
-  useEffect(() => {
-    if (!shouldFollowRef.current) return
     if (rafRef.current !== null) return
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = requestAnimationFrame(() => {

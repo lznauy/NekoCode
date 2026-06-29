@@ -61,7 +61,7 @@ func (m *Manager) Report() ContextReport {
 		}
 		switch msg.Role {
 		case "user":
-			if strings.HasPrefix(msg.Content, "[System]") {
+			if msg.Source == "system" {
 				r.SysInjections++
 			} else {
 				r.UserMessages++

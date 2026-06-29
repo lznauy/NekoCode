@@ -2,13 +2,6 @@ package budget
 
 import "nekocode/bot/governance"
 
-// ExplorationTracker implements a decay-score mechanism:
-// starts at 200, tools deduct, edits restore.
-// When score <= 0, forced precipitation is triggered via PreTurn hook.
-type ExplorationTracker struct {
-	Score int
-}
-
 const (
 	MaxScore      = 200
 	editRestore   = 60
@@ -19,6 +12,13 @@ const (
 	taskCost      = 12
 	trivialCost   = 2
 )
+
+// ExplorationTracker implements a decay-score mechanism:
+// starts at 200, tools deduct, edits restore.
+// When score <= 0, forced precipitation is triggered via PreTurn hook.
+type ExplorationTracker struct {
+	Score int
+}
 
 // NewExplorationTracker creates a fresh tracker at max score.
 func NewExplorationTracker() *ExplorationTracker {

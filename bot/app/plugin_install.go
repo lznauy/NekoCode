@@ -20,9 +20,7 @@ func (b *Bot) pluginInstall(args []string) (string, bool) {
 		return b.pluginInstallLocal(source, parsed.Confirmed)
 	}
 	if !parsed.Confirmed {
-		b.confirmMu.Lock()
-		b.pendingConfirm = true
-		b.confirmMu.Unlock()
+		b.setPendingConfirmation(true)
 		go b.fetchAndConfirmRemote(source)
 		return fmt.Sprintf("Fetching plugin info from %s ...", source), true
 	}
@@ -40,9 +38,7 @@ func (b *Bot) pluginInstallLocal(source string, confirmed bool) (string, bool) {
 		return b.pluginInstallSync(source)
 	}
 
-	b.confirmMu.Lock()
-	b.pendingConfirm = true
-	b.confirmMu.Unlock()
+	b.setPendingConfirmation(true)
 	go func() {
 		if b.confirmInstall(source, p, false) {
 			result, _ := b.pluginInstallSync(source)

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"nekocode/bot/llm/types"
 	"nekocode/common"
-	"nekocode/llm/types"
 )
 
 // DefaultExportPath is the default context-export destination under ~/.nekocode/exports.
