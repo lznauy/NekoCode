@@ -13,7 +13,7 @@
 ### 3. Diff 展示 ✅
 ### 4. 结构化内容块 (ContentBlock) ✅
 ### 5. TUI-Bot 解耦 ✅
-- `BotInterface` 接口（12 方法）
+- `bot.UI` 契约，TUI 不直接依赖 bot 内部实现
 
 ### 6. 项目感知上下文 ✅
 - NEKOCODE.md 自动发现 + @include 递归加载
@@ -76,9 +76,9 @@
 ### 57. Thinking 控制统一 ✅ — SetDisableThinking 跨协议一致
 ### 58. Bot 生命周期管理 ✅
 
-### 59. BotInterface 精简 ✅
-- 合并相似方法、配置方法归入 Configure、PendingConfirm 并入 CmdResult
-- 总计：12 方法
+### 59. UI 契约精简 ✅
+- `RunAgent + SetCallbacks` 合并为 `Run(input, callbacks)`
+- `bot.UI` / `bot.GUI` 由 bot 层统一暴露，TUI/GUI 共享契约
 
 ### 60. 声明式 Hook 系统 ✅
 - 6 种事件类型，JSON 配置驱动（hooks.json），支持 tool name matcher + 变量展开

@@ -4,18 +4,18 @@ import (
 	"reflect"
 	"testing"
 
-	"nekocode/bot/plugin"
+	extskill "nekocode/bot/extension/skill"
 )
 
 func TestBuildManagementSnapshot(t *testing.T) {
-	reg := NewRegistry()
-	reg.RegisterBundled([]*Skill{
+	reg := extskill.NewRegistry()
+	reg.RegisterBundled([]*extskill.Skill{
 		{Name: "builtin", Description: "built in"},
 		{Name: "plugin-skill", Description: "from plugin", Dir: "/plugins/p/skills/s1", Files: []string{"b", "a"}},
 	})
 	reg.MarkLoaded("builtin")
 
-	plugins := []plugin.Snapshot{{
+	plugins := []PluginSnapshot{{
 		Name:   "p",
 		Skills: []string{"/plugins/p/skills"},
 	}}
@@ -36,7 +36,7 @@ func TestBuildManagementSnapshot(t *testing.T) {
 }
 
 func TestSourceForDirKinds(t *testing.T) {
-	plugins := []plugin.Snapshot{{Name: "p", Skills: []string{"/plugins/p/skills"}}}
+	plugins := []PluginSnapshot{{Name: "p", Skills: []string{"/plugins/p/skills"}}}
 	cases := []struct {
 		dir       string
 		wantKind  string

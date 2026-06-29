@@ -61,5 +61,26 @@ describe('ActivityRow', () => {
 
     expect(toggleStep).toHaveBeenCalledTimes(1)
     expect(toggleStep).toHaveBeenCalledWith('bash-1')
+    expect(button).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('完成')).toBeInTheDocument()
+  })
+
+  it('renders blocked tools as blocked instead of execution errors', () => {
+    const step: ToolStep = {
+      id: 'bash-blocked',
+      toolName: 'bash',
+      args: 'command=rm -rf /tmp/example',
+      output: 'command was blocked by policy',
+      status: 'blocked',
+      isError: true,
+      collapsed: false,
+    }
+    const toggleStep = vi.fn()
+
+    render(<ActivityRow step={step} toggleStep={toggleStep} />)
+
+    expect(screen.getByText('阻止')).toBeInTheDocument()
+    expect(screen.queryByText('错误')).toBeNull()
+    expect(screen.getByText('command was blocked by policy')).toBeInTheDocument()
   })
 })

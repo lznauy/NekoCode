@@ -49,11 +49,6 @@ func (m *Model) startAgent(value string) tea.Cmd {
 		m.Messages.SetSkill(m.activeSkill)
 	}
 
-	m.Bot.SetCallbacks(
-		func(delta string) { m.Messages.ProcessStreamText(delta) },
-		func(delta string) { m.Messages.ProcessThinkingText(delta) },
-	)
-
 	return tea.Batch(
 		spinnerTick(),
 		listenConfirm(m.confirmCh),
@@ -77,7 +72,11 @@ func (m *Model) runAgent(value string) func() tea.Msg {
 
 		var finalResponse string
 
-		result, err := m.Bot.RunAgent(value, m.onAgentStep(&finalResponse))
+		result, err := m.Bot.Run(value, common.RunCallbacks{
+			Text:   func(delta string) { m.Messages.ProcessStreamText(delta) },
+			Reason: func(delta string) { m.Messages.ProcessThinkingText(delta) },
+			Step:   m.onAgentStep(&finalResponse),
+		})
 
 		// Use RunAgent returned FinalOutput as the primary source.
 		// finalResponse from callbacks can be stale when hooks trigger

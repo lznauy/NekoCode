@@ -5,13 +5,14 @@ import (
 	"os"
 
 	ctxmgr "nekocode/bot/contextmgr"
+	extskill "nekocode/bot/extension/skill"
 	extbundled "nekocode/bot/extension/skill/bundled"
-	"nekocode/bot/plugin"
+	"nekocode/bot/skillview"
 	"nekocode/bot/tools"
 )
 
 type Manager struct {
-	reg             *Registry
+	reg             *extskill.Registry
 	ctx             *ctxmgr.Manager
 	tools           *tools.Registry
 	contextWindow   int
@@ -42,9 +43,9 @@ func (m *Manager) Init() {
 }
 
 func (m *Manager) Reload(loaded map[string]bool) {
-	m.reg = NewRegistry()
+	m.reg = extskill.NewRegistry()
 	m.reg.RegisterBundled(extbundled.All())
-	dirs := DefaultDirs()
+	dirs := extskill.DefaultDirs()
 	if m.pluginSkillDirs != nil {
 		dirs = append(dirs, m.pluginSkillDirs()...)
 	}
@@ -64,11 +65,11 @@ func (m *Manager) ReloadPreservingLoaded() {
 	m.Reload(m.LoadedSet())
 }
 
-func (m *Manager) LoadPluginSkills(p *plugin.Plugin) {
-	if m == nil || m.reg == nil || p == nil {
+func (m *Manager) LoadPluginSkillDirs(dirs []string) {
+	if m == nil || m.reg == nil {
 		return
 	}
-	for _, dir := range p.SkillDirs() {
+	for _, dir := range dirs {
 		if err := m.reg.Load([]string{dir}); err != nil {
 			m.log("plugin: skill load error: %v", err)
 		}
@@ -77,25 +78,51 @@ func (m *Manager) LoadPluginSkills(p *plugin.Plugin) {
 	m.RegisterTool()
 }
 
-func (m *Manager) Registry() *Registry {
+func (m *Manager) Registry() *extskill.Registry {
 	if m == nil {
 		return nil
 	}
 	return m.reg
 }
 
-func (m *Manager) List() []*Skill {
+func (m *Manager) List() []*extskill.Skill {
 	if m == nil || m.reg == nil {
 		return nil
 	}
 	return m.reg.List()
 }
 
-func (m *Manager) Get(name string) (*Skill, bool) {
+func (m *Manager) Get(name string) (*extskill.Skill, bool) {
 	if m == nil || m.reg == nil {
 		return nil, false
 	}
 	return m.reg.Get(name)
+}
+
+func (m *Manager) ListForCommands() []skillview.Skill {
+	if m == nil || m.reg == nil {
+		return nil
+	}
+	skills := m.reg.List()
+	out := make([]skillview.Skill, 0, len(skills))
+	for _, sk := range skills {
+		out = append(out, skillview.Skill{
+			Name:    sk.Name,
+			Context: extskill.FormatForContext(sk),
+		})
+	}
+	return out
+}
+
+func (m *Manager) GetForCommand(name string) (skillview.Skill, bool) {
+	sk, ok := m.Get(name)
+	if !ok {
+		return skillview.Skill{}, false
+	}
+	return skillview.Skill{
+		Name:    sk.Name,
+		Context: extskill.FormatForContext(sk),
+	}, true
 }
 
 func (m *Manager) LoadedSet() map[string]bool {
@@ -125,7 +152,7 @@ func (m *Manager) RefreshList() {
 	if m == nil || m.ctx == nil || m.reg == nil {
 		return
 	}
-	m.ctx.SetSkillList(BuildSkillListText(m.reg.List(), m.reg.LoadedSet(), m.contextWindow))
+	m.ctx.SetSkillList(extskill.BuildSkillListText(m.reg.List(), m.reg.LoadedSet(), m.contextWindow))
 }
 
 func (m *Manager) RegisterTool() {
@@ -133,10 +160,10 @@ func (m *Manager) RegisterTool() {
 		return
 	}
 	m.tools.Unregister("skill")
-	m.tools.Register(NewSkillTool(m.reg))
+	m.tools.Register(extskill.NewSkillTool(m.reg))
 }
 
-func (m *Manager) ManagementSnapshot(plugins []plugin.Snapshot, mcp []plugin.MCPServerSnapshot) ManagementSnapshot {
+func (m *Manager) ManagementSnapshot(plugins []PluginSnapshot, mcp []MCPServerSnapshot) ManagementSnapshot {
 	return BuildManagementSnapshot(m.Registry(), plugins, mcp)
 }
 

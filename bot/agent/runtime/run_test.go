@@ -35,7 +35,7 @@ func TestHandleText_IsError_NotRecorded(t *testing.T) {
 	}
 
 	msgCountBefore := a.ctxMgr.Len()
-	finished := a.handleText(rr, &stepState{}, nil)
+	finished := a.handleText(rr, nil)
 
 	if !finished {
 		t.Error("expected finished=true for IsError without hook hints")
@@ -60,7 +60,7 @@ func TestHandleText_GarbledToolCall_NotRecorded(t *testing.T) {
 	}
 
 	msgCountBefore := a.ctxMgr.Len()
-	finished := a.handleText(rr, &stepState{}, nil)
+	finished := a.handleText(rr, nil)
 
 	if !finished {
 		t.Error("expected finished=true for GarbledToolCall without hook hints")
@@ -81,7 +81,7 @@ func TestHandleText_NormalChat_Recorded(t *testing.T) {
 	}
 
 	msgCountBefore := a.ctxMgr.Len()
-	finished := a.handleText(rr, &stepState{}, nil)
+	finished := a.handleText(rr, nil)
 
 	if !finished {
 		t.Error("expected finished=true for normal chat")
@@ -108,7 +108,7 @@ func TestHandleText_IsError_ConsecutiveFailuresIncrement(t *testing.T) {
 	// Each IsError call increments consecutiveFailures and finishes
 	// (no hook hints to keep the loop alive).
 	for i := 1; i <= maxConsecutiveFailures; i++ {
-		finished := a.handleText(rr, &stepState{}, nil)
+		finished := a.handleText(rr, nil)
 		if !finished {
 			t.Errorf("step %d: expected finished=true", i)
 		}
@@ -119,7 +119,7 @@ func TestHandleText_IsError_ConsecutiveFailuresIncrement(t *testing.T) {
 	}
 
 	// After reaching the limit, the next call stops with the limit message.
-	finished := a.handleText(rr, &stepState{}, nil)
+	finished := a.handleText(rr, nil)
 	if !finished {
 		t.Error("expected finished=true after limit reached")
 	}
@@ -144,7 +144,7 @@ func TestHandleText_IsError_WithPendingTasks_HintInjected(t *testing.T) {
 	}
 
 	msgCountBefore := a.ctxMgr.Len()
-	finished := a.handleText(rr, &stepState{}, nil)
+	finished := a.handleText(rr, nil)
 
 	if finished {
 		t.Error("expected finished=false when PostTurn hook injects hint")
@@ -205,7 +205,7 @@ func TestHandleText_NormalChat_ConsecutiveFailuresReset(t *testing.T) {
 		ActionInput: "error",
 		IsError:     true,
 	}
-	a.handleText(errRR, &stepState{}, nil)
+	a.handleText(errRR, nil)
 	if a.consecutiveFailures != 1 {
 		t.Fatalf("expected consecutiveFailures=1 after error, got %d", a.consecutiveFailures)
 	}
@@ -216,7 +216,7 @@ func TestHandleText_NormalChat_ConsecutiveFailuresReset(t *testing.T) {
 		Action:      ActionChat,
 		ActionInput: "Hello!",
 	}
-	a.handleText(okRR, &stepState{}, nil)
+	a.handleText(okRR, nil)
 	if a.consecutiveFailures != 0 {
 		t.Errorf("expected consecutiveFailures=0 after normal chat, got %d", a.consecutiveFailures)
 	}

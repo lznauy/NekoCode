@@ -1,7 +1,7 @@
 package app
 
 import (
-	"nekocode/bot/agent"
+	"nekocode/bot/agent/runtime"
 	"nekocode/bot/command"
 	"nekocode/common"
 )
@@ -42,7 +42,7 @@ func (b *Bot) SkillHint() (string, bool) {
 	return hint, cont
 }
 
-func (b *Bot) getAgent() *agent.Agent {
+func (b *Bot) getAgent() *runtime.Agent {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.ag

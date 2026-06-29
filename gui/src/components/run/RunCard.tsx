@@ -2,6 +2,7 @@
 // 性能与视觉平衡: 保留 rounded/border/bg (视觉边界), 去除 shadow-sm;
 // 运行态只让 13px 状态图标旋转, 避免整块卡片参与持续重绘。
 import { memo } from 'react'
+import type { ReactNode } from 'react'
 import type { Msg } from '../../types/events'
 import { MarkdownBody } from '../MarkdownBody'
 import { ActivityRow } from './ActivityRow'
@@ -33,48 +34,62 @@ export const RunCard = memo(function RunCard({ msg, toggleStep }: RunCardProps) 
   const steps = streaming ? allSteps : allSteps.filter((s) => persistentTool(s.toolName))
   const toolCount = allSteps.length
   const persistCount = allSteps.filter((s) => persistentTool(s.toolName)).length
+  const visibleToolCount = steps.length
+  const hiddenToolCount = Math.max(0, toolCount - visibleToolCount)
   const activity = msg.activity
   const tokenPrompt = msg.tokens?.prompt ?? 0
   const tokenCompl = msg.tokens?.completion ?? 0
+  const statusLabel = streaming ? PHASE_LABEL[phase] : '完成'
 
   return (
     <div className="flex flex-col gap-2 rounded-xl border border-border/70 bg-surface p-4">
       {/* —— Header —— */}
-      <header className="flex items-center gap-2 text-[12px] text-text-2">
-        {streaming ? (
-          <RunSpinner />
-        ) : (
-          <span className="flex h-5 w-5 items-center justify-center rounded-md bg-success/12 text-success" aria-hidden>
-            <CheckIcon />
-          </span>
-        )}
-        <span className="font-medium text-text">{PHASE_LABEL[phase]}</span>
-        {(tokenPrompt > 0 || tokenCompl > 0) && (
-          <span className="font-mono text-[10.5px] text-text-3 tabular-nums">
-            ↑{fmt(tokenPrompt)} ↓{fmt(tokenCompl)}
-          </span>
-        )}
-        {toolCount > 0 && <span className="text-text-3">· {toolCount} 关键工具</span>}
-        {activity && activity.reads > 0 && <span className="text-text-3">· 读取 {activity.reads}</span>}
-        {activity && activity.searches > 0 && <span className="text-text-3">· 搜索 {activity.searches}</span>}
-        {activity && activity.fetches > 0 && <span className="text-text-3">· 网页 {activity.fetches}</span>}
-        {persistCount > 0 && <span className="text-text-3">· {persistCount} 改动</span>}
-        {(msg.compactCount ?? 0) > 0 && (
-          <span className="text-text-3">· compact {msg.compactCount}</span>
-        )}
-        {msg.subagents && msg.subagents.length > 0 && (
-          <span className="ml-1 inline-flex h-5 items-center gap-1 rounded-md bg-accent/10 px-1.5 text-[10px] text-accent">
-            <BranchIcon />
-            并行 {msg.subagents.length}
-          </span>
-        )}
+      <header className="flex min-w-0 flex-col gap-2 rounded-md bg-surface-2/45 px-2.5 py-2 text-[12px] text-text-2" aria-live="polite">
+        <div className="flex min-w-0 items-center gap-2">
+          {streaming ? (
+            <RunSpinner />
+          ) : (
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-success/12 text-success" aria-hidden>
+              <CheckIcon />
+            </span>
+          )}
+          <span className="min-w-0 font-medium text-text">{statusLabel}</span>
+          {msg.subagents && msg.subagents.length > 0 && (
+            <span className="ml-auto inline-flex h-5 shrink-0 items-center gap-1 rounded-md bg-accent/10 px-1.5 text-[10px] text-accent">
+              <BranchIcon />
+              并行 {msg.subagents.length}
+            </span>
+          )}
+        </div>
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[11px]">
+          {(tokenPrompt > 0 || tokenCompl > 0) && (
+            <StatusPill>↑{fmt(tokenPrompt)} ↓{fmt(tokenCompl)}</StatusPill>
+          )}
+          {toolCount > 0 && (
+            <StatusPill>
+              工具 {hiddenToolCount > 0 ? `${visibleToolCount}/${toolCount}` : toolCount}
+            </StatusPill>
+          )}
+          {hiddenToolCount > 0 && <StatusPill>归档 {hiddenToolCount}</StatusPill>}
+          {activity && activity.reads > 0 && <StatusPill>读取 {activity.reads}</StatusPill>}
+          {activity && activity.searches > 0 && <StatusPill>搜索 {activity.searches}</StatusPill>}
+          {activity && activity.fetches > 0 && <StatusPill>网页 {activity.fetches}</StatusPill>}
+          {activity && activity.other > 0 && <StatusPill>其他 {activity.other}</StatusPill>}
+          {persistCount > 0 && <StatusPill>改动 {persistCount}</StatusPill>}
+          {(msg.compactCount ?? 0) > 0 && (
+            <StatusPill>compact {msg.compactCount}</StatusPill>
+          )}
+          {toolCount === 0 && !(tokenPrompt > 0 || tokenCompl > 0) && !activity && (
+            <span className="text-text-3">{streaming ? '等待模型响应' : '无工具调用'}</span>
+          )}
+        </div>
       </header>
 
       {/* —— Tasks —— */}
       {streaming && msg.todos && msg.todos.length > 0 && <TasksList todos={msg.todos} />}
 
       {/* —— 工具步骤 —— */}
-      {toolCount > 0 && (
+      {visibleToolCount > 0 && (
         <div className="flex flex-col gap-1">
           {steps.map((s) => (
             <ActivityRow key={s.id} step={s} toggleStep={toggleStep} />
@@ -114,6 +129,14 @@ function TransientOutput({ text }: { text: string }) {
       <div className="mb-1 text-[10px] font-medium uppercase tracking-[0.14em] text-text-3">临时输出</div>
       <div className="whitespace-pre-wrap [overflow-wrap:break-word]">{lines.join('\n')}</div>
     </div>
+  )
+}
+
+function StatusPill({ children }: { children: ReactNode }) {
+  return (
+    <span className="inline-flex max-w-full items-center rounded px-1.5 py-0.5 font-mono text-[10.5px] text-text-3 tabular-nums">
+      {children}
+    </span>
   )
 }
 

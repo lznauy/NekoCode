@@ -5,13 +5,13 @@ import (
 	"sort"
 	"strings"
 
-	"nekocode/bot/plugin"
+	extskill "nekocode/bot/extension/skill"
 )
 
 type ManagementSnapshot struct {
-	Skills  []Snapshot                 `json:"skills"`
-	Plugins []plugin.Snapshot          `json:"plugins"`
-	MCP     []plugin.MCPServerSnapshot `json:"mcp"`
+	Skills  []Snapshot          `json:"skills"`
+	Plugins []PluginSnapshot    `json:"plugins"`
+	MCP     []MCPServerSnapshot `json:"mcp"`
 }
 
 type Snapshot struct {
@@ -25,7 +25,31 @@ type Snapshot struct {
 	Plugin      string   `json:"plugin,omitempty"`
 }
 
-func BuildManagementSnapshot(reg *Registry, plugins []plugin.Snapshot, mcp []plugin.MCPServerSnapshot) ManagementSnapshot {
+type PluginSnapshot struct {
+	Name        string   `json:"name"`
+	Version     string   `json:"version,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Source      string   `json:"source,omitempty"`
+	Dir         string   `json:"dir,omitempty"`
+	Enabled     bool     `json:"enabled"`
+	Skills      []string `json:"skills,omitempty"`
+	SkillNames  []string `json:"skillNames,omitempty"`
+	Agents      []string `json:"agents,omitempty"`
+	Commands    []string `json:"commands,omitempty"`
+	MCPServers  []string `json:"mcpServers,omitempty"`
+	HasHooks    bool     `json:"hasHooks,omitempty"`
+}
+
+type MCPServerSnapshot struct {
+	Name          string   `json:"name"`
+	Plugin        string   `json:"plugin"`
+	Command       string   `json:"command"`
+	Args          []string `json:"args,omitempty"`
+	DangerLevel   string   `json:"dangerLevel,omitempty"`
+	PluginEnabled bool     `json:"pluginEnabled"`
+}
+
+func BuildManagementSnapshot(reg *extskill.Registry, plugins []PluginSnapshot, mcp []MCPServerSnapshot) ManagementSnapshot {
 	return ManagementSnapshot{
 		Skills:  BuildSnapshots(reg, plugins),
 		Plugins: plugins,
@@ -33,7 +57,7 @@ func BuildManagementSnapshot(reg *Registry, plugins []plugin.Snapshot, mcp []plu
 	}
 }
 
-func BuildSnapshots(reg *Registry, plugins []plugin.Snapshot) []Snapshot {
+func BuildSnapshots(reg *extskill.Registry, plugins []PluginSnapshot) []Snapshot {
 	if reg == nil {
 		return nil
 	}
@@ -64,7 +88,7 @@ func BuildSnapshots(reg *Registry, plugins []plugin.Snapshot) []Snapshot {
 //
 // It returns (kind, label, pluginName). label is a Chinese display string
 // ("内置" / "插件" / "本地"); kind is the stable machine-readable value.
-func SourceForDir(dir string, plugins []plugin.Snapshot) (string, string, string) {
+func SourceForDir(dir string, plugins []PluginSnapshot) (string, string, string) {
 	if dir == "" {
 		return "builtin", "内置", ""
 	}

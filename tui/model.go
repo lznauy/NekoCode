@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"nekocode/bot"
 	"nekocode/tui/components"
 	"nekocode/tui/styles"
 
@@ -16,7 +17,7 @@ import (
 )
 
 type Model struct {
-	Bot      BotInterface
+	Bot      bot.UI
 	Header   *components.Header
 	Messages *components.Messages
 	Input    *components.Input
@@ -42,7 +43,7 @@ type Model struct {
 
 const version = "0.3.2"
 
-func NewModel(b BotInterface) *Model {
+func NewModel(b bot.UI) *Model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sty := styles.DefaultStyles()

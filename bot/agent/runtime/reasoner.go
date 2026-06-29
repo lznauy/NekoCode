@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"nekocode/bot/debug"
+	"nekocode/bot/llm"
 	"nekocode/bot/tools"
 
 	"nekocode/common"
@@ -157,4 +158,31 @@ func (a *Agent) streamCallbacks() tools.StreamCallbacks {
 			a.ctxMgr.RecordCache(hit, miss)
 		},
 	}
+}
+
+func withRetry(ctx context.Context, fn func() error) error {
+	var attempt int
+	return llm.Retry(ctx, llm.DefaultRetryConfig, func() error {
+		err := fn()
+		if err != nil && llm.IsRetryable(err) {
+			attempt++
+			debug.Log("retry %d: %v", attempt, err)
+		}
+		return err
+	})
+}
+
+// isGarbledToolCall detects when a model erroneously serializes tool calls
+// into the text content instead of using the structured tool_calls field.
+func isGarbledToolCall(text string) bool {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return false
+	}
+	if strings.Contains(t, "<invoke") || strings.Contains(t, "</invoke") ||
+		strings.Contains(t, "<parameter") || strings.Contains(t, "</parameter") ||
+		strings.Contains(t, "<tool_call") || strings.Contains(t, "</tool_call") {
+		return true
+	}
+	return strings.Contains(t, `"tool_calls"`) || strings.Contains(t, `"tool_use"`)
 }

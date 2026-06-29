@@ -4,11 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"nekocode/bot/agent/subagent"
 	"nekocode/bot/debug"
-	"nekocode/bot/extension/mcp"
 	"nekocode/bot/hooks"
-	"nekocode/bot/tools"
 )
 
 const InstallUsage = "Usage: /plugin install <source>\n  source: GitHub URL | user/repo | ./local-path"
@@ -21,11 +18,14 @@ type Manager struct {
 }
 
 type ManagerOptions struct {
-	Hooks     *hooks.Registry
-	Tools     *tools.Registry
-	Logf      func(string, ...any)
-	OnInstall func(*Plugin)
-	OnChanged func()
+	Hooks               *hooks.Registry
+	Logf                func(string, ...any)
+	OnInstall           func(*Plugin)
+	OnChanged           func()
+	RegisterAgentPath   func(path string) error
+	UnregisterAgentPath func(path string)
+	RegisterMCPServer   func(pluginDir, name string, cfg MCPServerConfig) error
+	UnregisterMCPServer func(name string)
 }
 
 type InstallCallbacks struct {
@@ -48,10 +48,12 @@ type lookupResult struct {
 }
 
 type runtime struct {
-	Hooks      *hooks.Registry
-	Tools      *tools.Registry
-	MCPClients map[string]*mcp.Client
-	Logf       func(string, ...any)
+	Hooks               *hooks.Registry
+	Logf                func(string, ...any)
+	RegisterAgentPath   func(path string) error
+	UnregisterAgentPath func(path string)
+	RegisterMCPServer   func(pluginDir, name string, cfg MCPServerConfig) error
+	UnregisterMCPServer func(name string)
 }
 
 func NewManager(opts ManagerOptions) *Manager {
@@ -65,10 +67,12 @@ func NewManager(opts ManagerOptions) *Manager {
 		onInstall: opts.OnInstall,
 		onChanged: opts.OnChanged,
 		runtime: runtime{
-			Hooks:      opts.Hooks,
-			Tools:      opts.Tools,
-			MCPClients: make(map[string]*mcp.Client),
-			Logf:       reg.Logf,
+			Hooks:               opts.Hooks,
+			Logf:                reg.Logf,
+			RegisterAgentPath:   opts.RegisterAgentPath,
+			UnregisterAgentPath: opts.UnregisterAgentPath,
+			RegisterMCPServer:   opts.RegisterMCPServer,
+			UnregisterMCPServer: opts.UnregisterMCPServer,
 		},
 	}
 }
@@ -387,22 +391,22 @@ func (r runtime) logf(format string, args ...any) {
 }
 
 func (r runtime) registerAgents(p *Plugin) {
+	if r.RegisterAgentPath == nil {
+		return
+	}
 	for _, agentPath := range p.AgentPaths() {
-		def, err := subagent.ParseAgentMD(agentPath)
-		if err != nil {
+		if err := r.RegisterAgentPath(agentPath); err != nil {
 			r.logf("plugin: agent %s: %v", agentPath, err)
-			continue
 		}
-		subagent.RegisterPlugin(def.ToAgentType())
 	}
 }
 
 func (r runtime) unregisterAgents(p *Plugin) {
+	if r.UnregisterAgentPath == nil {
+		return
+	}
 	for _, ap := range p.AgentPaths() {
-		def, err := subagent.ParseAgentMD(ap)
-		if err == nil {
-			subagent.UnregisterPlugin(def.Name)
-		}
+		r.UnregisterAgentPath(ap)
 	}
 }
 
@@ -431,49 +435,22 @@ func (r runtime) unregisterHooks(p *Plugin) {
 }
 
 func (r runtime) registerMCP(p *Plugin) {
-	if r.Tools == nil || r.MCPClients == nil {
+	if r.RegisterMCPServer == nil {
 		return
 	}
 	for name, cfg := range p.MCPServers() {
-		level := mcp.ParseDangerLevel(cfg.DangerLevel)
-		cfg.Env = ExpandPluginEnv(cfg.Env, p.Dir)
-		client := mcp.NewClient(name, cfg)
-		if old, exists := r.MCPClients[name]; exists {
-			old.Close()
-		}
-		r.MCPClients[name] = client
-
-		if err := client.Start(); err != nil {
-			r.logf("plugin: mcp %s start: %v", name, err)
-			continue
-		}
-		mcpTools, err := client.ListTools()
-		if err != nil {
-			r.logf("plugin: mcp %s list tools: %v", name, err)
-			continue
-		}
-		for _, td := range mcpTools {
-			r.Tools.Register(mcp.NewMCPTool(client, td, level))
+		if err := r.RegisterMCPServer(p.Dir, name, cfg); err != nil {
+			r.logf("plugin: mcp %s: %v", name, err)
 		}
 	}
 }
 
 func (r runtime) unregisterMCP(p *Plugin) {
-	if r.Tools == nil || r.MCPClients == nil {
+	if r.UnregisterMCPServer == nil {
 		return
 	}
 	for srvName := range p.MCPServers() {
-		client, ok := r.MCPClients[srvName]
-		if !ok {
-			continue
-		}
-		for _, t := range r.Tools.List() {
-			if IsMCPToolForClient(t.Name(), client.Name) {
-				r.Tools.Unregister(t.Name())
-			}
-		}
-		client.Close()
-		delete(r.MCPClients, srvName)
+		r.UnregisterMCPServer(srvName)
 	}
 }
 

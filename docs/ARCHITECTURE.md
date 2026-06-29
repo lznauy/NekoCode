@@ -6,6 +6,46 @@
 
 NekoCode 是一个基于 Go 的终端 AI 助手，使用 Bubble Tea v2 构建 TUI，支持多 LLM provider（OpenAI 兼容 / Anthropic 兼容协议），具备 Agent 循环、Native Function Calling、工具执行、权限确认、Plan Mode、Plugin 系统、事件驱动 Hooks、MCP 客户端、子 Agent、上下文管理、Session Memory、AI 文生图等机制。
 
+## Bot 层目标结构
+
+Bot 层按子系统组织，目录结构和依赖方向都应接近树状：上层负责装配，下层负责能力实现；子系统之间通过窄接口交互，避免横向穿透和反向依赖。
+
+目标分层：
+
+```
+bot/
+├── app/                 # 对外 Bot API + 生命周期装配，保持薄层
+├── agent/runtime/       # Agent 主循环：turn、LLM 调用、工具反馈、停止条件
+├── contextmgr/          # 上下文、压缩、memory、token 统计
+├── llm/                 # LLM 协议、客户端工厂、stream/http 类型
+├── tools/               # 工具定义、注册、执行、执行状态、内置工具
+├── governance/          # 跨运行时治理语义和共享 guard 文案
+├── agent/governance/    # Agent 运行期治理状态、ledger、hook 桥接
+├── extension/           # plugin、skill、mcp 的底层扩展实现
+├── plugin/              # 插件管理门面：安装、启停、扩展加载
+├── skill/               # Skill 管理门面：加载、上下文刷新、skill tool 接线
+├── skillview/           # command/app 使用的 Skill 窄视图契约
+├── agent/subagent/      # 子 Agent 执行引擎
+├── index/               # 代码索引服务和 project_info tool
+├── command/             # slash command 注册和生命周期命令
+├── session/             # 会话持久化
+├── prompt/              # system/plan prompt 构建
+├── config/
+└── debug/
+```
+
+依赖规则：
+
+- `app` 是装配层，可以依赖各子系统；其他子系统不能依赖 `app`。
+- `agent/runtime` 只依赖 LLM、context、tools、hooks/governance 等运行时接口，不关心 plugin/skill/mcp 的安装和发现。
+- `tools` 只定义和执行工具，不反向依赖 agent 主循环或 `agent/subagent`；需要委托子 Agent 时通过 `TaskRunner` 接口接线，具体适配器放在 `app`。
+- `agent/subagent` 不能依赖 `agent/runtime`；共享治理提示放在 `bot/governance`。
+- `extension/*` 是底层实现；高层业务优先通过 `plugin.Manager`、`skill.Manager` 使用，避免绕过 manager 直接操作 registry。
+- `plugin` 只管理插件生命周期和扩展文件发现；agent 文件注册到 `agent/subagent` 由 `app` 注入回调完成。
+- `plugin` 不直接持有 MCP client；MCP server 启停和工具注册由 `app` 装配层通过回调处理。
+- `command` 只依赖 `skillview.Provider` 这类窄契约，不直接操作 `skill.Manager` 或具体 tool 类型。
+- 无引用的 alias 包应删除；内部新代码应直接依赖真实实现包。
+
 ## 目录结构
 
 ```
@@ -33,8 +73,8 @@ nekocode/
 │   ├── bot.go                      #   package bot 入口（类型别名导出）
 │   ├── app/                        #   Bot 应用层（依赖注入 + 生命周期编排）
 │   │   ├── bot.go                  #     Bot 结构体 + New() 初始化编排
-│   │   ├── api.go                  #     BotInterface 实现（Steer/Abort/ProviderModel/CommandNames/ExecuteCommand/SkillHint）
-│   │   ├── api_run.go              #     RunAgent / Configure / SetCallbacks
+│   │   ├── api.go                  #     bot.UI 基础方法（Steer/Abort/ProviderModel/CommandNames/ExecuteCommand/SkillHint）
+│   │   ├── api_run.go              #     Run / Configure / 兼容 RunAgent
 │   │   ├── api_model.go            #     SwitchModel
 │   │   ├── api_stats.go            #     Stats
 │   │   ├── init_agent.go           #     Agent 初始化
@@ -42,44 +82,33 @@ nekocode/
 │   │   ├── init_commands.go        #     Commands 初始化
 │   │   ├── context.go              #     Config / CtxMgr / 项目上下文 / 上下文守卫
 │   │   ├── plugin.go               #     plugin.Manager 接线 + /plugin 命令转发
+│   │   ├── plugin_agents.go        #     plugin agents/*.md 注册到 subagent
+│   │   ├── plugin_mcp.go           #     plugin MCP server 启停 + 工具注册
 │   │   ├── session.go              #     session.Manager 接线 + Session API/命令转发
 │   │   ├── task.go                 #     子 Agent 任务接线
 │   │   └── state.go                #     API 状态辅助
 │   ├── agent/                      #   Agent 循环
-│   │   ├── agent.go                #     package agent 入口（类型别名 → runtime）
 │   │   ├── runtime/                #     Agent 运行时核心
 │   │   │   ├── agent.go            #       Agent 结构体 + New()
-│   │   │   ├── run.go              #       Run() 主循环 + runTurn
-│   │   │   ├── run_context.go      #       injectHint / applyTurnHints / synthesizeAndReturn / drainSteering
-│   │   │   ├── run_exec.go         #       executeAndFeedback（工具执行 + PostTool hooks）
+│   │   │   ├── run.go              #       Run() 主循环，阅读入口
+│   │   │   ├── run_turn.go         #       单轮准备、Reason 后分支、文本完成
+│   │   │   ├── run_hints.go        #       hint 注入 + steering drain
+│   │   │   ├── run_exec.go         #       工具执行主流程 + PostTool hooks
 │   │   │   ├── run_exec_filter.go  #       工具调用过滤（配额 + PreToolUse hooks）
-│   │   │   ├── run_exec_posttool.go#       PostToolUse / PostTool hooks 评估
 │   │   │   ├── run_exec_results.go #       工具结果合并
 │   │   │   ├── run_exec_subagent.go#       子 Agent 回调准备
-│   │   │   ├── run_text.go         #       handleText（纯文本响应处理）
 │   │   │   ├── run_postturn.go     #       PostTurn hooks 评估
-│   │   │   ├── run_preedit.go      #       编辑前预处理
-│   │   │   ├── run_final.go        #       finalCheck / evaluateStop
-│   │   │   ├── reasoner.go         #       Reason() + ReasoningResult
-│   │   │   ├── retry.go            #       callLLMForTool + withRetry
+│   │   │   ├── reasoner.go         #       Reason() + LLM call + retry + 格式检测
 │   │   │   ├── synthesize.go       #       forceSynthesize 兜底总结
-│   │   │   ├── gate_alias.go       #       ResponseGate 别名
-│   │   │   ├── gov_alias.go        #       GovManager 别名
-│   │   │   ├── reasoning_alias.go  #       IsGarbledToolCall 别名
-│   │   │   └── subslot_alias.go    #       SubSlotManager 别名
-│   │   ├── gate/                   #     响应门控
-│   │   │   └── gate.go             #       ResponseGate（治理重试限制）
+│   │   │   ├── gate.go             #       ResponseGate（治理重试限制）
+│   │   │   ├── subslot.go          #       子 Agent 并发槽位
+│   │   │   └── messages.go         #       runtime 文案常量
 │   │   ├── governance/             #     治理管理器
 │   │   │   ├── gov.go              #       Manager（HookReg + Ledger + Exploration + Gate）
-│   │   │   ├── gov_final.go        #       最终检查
 │   │   │   ├── gov_lifecycle.go    #       生命周期（Reset/ResetTurn/ResetSession）
 │   │   │   ├── gov_observability.go#       可观测性
-│   │   │   └── gov_record.go       #       事件记录
-│   │   ├── ledger/                 #     工具执行账本
-│   │   │   ├── ledger.go           #       Ledger（readFiles/modifiedFiles/blockedTools/verifications）
-│   │   │   └── finalcheck.go       #       最终检查逻辑
-│   │   ├── reasoning/              #     推理格式检测
-│   │   │   └── format.go           #       IsGarbledToolCall
+│   │   │   ├── gov_record.go       #       事件记录
+│   │   │   └── ledger/             #       工具执行账本
 │   │   ├── budget/                 #     预算与配额
 │   │   │   ├── exploration.go      #       探索螺旋检测
 │   │   │   └── quota.go            #       每轮工具配额
@@ -194,13 +223,6 @@ nekocode/
 │   │       ├── tool_skill.go       #       技能工具注册
 │   │       └── bundled/            #       内置技能（go:embed）
 │   ├── index/                      #   代码索引
-│   │   ├── manager.go              #     入口管理器
-│   │   ├── tool.go                 #     project_info tool 接口层
-│   │   ├── sync.go                 #     同步入口
-│   │   ├── db_alias.go             #     DB 别名
-│   │   ├── graph_alias.go          #     Graph 别名
-│   │   ├── indexer_alias.go        #     Indexer 别名
-│   │   ├── parser_alias.go         #     Parser 别名
 │   │   ├── db/                     #     SQLite 持久化
 │   │   │   ├── db.go               #       DB 连接
 │   │   │   ├── schema.go           #       Schema
@@ -256,13 +278,11 @@ nekocode/
 │   │   ├── source.go               #     源解析 / env 展开
 │   │   ├── fetch.go                #     远程 plugin.json 获取
 │   │   └── format.go               #     插件展示文本
-│   ├── skill/                      #   Skill facade + GUI/API 快照
-│   │   ├── skill.go                #     extension/skill facade
+│   ├── skill/                      #   Skill 管理 + GUI/API 快照
+│   │   ├── manager.go              #     加载、上下文刷新、skill tool 接线
 │   │   └── management.go           #     skill/plugin 管理快照聚合
 │   ├── governance/                 #   工具语义分类
 │   │   └── semantics.go            #     Semantics（SourceProducing/Mutating/Verifying）
-│   ├── mcp/                        #   MCP 类型别名（→ extension/mcp）
-│   │   └── mcp.go                  #     类型别名 + NewClient / NewMCPTool
 │   ├── sdk/                        #   外部服务 SDK
 │   │   ├── volcengine_signer.go    #     火山引擎签名入口
 │   │   └── volcengine/             #     火山引擎 SigV4
@@ -356,7 +376,7 @@ nekocode/
 │   ├── view.go                     #   View() 视图布局组装
 │   ├── handlers.go                 #   按键处理
 │   ├── helpers.go                  #   辅助函数
-│   ├── types.go                    #   BotInterface + 消息类型
+│   ├── types.go                    #   状态枚举 + 消息类型
 │   ├── components/                 #   UI 组件
 │   │   ├── block/                  #     内容块渲染
 │   │   │   ├── block.go            #       Block 结构体 + Done 字段
@@ -389,17 +409,16 @@ nekocode/
 │       └── main.go                 #     快照入口
 ```
 
-## BotInterface（12 方法）
+## UI 契约
 
 ```go
-type BotInterface interface {
-    RunAgent(input string, onStep func(action, toolName, toolArgs, output string)) (string, error)
+type UI interface {
+    Run(input string, callbacks common.RunCallbacks) (string, error)
     ExecuteCommand(input string) (string, common.CmdResult)
     SkillHint() (string, bool)
     Stats() common.BotStats
     CommandNames() []string
-    Configure(confirmFn common.ConfirmFunc, phaseFn common.PhaseFunc, todoFn common.TodoFunc, notifyFn func(string), confirmCh chan common.ConfirmRequest)
-    SetCallbacks(textFn, reasonFn func(string))
+    Configure(confirmFn common.ConfirmFunc, phaseFn common.PhaseFunc, todoFn common.TodoFunc, notifyFn func(string), confirmCh chan common.ConfirmRequest, questionFn common.QuestionFunc)
     Steer(msg string)
     Abort()
     ProviderModel() (provider, model string)
@@ -408,7 +427,7 @@ type BotInterface interface {
 }
 ```
 
-定义在 `tui/types.go`，由 `bot/app/` 中的 `Bot` 结构体实现。
+定义在 `bot/ui.go`，由 `bot/app/` 中的 `Bot` 结构体实现。TUI 依赖 `bot.UI`，GUI 依赖扩展后的 `bot.GUI`。
 
 ## Bot 应用层（bot/app/）
 
@@ -470,18 +489,18 @@ Agent 循环硬限制：
 
 ### Agent 子包结构
 
-`bot/agent/agent.go` 是类型别名入口，所有实现位于子包：
+`bot/agent/` 的实现位于子包，根门面已删除：
 
 | 子包 | 职责 |
 |------|------|
-| `runtime/` | Agent 结构体 + Run() 主循环 + Reason + 工具执行 + 文本处理 |
-| `gate/` | ResponseGate：治理重试限制（默认 2 次） |
+| `runtime/` | Agent 结构体 + `Run()` 主循环 + `Reason()` + 工具/文本分支 |
+| `runtime/run.go` | 主循环阅读入口：start → loop → stop evaluation → finish |
+| `runtime/run_turn.go` | 单轮执行：PreTurn → steering/interruption → Reason → tool/text branch |
+| `runtime/run_exec*.go` | 工具调用过滤、执行、结果合并、subagent 回调 |
 | `governance/` | GovManager：整合 HookReg + Ledger + Exploration + Gate |
-| `ledger/` | 工具执行账本：readFiles / modifiedFiles / blockedTools / verifications |
-| `reasoning/` | IsGarbledToolCall：检测 LLM 输出中的 XML 泄漏 |
+| `governance/ledger/` | 工具执行账本：readFiles / modifiedFiles / blockedTools / verifications |
 | `budget/` | ExplorationTracker + ToolQuota |
 | `subagent/` | 子 Agent 引擎 + 注册表 + 安全审核 |
-| `subslot/` | 子 Agent 并发槽位管理（8 槽位 + 颜色分配） |
 
 ## 上下文管理
 
@@ -673,7 +692,7 @@ PolicyExploreExhausted="policy:explore_exhausted"
 - Server 生命周期管理（启动/初始化/心跳/tool 列举/关闭）
 - `tools.Tool` 接口适配（MCPTool）
 - 危险等级可配置
-- `bot/mcp/` 提供类型别名，方便外部引用
+- `app` 装配层负责根据 plugin 回调启动/关闭 MCP server，并注册/注销 MCP tool
 
 ## Skill 系统
 
@@ -729,7 +748,7 @@ PolicyExploreExhausted="policy:explore_exhausted"
 
 ### ResponseGate（响应门控）
 
-`bot/agent/gate/`：防止治理内部信号泄漏到模型可见输出。默认最多 2 次重试。
+`bot/agent/runtime/gate.go`：防止治理内部信号泄漏到模型可见输出。默认最多 2 次重试。
 
 ### 工具语义分类
 
@@ -755,12 +774,12 @@ Model
 
 | 模块 | 位置 | 职责 |
 |------|------|------|
-| Bot 应用层 | `bot/app/` | 依赖注入 + 生命周期编排 + BotInterface 实现 |
+| Bot 应用层 | `bot/app/` | 依赖注入 + 生命周期编排 + `bot.UI` / `bot.GUI` 实现 |
 | Agent 循环 | `bot/agent/runtime/` | Reason→Execute→Feedback，中断，重试 |
 | 治理系统 | `bot/agent/governance/` | Manager：HookReg + Ledger + Exploration |
 | 工具账本 | `bot/agent/governance/ledger/` | 工具执行追踪（读/写/阻止/错误/验证） |
 | 响应门控 | `bot/agent/runtime/gate.go` | 治理重试限制（内联于 runtime） |
-| 推理格式 | `bot/agent/runtime/reasoning.go` | GarbledToolCall 检测（内联于 runtime） |
+| 推理格式 | `bot/agent/runtime/reasoner.go` | GarbledToolCall 检测（内联于 runtime） |
 | 子 Agent | `bot/agent/subagent/` | 独立循环，3 种内置类型 + 插件扩展 |
 | 子槽位 | `bot/agent/runtime/subslot.go` | 并发控制（8 槽位 + 颜色，内联于 runtime） |
 | 预算配额 | `bot/agent/budget/` | 探索检测 + 工具配额 |

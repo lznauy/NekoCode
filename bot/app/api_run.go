@@ -5,6 +5,13 @@ import (
 	"nekocode/common"
 )
 
+func (b *Bot) Run(input string, callbacks common.RunCallbacks) (string, error) {
+	if callbacks.Text != nil || callbacks.Reason != nil {
+		b.SetCallbacks(callbacks.Text, callbacks.Reason)
+	}
+	return b.RunAgent(input, callbacks.Step)
+}
+
 func (b *Bot) RunAgent(input string, onStep func(action, toolName, toolArgs, output string)) (string, error) {
 	b.lastGuardrailWarned = 0
 	ag := b.getAgent()
@@ -33,6 +40,10 @@ func (b *Bot) setQuestionFunc(fn common.QuestionFunc) {
 
 func (b *Bot) SetCallbacks(textFn, reasonFn func(string)) {
 	ag := b.getAgent()
-	ag.SetStreamFn(func(delta string, _ bool) { textFn(delta) })
-	ag.SetReasoningStreamFn(reasonFn)
+	if textFn != nil {
+		ag.SetStreamFn(func(delta string, _ bool) { textFn(delta) })
+	}
+	if reasonFn != nil {
+		ag.SetReasoningStreamFn(reasonFn)
+	}
 }

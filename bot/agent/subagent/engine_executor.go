@@ -3,8 +3,8 @@ package subagent
 import (
 	"context"
 
-	"nekocode/bot/agent/runtime"
 	ctxmgr "nekocode/bot/contextmgr"
+	"nekocode/bot/governance"
 	"nekocode/bot/llm/types"
 	"nekocode/bot/tools"
 	"nekocode/common"
@@ -71,7 +71,7 @@ func applyReadOnlySpiralGuard(ctxMgr *ctxmgr.Manager, calls []tools.ToolCallItem
 	if tools.IsAllExploratory(calls) {
 		state.readOnlyStreak++
 		if state.readOnlyStreak >= 3 {
-			ctxMgr.Add("user", runtime.GuardReadOnlySpiral, "system")
+			ctxMgr.Add("user", governance.GuardReadOnlySpiral, "system")
 			state.readOnlyStreak = 0
 		}
 		return

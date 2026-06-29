@@ -1,4 +1,4 @@
-package tasktool
+package app
 
 import (
 	"context"
@@ -8,13 +8,13 @@ import (
 	"nekocode/bot/tools"
 )
 
-func TestBuildRunConfigUnknownAgent(t *testing.T) {
-	if _, ok := BuildRunConfig(RunConfigInput{AgentTypeName: "missing"}); ok {
+func TestBuildSubagentRunConfigUnknownAgent(t *testing.T) {
+	if _, ok := buildSubagentRunConfig(subagentRunConfigInput{AgentTypeName: "missing"}); ok {
 		t.Fatal("expected missing agent")
 	}
 }
 
-func TestBuildRunConfigWiresCallbacks(t *testing.T) {
+func TestBuildSubagentRunConfigWiresCallbacks(t *testing.T) {
 	subagent.RegisterPlugin(subagent.AgentType{Name: "tester"})
 	defer subagent.UnregisterPlugin("tester")
 
@@ -23,7 +23,7 @@ func TestBuildRunConfigWiresCallbacks(t *testing.T) {
 		eventAction = action + ":" + toolName + ":" + toolArgs + ":" + output
 	})
 	var phase string
-	cfg, ok := BuildRunConfig(RunConfigInput{
+	cfg, ok := buildSubagentRunConfig(subagentRunConfigInput{
 		Context:       ctx,
 		AgentTypeName: "tester",
 		Prompt:        "do it",
@@ -45,7 +45,7 @@ func TestBuildRunConfigWiresCallbacks(t *testing.T) {
 	}
 }
 
-func TestToTaskResultMapsStatus(t *testing.T) {
+func TestSubagentTaskResultMapsStatus(t *testing.T) {
 	tests := []struct {
 		status subagent.Status
 		want   tools.TaskStatus
@@ -55,12 +55,12 @@ func TestToTaskResultMapsStatus(t *testing.T) {
 		{subagent.StatusPartial, tools.TaskStatusPartial},
 	}
 	for _, tt := range tests {
-		got := ToTaskResult(&subagent.Result{Status: tt.status, Content: "ok"})
+		got := subagentTaskResult(&subagent.Result{Status: tt.status, Content: "ok"})
 		if got.Status != tt.want || got.Content != "ok" {
-			t.Fatalf("ToTaskResult(%v) = %+v", tt.status, got)
+			t.Fatalf("subagentTaskResult(%v) = %+v", tt.status, got)
 		}
 	}
-	if ToTaskResult(nil) != nil {
+	if subagentTaskResult(nil) != nil {
 		t.Fatal("nil result should map to nil")
 	}
 }

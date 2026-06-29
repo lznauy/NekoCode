@@ -1,10 +1,6 @@
 package runtime
 
-import (
-	"nekocode/bot/agent/budget"
-	aggov "nekocode/bot/agent/governance"
-	"nekocode/bot/hooks"
-)
+import "nekocode/bot/hooks"
 
 // maxAgentSteps is the hard ceiling on agent loop iterations. Prevents
 // infinite loops when the LLM keeps producing tool calls or PostTurn hooks
@@ -26,33 +22,17 @@ type RunResult struct {
 	Steps       int
 }
 
-type stepState struct {
-	Input string
-	quota budget.ToolQuota
-}
-
 type RunCallback func(action, toolName, toolArgs, output string)
 
 func (a *Agent) Run(input string, callback RunCallback) *RunResult {
-	a.Reset()
-	a.ctxMgr.Add("user", input, "user")
+	a.startRun(input)
 	state := &stepState{Input: input}
 
-	// Emit governance summary to debug log on completion.
-	defer a.gov.LogSummary(a.step)
-
-	// UserSubmit hooks.
-	if a.gov != nil && a.gov.HookReg != nil {
-		for _, r := range a.gov.HookReg.Evaluate(hooks.UserSubmit, "", false) {
-			a.injectHint(r.Hint)
-		}
-	}
+	defer a.logGovernanceSummary()
+	a.applyUserSubmitHooks()
 
 	for !a.finished.Load() {
-		if a.step >= maxAgentSteps {
-			a.stopReason = hooks.StopCompleted
-			a.lastText = ""
-			a.finalText = ""
+		if a.stepLimitReached() {
 			break
 		}
 		if finished := a.runTurn(state, callback); finished {
@@ -61,7 +41,40 @@ func (a *Agent) Run(input string, callback RunCallback) *RunResult {
 	}
 
 	a.evaluateStop()
+	return a.finishRun(callback)
+}
 
+func (a *Agent) startRun(input string) {
+	a.Reset()
+	a.ctxMgr.Add("user", input, "user")
+}
+
+func (a *Agent) applyUserSubmitHooks() {
+	if a.gov == nil || a.gov.HookReg == nil {
+		return
+	}
+	for _, r := range a.gov.HookReg.Evaluate(hooks.UserSubmit, "", false) {
+		a.injectHint(r.Hint)
+	}
+}
+
+func (a *Agent) logGovernanceSummary() {
+	if a.gov != nil {
+		a.gov.LogSummary(a.step)
+	}
+}
+
+func (a *Agent) stepLimitReached() bool {
+	if a.step < maxAgentSteps {
+		return false
+	}
+	a.stopReason = hooks.StopCompleted
+	a.lastText = ""
+	a.finalText = ""
+	return true
+}
+
+func (a *Agent) finishRun(callback RunCallback) *RunResult {
 	if a.getCtx().Err() != nil || a.stopReason == hooks.StopInterrupted {
 		return &RunResult{FinalOutput: MsgInterrupted, Steps: a.step}
 	}
@@ -93,73 +106,24 @@ func (a *Agent) evaluateStop() {
 func (a *Agent) runTurn(state *stepState, callback RunCallback) (finished bool) {
 	msgCountBefore := a.ctxMgr.Len()
 
-	a.ctxMgr.AutoCompactIfNeeded()
-	state.quota = budget.ComputeQuota(a.ctxMgr.TokenUsage())
-
-	// —— PreTurn hooks ——
-	if a.gov != nil && a.gov.HookReg != nil {
-		a.gov.ResetTurnBetween(state.Input, aggov.QuotaData{
-			MaxSlots: state.quota.MaxSlots,
-			Used:     state.quota.Used,
-		})
-
-		tasksDone := int64(0)
-		if a.ctxMgr.AllTasksDone() {
-			tasksDone = 1
-		}
-		hasTasks := int64(0)
-		if a.ctxMgr.HasTasks() {
-			hasTasks = 1
-		}
-		a.gov.HookReg.Set(hooks.StoreTasksAllDone, tasksDone)
-		a.gov.HookReg.Set(hooks.StoreHasTasks, hasTasks)
-
-		var hints []hooks.Hint
-		for _, r := range a.gov.HookReg.Evaluate(hooks.PreTurn, "", false) {
-			if r.Hint != nil {
-				hints = append(hints, *r.Hint)
-			}
-		}
-		a.applyTurnHints(hints)
-	} else {
-		a.applyTurnHints(nil)
-	}
+	a.prepareTurn(state)
 	defer a.ctxMgr.SetHints("")
 
-	a.drainSteering()
-	if a.getCtx().Err() != nil {
-		a.stopReason = hooks.StopInterrupted
-		a.lastText = MsgInterrupted
-		if callback != nil {
-			callback("chat", "", "", MsgInterrupted)
-		}
+	if a.interruptedBeforeReasoning(callback) {
 		return true
 	}
 
 	reasoning := a.Reason(state)
-
-	if reasoning.Interrupted {
-		if a.finished.Load() {
-			a.stopReason = hooks.StopInterrupted
-			return true
-		}
-		// Count interrupted responses toward the step limit to prevent
-		// unbounded loops when the LLM repeatedly produces interrupted output.
-		a.step++
-		a.ctxMgr.TruncateTo(msgCountBefore)
-		a.drainSteering()
+	if a.retryAfterInterruptedReasoning(reasoning, msgCountBefore) {
 		return false
+	}
+	if a.stopReason == hooks.StopInterrupted {
+		return true
 	}
 
 	calls := reasoning.ToolCalls
 	if len(calls) > 0 {
-		// Tool calls mean the agent is making progress — reset hint counter.
-		a.consecutiveHints = 0
-		a.consecutiveFailures = 0
-		a.gate.Reset()
-		var stopReason hooks.StopReason
-		var shouldStop bool
-		shouldStop, stopReason = a.executeAndFeedback(calls, reasoning, state, callback)
+		shouldStop, stopReason := a.handleToolCalls(calls, reasoning, state, callback)
 		if shouldStop {
 			a.stopReason = stopReason
 			return true
@@ -167,5 +131,5 @@ func (a *Agent) runTurn(state *stepState, callback RunCallback) (finished bool) 
 		return false
 	}
 
-	return a.handleText(reasoning, state, callback)
+	return a.handleText(reasoning, callback)
 }

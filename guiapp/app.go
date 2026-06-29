@@ -46,7 +46,7 @@ import (
 // App 是绑定到 Wails 前端的应用实例。
 type App struct {
 	ctx   context.Context
-	bot   *bot.Bot
+	bot   bot.GUI
 	mu    sync.Mutex
 	runs  int
 	ready atomic.Bool
@@ -225,33 +225,30 @@ func (a *App) SendMessage(input string) {
 
 	a.resetPending()
 
-	a.bot.SetCallbacks(
-		func(delta string) {
-			runtime.EventsEmit(a.ctx, "agent:delta", map[string]any{
-				"id":    runID,
-				"delta": delta,
-				"done":  false,
-			})
-		},
-		func(delta string) {
-			runtime.EventsEmit(a.ctx, "agent:reasoning", map[string]any{
-				"delta": delta,
-				"done":  false,
-			})
-		},
-	)
-
-	onStep := func(action, toolName, toolArgs, output string) {
-		a.dispatchStep(action, toolName, toolArgs, output)
-	}
-
 	start := time.Now()
 	go func() {
 		runtime.EventsEmit(a.ctx, "agent:status", map[string]string{
 			"status": "thinking",
 		})
 
-		result, err := a.bot.RunAgent(input, onStep)
+		result, err := a.bot.Run(input, common.RunCallbacks{
+			Text: func(delta string) {
+				runtime.EventsEmit(a.ctx, "agent:delta", map[string]any{
+					"id":    runID,
+					"delta": delta,
+					"done":  false,
+				})
+			},
+			Reason: func(delta string) {
+				runtime.EventsEmit(a.ctx, "agent:reasoning", map[string]any{
+					"delta": delta,
+					"done":  false,
+				})
+			},
+			Step: func(action, toolName, toolArgs, output string) {
+				a.dispatchStep(action, toolName, toolArgs, output)
+			},
+		})
 		errStr := ""
 		if err != nil {
 			errStr = err.Error()

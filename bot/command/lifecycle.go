@@ -4,11 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"nekocode/bot/agent"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/hooks"
 	"nekocode/bot/prompt"
-	"nekocode/bot/skill"
+	"nekocode/bot/skillview"
 	"nekocode/bot/tools"
 	"nekocode/common"
 )
@@ -21,11 +20,20 @@ type SkillState struct {
 	Hint       string
 }
 
+type PlanModeController interface {
+	SetPlanMode(bool)
+	GovernanceLine() string
+}
+
+type skillLoadCallbackTool interface {
+	SetOnLoad(func(string))
+}
+
 // Deps bundles services needed by registration and lifecycle operations.
 type Deps struct {
 	CtxMgr        *ctxmgr.Manager
-	Ag            func() *agent.Agent // dynamic: returns current agent
-	Skills        *skill.Manager
+	Ag            func() PlanModeController // dynamic: returns current agent
+	Skills        skillview.Provider
 	ToolRegistry  *tools.Registry
 	ContextWindow int
 	GetConfigFn   func() (provider, model string)           // dynamic config for /config and /model
@@ -51,15 +59,15 @@ func RegisterAll(p *Parser, deps Deps, st *SkillState) {
 	})
 
 	// /skill-name for each loaded skill.
-	for _, sk := range deps.Skills.List() {
+	for _, sk := range deps.Skills.ListForCommands() {
 		name := sk.Name
 		p.Register(name, func(cmd *Command) (string, bool) {
-			sk, ok := deps.Skills.Get(name)
+			sk, ok := deps.Skills.GetForCommand(name)
 			if !ok {
 				return fmt.Sprintf("Skill %q not found.", name), true
 			}
 			st.MsgStart = deps.CtxMgr.Len()
-			deps.CtxMgr.Add("user", skill.FormatForContext(sk))
+			deps.CtxMgr.Add("user", sk.Context)
 			deps.Skills.MarkLoaded(name)
 			if len(cmd.Args) == 0 {
 				st.MsgStart = -1
@@ -75,9 +83,11 @@ func RegisterAll(p *Parser, deps Deps, st *SkillState) {
 
 	// Skill tool OnLoad callback.
 	if t, err := deps.ToolRegistry.Get("skill"); err == nil {
-		t.(*skill.SkillTool).SetOnLoad(func(name string) {
-			deps.Skills.MarkLoaded(name)
-		})
+		if loader, ok := t.(skillLoadCallbackTool); ok {
+			loader.SetOnLoad(func(name string) {
+				deps.Skills.MarkLoaded(name)
+			})
+		}
 	}
 }
 
@@ -139,7 +149,7 @@ func ContextReport(ctxMgr *ctxmgr.Manager, toolDescs []tools.Descriptor) string 
 }
 
 // ForceFreshStart archives current conversation and starts a new session.
-func ForceFreshStart(ctxMgr *ctxmgr.Manager, skills *skill.Manager, hookReg *hooks.Registry) (string, error) {
+func ForceFreshStart(ctxMgr *ctxmgr.Manager, skills skillview.Provider, hookReg *hooks.Registry) (string, error) {
 	count, oldTokens, _ := ctxMgr.Stats()
 	skills.ClearLoaded()
 	// Reset hook session state so guards like completionQualityHook

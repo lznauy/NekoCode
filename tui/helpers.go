@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"nekocode/bot"
 	"nekocode/common"
 )
 
@@ -71,7 +72,7 @@ func formatBriefArgs(toolName, toolArgs string) string {
 	}
 }
 
-func tokensSummary(b BotInterface) string {
+func tokensSummary(b bot.UI) string {
 	st := b.Stats()
 	return "↑" + common.FormatTokens(st.TurnPrompt) + " ↓" + common.FormatTokens(st.TurnCompletion)
 }

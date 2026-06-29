@@ -33,16 +33,21 @@ func (b *Bot) reloadSkills() {
 }
 
 func (b *Bot) initPlugins() {
+	b.closePluginMCPServers()
+	b.resetPluginMCPClients()
 	b.plugins = plugin.NewManager(plugin.ManagerOptions{
 		Hooks: b.hookReg,
-		Tools: b.toolRegistry,
 		Logf:  debug.Log,
 		OnInstall: func(p *plugin.Plugin) {
 			if b.skills != nil {
-				b.skills.LoadPluginSkills(p)
+				b.skills.LoadPluginSkillDirs(p.SkillDirs())
 			}
 		},
-		OnChanged: b.refreshPluginSkills,
+		OnChanged:           b.refreshPluginSkills,
+		RegisterAgentPath:   b.registerPluginAgentPath,
+		UnregisterAgentPath: b.unregisterPluginAgentPath,
+		RegisterMCPServer:   b.registerPluginMCPServer,
+		UnregisterMCPServer: b.unregisterPluginMCPServer,
 	})
 	b.plugins.LoadAll()
 }

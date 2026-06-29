@@ -1,6 +1,6 @@
 // ActivityRow: 一行工具步骤。
 // 颜色胶带左侧细条标识状态, 内容区与工具行同列对齐, 不产生独立子框。
-import { memo, useCallback, useMemo, useRef } from 'react'
+import { memo, useCallback, useId, useMemo, useRef } from 'react'
 import type { ToolStep } from '../../types/events'
 import { useScrollContainer } from '../MessageList'
 import { compactArgs, editSummary, pathFromArgs, prettyTool } from './helpers'
@@ -13,11 +13,11 @@ interface ActivityRowProps {
 
 // 状态 → 左侧细条颜色 (2px 胶带, 不占满全高)
 function statusTape(s: ToolStep): string {
+  if (s.status === 'blocked') return 'bg-warning/70'
   if (s.isError) return 'bg-danger/70'
   switch (s.status) {
     case 'running': return 'bg-primary'
     case 'done':    return 'bg-success/70'
-    case 'blocked': return 'bg-warning/70'
     default:        return 'bg-text-3/30'
   }
 }
@@ -25,6 +25,7 @@ function statusTape(s: ToolStep): string {
 export const ActivityRow = memo(function ActivityRow({ step, toggleStep }: ActivityRowProps) {
   const rowRef = useRef<HTMLDivElement>(null)
   const scrollRef = useScrollContainer()
+  const bodyId = useId()
   const expanded = !step.collapsed
   // edit 成功后保留 preview diff; 运行中显示 preview; 其余完成状态显示 output。
   const content = step.toolName === 'edit'
@@ -60,18 +61,20 @@ export const ActivityRow = memo(function ActivityRow({ step, toggleStep }: Activ
   const argsLabel = useMemo(() => compactArgs(step.args), [step.args])
   const editSum = useMemo(() => editSummary(content), [content])
 
-  // 状态仅通过颜色表达 — 不再单独放置一个圆点/勾 glyph。
-  const badgeCls = step.isError
+  const isBlocked = step.status === 'blocked'
+  const isExecutionError = step.isError && !isBlocked
+  const badgeCls = isBlocked
+    ? 'text-warning'
+    : isExecutionError
     ? 'text-danger'
     : step.status === 'running'
       ? 'text-primary' // 去除 animate-pulse-soft 避免持续合成重绘
       : step.status === 'done'
         ? 'text-success'
-        : step.status === 'blocked'
-          ? 'text-warning'
-          : 'text-text-3'
+        : 'text-text-3'
 
   const tape = statusTape(step)
+  const statusText = statusLabel(step)
 
   return (
     <div
@@ -85,23 +88,29 @@ export const ActivityRow = memo(function ActivityRow({ step, toggleStep }: Activ
           type="button"
           onClick={handleToggle}
           disabled={!canExpand}
-          className={`group flex flex-1 items-center gap-2 px-2.5 py-1.5 text-left text-[12px] ${
-            canExpand ? 'hover:bg-surface-3/50' : 'cursor-default'
+          aria-expanded={canExpand ? expanded : undefined}
+          aria-controls={canExpand ? bodyId : undefined}
+          className={`group flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5 text-left text-[12px] ${
+            canExpand ? 'hover:bg-surface-3/50 active:bg-surface-3/70' : 'cursor-default'
           }`}
         >
           {/* 展开指示器 或 占位 */}
-          <span className="w-3 text-center leading-none text-text-3 text-[10px]">
+          <span className="w-3 shrink-0 text-center leading-none text-text-3 text-[10px]">
             {canExpand ? (expanded ? '▾' : '▸') : ' '}
           </span>
           <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-surface text-[13px] leading-none ${badgeCls}`}>
             <ToolGlyph name={step.toolName} />
           </span>
-          <span className={`font-medium ${step.isError ? 'text-danger' : 'text-text-2'}`}>
+          <span
+            title={prettyTool(step.toolName)}
+            className={`min-w-0 max-w-[9rem] shrink truncate font-medium ${isExecutionError ? 'text-danger' : 'text-text-2'}`}
+          >
             {prettyTool(step.toolName)}
           </span>
           {argsLabel && (
             <span
-              className={`truncate font-mono text-[11px] ${
+              title={argsLabel}
+              className={`min-w-0 flex-1 truncate font-mono text-[11px] ${
                 step.toolName === 'bash' ? 'text-text-2' : 'text-text-3'
               }`}
             >
@@ -109,14 +118,33 @@ export const ActivityRow = memo(function ActivityRow({ step, toggleStep }: Activ
             </span>
           )}
           {step.toolName === 'edit' && editSum && (
-            <span className="font-mono text-[11px] text-success">{editSum}</span>
+            <span className="shrink-0 font-mono text-[11px] text-success">{editSum}</span>
+          )}
+          <span
+            className={`ml-auto shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] tabular-nums ${badgeCls}`}
+          >
+            {statusText}
+          </span>
+          {canExpand && !expanded && (
+            <span className="sr-only">展开查看工具输出</span>
           )}
         </button>
       </div>
-      {expanded && content && <RowBody step={step} />}
+      {expanded && content && <RowBody id={bodyId} step={step} />}
     </div>
   )
 })
+
+function statusLabel(s: ToolStep): string {
+  if (s.status === 'blocked') return '阻止'
+  if (s.isError) return '错误'
+  switch (s.status) {
+    case 'running': return '运行中'
+    case 'done': return '完成'
+    case 'pending': return '等待'
+  }
+  return '等待'
+}
 
 function ToolGlyph({ name }: { name: string }) {
   const common = { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2.1, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true }
@@ -146,7 +174,7 @@ function ToolGlyph({ name }: { name: string }) {
   }
 }
 
-function RowBody({ step }: { step: ToolStep }) {
+function RowBody({ id, step }: { id: string; step: ToolStep }) {
   // edit 成功后保留 preview diff; 运行中显示 preview; 其余完成状态显示 output。
   const content = step.toolName === 'edit'
     ? (step.preview || step.output || '')
@@ -155,24 +183,24 @@ function RowBody({ step }: { step: ToolStep }) {
       : (step.output || '')
   if (step.toolName === 'edit' && step.isError) {
     return (
-      <div className="border-t border-danger/20 px-3 pb-2 pt-2 font-mono text-[11.5px] leading-relaxed text-danger whitespace-pre-wrap">
+      <div id={id} className={`border-t px-3 pb-2 pt-2 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap [overflow-wrap:break-word] ${step.status === 'blocked' ? 'border-warning/20 text-warning' : 'border-danger/20 text-danger'}`}>
         {content || 'edit failed'}
       </div>
     )
   }
   if (step.toolName === 'edit' && isEditRevertOutput(content)) {
     return (
-      <div className="border-t border-success/20 px-3 pb-2 pt-2 font-mono text-[11.5px] leading-relaxed text-text-2 whitespace-pre-wrap">
+      <div id={id} className="border-t border-success/20 px-3 pb-2 pt-2 font-mono text-[11.5px] leading-relaxed text-text-2 whitespace-pre-wrap [overflow-wrap:break-word]">
         {content}
       </div>
     )
   }
   if (step.toolName === 'edit') {
-    return <EditDiff content={content} filePath={pathFromArgs(step.args)} defaultCollapsed={false} skipHeader />
+    return <div id={id}><EditDiff content={content} filePath={pathFromArgs(step.args)} defaultCollapsed={false} skipHeader /></div>
   }
   if (step.isError) {
     return (
-      <div className="border-t border-danger/20 px-3 pb-2 pt-2 font-mono text-[11.5px] leading-relaxed text-danger whitespace-pre-wrap">
+      <div id={id} className={`border-t px-3 pb-2 pt-2 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap [overflow-wrap:break-word] ${step.status === 'blocked' ? 'border-warning/20 text-warning' : 'border-danger/20 text-danger'}`}>
         {content}
       </div>
     )
@@ -180,8 +208,9 @@ function RowBody({ step }: { step: ToolStep }) {
   const scrollable = step.toolName !== 'write'
   return (
     <pre
-      className={`border-t border-border/30 px-3 pb-2 pt-2 font-mono text-[11.5px] leading-relaxed text-text-2 [overflow-wrap:break-word] ${
-        scrollable ? 'max-h-[320px] overflow-y-auto' : ''
+      id={id}
+      className={`min-w-0 whitespace-pre-wrap break-words border-t border-border/30 px-3 pb-2 pt-2 font-mono text-[11.5px] leading-relaxed text-text-2 ${
+        scrollable ? 'max-h-[320px] overflow-y-auto overflow-x-hidden' : ''
       }`}
     >
       {content}

@@ -101,7 +101,7 @@ bot.go New()
 │   │
 │   ├── ctxMgr.Add("system", projCtx)         ← 注入 NEKOCODE.md 内容
 │   │
-│   ├── index.NewManager(cwd)                ← 创建管理器
+│   ├── service.NewManager(cwd)              ← 创建管理器
 │   │   ├── findProjectRoot(cwd)              ← 向上查找 .git/go.mod/package.json 等
 │   │   │   ├── 找到 → 以项目根为索引根目录
 │   │   │   └── 没找到 → 跳过索引，返回 nil indexer
@@ -174,25 +174,26 @@ Agent 调用 project_info tool
 
 ```
 bot/index/
-├── manager.go      # 入口管理器，协调各组件，项目根目录探测
-├── graph_alias.go  # graph 子模块的临时兼容别名
 ├── graph/          # 图模型、变更、查询、骨架格式化
-├── db_alias.go     # db 子模块的临时兼容别名
 ├── db/             # SQLite schema、持久化、图加载、FTS5 搜索
-├── parser_alias.go # parser 子模块的临时兼容别名
 ├── parser/         # Tree-sitter 解析引擎，提取符号和关系
-├── indexer_alias.go # indexer 子模块的临时兼容别名
 ├── indexer/        # 索引编排：扫描、缓存判定、增量更新、引用解析
-├── sync.go         # 增量同步（fsnotify 监听 + 防抖）
-├── tool.go         # project_info tool 接口层
+├── service/        # 入口管理器，协调各组件，项目根目录探测
+├── syncer/         # 增量同步（fsnotify 监听 + 防抖）
+├── projecttool/    # project_info tool 接口层
 └── projectctx/     # NEKOCODE.md 项目上下文发现与 include 展开
 ```
 
 ## 使用
 
 ```go
+import (
+    "nekocode/bot/index/projecttool"
+    "nekocode/bot/index/service"
+)
+
 // 创建并初始化
-mgr, err := index.NewManager(cwd)
+mgr, err := service.NewManager(cwd)
 if err != nil {
     log.Fatal(err)
 }
@@ -217,7 +218,7 @@ nodes, _ := mgr.Indexer().SearchFTS("http", 10)
 skeleton := graph.FormatSkeleton(cwd)
 
 // 注册为 tool
-tool := index.NewProjectInfoTool(mgr)
+tool := projecttool.NewProjectInfoTool(mgr)
 registry.Register(tool)
 ```
 

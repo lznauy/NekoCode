@@ -7,7 +7,7 @@ import (
 func (b *Bot) initCommands() {
 	command.RegisterAll(b.cmdParser, command.Deps{
 		CtxMgr:        b.ctxMgr,
-		Ag:            b.getAgent,
+		Ag:            func() command.PlanModeController { return b.getAgent() },
 		Skills:        b.skills,
 		ToolRegistry:  b.toolRegistry,
 		ContextWindow: b.cfg.ContextWindow,

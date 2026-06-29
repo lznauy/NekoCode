@@ -44,6 +44,12 @@ type BotStats struct {
 	Duration                       string
 }
 
+type RunCallbacks struct {
+	Text   func(delta string)
+	Reason func(delta string)
+	Step   func(action, toolName, toolArgs, output string)
+}
+
 // TodoItem represents a single task in the todo list.
 type TodoItem struct {
 	Content string `json:"content"`

@@ -4,10 +4,11 @@ import (
 	"os"
 	"sync"
 
-	"nekocode/bot/agent"
+	"nekocode/bot/agent/runtime"
 	"nekocode/bot/command"
 	"nekocode/bot/config"
 	ctxmgr "nekocode/bot/contextmgr"
+	"nekocode/bot/extension/mcp"
 	"nekocode/bot/hooks"
 	"nekocode/bot/index/service"
 	"nekocode/bot/plugin"
@@ -41,14 +42,15 @@ type botCore struct {
 }
 
 type botRuntime struct {
-	ag           *agent.Agent
+	ag           *runtime.Agent
 	toolRegistry *tools.Registry
 	hookReg      *hooks.Registry
 }
 
 type extensionRuntime struct {
-	skills  *skill.Manager
-	plugins *plugin.Manager
+	skills     *skill.Manager
+	plugins    *plugin.Manager
+	mcpClients map[string]*mcp.Client
 }
 
 type callbackRuntime struct {
