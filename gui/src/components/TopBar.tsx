@@ -22,7 +22,7 @@ export function TopBar({ model, models = [], busy, theme, onToggleTheme, onSwitc
     <header className="flex items-center gap-2 border-b border-border/60 bg-surface-2/95 px-5">
       <LogoMark size="sm" showWordmark />
       {model && (
-        <div className="model-tooltip group relative ml-2" data-tooltip={model}>
+        <div className="group relative ml-2">
           <button
             type="button"
             className="block max-w-[40vw] truncate rounded-md border border-border/60 bg-surface px-2 py-1 text-[10px] leading-none text-text-2 transition-all hover:border-primary/60 hover:text-text active:scale-95"
