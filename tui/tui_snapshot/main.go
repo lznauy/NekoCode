@@ -1,11 +1,12 @@
 // tui_snapshot renders all key TUI components with realistic data into plain-text files.
-// Run: go run ./utils/tui_snapshot
+// Run: go run ./tui/tui_snapshot
 package main
 
 import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"nekocode/common"
 	components "nekocode/tui/components"
@@ -24,26 +25,10 @@ func main() {
 	os.RemoveAll(outDir)
 	os.MkdirAll(outDir, 0755)
 
-	write(outDir, "confirm_edit.txt", renderConfirmEdit())
-	write(outDir, "confirm_bash.txt", renderConfirmBash())
-	write(outDir, "confirm_bash_long_python.txt", renderConfirmBashLongPython())
-	write(outDir, "confirm_bash_massive.txt", renderConfirmBashMassive())
-	write(outDir, "confirm_write.txt", renderConfirmWrite())
-	write(outDir, "confirm_plugin.txt", renderConfirmPlugin())
-
-	write(outDir, "block_edit_diff.txt", renderEditBlock())
-	write(outDir, "block_edit_multifile.txt", renderEditMultiBlock())
-	write(outDir, "block_edit_collapsed.txt", renderEditCollapsed())
-	write(outDir, "block_bash_short.txt", renderBashShort())
-	write(outDir, "block_bash_long.txt", renderBashLong())
-	write(outDir, "block_write.txt", renderWriteBlock())
-	write(outDir, "block_read_collapsed.txt", renderReadCollapsed())
-
-	write(outDir, "processing_active.txt", renderProcessingActive())
-	write(outDir, "processing_idle.txt", renderProcessingIdle())
-	write(outDir, "processing_subagent.txt", renderProcessingSubAgent())
-
-	write(outDir, "assistant_edit_diff.txt", renderAssistantWithEdit())
+	write(outDir, "confirmations.txt", renderConfirmations())
+	write(outDir, "tool_blocks.txt", renderToolBlocks())
+	write(outDir, "processing.txt", renderProcessingStates())
+	write(outDir, "assistant_message.txt", renderAssistantWithEdit())
 
 	log.Println("Snapshots written to", outDir)
 }
@@ -55,7 +40,20 @@ func write(dir, name, content string) {
 	}
 }
 
+func joinSnapshots(parts ...string) string {
+	return strings.Join(parts, "\n\n"+strings.Repeat("─", width)+"\n\n")
+}
+
 // ── ConfirmBar ───────────────────────────────────────────────────────────────
+
+func renderConfirmations() string {
+	return joinSnapshots(
+		renderConfirmEdit(),
+		renderConfirmBashMassive(),
+		renderConfirmWrite(),
+		renderConfirmPlugin(),
+	)
+}
 
 func renderConfirmEdit() string {
 	cb := components.NewConfirmBar(&sty)
@@ -68,32 +66,6 @@ func renderConfirmEdit() string {
 		Response: make(chan bool, 1),
 	})
 	return cb.View(width, 40)
-}
-
-func renderConfirmBash() string {
-	cb := components.NewConfirmBar(&sty)
-	cb.SetRequest(&common.ConfirmRequest{
-		ToolName: "bash",
-		Args: map[string]any{
-			"command": "curl -sS https://api.example.com/data | jq '.items[] | select(.active == true)' | head -20",
-		},
-		Level:    common.LevelWrite,
-		Response: make(chan bool, 1),
-	})
-	return cb.View(width, 40)
-}
-
-func renderConfirmBashLongPython() string {
-	cb := components.NewConfirmBar(&sty)
-	cb.SetRequest(&common.ConfirmRequest{
-		ToolName: "bash",
-		Args: map[string]any{
-			"command": `python -c "import sys, json; data = json.loads(open('/tmp/data.json').read()); result = [item for item in data['items'] if item.get('active') and item.get('score', 0) > 50]; print(json.dumps(result, indent=2))"`,
-		},
-		Level:    common.LevelWrite,
-		Response: make(chan bool, 1),
-	})
-	return cb.View(width, 80)
 }
 
 func renderConfirmBashMassive() string {
@@ -163,97 +135,52 @@ func renderConfirmPlugin() string {
 
 // ── Tool Blocks ─────────────────────────────────────────────────────────────
 
-func renderEditBlock() string {
-	// Uses actual format from formatHunkDiff:
-	//   -NNN:content → deletion
-	//   +NNN:content → addition
-	//    NNN:content → context
-	diff := "[bot/tools/builtin/tool_edit.go#C5E8]\n 318:    fmt.Println(\"Alice active:\", alice.Active)\n-318:    fmt.Println(\"Alice active:\", alice.Active)\n+319:    fmt.Println(\"Alice active status:\", alice.Active)"
-	b := block.ContentBlock{
-		Type:      block.BlockTool,
-		ToolName:  "edit",
-		ToolArgs:  "tool_edit.go",
-		Content:   diff,
-		Collapsed: false,
-		Done:      true,
-	}
-	return block.RenderTools([]block.ContentBlock{b}, width-10, &sty)
-}
-
-func renderEditMultiBlock() string {
-	diff := "[bot/tools/builtin/tool_edit.go#B7F2]\n 120:    desc := \"Edit text in files using simple replacements...\"\n-120:    desc := \"Edit text in files using simple replacements...\"\n+121:    desc := \"Edit files using oldString/newString content anchors. Returns a diff preview + new TAG for chaining.\"\n 125:    maxTokens := 5000\n-125:    maxTokens := 5000\n+126:    maxTokens := 8000"
-	b := block.ContentBlock{
-		Type:      block.BlockTool,
-		ToolName:  "edit",
-		ToolArgs:  "tool_edit.go",
-		Content:   diff,
-		Collapsed: false,
-		Done:      true,
-	}
-	return block.RenderTools([]block.ContentBlock{b}, width-10, &sty)
-}
-
-func renderEditCollapsed() string {
-	b := block.ContentBlock{
-		Type:      block.BlockTool,
-		ToolName:  "edit",
-		ToolArgs:  "main.go",
-		Content:   "[main.go#D4E1]\n-42:    x := 1\n+43:    x := 2",
-		Collapsed: true,
-		Done:      true,
-	}
-	return block.RenderTools([]block.ContentBlock{b}, width-10, &sty)
-}
-
-func renderBashShort() string {
-	b := block.ContentBlock{
-		Type:      block.BlockTool,
-		ToolName:  "bash",
-		ToolArgs:  "go test ./...",
-		Content:   "ok      nekocode/bot/tools      0.123s\nok      nekocode/tui             0.089s",
-		Collapsed: false,
-		Done:      true,
-	}
-	return block.RenderTools([]block.ContentBlock{b}, width-10, &sty)
-}
-
-func renderBashLong() string {
-	b := block.ContentBlock{
-		Type:      block.BlockTool,
-		ToolName:  "bash",
-		ToolArgs:  "ls -la /tmp",
-		Content:   "total 128\ndrwxrwxrwt  20 root   root    4096 Jun 13 10:00 .\ndrwxr-xr-x  22 root   root    4096 Jun 10 08:30 ..\n-rw-r--r--   1 user   user    1234 Jun 13 09:45 log.txt\n-rw-r--r--   1 user   user    5678 Jun 13 09:46 data.csv\n-rw-r--r--   1 user   user    9012 Jun 13 09:47 output.json",
-		Collapsed: false,
-		Done:      true,
-	}
-	return block.RenderTools([]block.ContentBlock{b}, width-10, &sty)
-}
-
-func renderWriteBlock() string {
-	b := block.ContentBlock{
-		Type:      block.BlockTool,
-		ToolName:  "write",
-		ToolArgs:  "/tmp/nekocode/testing/report.json",
-		Content:   "(wrote 1234 bytes)",
-		Collapsed: false,
-		Done:      true,
-	}
-	return block.RenderTools([]block.ContentBlock{b}, width-10, &sty)
-}
-
-func renderReadCollapsed() string {
-	b := block.ContentBlock{
-		Type:      block.BlockTool,
-		ToolName:  "read",
-		ToolArgs:  "main.go 1-50",
-		Content:   "[main.go#A1B2]\n1:package main\n2:\n3:import (\n4:\t\"fmt\"\n5:\t\"os\"\n6:)\n7:\n8:func main() {\n9:\tfmt.Println(\"hello\")\n10:}",
-		Collapsed: true,
-		Done:      true,
-	}
-	return block.RenderTools([]block.ContentBlock{b}, width-10, &sty)
+func renderToolBlocks() string {
+	return block.RenderTools([]block.ContentBlock{
+		{
+			Type:      block.BlockTool,
+			ToolName:  "edit",
+			ToolArgs:  "tool_edit.go",
+			Content:   "[bot/tools/builtin/tool_edit.go#C5E8]\n 318:    fmt.Println(\"Alice active:\", alice.Active)\n-318:    fmt.Println(\"Alice active:\", alice.Active)\n+319:    fmt.Println(\"Alice active status:\", alice.Active)",
+			Collapsed: false,
+			Done:      true,
+		},
+		{
+			Type:      block.BlockTool,
+			ToolName:  "bash",
+			ToolArgs:  "go test ./...",
+			Content:   "ok      nekocode/bot/tools      0.123s\nok      nekocode/tui             0.089s",
+			Collapsed: false,
+			Done:      true,
+		},
+		{
+			Type:      block.BlockTool,
+			ToolName:  "write",
+			ToolArgs:  "/tmp/nekocode/testing/report.json",
+			Content:   "(wrote 1234 bytes)",
+			Collapsed: false,
+			Done:      true,
+		},
+		{
+			Type:      block.BlockTool,
+			ToolName:  "read",
+			ToolArgs:  "main.go 1-50",
+			Content:   "[main.go#A1B2]\n1:package main\n2:\n3:import (\n4:\t\"fmt\"\n5:\t\"os\"\n6:)\n7:\n8:func main() {\n9:\tfmt.Println(\"hello\")\n10:}",
+			Collapsed: true,
+			Done:      true,
+		},
+	}, width-10, &sty)
 }
 
 // ── ProcessingItem ──────────────────────────────────────────────────────────
+
+func renderProcessingStates() string {
+	return joinSnapshots(
+		renderProcessingIdle(),
+		renderProcessingActive(),
+		renderProcessingSubAgent(),
+	)
+}
 
 func renderProcessingActive() string {
 	p := processing.NewProcessingItem(&sty)

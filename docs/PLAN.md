@@ -126,7 +126,7 @@
 
 ### 73. Agent 模块清理 ✅
 - 删除 agent/log.go（日志统一到 debug 包）
-- 删除 agent/retry.go（重试逻辑内联到 reasoner.go）
+- 删除 agent/retry.go（重试逻辑内联到 reason.go）
 
 ### 74. ctxmgr 模块清理 ✅
 - 删除 context/meta.go（元数据格式化内联到 content.go）

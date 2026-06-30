@@ -87,30 +87,32 @@ nekocode/
 │   │   ├── extension_plugin.go     #     plugin.Manager 接线 + /plugin 命令转发
 │   │   ├── extension_skill.go      #     skill.Manager 接线
 │   │   ├── extension_mcp.go        #     MCP server 启停 + 工具注册
-│   │   ├── extension_management.go #     Skill/Plugin/MCP 管理视图
 │   │   ├── facade_callback.go      #     前端回调接线
+│   │   ├── facade_extension.go     #     Skill/Plugin/MCP facade + command adapter
 │   │   ├── facade_session.go       #     session.Manager 接线
 │   │   ├── facade_subagent.go      #     task tool 到 subagent engine 接线
-│   │   ├── skill_commands.go       #     command.SkillProvider adapter
-│   │   ├── session.go              #     session.Manager 接线 + Session API/命令转发
-│   │   ├── task.go                 #     子 Agent 任务接线
-│   │   └── state.go                #     API 状态辅助
+│   │   ├── extension_mcp.go        #     MCP server/tool 接线
+│   │   └── extension_plugin.go     #     plugin lifecycle + plugin command
 │   ├── agent/                      #   Agent 循环
 │   │   ├── runtime/                #     Agent 运行时核心
 │   │   │   ├── agent.go            #       Agent 结构体 + New()
-│   │   │   ├── run.go              #       Run() 主循环，阅读入口
-│   │   │   ├── run_turn.go         #       单轮准备、Reason 后分支、文本完成
-│   │   │   ├── run_hints.go        #       hint 注入 + steering drain
-│   │   │   ├── run_exec.go         #       工具执行主流程 + PostTool hooks
-│   │   │   ├── run_exec_filter.go  #       工具调用过滤（配额 + PreToolUse hooks）
-│   │   │   ├── run_exec_results.go #       工具结果合并
-│   │   │   ├── run_exec_subagent.go#       子 Agent 回调准备
-│   │   │   ├── run_postturn.go     #       PostTurn hooks 评估
-│   │   │   ├── reasoner.go         #       Reason() + LLM call + retry + 格式检测
-│   │   │   ├── synthesize.go       #       forceSynthesize 兜底总结
-│   │   │   ├── gate.go             #       ResponseGate（治理重试限制）
-│   │   │   ├── subslot.go          #       子 Agent 并发槽位
-│   │   │   └── messages.go         #       runtime 文案常量
+│   │   │   ├── agent_api.go        #       callbacks/hooks/tokens/tool state 接线 API
+│   │   │   ├── run_loop.go         #       Run() 主循环，阅读入口
+│   │   │   ├── turn.go             #       单轮准备、Reason 后分支、文本完成
+│   │   │   ├── reason.go           #       Reason() + LLM call + retry + 格式检测
+│   │   │   ├── tool_pipeline.go    #       工具执行主流程 + PostTool hooks
+│   │   │   ├── tool_filter.go      #       工具调用过滤（配额 + PreToolUse hooks）
+│   │   │   ├── tool_results.go     #       工具结果合并
+│   │   │   ├── tool_subagents.go   #       子 Agent 回调准备
+│   │   │   ├── postturn_hooks.go   #       PostTurn hooks 评估
+│   │   │   ├── hints.go            #       hint 注入 + steering drain
+│   │   │   ├── final_synthesis.go  #       forceSynthesize 兜底总结
+│   │   │   ├── control/            #       ResponseGate（治理重试限制）
+│   │   │   ├── messages/           #       runtime 文案常量
+│   │   │   ├── reasoning/          #       LLM 响应分类 + garbled tool-call 检测
+│   │   │   ├── subagents/          #       子 Agent 并发槽位
+│   │   │   ├── toolflow/           #       工具调用/结果排序与回调转换
+│   │   │   └── toolpolicy/         #       工具目标路径 + edit anchor 策略
 │   │   ├── subagent/               #     子 Agent 系统
 │   │   │   ├── agents.go           #       内置 agent 类型定义（3 种：executor/verify/researcher）
 │   │   │   ├── agent_md.go         #       AgentMD 解析（Claude Code 格式）
@@ -127,8 +129,6 @@ nekocode/
 │   │   │       ├── executor.md     #         executor prompt
 │   │   │       ├── researcher.md   #         researcher prompt
 │   │   │       └── verify.md       #         verify prompt
-│   │   └── subslot/                #     子 Agent 并发槽位
-│   │       └── manager.go          #       Manager（8 槽位 + 颜色分配）
 │   ├── config/                     #   配置管理
 │   │   ├── config.go               #     Config + Load()
 │   │   └── view.go                 #     GUI/API 配置视图 DTO
@@ -498,9 +498,9 @@ Agent 循环硬限制：
 | 子包 | 职责 |
 |------|------|
 | `runtime/` | Agent 结构体 + `Run()` 主循环 + `Reason()` + 工具/文本分支 |
-| `runtime/run.go` | 主循环阅读入口：start → loop → stop evaluation → finish |
-| `runtime/run_turn.go` | 单轮执行：PreTurn → steering/interruption → Reason → tool/text branch |
-| `runtime/run_exec*.go` | 工具调用过滤、执行、结果合并、subagent 回调 |
+| `runtime/run_loop.go` | 主循环阅读入口：start → loop → stop evaluation → finish |
+| `runtime/turn.go` | 单轮执行：PreTurn → steering/interruption → Reason → tool/text branch |
+| `runtime/tool_*.go` | 工具调用过滤、执行、结果合并、subagent 回调 |
 | `policy/` | GovManager：整合 HookReg + Ledger + Exploration + Gate |
 | `policy/ledger/` | 工具执行账本：readFiles / modifiedFiles / blockedTools / verifications |
 | `budget/` | ExplorationTracker + ToolQuota |
@@ -732,7 +732,7 @@ PolicyExploreExhausted="policy:explore_exhausted"
 - Partial result 恢复（中断/错误时返回部分结果）
 - Metadata 追踪（totalTokens、toolUseCount、durationMs、cacheHitTokens、cacheMissTokens）
 - Phase 回调（cfg.OnPhase 通知阶段变化）
-- 子 Agent 并发通过 `subslot.Manager` 管理（最大 8 并发 + 颜色分配）
+- 子 Agent 并发通过 `runtime/subagents.SlotManager` 管理（最大 8 并发 + 颜色分配）
 
 ### AgentMD 解析
 
@@ -751,7 +751,7 @@ PolicyExploreExhausted="policy:explore_exhausted"
 
 ### ResponseGate（响应门控）
 
-`bot/agent/runtime/gate.go`：防止治理内部信号泄漏到模型可见输出。默认最多 2 次重试。
+`bot/agent/runtime/control/response_gate.go`：防止治理内部信号泄漏到模型可见输出。默认最多 2 次重试。
 
 ### 工具语义分类
 
@@ -781,10 +781,11 @@ Model
 | Agent 循环 | `bot/agent/runtime/` | Reason→Execute→Feedback，中断，重试 |
 | 治理系统 | `bot/policy/` | Manager：HookReg + Ledger + Exploration |
 | 工具账本 | `bot/policy/ledger/` | 工具执行追踪（读/写/阻止/错误/验证） |
-| 响应门控 | `bot/agent/runtime/gate.go` | 治理重试限制（内联于 runtime） |
-| 推理格式 | `bot/agent/runtime/reasoner.go` | GarbledToolCall 检测（内联于 runtime） |
+| 响应门控 | `bot/agent/runtime/control/response_gate.go` | 治理重试限制 |
+| 推理格式 | `bot/agent/runtime/reasoning/` | LLM 响应分类 + GarbledToolCall 检测 |
+| 工具策略 | `bot/agent/runtime/toolpolicy/` | 工具目标路径 + edit anchor 纯策略 |
 | 子 Agent | `bot/agent/subagent/` | 独立循环，3 种内置类型 + 插件扩展 |
-| 子槽位 | `bot/agent/runtime/subslot.go` | 并发控制（8 槽位 + 颜色，内联于 runtime） |
+| 子槽位 | `bot/agent/runtime/subagents/slots.go` | 并发控制（8 槽位 + 颜色） |
 | 预算配额 | `bot/policy/budget/` | 探索检测 + 工具配额 |
 | LLM 网关 | `llm/` | OpenAI/Anthropic 双协议，统一接口 |
 | 工具系统 | `bot/tools/` | Tool 接口 + Executor + Registry + FileCache |

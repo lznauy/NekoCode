@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"nekocode/bot/agent/runtime/control"
+	"nekocode/bot/agent/runtime/subagents"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/debug"
 	"nekocode/bot/hooks"
@@ -22,14 +24,7 @@ type ReasoningCallback func(delta string)
 const steeringChBuffer = 4
 
 type Agent struct {
-	agentLifecycle
-	agentDeps
-	agentCallbacks
-	tokenCounters
-	turnState
-}
-
-type agentLifecycle struct {
+	// Lifecycle.
 	liveMu    sync.Mutex
 	parentCtx context.Context
 	curCtx    context.Context
@@ -37,32 +32,28 @@ type agentLifecycle struct {
 	steering  chan string
 	startTime time.Time
 	finished  atomic.Bool
-}
 
-type agentDeps struct {
+	// Dependencies.
 	ctxMgr       *ctxmgr.Manager
 	llmClient    types.LLM
 	toolRegistry *tools.Registry
 	executor     *tools.Executor
-	subSlotMgr   *subSlotManager
+	subSlotMgr   *subagents.SlotManager
 	gov          *aggov.Manager
-}
 
-type agentCallbacks struct {
+	// Callbacks.
 	phase      common.PhaseFunc
 	textFn     StreamCallback
 	reasonFn   ReasoningCallback
 	lastReason string
-}
 
-type tokenCounters struct {
+	// Token accounting.
 	promptTok  atomic.Int64
 	complTok   atomic.Int64
 	promptSnap int64
 	complSnap  int64
-}
 
-type turnState struct {
+	// Current run state.
 	step       int
 	stopReason hooks.StopReason
 	lastText   string
@@ -71,28 +62,22 @@ type turnState struct {
 	consecutiveHints    int
 	consecutiveFailures int
 	pendingHints        []hooks.Hint
-	gate                *responseGate
+	gate                *control.ResponseGate
 }
 
 func New(ctx context.Context, ctxMgr *ctxmgr.Manager, llmClient types.LLM, toolRegistry *tools.Registry) *Agent {
 	agentCtx, cancel := context.WithCancel(ctx)
 	return &Agent{
-		agentLifecycle: agentLifecycle{
-			parentCtx: ctx,
-			curCtx:    agentCtx,
-			cancelFn:  cancel,
-			steering:  make(chan string, steeringChBuffer),
-		},
-		agentDeps: agentDeps{
-			ctxMgr:       ctxMgr,
-			llmClient:    llmClient,
-			toolRegistry: toolRegistry,
-			executor:     tools.NewExecutor(toolRegistry),
-			subSlotMgr:   newSubSlotManager(),
-		},
-		turnState: turnState{
-			gate: newResponseGate(),
-		},
+		parentCtx:    ctx,
+		curCtx:       agentCtx,
+		cancelFn:     cancel,
+		steering:     make(chan string, steeringChBuffer),
+		ctxMgr:       ctxMgr,
+		llmClient:    llmClient,
+		toolRegistry: toolRegistry,
+		executor:     tools.NewExecutor(toolRegistry),
+		subSlotMgr:   subagents.NewSlotManager(),
+		gate:         control.NewResponseGate(),
 	}
 }
 

@@ -4,10 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"nekocode/bot/agent/runtime"
 	"nekocode/bot/command"
 	ctxmgr "nekocode/bot/contextmgr"
-	"nekocode/bot/extension/skill"
 	"nekocode/bot/session"
 	"nekocode/common"
 )
@@ -18,52 +16,39 @@ type sessionFacade struct {
 }
 
 type sessionDeps struct {
-	CWD       string
-	CtxMgr    *ctxmgr.Manager
-	GetAgent  func() *runtime.Agent
-	GetSkills func() *skill.Manager
+	CWD             string
+	CtxMgr          *ctxmgr.Manager
+	TokenUsage      func() (int, int)
+	AddTokens       func(prompt, completion int)
+	LoadedSkills    func() map[string]bool
+	MarkSkillLoaded func(name string)
 }
 
-func (s *sessionFacade) Init(d sessionDeps) {
+func newSessionFacade(d sessionDeps) *sessionFacade {
+	s := &sessionFacade{}
 	s.mgr = session.NewManager(session.ManagerOptions{
 		CWD:     d.CWD,
 		Context: d.CtxMgr,
 		TokenUsage: func() (int, int) {
-			if d.GetAgent == nil {
+			if d.TokenUsage == nil {
 				return 0, 0
 			}
-			ag := d.GetAgent()
-			if ag == nil {
-				return 0, 0
-			}
-			return ag.TokenUsage()
+			return d.TokenUsage()
 		},
 		AddTokens: func(prompt, completion int) {
-			if d.GetAgent == nil {
-				return
-			}
-			ag := d.GetAgent()
-			if ag != nil {
-				ag.AddTokens(prompt, completion)
+			if d.AddTokens != nil {
+				d.AddTokens(prompt, completion)
 			}
 		},
 		LoadedSkills: func() map[string]bool {
-			if d.GetSkills == nil {
+			if d.LoadedSkills == nil {
 				return nil
 			}
-			sk := d.GetSkills()
-			if sk == nil {
-				return nil
-			}
-			return sk.LoadedSet()
+			return d.LoadedSkills()
 		},
 		MarkSkillLoaded: func(name string) {
-			if d.GetSkills == nil {
-				return
-			}
-			sk := d.GetSkills()
-			if sk != nil {
-				sk.MarkLoaded(name)
+			if d.MarkSkillLoaded != nil {
+				d.MarkSkillLoaded(name)
 			}
 		},
 	})
@@ -71,6 +56,7 @@ func (s *sessionFacade) Init(d sessionDeps) {
 	if err := s.mgr.Init(); err != nil {
 		fmt.Fprintf(os.Stderr, "session: %v — running without session persistence\n", err)
 	}
+	return s
 }
 
 func (s *sessionFacade) RegisterCommands(p *command.Parser) {
@@ -118,4 +104,45 @@ func (s *sessionFacade) Set(sess *session.Snapshot) { s.mgr.Set(sess) }
 func (s *sessionFacade) ClearContext()              { s.mgr.ClearContext() }
 func (s *sessionFacade) DisplayMessages() []common.DisplayMessage {
 	return s.mgr.DisplayMessages()
+}
+
+func (b *Bot) CWD() string                       { return b.sess.CWD() }
+func (b *Bot) CurrentSessionID() string          { return b.sess.CurrentID() }
+func (b *Bot) SetSession(sess *session.Snapshot) { b.sess.Set(sess) }
+func (b *Bot) ClearContext()                     { b.sess.ClearContext() }
+func (b *Bot) SessionMessages() []common.DisplayMessage {
+	return b.sess.DisplayMessages()
+}
+
+func (b *Bot) ResumeSession(id string) error { return b.sess.Resume(id) }
+
+func (b *Bot) initSession() {
+	b.sess = newSessionFacade(sessionDeps{
+		CWD:    b.cwd,
+		CtxMgr: b.ctxMgr,
+		TokenUsage: func() (int, int) {
+			ag := b.getAgent()
+			if ag == nil {
+				return 0, 0
+			}
+			return ag.TokenUsage()
+		},
+		AddTokens: func(prompt, completion int) {
+			ag := b.getAgent()
+			if ag != nil {
+				ag.AddTokens(prompt, completion)
+			}
+		},
+		LoadedSkills: func() map[string]bool {
+			if b.ext == nil || b.ext.skills == nil {
+				return nil
+			}
+			return b.ext.skills.LoadedSet()
+		},
+		MarkSkillLoaded: func(name string) {
+			if b.ext != nil && b.ext.skills != nil {
+				b.ext.skills.MarkLoaded(name)
+			}
+		},
+	})
 }

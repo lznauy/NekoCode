@@ -4,71 +4,48 @@ import (
 	"sync"
 
 	"nekocode/bot/agent/runtime"
-	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/extension/plugin"
-	"nekocode/bot/tools"
 	"nekocode/common"
 )
 
 type callbackBus struct {
-	confirmFn common.ConfirmFunc
-	phaseFn   common.PhaseFunc
-	todoFn    common.TodoFunc
-	notifyFn  func(string)
-	confirmCh chan common.ConfirmRequest
+	confirmFn  common.ConfirmFunc
+	phaseFn    common.PhaseFunc
+	todoFn     common.TodoFunc
+	notifyFn   func(string)
+	confirmCh  chan common.ConfirmRequest
+	questionFn common.QuestionFunc
 
 	confirmMu      sync.Mutex
 	pendingConfirm bool
-
-	toolRegistry *tools.Registry
-	ctxMgr       *ctxmgr.Manager
-	getAgent     func() *runtime.Agent
-}
-
-type callbackDeps struct {
-	ToolRegistry *tools.Registry
-	CtxMgr       *ctxmgr.Manager
-	GetAgent     func() *runtime.Agent
-}
-
-func (c *callbackBus) Init(d callbackDeps) {
-	c.toolRegistry = d.ToolRegistry
-	c.ctxMgr = d.CtxMgr
-	c.getAgent = d.GetAgent
 }
 
 func (c *callbackBus) Configure(confirmFn common.ConfirmFunc, phaseFn common.PhaseFunc, todoFn common.TodoFunc, notifyFn func(string), confirmCh chan common.ConfirmRequest, questionFn common.QuestionFunc) {
-	c.configureCallbacks(confirmFn, phaseFn, todoFn, notifyFn, confirmCh)
-	c.setQuestionFunc(questionFn)
-}
-
-func (c *callbackBus) configureCallbacks(confirmFn common.ConfirmFunc, phaseFn common.PhaseFunc, todoFn common.TodoFunc, notifyFn func(string), confirmCh chan common.ConfirmRequest) {
 	c.confirmFn = confirmFn
 	c.phaseFn = phaseFn
 	c.todoFn = todoFn
 	c.notifyFn = notifyFn
 	c.confirmCh = confirmCh
-	c.applyAgentCallbacks()
+	c.questionFn = questionFn
 }
 
-func (c *callbackBus) setQuestionFunc(fn common.QuestionFunc) {
-	if c.toolRegistry == nil {
+func (c *callbackBus) applyAgentControlCallbacksTo(ag *runtime.Agent) {
+	if ag == nil {
 		return
 	}
-	t, err := c.toolRegistry.Get("question")
-	if err != nil {
-		return
-	}
-	if qt, ok := t.(interface{ SetQuestionFunc(common.QuestionFunc) }); ok {
-		qt.SetQuestionFunc(fn)
+	ag.SetConfirmFn(c.confirmFn)
+	ag.SetPhaseFn(c.phaseFn)
+}
+
+func (c *callbackBus) todoWriter() func([]common.TodoItem) {
+	return func(items []common.TodoItem) {
+		if c.todoFn != nil {
+			c.todoFn(items)
+		}
 	}
 }
 
-func (c *callbackBus) SetCallbacks(textFn, reasonFn func(string)) {
-	if c.getAgent == nil {
-		return
-	}
-	ag := c.getAgent()
+func setAgentStreams(ag *runtime.Agent, textFn, reasonFn func(string)) {
 	if ag == nil {
 		return
 	}
@@ -78,30 +55,6 @@ func (c *callbackBus) SetCallbacks(textFn, reasonFn func(string)) {
 	if reasonFn != nil {
 		ag.SetReasoningStreamFn(reasonFn)
 	}
-}
-
-func (c *callbackBus) applyAgentCallbacks() {
-	if c.getAgent == nil {
-		return
-	}
-	ag := c.getAgent()
-	c.applyAgentCallbacksTo(ag)
-}
-
-func (c *callbackBus) applyAgentCallbacksTo(ag *runtime.Agent) {
-	if ag == nil {
-		return
-	}
-	ag.SetConfirmFn(c.confirmFn)
-	ag.SetPhaseFn(c.phaseFn)
-	ag.WireTodoWrite(func(items []common.TodoItem) {
-		if c.ctxMgr != nil {
-			c.ctxMgr.SetTodos(items)
-		}
-		if c.todoFn != nil {
-			c.todoFn(items)
-		}
-	})
 }
 
 func (c *callbackBus) pendingConfirmation() bool {
@@ -147,4 +100,13 @@ func (c *callbackBus) InstallCallbacks() plugin.InstallCallbacks {
 		SetPending: c.setPendingConfirmation,
 		Unblock:    c.UnblockConfirm,
 	}
+}
+
+func (b *Bot) Configure(confirmFn common.ConfirmFunc, phaseFn common.PhaseFunc, todoFn common.TodoFunc, notifyFn func(string), confirmCh chan common.ConfirmRequest, questionFn common.QuestionFunc) {
+	b.cb.Configure(confirmFn, phaseFn, todoFn, notifyFn, confirmCh, questionFn)
+	b.applyCallbacks()
+}
+
+func (b *Bot) SetCallbacks(textFn, reasonFn func(string)) {
+	setAgentStreams(b.getAgent(), textFn, reasonFn)
 }

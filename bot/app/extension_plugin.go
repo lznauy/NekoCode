@@ -29,14 +29,14 @@ func (e *extensionFacade) InitPlugins() {
 	e.plugins.LoadAll()
 }
 
-func (e *extensionFacade) RegisterPluginCommands(p *command.Parser) {
+func (e *extensionFacade) RegisterPluginCommands(p *command.Parser, callbacks plugin.InstallCallbacks) {
 	p.Register("plugin", func(cmd *command.Command) (string, bool) {
 		if len(cmd.Args) == 0 {
 			return plugin.Usage(), true
 		}
 		switch cmd.Args[0] {
 		case "install":
-			return e.plugins.Install(cmd.Args[1:], e.cb.InstallCallbacks()), true
+			return e.plugins.Install(cmd.Args[1:], callbacks), true
 		case "uninstall":
 			return e.plugins.Uninstall(cmd.Args[1:]), true
 		case "list":
