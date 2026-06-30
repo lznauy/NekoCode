@@ -2,15 +2,15 @@ package builtin
 
 // FinalCheckHook enforces honesty of the agent's final answer against the
 // ledger execution record. It replaces the former parallel applyFinalCheck
-// path, unifying final-answer governance into the hook system.
+// path, unifying final-answer policy into the hook system.
 //
 // Three rules (checked in priority order):
 //  1. missing_verification:    non-doc files modified, no passing verification,
-//                              and answer does not disclose "未验证".
+//     and answer does not disclose "未验证".
 //  2. unsupported_test_claim:  answer claims tests passed, but ledger has no
-//                              passing verification record.
+//     passing verification record.
 //  3. unreported_tool_error:   tool errors exist, answer claims completion
-//                              without mentioning any failure.
+//     without mentioning any failure.
 func FinalCheckHook() Hook {
 	return Hook{
 		Name:  "final_check",

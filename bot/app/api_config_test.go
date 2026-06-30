@@ -13,7 +13,7 @@ func TestApplyConfigReturnsWithoutSelfDeadlock(t *testing.T) {
 	b := New()
 	done := make(chan error, 1)
 	go func() {
-		_, err := b.ApplyConfig(config.NewSnapshot(config.Default))
+		_, err := b.ApplyConfig(config.NewView(config.Default))
 		done <- err
 	}()
 

@@ -4,19 +4,19 @@ import (
 	"nekocode/bot/config"
 )
 
-func (b *Bot) ConfigSnapshot() config.Snapshot {
+func (b *Bot) ConfigView() config.View {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return config.NewSnapshot(*b.cfg)
+	return config.NewView(*b.cfg)
 }
 
-func (b *Bot) ApplyConfig(snapshot config.Snapshot) (config.Snapshot, error) {
-	next := snapshot.Config()
+func (b *Bot) ApplyConfig(view config.View) (config.View, error) {
+	next := view.Config()
 	if err := config.Validate(&next); err != nil {
-		return config.Snapshot{}, err
+		return config.View{}, err
 	}
 	if err := config.Save(next); err != nil {
-		return config.Snapshot{}, err
+		return config.View{}, err
 	}
 
 	b.mu.Lock()
@@ -29,7 +29,7 @@ func (b *Bot) ApplyConfig(snapshot config.Snapshot) (config.Snapshot, error) {
 
 	go b.reloadRuntime(oldPrompt, oldCompl)
 
-	return config.NewSnapshot(next), nil
+	return config.NewView(next), nil
 }
 
 func (b *Bot) reloadRuntime(oldPrompt, oldCompl int) {

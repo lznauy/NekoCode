@@ -3,7 +3,7 @@ package builtin
 import (
 	"fmt"
 
-	"nekocode/bot/governance"
+	"nekocode/bot/policy/semantics"
 )
 
 func ExplorationExhaustedHook() Hook {
@@ -64,7 +64,7 @@ func isExploratoryCall(name string, args map[string]any) bool {
 			return true
 		}
 	}
-	return governance.ClassifyToolCall(name, args).Exploratory
+	return semantics.ClassifyToolCall(name, args).Exploratory
 }
 
 func ExploreCascadeHook() Hook {

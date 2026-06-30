@@ -1,11 +1,11 @@
 import { useCallback } from 'react'
 import { cn } from '../lib/classnames'
-import type { SkillSnapshot } from '../types/skills'
+import type { SkillView } from '../types/skills'
 
 interface InputBarProps {
   text: string
   busy: boolean
-  skills?: SkillSnapshot[]
+  skills?: SkillView[]
   selectedSkill?: string
   textareaRef: React.RefObject<HTMLTextAreaElement>
   onChange: (text: string) => void

@@ -110,4 +110,47 @@ describe('useSessions', () => {
       isError: true,
     })
   })
+
+  it('loads edit and bash blocks expanded while keeping write collapsed', async () => {
+    mockSafeListSessions.mockResolvedValueOnce([meta('one')])
+    mockSafeLoadSession.mockResolvedValueOnce([
+      {
+        Role: 'assistant',
+        Content: '',
+        Blocks: [
+          {
+            ToolName: 'edit',
+            Args: '{"file_path":"/repo/app.ts"}',
+            Content: 'diff',
+            IsError: false,
+          },
+          {
+            ToolName: 'bash',
+            Args: '{"command":"npm test"}',
+            Content: 'ok',
+            IsError: false,
+          },
+          {
+            ToolName: 'write',
+            Args: '{"file_path":"/repo/out.txt"}',
+            Content: 'written',
+            IsError: false,
+          },
+        ],
+        Images: null,
+      },
+    ])
+    const { result } = renderHook(() => useSessions())
+
+    await waitFor(() => expect(result.current.currentId).toBe('one'))
+
+    const loaded = await act(async () => result.current.switchSession('one'))
+    const steps = loaded?.[0].steps ?? []
+
+    expect(steps.map((s) => ({ toolName: s.toolName, collapsed: s.collapsed }))).toEqual([
+      { toolName: 'edit', collapsed: false },
+      { toolName: 'bash', collapsed: false },
+      { toolName: 'write', collapsed: true },
+    ])
+  })
 })

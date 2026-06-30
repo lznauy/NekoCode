@@ -5,10 +5,11 @@ import (
 	"net/http"
 	"time"
 
+	"nekocode/bot/tools/editcore"
+	"nekocode/bot/tools/execution"
 	"nekocode/bot/tools/netclient"
 	"nekocode/bot/tools/pathutil"
 	"nekocode/bot/tools/semantics"
-	"nekocode/bot/tools/snapshots"
 	"nekocode/bot/tools/textutil"
 )
 
@@ -37,9 +38,16 @@ func IsAllExploratory(calls []ToolCallItem) bool {
 }
 
 func RecordSnapshot(path, content string) string {
-	return snapshots.Record(GetGlobalSnapshotStore(), path, content)
+	return recordSnapshot(GetGlobalSnapshotStore(), path, content)
 }
 
 func RecordSnapshotInContext(ctx context.Context, path, content string) string {
-	return snapshots.RecordInContext(ctx, path, content)
+	return recordSnapshot(execution.SnapshotStoreFromContext(ctx), path, content)
+}
+
+func recordSnapshot(store *editcore.SnapshotStore, path, content string) string {
+	if store == nil {
+		return ""
+	}
+	return store.Record(path, content)
 }

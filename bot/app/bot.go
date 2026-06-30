@@ -10,7 +10,7 @@ import (
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/hooks"
 	"nekocode/bot/index/service"
-	"nekocode/bot/prompt"
+	systemprompt "nekocode/bot/prompt/system"
 	"nekocode/bot/tools"
 )
 
@@ -25,15 +25,14 @@ type Bot struct {
 }
 
 type botCore struct {
-	cfg                 *config.Config
-	ctxMgr              *ctxmgr.Manager
-	cmdParser           *command.Parser
-	skillState          *command.SkillState
-	promptBuilder       *prompt.Builder
-	projCtx             string
-	indexMgr            *service.Manager
-	cwd                 string
-	lastGuardrailWarned int
+	cfg           *config.Config
+	ctxMgr        *ctxmgr.Manager
+	cmdParser     *command.Parser
+	skillState    *command.SkillState
+	promptBuilder *systemprompt.Builder
+	projCtx       string
+	indexMgr      *service.Manager
+	cwd           string
 }
 
 type botRuntime struct {
@@ -81,7 +80,6 @@ func (b *Bot) reinit() {
 		ToolRegistry:  b.toolRegistry,
 		HookReg:       b.hookReg,
 		ContextWindow: b.cfg.ContextWindow,
-		CmdParser:     b.cmdParser,
 		Callbacks:     b.cb,
 	})
 	b.subWiring = &subagentWiring{}

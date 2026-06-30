@@ -1,10 +1,10 @@
 package runtime
 
 import (
-	aggov "nekocode/bot/agent/governance"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/hooks"
 	"nekocode/bot/llm/types"
+	aggov "nekocode/bot/policy"
 	"nekocode/bot/tools"
 )
 

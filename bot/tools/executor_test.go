@@ -111,6 +111,6 @@ func TestExecutorDoesNotOwnReadBeforeWriteGovernance(t *testing.T) {
 		{ID: "1", Name: "write", Args: map[string]any{"path": "existing.go"}},
 	})
 	if results[0].Error != "" {
-		t.Errorf("executor should not apply read-before-write governance: %s", results[0].Error)
+		t.Errorf("executor should not apply read-before-write policy: %s", results[0].Error)
 	}
 }

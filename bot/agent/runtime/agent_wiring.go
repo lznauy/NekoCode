@@ -1,14 +1,13 @@
 package runtime
 
 import (
-	aggov "nekocode/bot/agent/governance"
 	"nekocode/bot/hooks"
+	aggov "nekocode/bot/policy"
 	"nekocode/bot/tools"
 
 	"nekocode/common"
 )
 
-func (a *Agent) SetContextTransform(fn ContextTransform)   { a.transform = fn }
 func (a *Agent) SetStreamFn(fn StreamCallback)             { a.textFn = fn }
 func (a *Agent) SetReasoningStreamFn(fn ReasoningCallback) { a.reasonFn = fn }
 

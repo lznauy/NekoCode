@@ -6,8 +6,7 @@ import (
 
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/hooks"
-	"nekocode/bot/prompt"
-	"nekocode/bot/skillview"
+	"nekocode/bot/prompt/planmode"
 	"nekocode/bot/tools"
 	"nekocode/common"
 )
@@ -22,7 +21,18 @@ type SkillState struct {
 
 type PlanModeController interface {
 	SetPlanMode(bool)
-	GovernanceLine() string
+}
+
+type SkillCommand struct {
+	Name    string
+	Context string
+}
+
+type SkillProvider interface {
+	ListForCommands() []SkillCommand
+	GetForCommand(name string) (SkillCommand, bool)
+	MarkLoaded(name string)
+	ClearLoaded()
 }
 
 type skillLoadCallbackTool interface {
@@ -33,7 +43,7 @@ type skillLoadCallbackTool interface {
 type Deps struct {
 	CtxMgr        *ctxmgr.Manager
 	Ag            func() PlanModeController // dynamic: returns current agent
-	Skills        skillview.Provider
+	Skills        SkillProvider
 	ToolRegistry  *tools.Registry
 	ContextWindow int
 	GetConfigFn   func() (provider, model string)           // dynamic config for /config and /model
@@ -52,7 +62,7 @@ func RegisterAll(p *Parser, deps Deps, st *SkillState) {
 			return "Usage: /plan <task>", true
 		}
 		deps.Ag().SetPlanMode(true)
-		deps.CtxMgr.SetSystemPrompt(prompt.PlanModePrompt(strings.Join(cmd.Args, " ")))
+		deps.CtxMgr.SetSystemPrompt(planmode.Prompt(strings.Join(cmd.Args, " ")))
 		deps.CtxMgr.Add("user", strings.Join(cmd.Args, " "))
 		st.WantsAgent = true
 		return "", false
@@ -149,7 +159,7 @@ func ContextReport(ctxMgr *ctxmgr.Manager, toolDescs []tools.Descriptor) string 
 }
 
 // ForceFreshStart archives current conversation and starts a new session.
-func ForceFreshStart(ctxMgr *ctxmgr.Manager, skills skillview.Provider, hookReg *hooks.Registry) (string, error) {
+func ForceFreshStart(ctxMgr *ctxmgr.Manager, skills SkillProvider, hookReg *hooks.Registry) (string, error) {
 	count, oldTokens, _ := ctxMgr.Stats()
 	skills.ClearLoaded()
 	// Reset hook session state so guards like completionQualityHook

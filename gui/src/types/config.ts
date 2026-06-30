@@ -24,7 +24,7 @@ export interface MCPServerConfig {
   enabled: boolean
 }
 
-export interface ConfigSnapshot {
+export interface ConfigView {
   path: string
   exists: boolean
   active: string

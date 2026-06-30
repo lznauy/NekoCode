@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"nekocode/bot/debug"
-	"nekocode/bot/governance"
 	"nekocode/bot/hooks"
 	"nekocode/bot/tools"
 )
@@ -22,17 +21,6 @@ func (a *Agent) filterToolCalls(calls []tools.ToolCallItem, state *stepState) fi
 		blocked: make(map[int]string),
 	}
 	for i, c := range calls {
-		if msg := a.preEditBlockReason(c); msg != "" {
-			out.blocked[i] = msg
-			out.preToolHints = append(out.preToolHints, &hooks.Hint{
-				Type:     "pre_edit_guard",
-				Severity: "warning",
-				Content:  msg,
-			})
-			debug.Log("pre-edit guard: blocked %s — %s", c.Name, msg)
-			continue
-		}
-
 		if err := state.quota.ConsumeCall(c.Name, c.Args); err != nil {
 			out.blocked[i] = err.Error()
 			debug.Log("quota: blocked %s — %v", c.Name, err)
@@ -52,6 +40,7 @@ func (a *Agent) applyPreToolPolicy(c tools.ToolCallItem, blocked map[int]string,
 	if a.gov == nil || a.gov.HookReg == nil {
 		return false
 	}
+	a.preparePreToolHookState(c)
 	shouldBlock := false
 	for _, r := range a.gov.HookReg.Evaluate(hooks.PreToolUse, c.Name, false, c.Args) {
 		if r.Hint != nil {
@@ -87,30 +76,23 @@ func emitToolStartCallbacks(calls []tools.ToolCallItem, blocked map[int]string, 
 	}
 }
 
-// -- pre-edit guard ---------------------------------------------------------
-
-func (a *Agent) preEditBlockReason(tc tools.ToolCallItem) string {
+func (a *Agent) preparePreToolHookState(tc tools.ToolCallItem) {
 	if a.gov == nil || a.gov.Ledger == nil {
-		return ""
-	}
-	if tc.Name != "edit" && tc.Name != "write" {
-		return ""
+		return
 	}
 	targetPath := extractTargetPath(tc.Name, tc.Args)
-	if targetPath == "" || a.gov.Ledger.WasRead(targetPath) {
-		return ""
+	a.gov.HookReg.SetStr(hooks.StoreEditTargetPath, targetPath)
+	a.gov.HookReg.Set(hooks.StoreEditTargetWasRead, boolStore(targetPath != "" && a.gov.Ledger.WasRead(targetPath)))
+	a.gov.HookReg.Set(hooks.StoreEditAnchorSufficient, boolStore(tc.Name == "edit" && hasSufficientEditAnchor(tc.Args)))
+	exists := false
+	if targetPath != "" {
+		if resolved, err := tools.ValidatePath(targetPath); err == nil {
+			if _, err := os.Stat(resolved); err == nil {
+				exists = true
+			}
+		}
 	}
-	if tc.Name == "edit" && hasSufficientEditAnchor(tc.Args) {
-		return ""
-	}
-	resolved, err := tools.ValidatePath(targetPath)
-	if err != nil {
-		return ""
-	}
-	if _, err := os.Stat(resolved); err != nil {
-		return ""
-	}
-	return governance.ReadBeforeWriteWarning(targetPath)
+	a.gov.HookReg.Set(hooks.StoreEditTargetExists, boolStore(exists))
 }
 
 func hasSufficientEditAnchor(args map[string]any) bool {

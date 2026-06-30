@@ -16,5 +16,5 @@ Default behavior:
 Prefer copying enough unchanged context into oldString to make the match unique. Do not use line numbers, read windows, revision tags, or structured edit intents.
 
 Constraints:
-- edit/write before Read: the governance layer tracks reads and warns if a file is written without prior Read. Always Read the file first to confirm current content before editing.
+- edit/write before Read: the policy layer tracks reads and warns if a file is written without prior Read. Always Read the file first to confirm current content before editing.
 - Snapshot: edit keeps only one latest pre-edit snapshot per file. Repeated revert restores this same snapshot until another edit records a new one.

@@ -76,12 +76,6 @@ export function ContextPanel({ open, snapshot, loading, onClose }: ContextPanelP
                 <Metric label="子代理" value={`${snapshot.subCount}`} detail={formatTokens(snapshot.subTokens)} />
               </section>
 
-              {snapshot.governance && (
-                <section className="rounded-md border border-border/50 bg-surface px-4 py-3">
-                  <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-text-3">Governance</div>
-                  <p className="text-[12px] leading-relaxed text-text-2">{snapshot.governance}</p>
-                </section>
-              )}
             </div>
           ) : (
             <div className="rounded-md border border-border/45 bg-surface px-4 py-3 text-sm text-text-2">暂无上下文信息</div>

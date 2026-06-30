@@ -21,7 +21,7 @@ describe('useAutoScroll', () => {
     })
     // rAF1 ran → queued rAF2; need second advance
     act(() => { vi.advanceTimersByTime(50) })
-    expect(el.scrollTop).toBe(1000)
+    expect(el.scrollTop).toBe(800)
     vi.useRealTimers()
   })
 
@@ -69,7 +69,7 @@ describe('useAutoScroll', () => {
       vi.advanceTimersByTime(50)
       vi.advanceTimersByTime(50)
     })
-    expect(el.scrollTop).toBe(3000)
+    expect(el.scrollTop).toBe(2800)
     vi.useRealTimers()
   })
 })

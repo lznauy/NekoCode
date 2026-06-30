@@ -7,7 +7,9 @@ import (
 	"strings"
 
 	"nekocode/bot/debug"
+	"nekocode/bot/hooks"
 	"nekocode/bot/llm"
+	"nekocode/bot/llm/types"
 	"nekocode/bot/tools"
 
 	"nekocode/common"
@@ -98,9 +100,7 @@ func (a *Agent) callLLMForTool() ([]tools.ToolCallItem, string, error) {
 
 	err := withRetry(a.getCtx(), func() error {
 		messages := a.ctxMgr.Build(true)
-		if a.transform != nil {
-			messages = a.transform(messages)
-		}
+		messages = a.applyPreModelRequestHooks(messages)
 
 		result, err := tools.CallLLM(a.llmClient, tools.LLMCallOptions{
 			Ctx:       a.getCtx(),
@@ -127,6 +127,37 @@ func (a *Agent) callLLMForTool() ([]tools.ToolCallItem, string, error) {
 	})
 
 	return items, textContent, err
+}
+
+func (a *Agent) applyPreModelRequestHooks(messages []types.Message) []types.Message {
+	if a.gov == nil || a.gov.HookReg == nil {
+		return messages
+	}
+	a.gov.HookReg.Set(hooks.StoreToolResultCount, countToolResults(messages))
+	var hints []hooks.Hint
+	for _, r := range a.gov.HookReg.Evaluate(hooks.PreModelRequest, "", false) {
+		if r.Hint != nil {
+			hints = append(hints, *r.Hint)
+		}
+	}
+	if len(hints) == 0 {
+		return messages
+	}
+	return append(messages, types.Message{
+		Role:    "system",
+		Content: hooks.FormatHints(hints),
+		Source:  "hook",
+	})
+}
+
+func countToolResults(messages []types.Message) int64 {
+	var count int64
+	for _, m := range messages {
+		if m.Role == "tool" {
+			count++
+		}
+	}
+	return count
 }
 
 // streamCallbacks returns the StreamCallbacks for the main agent.

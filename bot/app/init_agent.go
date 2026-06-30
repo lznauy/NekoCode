@@ -4,10 +4,7 @@ import (
 	"context"
 
 	"nekocode/bot/agent/runtime"
-	ctxmgr "nekocode/bot/contextmgr"
-	"nekocode/bot/governance"
 	"nekocode/bot/llm"
-	"nekocode/bot/llm/types"
 )
 
 func (b *Bot) initAgent() {
@@ -23,13 +20,6 @@ func (b *Bot) initAgent() {
 	b.ag = runtime.New(context.Background(), b.ctxMgr, llmClient, b.toolRegistry)
 	b.ag.SetHookRegistry(b.hookReg)
 	b.cb.applyAgentCallbacksTo(b.ag)
-
-	b.ag.SetContextTransform(func(msgs []types.Message) []types.Message {
-		return ctxmgr.ApplyToolResultGuardrail(msgs, ctxmgr.ToolResultGuardrailOptions{
-			LastWarned: &b.lastGuardrailWarned,
-			Warning:    governance.ToolResultWarning,
-		})
-	})
 
 	b.subWiring.WireTaskTool(fm)
 }

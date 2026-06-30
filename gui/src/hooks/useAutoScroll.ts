@@ -20,7 +20,7 @@ export function useAutoScroll(deps: DependencyList): UseAutoScrollReturn {
   const scrollToBottom = useCallback(() => {
     const el = containerRef.current
     if (!el) return
-    el.scrollTop = el.scrollHeight
+    el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight)
   }, [])
 
   // send 时强制滚动，独立于 deps effect 的 nearBottom 判断

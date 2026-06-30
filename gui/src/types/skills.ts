@@ -1,6 +1,6 @@
 export type SkillSourceKind = 'builtin' | 'local' | 'plugin'
 
-export interface SkillSnapshot {
+export interface SkillView {
   name: string
   description?: string
   dir?: string
@@ -11,7 +11,7 @@ export interface SkillSnapshot {
   plugin?: string
 }
 
-export interface PluginSnapshot {
+export interface PluginView {
   name: string
   version?: string
   description?: string
@@ -26,7 +26,7 @@ export interface PluginSnapshot {
   hasHooks?: boolean
 }
 
-export interface MCPServerSnapshot {
+export interface MCPServerView {
   name: string
   plugin: string
   command: string
@@ -38,8 +38,8 @@ export interface MCPServerSnapshot {
   toolCount?: number
 }
 
-export interface SkillManagementSnapshot {
-  skills: SkillSnapshot[]
-  plugins: PluginSnapshot[]
-  mcp: MCPServerSnapshot[]
+export interface SkillManagementView {
+  skills: SkillView[]
+  plugins: PluginView[]
+  mcp: MCPServerView[]
 }

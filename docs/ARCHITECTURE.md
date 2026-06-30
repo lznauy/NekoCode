@@ -19,12 +19,9 @@ bot/
 ├── contextmgr/          # 上下文、压缩、memory、token 统计
 ├── llm/                 # LLM 协议、客户端工厂、stream/http 类型
 ├── tools/               # 工具定义、注册、执行、执行状态、内置工具
-├── governance/          # 跨运行时治理语义和共享 guard 文案
-├── agent/governance/    # Agent 运行期治理状态、ledger、hook 桥接
-├── extension/           # plugin、skill、mcp 的底层扩展实现
-├── plugin/              # 插件管理门面：安装、启停、扩展加载
-├── skill/               # Skill 管理门面：加载、上下文刷新、skill tool 接线
-├── skillview/           # command/app 使用的 Skill 窄视图契约
+├── policy/              # 策略系统：manager、ledger、budget、tool semantics
+├── hooks/               # Hook 事件系统：内置策略与插件声明式 hooks
+├── extension/           # plugin、skill、mcp 扩展实现与管理
 ├── agent/subagent/      # 子 Agent 执行引擎
 ├── index/               # 代码索引服务和 project_info tool
 ├── command/             # slash command 注册和生命周期命令
@@ -37,13 +34,13 @@ bot/
 依赖规则：
 
 - `app` 是装配层，可以依赖各子系统；其他子系统不能依赖 `app`。
-- `agent/runtime` 只依赖 LLM、context、tools、hooks/governance 等运行时接口，不关心 plugin/skill/mcp 的安装和发现。
+- `agent/runtime` 只依赖 LLM、context、tools、policy/hooks 等运行时接口，不关心 plugin/skill/mcp 的安装和发现。
 - `tools` 只定义和执行工具，不反向依赖 agent 主循环或 `agent/subagent`；需要委托子 Agent 时通过 `TaskRunner` 接口接线，具体适配器放在 `app`。
-- `agent/subagent` 不能依赖 `agent/runtime`；共享治理提示放在 `bot/governance`。
+- `agent/subagent` 不能依赖 `agent/runtime`；共享策略通过 hooks/policy 接入。
 - `extension/*` 是底层实现；高层业务优先通过 `plugin.Manager`、`skill.Manager` 使用，避免绕过 manager 直接操作 registry。
 - `plugin` 只管理插件生命周期和扩展文件发现；agent 文件注册到 `agent/subagent` 由 `app` 注入回调完成。
 - `plugin` 不直接持有 MCP client；MCP server 启停和工具注册由 `app` 装配层通过回调处理。
-- `command` 只依赖 `skillview.Provider` 这类窄契约，不直接操作 `skill.Manager` 或具体 tool 类型。
+- `command` 自己定义 slash command 所需的窄契约；`app` 负责把 extension/skill manager 适配进去。
 - 无引用的 alias 包应删除；内部新代码应直接依赖真实实现包。
 
 ## 目录结构
@@ -75,15 +72,26 @@ nekocode/
 │   │   ├── bot.go                  #     Bot 结构体 + New() 初始化编排
 │   │   ├── api.go                  #     bot.UI 基础方法（Steer/Abort/ProviderModel/CommandNames/ExecuteCommand/SkillHint）
 │   │   ├── api_run.go              #     Run / Configure / 兼容 RunAgent
+│   │   ├── api_context.go          #     ContextStatus / ContextReport / ContextSnapshot
+│   │   ├── api_config.go           #     ConfigView / ApplyConfig
+│   │   ├── api_skills.go           #     Skill/Plugin/MCP 管理视图
+│   │   ├── api_skill_selection.go  #     GUI skill 选择
 │   │   ├── api_model.go            #     SwitchModel
 │   │   ├── api_stats.go            #     Stats
+│   │   ├── context_snapshot.go     #     Context GUI/API 视图 DTO 构建
 │   │   ├── init_agent.go           #     Agent 初始化
 │   │   ├── init_tools.go           #     ToolRegistry + Hooks 初始化
 │   │   ├── init_commands.go        #     Commands 初始化
 │   │   ├── context.go              #     Config / CtxMgr / 项目上下文 / 上下文守卫
-│   │   ├── plugin.go               #     plugin.Manager 接线 + /plugin 命令转发
-│   │   ├── plugin_agents.go        #     plugin agents/*.md 注册到 subagent
-│   │   ├── plugin_mcp.go           #     plugin MCP server 启停 + 工具注册
+│   │   ├── facade_extension.go     #     extension facade 核心依赖
+│   │   ├── extension_plugin.go     #     plugin.Manager 接线 + /plugin 命令转发
+│   │   ├── extension_skill.go      #     skill.Manager 接线
+│   │   ├── extension_mcp.go        #     MCP server 启停 + 工具注册
+│   │   ├── extension_management.go #     Skill/Plugin/MCP 管理视图
+│   │   ├── facade_callback.go      #     前端回调接线
+│   │   ├── facade_session.go       #     session.Manager 接线
+│   │   ├── facade_subagent.go      #     task tool 到 subagent engine 接线
+│   │   ├── skill_commands.go       #     command.SkillProvider adapter
 │   │   ├── session.go              #     session.Manager 接线 + Session API/命令转发
 │   │   ├── task.go                 #     子 Agent 任务接线
 │   │   └── state.go                #     API 状态辅助
@@ -103,15 +111,6 @@ nekocode/
 │   │   │   ├── gate.go             #       ResponseGate（治理重试限制）
 │   │   │   ├── subslot.go          #       子 Agent 并发槽位
 │   │   │   └── messages.go         #       runtime 文案常量
-│   │   ├── governance/             #     治理管理器
-│   │   │   ├── gov.go              #       Manager（HookReg + Ledger + Exploration + Gate）
-│   │   │   ├── gov_lifecycle.go    #       生命周期（Reset/ResetTurn/ResetSession）
-│   │   │   ├── gov_observability.go#       可观测性
-│   │   │   ├── gov_record.go       #       事件记录
-│   │   │   └── ledger/             #       工具执行账本
-│   │   ├── budget/                 #     预算与配额
-│   │   │   ├── exploration.go      #       探索螺旋检测
-│   │   │   └── quota.go            #       每轮工具配额
 │   │   ├── subagent/               #     子 Agent 系统
 │   │   │   ├── agents.go           #       内置 agent 类型定义（3 种：executor/verify/researcher）
 │   │   │   ├── agent_md.go         #       AgentMD 解析（Claude Code 格式）
@@ -131,7 +130,8 @@ nekocode/
 │   │   └── subslot/                #     子 Agent 并发槽位
 │   │       └── manager.go          #       Manager（8 槽位 + 颜色分配）
 │   ├── config/                     #   配置管理
-│   │   └── config.go               #     Config + Load()
+│   │   ├── config.go               #     Config + Load()
+│   │   └── view.go                 #     GUI/API 配置视图 DTO
 │   ├── command/                    #   斜杠命令系统
 │   │   ├── parser.go               #     Parser + Callbacks
 │   │   └── lifecycle.go            #     SummarizeIfNeeded / ForceFreshStart / ContextStats
@@ -180,7 +180,7 @@ nekocode/
 │   │   ├── registry.go             #     Registry + Evaluate
 │   │   ├── state.go                #     Snapshot 状态存储
 │   │   ├── format.go               #     FormatHints
-│   │   ├── builtin_register.go     #     RegisterBuiltin（8 个内置 Hook）
+│   │   ├── builtin_register.go     #     RegisterBuiltin（12 个内置 Hook）
 │   │   ├── plugin.go               #     LoadPluginHooks（声明式 hooks）
 │   │   ├── builtin/                #     内置 Hook 实现
 │   │   │   ├── all.go              #       All() 列表
@@ -258,33 +258,37 @@ nekocode/
 │   ├── treesitter/                 #   Tree-sitter 语言支持
 │   │   └── langs.go                #     语言注册 + 查询定义
 │   ├── prompt/                     #   System Prompt 构建
-│   │   ├── builder.go              #     Prompt 构建器
-│   │   ├── system.md               #     英文 System Prompt 模板
 │   │   ├── system/                 #     System Prompt 子模块
 │   │   │   ├── builder.go          #       构建器
 │   │   │   ├── system_zh.md        #       中文 System Prompt 模板
-│   │   │   ├── analysis_rules_zh.md#       分析规则
 │   │   │   └── os_release.go       #       OS 检测
 │   │   └── planmode/               #     Plan Mode
 │   │       └── prompt.go           #       Plan Mode prompt
 │   ├── session/                    #   Session 管理
 │   │   ├── session.go              #     Snapshot / Meta 持久化
-│   │   └── manager.go              #     Session Manager / 导出 / 恢复 / 视图消息
-│   ├── sessionview/                #   Session 视图
-│   │   └── messages.go             #     DisplayMessages
-│   ├── plugin/                     #   Plugin Manager + 源解析/格式化/远程获取
-│   │   ├── manager.go              #     生命周期 + runtime 编排
-│   │   ├── snapshot.go             #     GUI/API 插件快照
-│   │   ├── source.go               #     源解析 / env 展开
-│   │   ├── fetch.go                #     远程 plugin.json 获取
-│   │   └── format.go               #     插件展示文本
-│   ├── skill/                      #   Skill 管理 + GUI/API 快照
-│   │   ├── manager.go              #     加载、上下文刷新、skill tool 接线
-│   │   └── management.go           #     skill/plugin 管理快照聚合
-│   ├── governance/                 #   工具语义分类
+│   │   ├── manager.go              #     Session Manager / 导出 / 恢复
+│   │   └── view_messages.go        #     DisplayMessages 转换
+│   ├── extension/                  #   扩展系统
+│   │   ├── plugin/                 #     Plugin Manager + 源解析/格式化/远程获取
+│   │   │   ├── manager.go          #       生命周期 + runtime 编排
+│   │   │   ├── views.go            #       GUI/API 插件视图 DTO 构建
+│   │   │   ├── source.go           #       源解析 / env 展开
+│   │   │   ├── fetch.go            #       远程 plugin.json 获取
+│   │   │   └── format.go           #       插件展示文本
+│   │   ├── skill/                  #     Skill 管理
+│   │   │   ├── manager.go          #       加载、上下文刷新、skill tool 接线
+│   │   │   └── management.go       #       skill/plugin 管理视图聚合
+│   │   └── mcp/                    #     MCP 客户端
+│   ├── policy/                    #   策略系统
+│   │   ├── gov.go                 #     Manager（HookReg + Ledger + Exploration）
+│   │   ├── gov_lifecycle.go       #     生命周期（Reset/ResetTurn/ResetSession）
+│   │   ├── gov_observability.go   #     可观测性
+│   │   ├── gov_record.go          #     事件记录
+│   │   ├── ledger/                #     工具执行账本
+│   │   ├── budget/                #     探索预算与工具配额
+│   │   └── semantics/             #     工具语义分类
 │   │   └── semantics.go            #     Semantics（SourceProducing/Mutating/Verifying）
 │   ├── sdk/                        #   外部服务 SDK
-│   │   ├── volcengine_signer.go    #     火山引擎签名入口
 │   │   └── volcengine/             #     火山引擎 SigV4
 │   │       ├── signer.go           #       签名器
 │   │       ├── crypto.go           #       加密
@@ -362,8 +366,6 @@ nekocode/
 │       │   └── path.go             #     路径验证
 │       ├── semantics/              #   工具语义
 │       │   └── exploratory.go      #     探索性检测
-│       ├── snapshots/              #   快照
-│       │   └── snapshots.go        #     快照管理
 │       ├── textutil/               #   文本工具
 │       │   └── text.go             #     文本处理
 │       └── toolhelpers/            #   工具辅助
@@ -435,16 +437,18 @@ type UI interface {
 
 ```
 New()
-  ├── initConfig()        → config.Load() + prompt.NewBuilder()
-  ├── initCtxMgr()        → contextmgr.New() + contextinit.ApplyProjectContextAndIndex()
-  ├── initToolRegistry()  → catalog.RegisterAll() + projecttool（条件注册）
-  ├── initHooks()         → hooks.RegisterBuiltin()
-  ├── initPlugins()       → plugin.NewRegistry().LoadAll() → loadPluginExtensions()
-  ├── initSkills()        → skill.NewRegistry() + bundled + Load()
-  ├── initSession()       → session.New() + command.NewParser()
-  ├── initAgent()         → llm.NewClientWithProtocol() + agent.New() + wireTaskTool()
-  ├── initSummarizer()    → ctxMgr.CM.Summarizer = MakeSummarizer()
-  └── initCommands()      → command.RegisterAll() + session/export/plugin 命令
+  ├── initConfig()        → config.Load() + prompt/system.NewBuilder()
+  ├── initCtxMgr()        → contextmgr.New() + projectctx.Apply()
+  ├── initSession()       → session.Manager facade
+  └── reinit()
+      ├── initToolRegistry()     → catalog.RegisterAll() + projecttool（条件注册）
+      ├── initHooks()            → hooks.RegisterBuiltin()
+      ├── extension.InitPlugins()
+      ├── extension.InitConfigMCPServers()
+      ├── extension.InitSkills()
+      ├── initAgent()            → llm.NewClientWithProtocol() + runtime.New()
+      ├── initSummarizer()       → ctxMgr.CM.Summarizer = MakeSummarizer()
+      └── initCommands()         → command.RegisterAll() + session/export/plugin 命令
 ```
 
 ## 核心架构：Agent 循环
@@ -464,7 +468,7 @@ Run() 主循环 → runTurn(state)
   ├─ Reason(state) → ReasoningResult
   │   ├─ phase(PhaseThinking)
   │   ├─ ctxMgr.Build(true) 组装上下文（全部消息，不再截断）
-  │   ├─ transform(messages) 消息变换钩子
+  │   ├─ PreModelRequest hooks: Evaluate → request-scoped hints
   │   ├─ callLLMForTool() 流式调用
   │   └─ withRetry() 指数退避重试
   │
@@ -497,8 +501,8 @@ Agent 循环硬限制：
 | `runtime/run.go` | 主循环阅读入口：start → loop → stop evaluation → finish |
 | `runtime/run_turn.go` | 单轮执行：PreTurn → steering/interruption → Reason → tool/text branch |
 | `runtime/run_exec*.go` | 工具调用过滤、执行、结果合并、subagent 回调 |
-| `governance/` | GovManager：整合 HookReg + Ledger + Exploration + Gate |
-| `governance/ledger/` | 工具执行账本：readFiles / modifiedFiles / blockedTools / verifications |
+| `policy/` | GovManager：整合 HookReg + Ledger + Exploration + Gate |
+| `policy/ledger/` | 工具执行账本：readFiles / modifiedFiles / blockedTools / verifications |
 | `budget/` | ExplorationTracker + ToolQuota |
 | `subagent/` | 子 Agent 引擎 + 注册表 + 安全审核 |
 
@@ -591,7 +595,6 @@ type Tool interface {
 | `netclient/` | HTTP 客户端 |
 | `pathutil/` | 路径验证 |
 | `semantics/` | 探索性检测 |
-| `snapshots/` | 快照管理 |
 | `textutil/` | 文本处理 |
 | `toolhelpers/` | 辅助函数 |
 
@@ -652,11 +655,14 @@ CounterQualityWarned = "counter:quality_warned"
 PolicyExploreExhausted="policy:explore_exhausted"
 ```
 
-### 内置 Hook（8 个）
+### 内置 Hook（12 个）
 
 | Hook | Point | 功能 |
 |------|-------|------|
 | quota | PreTurn | 读取配额不足时告警，引导优先实质性修改 |
+| tool_result_guardrail | PreModelRequest | 工具结果过多时注入 request-scoped 提醒 |
+| read_before_write | PreToolUse | edit/write 前检查目标文件读取记录 |
+| read_only_spiral | PostTool | 连续只读探索后提醒综合发现并停止继续读 |
 | verification | PostTurn | 有未完成任务但本轮无工具调用时提醒继续 |
 | exploration_exhausted | PreTurn | 探索调用 ≥10 且分数耗尽时强制行动 |
 | exploration_guard | PreToolUse | 探索配额耗尽时阻止探索性工具 |
@@ -664,6 +670,7 @@ PolicyExploreExhausted="policy:explore_exhausted"
 | progress_stall | PostTool | 连续多轮无进展后警告开始写代码 |
 | completion_quality | PostTurn | 任务全标完成但未修改文件时提醒 |
 | garbled_circuit_breaker | PostTurn | 累计 5 次 garbled 工具调用则强制停止 |
+| final_check | PostTurn | 最终回答前检查验证、错误披露和测试声明 |
 
 ## Plugin 系统
 
@@ -671,10 +678,8 @@ PolicyExploreExhausted="policy:explore_exhausted"
 - 安装源：GitHub URL / user:repo / 本地路径
 - 扩展点：Skills / Agents / Hooks / MCP Servers
 - manifest / registry / 安装源模型
-
-`bot/plugin/`：
 - `/plugin install/list/uninstall/enable/disable/info`
-- 插件运行时加载（Skills / Agents / Hooks / MCP）通过 `bot/plugin/manager.go` 实现
+- 插件运行时加载（Skills / Agents / Hooks / MCP）通过 `manager.go` 实现
 
 ## 声明式 Hooks
 
@@ -702,10 +707,8 @@ PolicyExploreExhausted="policy:explore_exhausted"
 - 内置技能通过 `bundled/` go:embed
 - `skill` 工具动态注册到 toolRegistry
 - 插件可提供额外 Skill 目录
-
-`bot/skill/`：
-- 对外 facade + GUI/API 管理快照
-- `ManagementSnapshot` 聚合 skill registry 与 plugin snapshots
+- 对外 manager + GUI/API 管理快照
+- `ManagementView` 聚合 skill registry 与 plugin views
 
 ## 子 Agent 系统
 
@@ -739,7 +742,7 @@ PolicyExploreExhausted="policy:explore_exhausted"
 
 ### Ledger（工具执行账本）
 
-`bot/agent/governance/ledger/`：追踪所有工具执行事件，记录：
+`bot/policy/ledger/`：追踪所有工具执行事件，记录：
 - `readFiles`：已读取文件集合
 - `modifiedFiles`：已修改文件集合
 - `blockedTools`：被阻止的工具调用
@@ -752,7 +755,7 @@ PolicyExploreExhausted="policy:explore_exhausted"
 
 ### 工具语义分类
 
-`bot/governance/semantics.go`：定义工具语义标签：
+`bot/policy/semantics/semantics.go`：定义工具语义标签：
 - `SourceProducing`：产生源码信息（read/grep/glob/list）
 - `Mutating`：修改文件（write/edit/bash）
 - `Verifying`：验证操作
@@ -776,13 +779,13 @@ Model
 |------|------|------|
 | Bot 应用层 | `bot/app/` | 依赖注入 + 生命周期编排 + `bot.UI` / `bot.GUI` 实现 |
 | Agent 循环 | `bot/agent/runtime/` | Reason→Execute→Feedback，中断，重试 |
-| 治理系统 | `bot/agent/governance/` | Manager：HookReg + Ledger + Exploration |
-| 工具账本 | `bot/agent/governance/ledger/` | 工具执行追踪（读/写/阻止/错误/验证） |
+| 治理系统 | `bot/policy/` | Manager：HookReg + Ledger + Exploration |
+| 工具账本 | `bot/policy/ledger/` | 工具执行追踪（读/写/阻止/错误/验证） |
 | 响应门控 | `bot/agent/runtime/gate.go` | 治理重试限制（内联于 runtime） |
 | 推理格式 | `bot/agent/runtime/reasoner.go` | GarbledToolCall 检测（内联于 runtime） |
 | 子 Agent | `bot/agent/subagent/` | 独立循环，3 种内置类型 + 插件扩展 |
 | 子槽位 | `bot/agent/runtime/subslot.go` | 并发控制（8 槽位 + 颜色，内联于 runtime） |
-| 预算配额 | `bot/agent/budget/` | 探索检测 + 工具配额 |
+| 预算配额 | `bot/policy/budget/` | 探索检测 + 工具配额 |
 | LLM 网关 | `llm/` | OpenAI/Anthropic 双协议，统一接口 |
 | 工具系统 | `bot/tools/` | Tool 接口 + Executor + Registry + FileCache |
 | 工具注册 | `bot/tools/catalog/` | RegisterAll() 内置工具注册清单 |
@@ -796,9 +799,9 @@ Model
 | SDK | `bot/sdk/` | 外部服务 SDK（火山引擎 SigV4 签名） |
 | 上下文管理 | `bot/contextmgr/` | Build 管线 + 五级压缩 + token 估算 |
 | Session Memory | `bot/contextmgr/memory/` | Memory 文件持久化 |
-| Plugin 系统 | `bot/plugin/`, `bot/extension/plugin/` | manager 编排 + manifest/registry |
+| Plugin 系统 | `bot/extension/plugin/` | manager 编排 + manifest/registry |
 | MCP 客户端 | `bot/extension/mcp/` | JSON-RPC 2.0 |
-| Skill 系统 | `bot/skill/`, `bot/extension/skill/` | 管理快照/facade + YAML 技能加载 |
+| Skill 系统 | `bot/extension/skill/` | manager + 管理快照 + YAML 技能加载 |
 | Hook 系统 | `bot/hooks/` | 事件驱动（7 种触发点）+ 声明式（plugin/） |
 | 内置 Hook | `bot/hooks/builtin/` | 8 个内置 Hook 实现 |
 | 声明式 Hook | `bot/hooks/plugin/` | JSON 配置驱动 Hook |
@@ -806,6 +809,6 @@ Model
 | 代码索引 | `bot/index/` | SQLite + FTS5 + Tree-sitter 代码索引 |
 | 命令系统 | `bot/command/` | 斜杠命令解析 |
 | 调试日志 | `bot/debug/` | 全局 debug.Log（时间戳 + subagent 标签） |
-| 工具语义 | `bot/governance/` | Semantics 分类（SourceProducing/Mutating/Verifying） |
-| Session 视图 | `bot/sessionview/` | DisplayMessages 转换 |
+| 工具语义 | `bot/policy/semantics/` | Semantics 分类（SourceProducing/Mutating/Verifying） |
+| Session 视图 | `bot/session/` | DisplayMessages 转换 |
 | TUI | `tui/` | Bubble Tea v2 组件化 |

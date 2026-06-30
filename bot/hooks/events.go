@@ -3,13 +3,14 @@ package hooks
 type HookPoint string
 
 const (
-	PreTurn     HookPoint = "pre_turn"
-	PreToolUse  HookPoint = "pre_tool_use"
-	PostToolUse HookPoint = "post_tool_use" // per-tool (declarative hooks)
-	PostTool    HookPoint = "post_tool"     // batch (builtin hooks)
-	PostTurn    HookPoint = "post_turn"
-	UserSubmit  HookPoint = "user_submit"
-	Stop        HookPoint = "stop"
+	PreTurn         HookPoint = "pre_turn"
+	PreModelRequest HookPoint = "pre_model_request"
+	PreToolUse      HookPoint = "pre_tool_use"
+	PostToolUse     HookPoint = "post_tool_use" // per-tool (declarative hooks)
+	PostTool        HookPoint = "post_tool"     // batch (builtin hooks)
+	PostTurn        HookPoint = "post_turn"
+	UserSubmit      HookPoint = "user_submit"
+	Stop            HookPoint = "stop"
 )
 
 type Hint struct {

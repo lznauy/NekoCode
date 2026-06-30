@@ -5,12 +5,12 @@ import (
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/contextmgr/memory"
 	"nekocode/bot/index/projectctx"
-	"nekocode/bot/prompt"
+	systemprompt "nekocode/bot/prompt/system"
 )
 
 func (b *Bot) initConfig() {
 	b.cfg, _ = config.Load()
-	b.promptBuilder = prompt.NewBuilder(b.cwd)
+	b.promptBuilder = systemprompt.NewBuilder(b.cwd)
 }
 
 func (b *Bot) initCtxMgr() {

@@ -25,13 +25,13 @@ import {
   safeGetConfig,
   safeQuit,
   safeSelectSkill,
-  safeSkillManagementSnapshot,
+  safeSkillManagementView,
   safeSwitchModel,
 } from './lib/wails'
 import type { ConfirmEvent, Msg, QuestionEvent } from './types/events'
 import type { ModelConfig } from './types/config'
 import type { ContextSnapshot } from './types/context'
-import type { SkillSnapshot } from './types/skills'
+import type { SkillView } from './types/skills'
 
 export default function App() {
   const { msgs, text, setText, busy, send, stop, toggleStep, setMessages, clearMessages } = useChat()
@@ -59,7 +59,7 @@ export default function App() {
   const [configInitialTab, setConfigInitialTab] = useState<ConfigTab>('overview')
   const [skillsOpen, setSkillsOpen] = useState(false)
   const [models, setModels] = useState<ModelConfig[]>([])
-  const [skills, setSkills] = useState<SkillSnapshot[]>([])
+  const [skills, setSkills] = useState<SkillView[]>([])
   const [selectedSkill, setSelectedSkill] = useState('')
   const [contextOpen, setContextOpen] = useState(false)
   const [contextLoading, setContextLoading] = useState(false)
@@ -68,7 +68,7 @@ export default function App() {
   const refreshControls = useCallback(async () => {
     const [cfg, skillSnapshot] = await Promise.all([
       safeGetConfig(),
-      safeSkillManagementSnapshot(),
+      safeSkillManagementView(),
     ])
     setModels(cfg?.models ?? [])
     setSkills(skillSnapshot?.skills ?? [])

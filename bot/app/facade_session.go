@@ -7,8 +7,8 @@ import (
 	"nekocode/bot/agent/runtime"
 	"nekocode/bot/command"
 	ctxmgr "nekocode/bot/contextmgr"
+	"nekocode/bot/extension/skill"
 	"nekocode/bot/session"
-	"nekocode/bot/skill"
 	"nekocode/common"
 )
 
@@ -18,12 +18,10 @@ type sessionFacade struct {
 }
 
 type sessionDeps struct {
-	CWD        string
-	CtxMgr     *ctxmgr.Manager
-	CmdParser  *command.Parser
-	SkillState *command.SkillState
-	GetAgent   func() *runtime.Agent
-	GetSkills  func() *skill.Manager
+	CWD       string
+	CtxMgr    *ctxmgr.Manager
+	GetAgent  func() *runtime.Agent
+	GetSkills func() *skill.Manager
 }
 
 func (s *sessionFacade) Init(d sessionDeps) {
@@ -114,10 +112,10 @@ func (s *sessionFacade) DrainResumed() bool {
 	return r
 }
 
-func (s *sessionFacade) CWD() string                        { return s.mgr.CWD() }
-func (s *sessionFacade) CurrentID() string                  { return s.mgr.CurrentID() }
-func (s *sessionFacade) Set(sess *session.Snapshot)         { s.mgr.Set(sess) }
-func (s *sessionFacade) ClearContext()                      { s.mgr.ClearContext() }
+func (s *sessionFacade) CWD() string                { return s.mgr.CWD() }
+func (s *sessionFacade) CurrentID() string          { return s.mgr.CurrentID() }
+func (s *sessionFacade) Set(sess *session.Snapshot) { s.mgr.Set(sess) }
+func (s *sessionFacade) ClearContext()              { s.mgr.ClearContext() }
 func (s *sessionFacade) DisplayMessages() []common.DisplayMessage {
 	return s.mgr.DisplayMessages()
 }

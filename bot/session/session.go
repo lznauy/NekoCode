@@ -26,9 +26,18 @@ type Snapshot struct {
 	Messages        []types.Message `json:"messages"`
 	CompactBoundary int             `json:"compact_boundary"`
 
-	ContextWindow    int `json:"context_window"`
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
+	ContextWindow     int `json:"context_window"`
+	PromptTokens      int `json:"prompt_tokens"`
+	CompletionTokens  int `json:"completion_tokens"`
+	TrackerPrompt     int `json:"tracker_prompt_tokens,omitempty"`
+	TrackerCompletion int `json:"tracker_completion_tokens,omitempty"`
+	TrackerNewTokens  int `json:"tracker_new_tokens,omitempty"`
+	CacheHitTokens    int `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens   int `json:"cache_miss_tokens,omitempty"`
+	SubCount          int `json:"sub_count,omitempty"`
+	SubTokens         int `json:"sub_tokens,omitempty"`
+	SubCacheHit       int `json:"sub_cache_hit,omitempty"`
+	SubCacheMiss      int `json:"sub_cache_miss,omitempty"`
 
 	LoadedSkills []string `json:"loaded_skills"`
 }

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { cn } from '../lib/classnames'
 import { isWailsEnvironment, safeGetConfig, safeSaveConfig } from '../lib/wails'
-import type { ConfigSnapshot, ImageGenConfig, MCPServerConfig, ModelConfig } from '../types/config'
+import type { ConfigView, ImageGenConfig, MCPServerConfig, ModelConfig } from '../types/config'
 
 interface ConfigPanelProps {
   open: boolean
@@ -46,7 +46,7 @@ const configTabs: Array<{ value: ConfigTab; label: string }> = [
 ]
 
 export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }: ConfigPanelProps) {
-  const [cfg, setCfg] = useState<ConfigSnapshot | null>(null)
+  const [cfg, setCfg] = useState<ConfigView | null>(null)
   const [tab, setTab] = useState<ConfigTab>(initialTab)
   const [selectedMcp, setSelectedMcp] = useState('')
   const [loading, setLoading] = useState(false)
@@ -91,7 +91,7 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
 
   if (!open) return null
 
-  const update = (patch: Partial<ConfigSnapshot>) => {
+  const update = (patch: Partial<ConfigView>) => {
     setSaved(false)
     setCfg((prev) => (prev ? { ...prev, ...patch } : prev))
   }
@@ -101,7 +101,7 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
     setCfg((prev) => {
       if (!prev) return prev
       const models = prev.models.map((m, i) => (i === idx ? { ...m, ...patch } : m))
-      const next: ConfigSnapshot = { ...prev, models }
+      const next: ConfigView = { ...prev, models }
       if (!models.some((m) => m.name === next.active)) next.active = models[0]?.name ?? ''
       if (next.flash_model && !models.some((m) => m.name === next.flash_model)) next.flash_model = ''
       return next
@@ -618,7 +618,7 @@ function StatusPill({ ok, text }: { ok: boolean; text: string }) {
   )
 }
 
-function validateConfig(cfg: ConfigSnapshot | null): string {
+function validateConfig(cfg: ConfigView | null): string {
   if (!cfg) return ''
   if (!cfg.models.length) return '至少需要一个文本模型'
   const names = new Set<string>()

@@ -15,6 +15,7 @@ type ManagerSnapshot struct {
 	CompactBoundary int
 	Messages        []types.Message
 	Budget          int
+	Tracker         token.State
 }
 
 func (m *Manager) Snapshot() ManagerSnapshot {
@@ -29,6 +30,7 @@ func (m *Manager) Snapshot() ManagerSnapshot {
 		CompactBoundary: m.ctx.CompactBoundary,
 		Messages:        m.ctx.Messages,
 		Budget:          m.ContextWindow,
+		Tracker:         m.Tracker.Snapshot(),
 	}
 }
 
@@ -44,4 +46,5 @@ func (m *Manager) Restore(s ManagerSnapshot) {
 	m.ctx.Messages = s.Messages
 	m.ContextWindow = s.Budget
 	m.Tracker = &token.Tracker{}
+	m.Tracker.Restore(s.Tracker)
 }

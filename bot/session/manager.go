@@ -9,8 +9,8 @@ import (
 	"sync"
 
 	ctxmgr "nekocode/bot/contextmgr"
+	"nekocode/bot/contextmgr/token"
 	"nekocode/bot/llm/types"
-	"nekocode/bot/sessionview"
 	"nekocode/common"
 )
 
@@ -104,7 +104,7 @@ func (m *Manager) DisplayMessages() []common.DisplayMessage {
 		return nil
 	}
 	snap := m.ctx.Snapshot()
-	return sessionview.DisplayMessages(snap.Messages, snap.CompactBoundary)
+	return DisplayMessages(snap.Messages, snap.CompactBoundary)
 }
 
 func (m *Manager) Save() error {
@@ -226,6 +226,15 @@ func ApplyContextSnapshot(sess *Snapshot, snap ctxmgr.ManagerSnapshot, promptTok
 	sess.ContextWindow = snap.Budget
 	sess.PromptTokens = promptTokens
 	sess.CompletionTokens = completionTokens
+	sess.TrackerPrompt = snap.Tracker.LastPromptTokens
+	sess.TrackerCompletion = snap.Tracker.LastCompTokens
+	sess.TrackerNewTokens = snap.Tracker.NewMessageTokens
+	sess.CacheHitTokens = snap.Tracker.CacheHitTokens
+	sess.CacheMissTokens = snap.Tracker.CacheMissTokens
+	sess.SubCount = snap.Tracker.Sub.Count
+	sess.SubTokens = snap.Tracker.Sub.TotalTokens
+	sess.SubCacheHit = snap.Tracker.Sub.CacheHitTokens
+	sess.SubCacheMiss = snap.Tracker.Sub.CacheMissTokens
 	sess.LoadedSkills = LoadedSkillNames(loaded)
 }
 
@@ -241,6 +250,19 @@ func ManagerSnapshot(sess *Snapshot) ctxmgr.ManagerSnapshot {
 		CompactBoundary: sess.CompactBoundary,
 		Messages:        sess.Messages,
 		Budget:          sess.ContextWindow,
+		Tracker: token.State{
+			LastPromptTokens: sess.TrackerPrompt,
+			LastCompTokens:   sess.TrackerCompletion,
+			NewMessageTokens: sess.TrackerNewTokens,
+			CacheHitTokens:   sess.CacheHitTokens,
+			CacheMissTokens:  sess.CacheMissTokens,
+			Sub: token.SubStats{
+				Count:           sess.SubCount,
+				TotalTokens:     sess.SubTokens,
+				CacheHitTokens:  sess.SubCacheHit,
+				CacheMissTokens: sess.SubCacheMiss,
+			},
+		},
 	}
 }
 

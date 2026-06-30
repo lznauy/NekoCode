@@ -63,3 +63,26 @@ func TestTracker_NoAPIData(t *testing.T) {
 		t.Error("without API data, Total should be 0")
 	}
 }
+
+func TestTrackerSnapshotRestore(t *testing.T) {
+	var tr Tracker
+	tr.RecordUsage(1000, 200)
+	tr.AddNew(400)
+	tr.RecordCache(75, 25)
+	tr.RecordSubagent(300, 20, 10)
+
+	var restored Tracker
+	restored.Restore(tr.Snapshot())
+
+	hit, miss := restored.CacheStats()
+	if hit != 75 || miss != 25 {
+		t.Fatalf("cache stats = %d/%d, want 75/25", hit, miss)
+	}
+	if got := restored.PromptEstimate(); got != 1100 {
+		t.Fatalf("prompt estimate = %d, want 1100", got)
+	}
+	sub := restored.SubStats()
+	if sub.Count != 1 || sub.TotalTokens != 300 || sub.CacheHitTokens != 20 || sub.CacheMissTokens != 10 {
+		t.Fatalf("sub stats = %+v", sub)
+	}
+}

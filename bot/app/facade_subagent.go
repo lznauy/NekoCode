@@ -13,12 +13,12 @@ import (
 )
 
 type subagentWiring struct {
-	toolRegistry *tools.Registry
-	ctxMgr       *contextmgr.Manager
-	cwd          string
-	projCtx      string
+	toolRegistry  *tools.Registry
+	ctxMgr        *contextmgr.Manager
+	cwd           string
+	projCtx       string
 	contextWindow int
-	getAgent     func() *runtime.Agent
+	getAgent      func() *runtime.Agent
 }
 
 type subagentWiringDeps struct {

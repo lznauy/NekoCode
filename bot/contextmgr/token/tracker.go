@@ -14,6 +14,39 @@ type Tracker struct {
 	sub              SubStats
 }
 
+type State struct {
+	LastPromptTokens int
+	LastCompTokens   int
+	CacheHitTokens   int
+	CacheMissTokens  int
+	NewMessageTokens int
+	Sub              SubStats
+}
+
+func (t *Tracker) Snapshot() State {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return State{
+		LastPromptTokens: t.lastPromptTokens,
+		LastCompTokens:   t.lastCompTokens,
+		CacheHitTokens:   t.cacheHitTokens,
+		CacheMissTokens:  t.cacheMissTokens,
+		NewMessageTokens: t.newMessageTokens,
+		Sub:              t.sub,
+	}
+}
+
+func (t *Tracker) Restore(s State) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.lastPromptTokens = s.LastPromptTokens
+	t.lastCompTokens = s.LastCompTokens
+	t.cacheHitTokens = s.CacheHitTokens
+	t.cacheMissTokens = s.CacheMissTokens
+	t.newMessageTokens = s.NewMessageTokens
+	t.sub = s.Sub
+}
+
 // RecordUsage records token usage from an API response.
 func (t *Tracker) RecordUsage(promptTokens, completionTokens int) {
 	t.mu.Lock()

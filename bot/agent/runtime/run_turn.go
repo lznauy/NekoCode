@@ -1,9 +1,9 @@
 package runtime
 
 import (
-	"nekocode/bot/agent/budget"
-	aggov "nekocode/bot/agent/governance"
 	"nekocode/bot/hooks"
+	aggov "nekocode/bot/policy"
+	"nekocode/bot/policy/budget"
 	"nekocode/bot/tools"
 )
 

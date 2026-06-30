@@ -6,12 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	aggov "nekocode/bot/agent/governance"
-	"nekocode/bot/agent/governance/ledger"
 	ctxmgr "nekocode/bot/contextmgr"
-	"nekocode/bot/governance"
 	"nekocode/bot/hooks"
 	"nekocode/bot/llm/types"
+	aggov "nekocode/bot/policy"
+	"nekocode/bot/policy/budget"
+	"nekocode/bot/policy/ledger"
+	"nekocode/bot/policy/semantics"
 	"nekocode/bot/tools"
 )
 
@@ -22,6 +23,11 @@ func newTestAgent() *Agent {
 	a.gov = aggov.NewManager(hooks.NewRegistry())
 	hooks.RegisterBuiltin(a.gov.HookReg)
 	return a
+}
+
+func preToolBlockReasonForTest(a *Agent, tc tools.ToolCallItem) string {
+	filtered := a.filterToolCalls([]tools.ToolCallItem{tc}, &stepState{quota: budget.ToolQuota{MaxSlots: 8}})
+	return filtered.blocked[0]
 }
 
 func TestHandleText_IsError_NotRecorded(t *testing.T) {
@@ -230,16 +236,16 @@ func TestPreEditBlockReasonRequiresLedgerReadForExistingFile(t *testing.T) {
 	}
 
 	tc := tools.ToolCallItem{Name: "write", Args: map[string]any{"path": path}}
-	if got := a.preEditBlockReason(tc); got == "" {
+	if got := preToolBlockReasonForTest(a, tc); got == "" {
 		t.Fatal("expected existing unread file to be blocked")
 	}
 
 	a.gov.Ledger.RecordTool(ledger.ToolEvent{
 		Name:      "read",
 		Args:      map[string]any{"path": path},
-		Semantics: governance.ClassifyToolCall("read", map[string]any{"path": path}),
+		Semantics: semantics.ClassifyToolCall("read", map[string]any{"path": path}),
 	})
-	if got := a.preEditBlockReason(tc); got != "" {
+	if got := preToolBlockReasonForTest(a, tc); got != "" {
 		t.Fatalf("expected read file to pass, got %q", got)
 	}
 }
@@ -263,7 +269,7 @@ func TestPreEditBlockReasonAllowsEditWithSufficientAnchor(t *testing.T) {
 		}, "\n"),
 		"newString": "package main\n",
 	}}
-	if got := a.preEditBlockReason(tc); got != "" {
+	if got := preToolBlockReasonForTest(a, tc); got != "" {
 		t.Fatalf("expected sufficiently anchored edit to pass without read, got %q", got)
 	}
 }
@@ -280,7 +286,7 @@ func TestPreEditBlockReasonBlocksEditWithShortAnchor(t *testing.T) {
 		"oldString": "main",
 		"newString": "app",
 	}}
-	if got := a.preEditBlockReason(tc); got == "" {
+	if got := preToolBlockReasonForTest(a, tc); got == "" {
 		t.Fatal("expected short unread edit to be blocked")
 	}
 }
@@ -289,7 +295,7 @@ func TestPreEditBlockReasonAllowsNewFile(t *testing.T) {
 	a := newTestAgent()
 	path := t.TempDir() + "/new.go"
 	tc := tools.ToolCallItem{Name: "write", Args: map[string]any{"path": path}}
-	if got := a.preEditBlockReason(tc); got != "" {
+	if got := preToolBlockReasonForTest(a, tc); got != "" {
 		t.Fatalf("expected new file write to pass, got %q", got)
 	}
 }

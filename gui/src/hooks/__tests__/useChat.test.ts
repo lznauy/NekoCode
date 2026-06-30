@@ -194,7 +194,7 @@ describe('useChat', () => {
       emit('agent:tool_done', { id: 't1', toolName: 'ls', args: '', output: 'file.txt', isError: false })
     })
     await waitFor(() => expect(result.current.msgs[1].steps![0].status).toBe('done'))
-    // 非持久化工具成功后丢弃 output，与 TUI/sessionview 一致。
+    // 非持久化工具成功后丢弃 output，与 TUI/session view 一致。
     expect(result.current.msgs[1].steps![0].output).toBe('')
   })
 

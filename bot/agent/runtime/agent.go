@@ -6,17 +6,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	aggov "nekocode/bot/agent/governance"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/debug"
 	"nekocode/bot/hooks"
 	"nekocode/bot/llm/types"
+	aggov "nekocode/bot/policy"
 	"nekocode/bot/tools"
 
 	"nekocode/common"
 )
 
-type ContextTransform func(messages []types.Message) []types.Message
 type StreamCallback func(delta string, isToolCall bool)
 type ReasoningCallback func(delta string)
 
@@ -47,7 +46,6 @@ type agentDeps struct {
 	executor     *tools.Executor
 	subSlotMgr   *subSlotManager
 	gov          *aggov.Manager
-	transform    ContextTransform
 }
 
 type agentCallbacks struct {
@@ -133,14 +131,6 @@ func (a *Agent) Duration() time.Duration {
 		return 0
 	}
 	return time.Since(a.startTime)
-}
-
-// GovernanceLine returns a one-line governance status summary for /context.
-func (a *Agent) GovernanceLine() string {
-	if a.gov == nil {
-		return ""
-	}
-	return a.gov.Summary()
 }
 
 func (a *Agent) Reset() {

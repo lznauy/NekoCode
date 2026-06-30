@@ -78,7 +78,6 @@ type ContextSnapshot struct {
 	SubTokens       int              `json:"subTokens"`
 	SubCacheHit     int              `json:"subCacheHit"`
 	SubCacheMiss    int              `json:"subCacheMiss"`
-	Governance      string           `json:"governance"`
 	Segments        []ContextSegment `json:"segments"`
 }
 

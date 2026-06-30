@@ -213,7 +213,7 @@ export function useChat(): UseChatReturn {
           output = ''
         }
       } else if (!isPersistent && !e.isError) {
-        // 非持久化工具在成功后丢弃中间 preview/output，与 sessionview 只保留 edit/bash/write 一致。
+        // 非持久化工具在成功后丢弃中间 preview/output，与 session view 只保留 edit/bash/write 一致。
         output = ''
         preview = undefined
       }

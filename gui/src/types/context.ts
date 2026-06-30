@@ -30,6 +30,5 @@ export interface ContextSnapshot {
   subTokens: number
   subCacheHit: number
   subCacheMiss: number
-  governance: string
   segments: ContextSegment[]
 }

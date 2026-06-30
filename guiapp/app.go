@@ -36,7 +36,6 @@ import (
 	"nekocode/bot"
 	botconfig "nekocode/bot/config"
 	"nekocode/bot/session"
-	botskill "nekocode/bot/skill"
 	"nekocode/common"
 
 	"github.com/google/uuid"
@@ -416,23 +415,23 @@ func (a *App) ClearSelectedSkill() {
 	a.bot.ClearSelectedSkill()
 }
 
-func (a *App) GetConfig() botconfig.Snapshot {
-	return a.bot.ConfigSnapshot()
+func (a *App) GetConfig() botconfig.View {
+	return a.bot.ConfigView()
 }
 
-func (a *App) SaveConfig(cfg botconfig.Snapshot) (botconfig.Snapshot, error) {
+func (a *App) SaveConfig(cfg botconfig.View) (botconfig.View, error) {
 	return a.bot.ApplyConfig(cfg)
 }
 
-func (a *App) GetSkillManagement() botskill.ManagementSnapshot {
-	return a.bot.SkillManagementSnapshot()
+func (a *App) GetSkillManagement() common.SkillManagementView {
+	return a.bot.SkillManagementView()
 }
 
-func (a *App) RefreshSkillManagement() botskill.ManagementSnapshot {
+func (a *App) RefreshSkillManagement() common.SkillManagementView {
 	return a.bot.RefreshSkillManagement()
 }
 
-func (a *App) SetPluginEnabled(name string, enabled bool) (botskill.ManagementSnapshot, error) {
+func (a *App) SetPluginEnabled(name string, enabled bool) (common.SkillManagementView, error) {
 	return a.bot.SetPluginEnabled(name, enabled)
 }
 

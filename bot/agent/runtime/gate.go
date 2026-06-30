@@ -4,7 +4,7 @@ import "nekocode/bot/debug"
 
 const defaultMaxRetries = 2
 
-// responseGate prevents governance internal signals from leaking into
+// responseGate prevents policy internal signals from leaking into
 // the model's visible assistant output. It tracks retries for final-answer
 // blocks and enforces a hard limit.
 type responseGate struct {

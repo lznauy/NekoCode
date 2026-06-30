@@ -3,10 +3,11 @@ package builtin
 type Point string
 
 const (
-	PreTurn    Point = "pre_turn"
-	PreToolUse Point = "pre_tool_use"
-	PostTool   Point = "post_tool"
-	PostTurn   Point = "post_turn"
+	PreTurn         Point = "pre_turn"
+	PreModelRequest Point = "pre_model_request"
+	PreToolUse      Point = "pre_tool_use"
+	PostTool        Point = "post_tool"
+	PostTurn        Point = "post_turn"
 )
 
 type StopReason string

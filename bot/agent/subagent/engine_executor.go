@@ -4,7 +4,7 @@ import (
 	"context"
 
 	ctxmgr "nekocode/bot/contextmgr"
-	"nekocode/bot/governance"
+	"nekocode/bot/hooks"
 	"nekocode/bot/llm/types"
 	"nekocode/bot/tools"
 	"nekocode/common"
@@ -70,11 +70,23 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 func applyReadOnlySpiralGuard(ctxMgr *ctxmgr.Manager, calls []tools.ToolCallItem, state *runState) {
 	if tools.IsAllExploratory(calls) {
 		state.readOnlyStreak++
-		if state.readOnlyStreak >= 3 {
-			ctxMgr.Add("user", governance.GuardReadOnlySpiral, "system")
+		if hint := evaluateReadOnlySpiralHook(state.readOnlyStreak); hint != nil {
+			ctxMgr.Add("system", hooks.FormatHints([]hooks.Hint{*hint}), "hook")
 			state.readOnlyStreak = 0
 		}
 		return
 	}
 	state.readOnlyStreak = 0
+}
+
+func evaluateReadOnlySpiralHook(streak int) *hooks.Hint {
+	reg := hooks.NewRegistry()
+	hooks.RegisterBuiltin(reg)
+	reg.Set(hooks.StoreReadOnlyStreak, int64(streak))
+	for _, r := range reg.Evaluate(hooks.PostTool, "", false) {
+		if r.Hint != nil && r.Hint.Type == "read_only_spiral" {
+			return r.Hint
+		}
+	}
+	return nil
 }

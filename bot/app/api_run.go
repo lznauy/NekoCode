@@ -13,7 +13,6 @@ func (b *Bot) Run(input string, callbacks common.RunCallbacks) (string, error) {
 }
 
 func (b *Bot) RunAgent(input string, onStep func(action, toolName, toolArgs, output string)) (string, error) {
-	b.lastGuardrailWarned = 0
 	ag := b.getAgent()
 	result := ag.Run(input, onStep)
 	ag.SetPlanMode(false)

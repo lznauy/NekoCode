@@ -108,15 +108,7 @@ func RegisterDefaults(p *Parser, deps Deps) {
 	})
 
 	p.Register("context", func(cmd *Command) (string, bool) {
-		report := ContextReport(deps.CtxMgr, deps.ToolRegistry.Descriptors())
-		if deps.Ag != nil {
-			if ag := deps.Ag(); ag != nil {
-				if gov := ag.GovernanceLine(); gov != "" {
-					report += "\n\n" + gov
-				}
-			}
-		}
-		return report, true
+		return ContextReport(deps.CtxMgr, deps.ToolRegistry.Descriptors()), true
 	})
 
 	p.Register("config", func(cmd *Command) (string, bool) {

@@ -43,7 +43,6 @@ export namespace common {
 	    subTokens: number;
 	    subCacheHit: number;
 	    subCacheMiss: number;
-	    governance: string;
 	    segments: ContextSegment[];
 	
 	    static createFrom(source: any = {}) {
@@ -76,7 +75,6 @@ export namespace common {
 	        this.subTokens = source["subTokens"];
 	        this.subCacheHit = source["subCacheHit"];
 	        this.subCacheMiss = source["subCacheMiss"];
-	        this.governance = source["governance"];
 	        this.segments = this.convertValues(source["segments"], ContextSegment);
 	    }
 	
@@ -170,6 +168,129 @@ export namespace common {
 		    return a;
 		}
 	}
+	
+	export class MCPServerView {
+	    name: string;
+	    plugin: string;
+	    command: string;
+	    args?: string[];
+	    dangerLevel?: string;
+	    pluginEnabled: boolean;
+	    status?: string;
+	    error?: string;
+	    toolCount?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new MCPServerView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.plugin = source["plugin"];
+	        this.command = source["command"];
+	        this.args = source["args"];
+	        this.dangerLevel = source["dangerLevel"];
+	        this.pluginEnabled = source["pluginEnabled"];
+	        this.status = source["status"];
+	        this.error = source["error"];
+	        this.toolCount = source["toolCount"];
+	    }
+	}
+	export class PluginView {
+	    name: string;
+	    version?: string;
+	    description?: string;
+	    source?: string;
+	    dir?: string;
+	    enabled: boolean;
+	    skills?: string[];
+	    skillNames?: string[];
+	    agents?: string[];
+	    commands?: string[];
+	    mcpServers?: string[];
+	    hasHooks?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new PluginView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.version = source["version"];
+	        this.description = source["description"];
+	        this.source = source["source"];
+	        this.dir = source["dir"];
+	        this.enabled = source["enabled"];
+	        this.skills = source["skills"];
+	        this.skillNames = source["skillNames"];
+	        this.agents = source["agents"];
+	        this.commands = source["commands"];
+	        this.mcpServers = source["mcpServers"];
+	        this.hasHooks = source["hasHooks"];
+	    }
+	}
+	export class SkillView {
+	    name: string;
+	    description?: string;
+	    dir?: string;
+	    files?: string[];
+	    loaded: boolean;
+	    source: string;
+	    sourceKind: string;
+	    plugin?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SkillView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.dir = source["dir"];
+	        this.files = source["files"];
+	        this.loaded = source["loaded"];
+	        this.source = source["source"];
+	        this.sourceKind = source["sourceKind"];
+	        this.plugin = source["plugin"];
+	    }
+	}
+	export class SkillManagementView {
+	    skills: SkillView[];
+	    plugins: PluginView[];
+	    mcp: MCPServerView[];
+	
+	    static createFrom(source: any = {}) {
+	        return new SkillManagementView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.skills = this.convertValues(source["skills"], SkillView);
+	        this.plugins = this.convertValues(source["plugins"], PluginView);
+	        this.mcp = this.convertValues(source["mcp"], MCPServerView);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 
 }
 
@@ -239,7 +360,7 @@ export namespace config {
 	        this.protocol = source["protocol"];
 	    }
 	}
-	export class Snapshot {
+	export class View {
 	    path: string;
 	    exists: boolean;
 	    active: string;
@@ -250,7 +371,7 @@ export namespace config {
 	    mcp_servers?: Record<string, MCPServerConfig>;
 	
 	    static createFrom(source: any = {}) {
-	        return new Snapshot(source);
+	        return new View(source);
 	    }
 	
 	    constructor(source: any = {}) {
@@ -308,134 +429,6 @@ export namespace session {
 	        this.msg_count = source["msg_count"];
 	    }
 	}
-
-}
-
-export namespace skill {
-	
-	export class MCPServerSnapshot {
-	    name: string;
-	    plugin: string;
-	    command: string;
-	    args?: string[];
-	    dangerLevel?: string;
-	    pluginEnabled: boolean;
-	    status?: string;
-	    error?: string;
-	    toolCount?: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new MCPServerSnapshot(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.plugin = source["plugin"];
-	        this.command = source["command"];
-	        this.args = source["args"];
-	        this.dangerLevel = source["dangerLevel"];
-	        this.pluginEnabled = source["pluginEnabled"];
-	        this.status = source["status"];
-	        this.error = source["error"];
-	        this.toolCount = source["toolCount"];
-	    }
-	}
-	export class PluginSnapshot {
-	    name: string;
-	    version?: string;
-	    description?: string;
-	    source?: string;
-	    dir?: string;
-	    enabled: boolean;
-	    skills?: string[];
-	    skillNames?: string[];
-	    agents?: string[];
-	    commands?: string[];
-	    mcpServers?: string[];
-	    hasHooks?: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new PluginSnapshot(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.version = source["version"];
-	        this.description = source["description"];
-	        this.source = source["source"];
-	        this.dir = source["dir"];
-	        this.enabled = source["enabled"];
-	        this.skills = source["skills"];
-	        this.skillNames = source["skillNames"];
-	        this.agents = source["agents"];
-	        this.commands = source["commands"];
-	        this.mcpServers = source["mcpServers"];
-	        this.hasHooks = source["hasHooks"];
-	    }
-	}
-	export class Snapshot {
-	    name: string;
-	    description?: string;
-	    dir?: string;
-	    files?: string[];
-	    loaded: boolean;
-	    source: string;
-	    sourceKind: string;
-	    plugin?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new Snapshot(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.description = source["description"];
-	        this.dir = source["dir"];
-	        this.files = source["files"];
-	        this.loaded = source["loaded"];
-	        this.source = source["source"];
-	        this.sourceKind = source["sourceKind"];
-	        this.plugin = source["plugin"];
-	    }
-	}
-	export class ManagementSnapshot {
-	    skills: Snapshot[];
-	    plugins: PluginSnapshot[];
-	    mcp: MCPServerSnapshot[];
-	
-	    static createFrom(source: any = {}) {
-	        return new ManagementSnapshot(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.skills = this.convertValues(source["skills"], Snapshot);
-	        this.plugins = this.convertValues(source["plugins"], PluginSnapshot);
-	        this.mcp = this.convertValues(source["mcp"], MCPServerSnapshot);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	
 
 }
 

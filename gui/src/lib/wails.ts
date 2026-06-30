@@ -22,10 +22,10 @@ import {
   SelectSkill,
   SwitchModel,
 } from '../../wailsjs/go/main/App'
-import type { ConfigSnapshot } from '../types/config'
+import type { ConfigView } from '../types/config'
 import type { ContextSnapshot as GUIContextSnapshot } from '../types/context'
 import type { DisplayMessage, SessionMeta } from '../types/session'
-import type { SkillManagementSnapshot as SkillManagement } from '../types/skills'
+import type { SkillManagementView as SkillManagement } from '../types/skills'
 
 export function isWailsEnvironment(): boolean {
   return typeof window !== 'undefined' && (window as unknown as Record<string, unknown>).go !== undefined
@@ -111,25 +111,25 @@ export function safeClearSelectedSkill(): Promise<void> {
   }
 }
 
-export function safeGetConfig(): Promise<ConfigSnapshot | null> {
+export function safeGetConfig(): Promise<ConfigView | null> {
   try {
-    return GetConfig().then((cfg) => cfg as unknown as ConfigSnapshot)
+    return GetConfig().then((cfg) => cfg as unknown as ConfigView)
   } catch {
     return Promise.resolve(null)
   }
 }
 
-export function safeSaveConfig(cfg: ConfigSnapshot): Promise<ConfigSnapshot | null> {
+export function safeSaveConfig(cfg: ConfigView): Promise<ConfigView | null> {
   try {
-    return SaveConfig(cfg as never).then((saved) => saved as unknown as ConfigSnapshot)
+    return SaveConfig(cfg as never).then((saved) => saved as unknown as ConfigView)
   } catch {
     return Promise.resolve(null)
   }
 }
 
-export function safeSkillManagementSnapshot(): Promise<SkillManagement | null> {
+export function safeSkillManagementView(): Promise<SkillManagement | null> {
   try {
-    return GetSkillManagement().then((snapshot: unknown) => snapshot as SkillManagement)
+    return GetSkillManagement().then((view: unknown) => view as SkillManagement)
   } catch {
     return Promise.resolve(null)
   }
@@ -137,7 +137,7 @@ export function safeSkillManagementSnapshot(): Promise<SkillManagement | null> {
 
 export function safeRefreshSkillManagement(): Promise<SkillManagement | null> {
   try {
-    return RefreshSkillManagement().then((snapshot: unknown) => snapshot as SkillManagement)
+    return RefreshSkillManagement().then((view: unknown) => view as SkillManagement)
   } catch {
     return Promise.resolve(null)
   }
@@ -145,7 +145,7 @@ export function safeRefreshSkillManagement(): Promise<SkillManagement | null> {
 
 export function safeSetPluginEnabled(name: string, enabled: boolean): Promise<SkillManagement | null> {
   try {
-    return SetPluginEnabled(name, enabled).then((snapshot: unknown) => snapshot as SkillManagement)
+    return SetPluginEnabled(name, enabled).then((view: unknown) => view as SkillManagement)
   } catch {
     return Promise.resolve(null)
   }

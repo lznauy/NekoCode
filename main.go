@@ -7,7 +7,6 @@ import (
 
 	botconfig "nekocode/bot/config"
 	"nekocode/bot/session"
-	botskill "nekocode/bot/skill"
 	"nekocode/common"
 	"nekocode/guiapp"
 
@@ -77,23 +76,23 @@ func (a *App) ClearSelectedSkill() {
 	a.impl.ClearSelectedSkill()
 }
 
-func (a *App) GetConfig() botconfig.Snapshot {
+func (a *App) GetConfig() botconfig.View {
 	return a.impl.GetConfig()
 }
 
-func (a *App) SaveConfig(cfg botconfig.Snapshot) (botconfig.Snapshot, error) {
+func (a *App) SaveConfig(cfg botconfig.View) (botconfig.View, error) {
 	return a.impl.SaveConfig(cfg)
 }
 
-func (a *App) GetSkillManagement() botskill.ManagementSnapshot {
+func (a *App) GetSkillManagement() common.SkillManagementView {
 	return a.impl.GetSkillManagement()
 }
 
-func (a *App) RefreshSkillManagement() botskill.ManagementSnapshot {
+func (a *App) RefreshSkillManagement() common.SkillManagementView {
 	return a.impl.RefreshSkillManagement()
 }
 
-func (a *App) SetPluginEnabled(name string, enabled bool) (botskill.ManagementSnapshot, error) {
+func (a *App) SetPluginEnabled(name string, enabled bool) (common.SkillManagementView, error) {
 	return a.impl.SetPluginEnabled(name, enabled)
 }
 

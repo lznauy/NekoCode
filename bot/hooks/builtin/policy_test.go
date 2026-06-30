@@ -160,6 +160,69 @@ func TestExploreCascadeHook(t *testing.T) {
 	}
 }
 
+func TestToolResultGuardrailHook(t *testing.T) {
+	hk := ToolResultGuardrailHook()
+	s := newState()
+
+	s.Set(StoreToolResultCount, 40)
+	if r := hk.On(s); r != nil {
+		t.Fatalf("threshold should be silent, got %+v", r)
+	}
+	s.Set(StoreToolResultCount, 41)
+	if r := hk.On(s); r == nil || r.Hint == nil || r.Hint.Type != "tool_results" {
+		t.Fatalf("tool result guardrail = %+v, want hint", r)
+	}
+	if s.Get(CounterToolResultWarned) != 41 {
+		t.Fatalf("last warned = %d, want 41", s.Get(CounterToolResultWarned))
+	}
+	s.Set(StoreToolResultCount, 45)
+	if r := hk.On(s); r != nil {
+		t.Fatalf("interval should dedupe, got %+v", r)
+	}
+}
+
+func TestReadBeforeWriteHook(t *testing.T) {
+	hk := ReadBeforeWriteHook()
+	s := newState()
+	s.SetTool("edit", nil)
+	s.SetStr(StoreEditTargetPath, "main.go")
+	s.Set(StoreEditTargetExists, 1)
+	s.Set(StoreEditTargetWasRead, 0)
+	s.Set(StoreEditAnchorSufficient, 0)
+
+	if r := hk.On(s); r == nil || r.BlockTool == nil || !strings.Contains(r.BlockTool.Reason, "main.go") {
+		t.Fatalf("unread edit result = %+v, want block", r)
+	}
+
+	s.Set(StoreEditTargetWasRead, 1)
+	if r := hk.On(s); r != nil {
+		t.Fatalf("read target should pass, got %+v", r)
+	}
+
+	s.Set(StoreEditTargetWasRead, 0)
+	s.Set(StoreEditAnchorSufficient, 1)
+	if r := hk.On(s); r != nil {
+		t.Fatalf("anchored edit should pass, got %+v", r)
+	}
+}
+
+func TestReadOnlySpiralHook(t *testing.T) {
+	hk := ReadOnlySpiralHook()
+	s := newState()
+
+	s.Set(StoreReadOnlyStreak, 2)
+	if r := hk.On(s); r != nil {
+		t.Fatalf("streak=2 should be silent, got %+v", r)
+	}
+	s.Set(StoreReadOnlyStreak, 3)
+	if r := hk.On(s); r == nil || r.Hint == nil || r.Hint.Type != "read_only_spiral" {
+		t.Fatalf("streak=3 result = %+v, want hint", r)
+	}
+	if s.Get(StoreReadOnlyStreak) != 0 {
+		t.Fatalf("streak after hook = %d, want reset", s.Get(StoreReadOnlyStreak))
+	}
+}
+
 func TestFinalCheckHookRequiresVerificationForModifiedFiles(t *testing.T) {
 	hk := FinalCheckHook()
 	s := newState()

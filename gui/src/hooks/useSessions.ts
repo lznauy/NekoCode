@@ -150,7 +150,7 @@ function buildStepsFromBlocks(blocks: DisplayMessage['Blocks']): ToolStep[] {
       output: b.Content,
       status: isError ? 'error' as const : 'done' as const,
       isError,
-      collapsed: persistentTool(b.ToolName),
+      collapsed: shouldCollapseLoadedTool(b.ToolName),
     }
   })
 }
@@ -166,6 +166,6 @@ function extractFilePath(content: string): string {
   return h > 0 ? inner.slice(0, h) : inner
 }
 
-function persistentTool(name: string): boolean {
-  return name === 'edit' || name === 'write' || name === 'bash'
+function shouldCollapseLoadedTool(name: string): boolean {
+  return !(name === 'edit' || name === 'bash')
 }

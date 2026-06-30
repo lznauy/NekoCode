@@ -4,13 +4,13 @@ import {
   isWailsEnvironment,
   safeRefreshSkillManagement,
   safeSetPluginEnabled,
-  safeSkillManagementSnapshot,
+  safeSkillManagementView,
 } from '../lib/wails'
 import type {
-  MCPServerSnapshot,
-  PluginSnapshot,
-  SkillManagementSnapshot,
-  SkillSnapshot,
+  MCPServerView,
+  PluginView,
+  SkillManagementView,
+  SkillView,
   SkillSourceKind,
 } from '../types/skills'
 
@@ -26,7 +26,7 @@ type PluginFilter = 'all' | 'enabled' | 'disabled'
 type McpFilter = 'all' | 'enabled' | 'disabled' | 'config' | 'plugin'
 
 export function SkillPanel({ open, onClose, onConfigureMcp }: SkillPanelProps) {
-  const [snapshot, setSnapshot] = useState<SkillManagementSnapshot | null>(null)
+  const [view, setView] = useState<SkillManagementView | null>(null)
   const [tab, setTab] = useState<Tab>('skills')
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
@@ -42,20 +42,20 @@ export function SkillPanel({ open, onClose, onConfigureMcp }: SkillPanelProps) {
     setLoading(true)
     setError('')
     if (!isWailsEnvironment()) {
-      setSnapshot(null)
+      setView(null)
       setError('当前是浏览器预览环境，无法访问 Wails skill 管理接口；请通过 Wails GUI 运行后再打开技能管理。')
       setLoading(false)
       return
     }
-    safeSkillManagementSnapshot()
-      .then((next) => applySnapshot(next))
+    safeSkillManagementView()
+      .then((next) => applyView(next))
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setLoading(false))
   }, [open])
 
-  const skills = snapshot?.skills ?? []
-  const plugins = snapshot?.plugins ?? []
-  const mcpServers = snapshot?.mcp ?? []
+  const skills = view?.skills ?? []
+  const plugins = view?.plugins ?? []
+  const mcpServers = view?.mcp ?? []
   const loadedCount = skills.filter((skill) => skill.loaded).length
   const pluginSkillCount = skills.filter((skill) => skill.sourceKind === 'plugin').length
   const localSkillCount = skills.filter((skill) => skill.sourceKind === 'local').length
@@ -104,24 +104,24 @@ export function SkillPanel({ open, onClose, onConfigureMcp }: SkillPanelProps) {
 
   if (!open) return null
 
-  function applySnapshot(next: SkillManagementSnapshot | null) {
+  function applyView(next: SkillManagementView | null) {
     if (!next) {
       setError('无法读取 skill 管理数据：Wails 接口没有返回数据')
       return
     }
-    const normalized: SkillManagementSnapshot = {
+    const normalized: SkillManagementView = {
       skills: next.skills ?? [],
       plugins: next.plugins ?? [],
       mcp: next.mcp ?? [],
     }
-    setSnapshot(normalized)
+    setView(normalized)
   }
 
   async function refresh() {
     setRefreshing(true)
     setError('')
     try {
-      applySnapshot(await safeRefreshSkillManagement())
+      applyView(await safeRefreshSkillManagement())
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -129,11 +129,11 @@ export function SkillPanel({ open, onClose, onConfigureMcp }: SkillPanelProps) {
     }
   }
 
-  async function togglePlugin(plugin: PluginSnapshot) {
+  async function togglePlugin(plugin: PluginView) {
     setMutating(plugin.name)
     setError('')
     try {
-      applySnapshot(await safeSetPluginEnabled(plugin.name, !plugin.enabled))
+      applyView(await safeSetPluginEnabled(plugin.name, !plugin.enabled))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -255,8 +255,8 @@ const filterOptions: Array<{ value: Filter; label: string }> = [
 ]
 
 function SkillsView(props: {
-  filteredSkills: SkillSnapshot[]
-  plugins: PluginSnapshot[]
+  filteredSkills: SkillView[]
+  plugins: PluginView[]
   query: string
   setQuery: (v: string) => void
   filter: Filter
@@ -269,7 +269,7 @@ function SkillsView(props: {
   const builtinSkills = filteredSkills.filter((s) => s.sourceKind === 'builtin')
   const localSkills = filteredSkills.filter((s) => s.sourceKind === 'local')
   const pluginSkillsByPlugin = useMemo(() => {
-    const map = new Map<string, SkillSnapshot[]>()
+    const map = new Map<string, SkillView[]>()
     for (const s of filteredSkills) {
       if (s.sourceKind !== 'plugin' || !s.plugin) continue
       const list = map.get(s.plugin) ?? []
@@ -341,7 +341,7 @@ function SkillsView(props: {
   )
 }
 
-function SkillGroup(props: { title: string; subtitle?: string; skills: SkillSnapshot[] }) {
+function SkillGroup(props: { title: string; subtitle?: string; skills: SkillView[] }) {
   const { title, subtitle, skills } = props
   return (
     <div className="border-b border-border/40 last:border-b-0">
@@ -358,7 +358,7 @@ function SkillGroup(props: { title: string; subtitle?: string; skills: SkillSnap
   )
 }
 
-function SkillRow({ skill }: { skill: SkillSnapshot }) {
+function SkillRow({ skill }: { skill: SkillView }) {
   const [expanded, setExpanded] = useState(false)
   const files = skill.files ?? []
   return (
@@ -410,11 +410,11 @@ function SkillRow({ skill }: { skill: SkillSnapshot }) {
 }
 
 function PluginsView(props: {
-  plugins: PluginSnapshot[]
+  plugins: PluginView[]
   query: string
   setQuery: (v: string) => void
   mutating: string
-  onToggle: (plugin: PluginSnapshot) => void
+  onToggle: (plugin: PluginView) => void
   filter: PluginFilter
   setFilter: (v: PluginFilter) => void
   totalCount: number
@@ -461,7 +461,7 @@ function PluginsView(props: {
   )
 }
 
-function PluginRow(props: { plugin: PluginSnapshot; mutating: string; onToggle: (plugin: PluginSnapshot) => void }) {
+function PluginRow(props: { plugin: PluginView; mutating: string; onToggle: (plugin: PluginView) => void }) {
   const { plugin: p, mutating, onToggle } = props
   const [expanded, setExpanded] = useState(false)
   const badges = bundleBadges(p)
@@ -539,7 +539,7 @@ function BundleList(props: { title: string; items?: string[]; empty: string }) {
   )
 }
 
-function bundleBadges(plugin: PluginSnapshot): Array<{ label: string; tone: string }> {
+function bundleBadges(plugin: PluginView): Array<{ label: string; tone: string }> {
   const out: Array<{ label: string; tone: string }> = []
   const skills = plugin.skillNames?.length ?? 0
   const mcp = plugin.mcpServers?.length ?? 0
@@ -554,8 +554,8 @@ function bundleBadges(plugin: PluginSnapshot): Array<{ label: string; tone: stri
 }
 
 function McpView(props: {
-  servers: MCPServerSnapshot[]
-  allServers: MCPServerSnapshot[]
+  servers: MCPServerView[]
+  allServers: MCPServerView[]
   query: string
   setQuery: (v: string) => void
   filter: McpFilter
@@ -618,7 +618,7 @@ function McpView(props: {
   )
 }
 
-function McpRow({ server }: { server: MCPServerSnapshot }) {
+function McpRow({ server }: { server: MCPServerView }) {
   const cmd = [server.command, ...(server.args ?? [])].join(' ')
   return (
     <div className="grid gap-2 px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
@@ -732,7 +732,7 @@ function SegmentedFilter({
   )
 }
 
-function SourcePill({ skill }: { skill: SkillSnapshot }) {
+function SourcePill({ skill }: { skill: SkillView }) {
   const tone = sourceKindTone(skill.sourceKind)
   return (
     <span className={cn('shrink-0 rounded-sm px-1.5 py-0.5 text-[10px]', tone)}>

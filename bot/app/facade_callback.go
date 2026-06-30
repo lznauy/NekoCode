@@ -5,7 +5,7 @@ import (
 
 	"nekocode/bot/agent/runtime"
 	ctxmgr "nekocode/bot/contextmgr"
-	"nekocode/bot/plugin"
+	"nekocode/bot/extension/plugin"
 	"nekocode/bot/tools"
 	"nekocode/common"
 )
