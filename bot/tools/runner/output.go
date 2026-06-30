@@ -11,6 +11,19 @@ const (
 	tailLen  = 20
 )
 
+func formatOutput(toolName, output string) string {
+	if preserveFullOutput(toolName) {
+		return output
+	}
+	return truncateOutput(output)
+}
+
+func preserveFullOutput(toolName string) bool {
+	// task returns the sub-agent's final handoff. Truncating the middle can drop
+	// the exact findings the main agent delegated the work to obtain.
+	return toolName == "task"
+}
+
 func truncateOutput(output string) string {
 	lines := strings.Split(output, "\n")
 	if len(lines) <= maxLines {

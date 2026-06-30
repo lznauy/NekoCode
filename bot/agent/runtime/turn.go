@@ -2,33 +2,44 @@ package runtime
 
 import (
 	"nekocode/bot/agent/runtime/messages"
+	"nekocode/bot/agent/runtime/toolrun"
 	"nekocode/bot/hooks"
 	aggov "nekocode/bot/policy"
 	"nekocode/bot/policy/budget"
 	"nekocode/bot/tools"
 )
 
-func (a *Agent) prepareTurn(input string) budget.ToolQuota {
-	a.ctxMgr.AutoCompactIfNeeded()
-	quota := budget.ComputeQuota(a.ctxMgr.TokenUsage())
-	a.applyPreTurnHooks(input, quota)
+type turnRunner struct {
+	agent *Agent
+}
+
+func newTurnRunner(agent *Agent) *turnRunner {
+	return &turnRunner{agent: agent}
+}
+
+func (r *turnRunner) prepareTurn(input string) budget.ToolQuota {
+	a := r.agent
+	a.deps.ctxMgr.AutoCompactIfNeeded()
+	quota := budget.ComputeQuota(a.deps.ctxMgr.TokenUsage())
+	r.applyPreTurnHooks(input, quota)
 	return quota
 }
 
-func (a *Agent) applyPreTurnHooks(input string, quota budget.ToolQuota) {
-	if a.gov == nil || a.gov.HookReg == nil {
+func (r *turnRunner) applyPreTurnHooks(input string, quota budget.ToolQuota) {
+	a := r.agent
+	if a.deps.gov == nil || a.deps.gov.HookReg == nil {
 		a.applyTurnHints(nil)
 		return
 	}
-	a.gov.ResetTurnBetween(input, aggov.QuotaData{
+	a.deps.gov.ResetTurnBetween(input, aggov.QuotaData{
 		MaxSlots: quota.MaxSlots,
 		Used:     quota.Used,
 	})
-	a.gov.HookReg.Set(hooks.StoreTasksAllDone, boolStore(a.ctxMgr.AllTasksDone()))
-	a.gov.HookReg.Set(hooks.StoreHasTasks, boolStore(a.ctxMgr.HasTasks()))
+	a.deps.gov.HookReg.Set(hooks.StoreTasksAllDone, boolStore(a.deps.ctxMgr.AllTasksDone()))
+	a.deps.gov.HookReg.Set(hooks.StoreHasTasks, boolStore(a.deps.ctxMgr.HasTasks()))
 
 	var hints []hooks.Hint
-	for _, r := range a.gov.HookReg.Evaluate(hooks.PreTurn, "", false) {
+	for _, r := range a.deps.gov.HookReg.Evaluate(hooks.PreTurn, "", false) {
 		if r.Hint != nil {
 			hints = append(hints, *r.Hint)
 		}
@@ -43,77 +54,41 @@ func boolStore(ok bool) int64 {
 	return 0
 }
 
-func (a *Agent) interruptedBeforeReasoning(callback RunCallback) bool {
+func (r *turnRunner) interruptedBeforeReasoning(callback RunCallback) bool {
+	a := r.agent
 	a.drainSteering()
 	if a.getCtx().Err() == nil {
 		return false
 	}
-	a.stopReason = hooks.StopInterrupted
-	a.lastText = messages.MsgInterrupted
+	a.run.stopReason = hooks.StopInterrupted
+	a.run.lastText = messages.MsgInterrupted
 	if callback != nil {
 		callback("chat", "", "", messages.MsgInterrupted)
 	}
 	return true
 }
 
-func (a *Agent) retryAfterInterruptedReasoning(reasoning *ReasoningResult, msgCountBefore int) bool {
+func (r *turnRunner) retryAfterInterruptedReasoning(reasoning *ReasoningResult, msgCountBefore int) bool {
+	a := r.agent
 	if !reasoning.Interrupted {
 		return false
 	}
-	if a.finished.Load() {
-		a.stopReason = hooks.StopInterrupted
+	if a.life.finished.Load() {
+		a.run.stopReason = hooks.StopInterrupted
 		return false
 	}
 	// Count interrupted responses toward the step limit to prevent
 	// unbounded loops when the LLM repeatedly produces interrupted output.
-	a.step++
-	a.ctxMgr.TruncateTo(msgCountBefore)
+	a.run.step++
+	a.deps.ctxMgr.TruncateTo(msgCountBefore)
 	a.drainSteering()
 	return true
 }
 
-func (a *Agent) handleToolCalls(calls []tools.ToolCallItem, reasoning *ReasoningResult, quota *budget.ToolQuota, callback RunCallback) bool {
-	a.consecutiveHints = 0
-	a.consecutiveFailures = 0
-	a.gate.Reset()
-	return a.executeAndFeedback(calls, reasoning, quota, callback)
-}
-
-func (a *Agent) handleText(reasoning *ReasoningResult, callback RunCallback) (finished bool) {
-	if reasoning.IsError {
-		a.consecutiveFailures++
-		if a.consecutiveFailures >= maxConsecutiveFailures {
-			a.step++
-			a.stopReason = hooks.StopCompleted
-			a.lastText = ""
-			return true
-		}
-	} else {
-		a.consecutiveFailures = 0
-	}
-
-	recordable := isRecordableText(reasoning)
-	if a.applyPostTurnHooks(reasoning, recordable, callback) {
-		return a.stopReason == hooks.StopCompleted || a.stopReason == hooks.StopInterrupted || a.stopReason == hooks.StopFormatError
-	}
-
-	a.completeWithText(reasoning, recordable, callback)
-	return true
-}
-
-func isRecordableText(reasoning *ReasoningResult) bool {
-	return !reasoning.IsError && !reasoning.GarbledToolCall && reasoning.Action == ActionChat
-}
-
-func (a *Agent) completeWithText(reasoning *ReasoningResult, recordable bool, callback RunCallback) {
-	a.stopReason = hooks.StopCompleted
-	a.step++
-	a.lastText = reasoning.ActionInput
-	if recordable {
-		a.ctxMgr.AddAssistantResponse(reasoning.ActionInput, a.lastReason)
-		a.finalText = reasoning.ActionInput
-	}
-	if callback != nil {
-		callback(reasoning.Action.String(), "", "", reasoning.ActionInput)
-	}
+func (r *turnRunner) handleToolCalls(calls []tools.ToolCallItem, reasoning *ReasoningResult, quota *budget.ToolQuota, callback RunCallback) bool {
+	a := r.agent
+	a.run.consecutiveHints = 0
+	a.run.consecutiveFailures = 0
+	a.run.gate.Reset()
+	return a.toolRunner.ExecuteAndFeedback(calls, reasoning.TextContent, quota, toolrun.Callback(callback))
 }

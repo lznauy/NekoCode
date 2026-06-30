@@ -27,109 +27,133 @@ type RunResult struct {
 
 type RunCallback func(action, toolName, toolArgs, output string)
 
+type loopRunner struct {
+	agent *Agent
+}
+
+func newLoopRunner(agent *Agent) *loopRunner {
+	return &loopRunner{agent: agent}
+}
+
 func (a *Agent) Run(input string, callback RunCallback) *RunResult {
-	a.startRun(input)
+	return a.loopRunner.run(input, callback)
+}
 
-	defer a.logGovernanceSummary()
-	a.applyUserSubmitHooks()
+func (r *loopRunner) run(input string, callback RunCallback) *RunResult {
+	a := r.agent
+	r.startRun(input)
 
-	for !a.finished.Load() {
-		if a.stepLimitReached() {
+	defer r.logGovernanceSummary()
+	r.applyUserSubmitHooks()
+
+	for !a.life.finished.Load() {
+		if r.stepLimitReached() {
 			break
 		}
-		if finished := a.runTurn(input, callback); finished {
-			a.finished.Store(true)
+		if finished := r.runTurn(input, callback); finished {
+			a.life.finished.Store(true)
 		}
 	}
 
-	a.evaluateStop()
-	return a.finishRun(callback)
+	r.evaluateStop()
+	return r.finishRun(callback)
 }
 
-func (a *Agent) startRun(input string) {
+func (r *loopRunner) startRun(input string) {
+	a := r.agent
 	a.Reset()
-	a.ctxMgr.Add("user", input, "user")
+	a.deps.ctxMgr.Add("user", input, "user")
 }
 
-func (a *Agent) applyUserSubmitHooks() {
-	if a.gov == nil || a.gov.HookReg == nil {
+func (r *loopRunner) applyUserSubmitHooks() {
+	a := r.agent
+	if a.deps.gov == nil || a.deps.gov.HookReg == nil {
 		return
 	}
-	for _, r := range a.gov.HookReg.Evaluate(hooks.UserSubmit, "", false) {
+	for _, r := range a.deps.gov.HookReg.Evaluate(hooks.UserSubmit, "", false) {
 		a.injectHint(r.Hint)
 	}
 }
 
-func (a *Agent) logGovernanceSummary() {
-	if a.gov != nil {
-		a.gov.LogSummary(a.step)
+func (r *loopRunner) logGovernanceSummary() {
+	a := r.agent
+	if a.deps.gov != nil {
+		a.deps.gov.LogSummary(a.run.step)
 	}
 }
 
-func (a *Agent) stepLimitReached() bool {
-	if a.step < maxAgentSteps {
+func (r *loopRunner) stepLimitReached() bool {
+	a := r.agent
+	if a.run.step < maxAgentSteps {
 		return false
 	}
-	a.stopReason = hooks.StopCompleted
-	a.lastText = ""
-	a.finalText = ""
+	a.run.stopReason = hooks.StopCompleted
+	a.run.lastText = ""
+	a.run.finalText = ""
 	return true
 }
 
-func (a *Agent) finishRun(callback RunCallback) *RunResult {
-	if a.getCtx().Err() != nil || a.stopReason == hooks.StopInterrupted {
-		return &RunResult{FinalOutput: messages.MsgInterrupted, Steps: a.step}
+func (r *loopRunner) finishRun(callback RunCallback) *RunResult {
+	a := r.agent
+	if a.getCtx().Err() != nil || a.run.stopReason == hooks.StopInterrupted {
+		return &RunResult{FinalOutput: messages.MsgInterrupted, Steps: a.run.step}
 	}
-	if a.stopReason == hooks.StopCompleted {
-		output := a.finalText
+	if a.run.stopReason == hooks.StopCompleted {
+		output := a.run.finalText
 		if output == "" {
-			output = a.lastText
+			output = a.run.lastText
 		}
 		if output != "" {
-			return &RunResult{FinalOutput: output, Steps: a.step}
+			return &RunResult{FinalOutput: output, Steps: a.run.step}
 		}
 	}
-	return a.synthesizeAndReturn(callback)
+	output := a.modelRunner.Synthesize()
+	if callback != nil {
+		callback("chat", "", "", output)
+	}
+	return &RunResult{FinalOutput: output, Steps: a.run.step}
 }
 
-func (a *Agent) evaluateStop() {
-	if a.gov != nil && a.gov.HookReg != nil {
-		for _, r := range a.gov.HookReg.Evaluate(hooks.Stop, "", false) {
-			if r.Stop != nil {
-				a.stopReason = *r.Stop
+func (r *loopRunner) evaluateStop() {
+	a := r.agent
+	if a.deps.gov != nil && a.deps.gov.HookReg != nil {
+		for _, result := range a.deps.gov.HookReg.Evaluate(hooks.Stop, "", false) {
+			if result.Stop != nil {
+				a.run.stopReason = *result.Stop
 			}
-			if r.Hint != nil {
-				a.injectHint(r.Hint)
+			if result.Hint != nil {
+				a.injectHint(result.Hint)
 			}
 		}
 	}
 }
 
-func (a *Agent) runTurn(input string, callback RunCallback) (finished bool) {
-	msgCountBefore := a.ctxMgr.Len()
+func (r *loopRunner) runTurn(input string, callback RunCallback) (finished bool) {
+	a := r.agent
+	msgCountBefore := a.deps.ctxMgr.Len()
 
-	quota := a.prepareTurn(input)
-	defer a.ctxMgr.SetHints("")
+	quota := a.turnRunner.prepareTurn(input)
+	defer a.deps.ctxMgr.SetHints("")
 
-	if a.interruptedBeforeReasoning(callback) {
+	if a.turnRunner.interruptedBeforeReasoning(callback) {
 		return true
 	}
 
-	reasoning := a.Reason(input)
-	if a.retryAfterInterruptedReasoning(reasoning, msgCountBefore) {
+	reasoning := a.modelRunner.Reason(input)
+	if a.turnRunner.retryAfterInterruptedReasoning(reasoning, msgCountBefore) {
 		return false
 	}
-	if a.stopReason == hooks.StopInterrupted {
+	if a.run.stopReason == hooks.StopInterrupted {
 		return true
 	}
 
 	calls := reasoning.ToolCalls
 	if len(calls) > 0 {
-		if a.handleToolCalls(calls, reasoning, &quota, callback) {
+		if a.turnRunner.handleToolCalls(calls, reasoning, &quota, callback) {
 			return true
 		}
 		return false
 	}
 
-	return a.handleText(reasoning, callback)
+	return a.turnRunner.handleText(reasoning, callback)
 }

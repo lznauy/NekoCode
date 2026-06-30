@@ -98,3 +98,19 @@ func TestTruncateOutput(t *testing.T) {
 		t.Fatalf("missing truncation marker: %q", got)
 	}
 }
+
+func TestExecutorPreservesTaskOutput(t *testing.T) {
+	var output string
+	for i := range maxLines + 5 {
+		output += fmt.Sprintf("line %d\n", i)
+	}
+	e := NewExecutor(fakeRegistry{
+		"task": fakeTool{name: "task", mode: core.ModeParallel, danger: common.LevelSafe, output: output},
+	})
+
+	got := e.ExecuteBatch(context.Background(), []core.ToolCallItem{{ID: "1", Name: "task"}})[0]
+
+	if got.Output != output {
+		t.Fatal("task output should not be truncated")
+	}
+}

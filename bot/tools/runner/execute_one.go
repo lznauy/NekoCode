@@ -38,7 +38,7 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) core.To
 	}
 
 	e.invalidateMutatedPaths(tc.Name, paths)
-	return core.ToolCallResult{ID: tc.ID, Name: tc.Name, Output: truncateOutput(output)}
+	return core.ToolCallResult{ID: tc.ID, Name: tc.Name, Output: formatOutput(tc.Name, output)}
 }
 
 func (e *Executor) callbacks() (common.PhaseFunc, common.ConfirmFunc, bool) {

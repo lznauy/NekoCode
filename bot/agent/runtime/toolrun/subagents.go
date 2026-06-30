@@ -1,4 +1,4 @@
-package runtime
+package toolrun
 
 import (
 	"fmt"
@@ -14,7 +14,7 @@ type subSlotInfo struct {
 	colorIdx int
 }
 
-func (a *Agent) prepareSubagentCallbacks(allowed []tools.ToolCallItem, callback RunCallback) func() {
+func (r *Runner) prepareSubagentCallbacks(allowed []tools.ToolCallItem, callback Callback) func() {
 	var taskInfos []subSlotInfo
 	for i, c := range allowed {
 		if c.Name != "task" {
@@ -25,7 +25,7 @@ func (a *Agent) prepareSubagentCallbacks(allowed []tools.ToolCallItem, callback 
 			subType = "executor"
 		}
 		subID := uuid.New().String()
-		colorIdx, ok := a.subSlotMgr.Acquire(subID, subType)
+		colorIdx, ok := r.host.SubSlots().Acquire(subID, subType)
 		if !ok {
 			debug.Log("subSlotMgr: Acquire failed for %s (all slots full)", subType)
 			continue
@@ -54,7 +54,7 @@ func (a *Agent) prepareSubagentCallbacks(allowed []tools.ToolCallItem, callback 
 
 	return func() {
 		for _, ti := range taskInfos {
-			a.subSlotMgr.Release(ti.subID)
+			r.host.SubSlots().Release(ti.subID)
 			if callback != nil {
 				callback("sub_agent_end", "", ti.subID, "")
 			}
