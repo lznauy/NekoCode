@@ -3,7 +3,7 @@ package runtime
 import (
 	"context"
 
-	"nekocode/bot/agent/runtime/subagents"
+	"nekocode/bot/agent/runtime/toolrun"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/hooks"
 	"nekocode/bot/llm/types"
@@ -31,7 +31,7 @@ func (h runnerHost) Governance() *aggov.Manager {
 	return h.agent.deps.gov
 }
 
-func (h runnerHost) SubSlots() *subagents.SlotManager {
+func (h runnerHost) SubSlots() *toolrun.SlotManager {
 	return h.agent.deps.subSlotMgr
 }
 

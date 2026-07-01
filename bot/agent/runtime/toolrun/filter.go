@@ -2,9 +2,8 @@ package toolrun
 
 import (
 	"os"
+	"strings"
 
-	"nekocode/bot/agent/runtime/messages"
-	"nekocode/bot/agent/runtime/toolpolicy"
 	"nekocode/bot/debug"
 	"nekocode/bot/hooks"
 	"nekocode/bot/policy/budget"
@@ -16,6 +15,8 @@ type FilteredCalls struct {
 	Blocked      map[int]string
 	PreToolHints []*hooks.Hint
 }
+
+const policyBlockedDefault = "blocked by policy"
 
 func (r *Runner) FilterToolCalls(calls []tools.ToolCallItem, quota *budget.ToolQuota) FilteredCalls {
 	out := FilteredCalls{
@@ -52,17 +53,21 @@ func (r *Runner) applyPreToolPolicy(c tools.ToolCallItem, blocked map[int]string
 		if result.BlockTool != nil && (result.BlockTool.Tool == "" || result.BlockTool.Tool == c.Name) {
 			blocked[idx] = result.BlockTool.Reason
 			if blocked[idx] == "" {
-				blocked[idx] = messages.PolicyBlockedDefault
+				blocked[idx] = policyBlockedDefault
 			}
 			debug.Log("policy: blocked %s — %s", c.Name, blocked[idx])
 			shouldBlock = true
 		}
 		if result.Stop != nil {
-			blocked[idx] = messages.PolicyBlockedStop(result.Stop.String())
+			blocked[idx] = policyBlockedStop(result.Stop.String())
 			shouldBlock = true
 		}
 	}
 	return shouldBlock
+}
+
+func policyBlockedStop(stop string) string {
+	return "blocked by stop policy: " + stop
 }
 
 func (r *Runner) preparePreToolHookState(tc tools.ToolCallItem) {
@@ -70,10 +75,10 @@ func (r *Runner) preparePreToolHookState(tc tools.ToolCallItem) {
 	if gov == nil || gov.Ledger == nil {
 		return
 	}
-	targetPath := toolpolicy.ExtractTargetPath(tc.Name, tc.Args)
+	targetPath := extractTargetPath(tc.Name, tc.Args)
 	gov.HookReg.SetStr(hooks.StoreEditTargetPath, targetPath)
-	gov.HookReg.Set(hooks.StoreEditTargetWasRead, boolStore(targetPath != "" && gov.Ledger.WasRead(targetPath)))
-	gov.HookReg.Set(hooks.StoreEditAnchorSufficient, boolStore(tc.Name == "edit" && toolpolicy.HasSufficientEditAnchor(tc.Args)))
+	gov.HookReg.Flag(hooks.StoreEditTargetWasRead, targetPath != "" && gov.Ledger.WasRead(targetPath))
+	gov.HookReg.Flag(hooks.StoreEditAnchorSufficient, tc.Name == "edit" && hasSufficientEditAnchor(tc.Args))
 	exists := false
 	if targetPath != "" {
 		if resolved, err := tools.ValidatePath(targetPath); err == nil {
@@ -82,12 +87,33 @@ func (r *Runner) preparePreToolHookState(tc tools.ToolCallItem) {
 			}
 		}
 	}
-	gov.HookReg.Set(hooks.StoreEditTargetExists, boolStore(exists))
+	gov.HookReg.Flag(hooks.StoreEditTargetExists, exists)
 }
 
-func boolStore(ok bool) int64 {
-	if ok {
-		return 1
+func hasSufficientEditAnchor(args map[string]any) bool {
+	oldString, _ := args["oldString"].(string)
+	oldString = strings.TrimSpace(oldString)
+	if oldString == "" {
+		return false
 	}
-	return 0
+	if len([]rune(oldString)) >= 200 {
+		return true
+	}
+	lines := strings.Split(oldString, "\n")
+	nonEmpty := 0
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			nonEmpty++
+		}
+	}
+	return nonEmpty >= 5
+}
+
+func extractTargetPath(toolName string, args map[string]any) string {
+	switch toolName {
+	case "write", "edit":
+		p, _ := args["path"].(string)
+		return p
+	}
+	return ""
 }

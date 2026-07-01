@@ -31,9 +31,6 @@ func newSubagentWiring(toolRegistry *tools.Registry, ctxMgr *contextmgr.Manager,
 }
 
 func (w *subagentWiring) WireTaskTool(fm config.ModelConfig, ag agentCallbacks) {
-	subLLM := llm.NewClientWithProtocol(fm.Provider, fm.APIKey, fm.BaseURL, fm.Model, fm.Protocol)
-	engine := subagent.NewEngine(subLLM, w.toolRegistry, w.ctxMgr.MergeClient)
-
 	t, err := w.toolRegistry.Get("task")
 	if err != nil {
 		return
@@ -43,6 +40,9 @@ func (w *subagentWiring) WireTaskTool(fm config.ModelConfig, ag agentCallbacks) 
 		return
 	}
 	taskTool.Wire(func(ctx context.Context, prompt, agentType, thoroughness string) (*tools.TaskResult, error) {
+		subLLM := llm.NewClientWithProtocol(fm.Provider, fm.APIKey, fm.BaseURL, fm.Model, fm.Protocol)
+		subLLM.SetDisableThinking(true)
+		engine := subagent.NewEngine(subLLM, w.toolRegistry, w.ctxMgr.MergeClient)
 		cfg, ok := w.buildSubagentRunConfig(ctx, prompt, agentType, thoroughness, ag)
 		if !ok {
 			return nil, fmt.Errorf("unknown sub-agent type: %s", agentType)
@@ -98,16 +98,15 @@ func buildSubagentRunConfig(input subagentRunConfigInput) (subagent.RunConfig, b
 		return subagent.RunConfig{}, false
 	}
 	cfg := subagent.RunConfig{
-		Prompt:          input.Prompt,
-		AgentType:       at,
-		Cwd:             input.Cwd,
-		ProjectContext:  input.ProjectContext,
-		Thoroughness:    input.Thoroughness,
-		ContextWindow:   input.ContextWindow,
-		DisableThinking: true,
-		ConfirmFn:       input.ConfirmFn,
-		ToolState:       input.ToolState,
-		AddTokens:       input.AddTokens,
+		Prompt:         input.Prompt,
+		AgentType:      at,
+		Cwd:            input.Cwd,
+		ProjectContext: input.ProjectContext,
+		Thoroughness:   input.Thoroughness,
+		ContextWindow:  input.ContextWindow,
+		ConfirmFn:      input.ConfirmFn,
+		ToolState:      input.ToolState,
+		AddTokens:      input.AddTokens,
 	}
 	if subCB, ok := tools.TaskCallbackFromCtx(input.Context); ok {
 		cfg.OnToolCall = func(ev subagent.ToolCallEvent) {

@@ -1,10 +1,10 @@
-package modelrun
+package model
 
 import (
 	"context"
 	"strings"
+	"time"
 
-	"nekocode/bot/agent/runtime/reasoning"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/debug"
 	"nekocode/bot/hooks"
@@ -39,50 +39,101 @@ func New(host Host) *Runner {
 	return &Runner{host: host}
 }
 
-func (r *Runner) Reason(input string) *reasoning.Result {
+func CallLLMWithRetry(ctx context.Context, client types.LLM, buildOptions func() tools.LLMCallOptions) (*tools.LLMCallResult, error) {
+	var result *tools.LLMCallResult
+	err := WithRetry(ctx, func() error {
+		var err error
+		result, err = tools.CallLLM(client, buildOptions())
+		return err
+	})
+	return result, err
+}
+
+func (r *Runner) Reason(input string) *Result {
 	r.host.Phase(common.PhaseThinking)
 	if strings.HasPrefix(input, "/") && !strings.Contains(input, " ") {
-		return reasoning.CommandResult()
+		return CommandResult()
 	}
 
 	toolCalls, textContent, err := r.callLLMForTool()
-	return reasoning.FromLLM(toolCalls, textContent, err)
+	return FromLLM(toolCalls, textContent, err)
 }
 
 func (r *Runner) callLLMForTool() ([]tools.ToolCallItem, string, error) {
 	toolDefs := tools.ToToolDefs(r.host.ToolRegistry().Descriptors())
-	var items []tools.ToolCallItem
-	var textContent string
+	messages := r.host.ContextManager().Build()
+	messages = r.applyPreModelRequestHooks(messages)
 
-	err := withRetry(r.host.Context(), func() error {
-		messages := r.host.ContextManager().Build(true)
-		messages = r.applyPreModelRequestHooks(messages)
-
-		result, err := tools.CallLLM(r.host.LLM(), tools.LLMCallOptions{
+	result, err := CallLLMWithRetry(r.host.Context(), r.host.LLM(), func() tools.LLMCallOptions {
+		return tools.LLMCallOptions{
 			Ctx:       r.host.Context(),
 			Messages:  messages,
 			ToolDefs:  toolDefs,
 			Callbacks: r.streamCallbacks(),
 			CheckDone: r.host.IsFinished,
-		})
+		}
+	})
+	if err != nil {
+		return nil, "", err
+	}
+
+	textContent := result.Text
+	if result.Reasoning != "" {
+		r.host.SetLastReason(result.Reasoning)
+	}
+	if len(result.ToolCalls) > 0 {
+		r.host.ContextManager().AddAssistantToolCall(textContent, r.host.LastReason(), tools.ToLLMToolCalls(result.ToolCalls))
+	}
+	return result.ToolCalls, textContent, nil
+}
+
+const synthesizePrompt = "Based on the information collected above, provide a final answer. Do NOT call any more tools. Output your conclusion directly."
+const fallbackSynthesize = "Unable to produce a final summary — the model is currently unavailable. The task's tool operations may have completed, but the results could not be synthesized. Please try again or check the conversation log for details."
+
+func (r *Runner) Synthesize() string {
+	output := r.forceSynthesize()
+	r.host.ContextManager().AddAssistantResponse(output, "")
+	return output
+}
+
+func (r *Runner) forceSynthesize() string {
+	var text string
+	_ = WithRetry(r.host.Context(), func() error {
+		result, err := r.streamSynthesize(r.host.Context())
 		if err != nil {
 			return err
 		}
-
-		textContent = result.Text
-		if result.Reasoning != "" {
-			r.host.SetLastReason(result.Reasoning)
-		}
-		if len(result.ToolCalls) == 0 {
-			return nil
-		}
-
-		items = result.ToolCalls
-		r.host.ContextManager().AddAssistantToolCall(textContent, r.host.LastReason(), tools.ToLLMToolCalls(items))
+		text = result
 		return nil
 	})
+	if text != "" && !IsGarbledToolCall(text) {
+		return text
+	}
 
-	return items, textContent, err
+	debug.Log("forceSynthesize: primary path failed, attempting emergency fallback")
+	r.host.ContextManager().AutoCompactIfNeeded()
+	ctx, cancel := context.WithTimeout(r.host.Context(), 30*time.Second)
+	defer cancel()
+	if fb, _ := r.streamSynthesize(ctx); fb != "" && !IsGarbledToolCall(fb) {
+		return fb
+	}
+
+	return fallbackSynthesize
+}
+
+func (r *Runner) streamSynthesize(ctx context.Context) (string, error) {
+	messages := r.host.ContextManager().Build()
+	messages = append(messages, types.Message{Role: "user", Content: synthesizePrompt})
+
+	result, err := tools.CallLLM(r.host.LLM(), tools.LLMCallOptions{
+		Ctx:       ctx,
+		Messages:  messages,
+		Callbacks: r.streamCallbacks(),
+	})
+	if err != nil {
+		return "", err
+	}
+	return result.Text, nil
 }
 
 func (r *Runner) applyPreModelRequestHooks(messages []types.Message) []types.Message {
@@ -140,7 +191,7 @@ func (r *Runner) streamCallbacks() tools.StreamCallbacks {
 	}
 }
 
-func withRetry(ctx context.Context, fn func() error) error {
+func WithRetry(ctx context.Context, fn func() error) error {
 	var attempt int
 	return llm.Retry(ctx, llm.DefaultRetryConfig, func() error {
 		err := fn()

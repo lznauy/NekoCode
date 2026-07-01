@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	agentruntime "nekocode/bot/agent/runtime"
+	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/debug"
 	"nekocode/bot/llm/types"
 	"nekocode/bot/tools"
@@ -21,8 +23,51 @@ type Engine struct {
 	mergeClient  types.LLM
 }
 
+type runState struct {
+	startTime      time.Time
+	toolUseCount   int
+	totalTokens    int
+	sensitiveOps   int
+	readOnlyStreak int
+	lastText       string
+}
+
 func NewEngine(llmClient types.LLM, registry *tools.Registry, mergeClient types.LLM) *Engine {
 	return &Engine{llmClient: llmClient, toolRegistry: registry, mergeClient: mergeClient}
+}
+
+func newRunState() *runState {
+	return &runState{startTime: time.Now()}
+}
+
+func (s *runState) addTokens(cfg RunConfig) func(int, int) {
+	return func(prompt, compl int) {
+		s.totalTokens += prompt + compl
+		if cfg.AddTokens != nil {
+			cfg.AddTokens(prompt, compl)
+		}
+	}
+}
+
+func (s *runState) meta(ctxMgr *ctxmgr.Manager) runMeta {
+	hit, miss := ctxMgr.Tracker.CacheStats()
+	return runMeta{
+		totalTokens:     s.totalTokens,
+		toolUseCount:    s.toolUseCount,
+		durationMs:      time.Since(s.startTime).Milliseconds(),
+		cacheHitTokens:  hit,
+		cacheMissTokens: miss,
+		sensitiveOps:    s.sensitiveOps,
+	}
+}
+
+func (s *runState) recordCalls(calls []tools.ToolCallItem) {
+	s.toolUseCount += len(calls)
+	for _, c := range calls {
+		if isSensitiveCall(c) {
+			s.sensitiveOps++
+		}
+	}
 }
 
 func (e *Engine) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
@@ -37,51 +82,102 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
 	defer cleanupExecutor()
 
 	ctxMgr := e.newContextManager(cfg)
-	restoreThinking := e.applyThinkingMode(cfg)
-	defer restoreThinking()
 
 	ctxMgr.Add("user", cfg.Prompt)
 	phase := phaseReporter(cfg)
 	phase("Waiting")
 
-	for step := 0; ; step++ {
-		select {
-		case <-ctx.Done():
-			subLog("interrupted: step=%d lastText=%q", step, state.lastText[:min(len(state.lastText), 200)])
-			return buildPartialResult(state.lastText, state.meta(ctxMgr)), ctx.Err()
-		default:
-		}
-
-		if step >= maxSubAgentSteps {
-			subLog("max steps reached: step=%d", step)
-			return buildPartialResult(state.lastText, state.meta(ctxMgr)), nil
-		}
-
-		ctxMgr.AutoCompactIfNeeded()
-		calls, text, err := e.reason(ctx, ctxMgr, cfg.AgentType.Tools, state.addTokens(cfg), phase)
-		if err != nil {
-			subLog("error: %v", err)
-			if state.lastText != "" {
-				subLog("partial_result: %q", state.lastText[:min(len(state.lastText), 300)])
-				return buildPartialResult(state.lastText, state.meta(ctxMgr)), nil
-			}
-			return buildFailedResult(err.Error(), state.meta(ctxMgr)), err
-		}
-
-		if text != "" {
-			state.lastText = text
-		}
-		if len(calls) == 0 {
-			phase("done")
-			result := buildResult(text, state.meta(ctxMgr))
-			subLog("result: tokens=%d tools=%d duration=%dms output=%q",
-				result.TotalTokens, result.ToolUseCount, result.DurationMs,
-				text[:min(len(text), 300)])
-			return result, nil
-		}
-
-		state.recordCalls(calls)
-		e.executeToolBatch(ctx, cfg, ctxMgr, executor, calls, state, phase, subLog)
-		phase("Waiting")
+	run := &engineRun{
+		engine:   e,
+		ctx:      ctx,
+		cfg:      cfg,
+		ctxMgr:   ctxMgr,
+		executor: executor,
+		state:    state,
+		phase:    phase,
+		log:      subLog,
 	}
+
+	agentruntime.RunLoop(agentruntime.Loop{
+		StepLimitReached: run.stepLimitReached,
+		Step:             run.stepOnce,
+	})
+
+	return run.finish()
+}
+
+type engineRun struct {
+	engine   *Engine
+	ctx      context.Context
+	cfg      RunConfig
+	ctxMgr   *ctxmgr.Manager
+	executor *tools.Executor
+	state    *runState
+	phase    func(string)
+	log      func(string, ...any)
+
+	step   int
+	result *Result
+	err    error
+}
+
+func (r *engineRun) stepLimitReached() bool {
+	if r.step < maxSubAgentSteps {
+		return false
+	}
+	r.log("max steps reached: step=%d", r.step)
+	r.result = buildPartialResult(r.state.lastText, r.state.meta(r.ctxMgr))
+	return true
+}
+
+func (r *engineRun) stepOnce() bool {
+	if r.ctx.Err() != nil {
+		r.log("interrupted: step=%d lastText=%q", r.step, r.state.lastText[:min(len(r.state.lastText), 200)])
+		r.result = buildPartialResult(r.state.lastText, r.state.meta(r.ctxMgr))
+		r.err = r.ctx.Err()
+		return true
+	}
+
+	r.ctxMgr.AutoCompactIfNeeded()
+	calls, text, err := r.engine.reason(r.ctx, r.ctxMgr, r.cfg.AgentType.Tools, r.state.addTokens(r.cfg), r.phase)
+	if err != nil {
+		r.log("error: %v", err)
+		if r.state.lastText != "" {
+			r.log("partial_result: %q", r.state.lastText[:min(len(r.state.lastText), 300)])
+			r.result = buildPartialResult(r.state.lastText, r.state.meta(r.ctxMgr))
+			return true
+		}
+		r.result = buildFailedResult(err.Error(), r.state.meta(r.ctxMgr))
+		r.err = err
+		return true
+	}
+
+	if text != "" {
+		r.state.lastText = text
+	}
+	if len(calls) == 0 {
+		r.complete(text)
+		return true
+	}
+
+	r.state.recordCalls(calls)
+	r.engine.executeToolBatch(r.ctx, r.cfg, r.ctxMgr, r.executor, calls, r.state, r.phase, r.log)
+	r.phase("Waiting")
+	r.step++
+	return false
+}
+
+func (r *engineRun) complete(text string) {
+	r.phase("done")
+	r.result = buildResult(text, r.state.meta(r.ctxMgr))
+	r.log("result: tokens=%d tools=%d duration=%dms output=%q",
+		r.result.TotalTokens, r.result.ToolUseCount, r.result.DurationMs,
+		text[:min(len(text), 300)])
+}
+
+func (r *engineRun) finish() (*Result, error) {
+	if r.result == nil {
+		r.result = buildPartialResult(r.state.lastText, r.state.meta(r.ctxMgr))
+	}
+	return r.result, r.err
 }

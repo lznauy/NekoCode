@@ -10,7 +10,7 @@ func TestFilterValidMessages_PassesNormal(t *testing.T) {
 	m := newManager()
 	m.Add("user", "hello")
 	m.AddAssistantResponse("reply", "")
-	msgs := m.Build(false)
+	msgs := m.Build()
 	if len(msgs) < 2 {
 		t.Errorf("expected at least 2 messages in build output, got %d", len(msgs))
 	}
@@ -22,7 +22,7 @@ func TestFilterValidMessages_OrphanToolsDropped(t *testing.T) {
 	m.AddToolResultsBatch([]ToolResultMsg{
 		{Message: types.Message{Content: "orphan content", ToolCallID: "orphan-id"}, ToolName: "read"},
 	})
-	msgs := m.Build(false)
+	msgs := m.Build()
 	for _, msg := range msgs {
 		if msg.Role == "tool" && msg.ToolCallID == "orphan-id" {
 			t.Error("orphan tool result should have been filtered out")
@@ -39,7 +39,7 @@ func TestFilterValidMessages_AssistantWithToolCalls(t *testing.T) {
 		{Message: types.Message{Content: "file content", ToolCallID: "tc1"}, ToolName: "read"},
 	})
 
-	msgs := m.Build(false)
+	msgs := m.Build()
 	foundAsst, foundTool := false, false
 	for _, msg := range msgs {
 		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
@@ -57,7 +57,7 @@ func TestFilterValidMessages_AssistantWithToolCalls(t *testing.T) {
 func TestFilterValidMessages_EmptyContent(t *testing.T) {
 	m := newManager()
 	m.ctx.Messages = append(m.ctx.Messages, types.Message{Role: "assistant", Content: ""})
-	msgs := m.Build(false)
+	msgs := m.Build()
 	for _, msg := range msgs {
 		if msg.Role == "assistant" && msg.Content == "" {
 			t.Error("empty assistant messages should get '.' placeholder")
@@ -67,7 +67,7 @@ func TestFilterValidMessages_EmptyContent(t *testing.T) {
 
 func TestBuild_EmptyManager(t *testing.T) {
 	m := newManager()
-	msgs := m.Build(false)
+	msgs := m.Build()
 	if len(msgs) == 0 {
 		t.Error("Build should return at least system prompt")
 	}

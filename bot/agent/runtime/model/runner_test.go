@@ -1,4 +1,4 @@
-package modelrun
+package model
 
 import (
 	"context"
@@ -54,7 +54,7 @@ type fakeLLM struct {
 }
 
 func (f *fakeLLM) Chat(context.Context, []types.Message, []types.ToolDef) (*types.Response, error) {
-	panic("Chat should not be called by modelrun")
+	panic("Chat should not be called by model")
 }
 
 func (f *fakeLLM) ChatStream(ctx context.Context, messages []types.Message, tools []types.ToolDef) (<-chan types.StreamToken, <-chan error) {

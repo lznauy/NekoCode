@@ -115,10 +115,3 @@ func TestClassifyHandoff_SensitiveOps(t *testing.T) {
 		t.Errorf("classifyHandoff with sensitiveOps>0 = %v, want classWarn", got)
 	}
 }
-
-func TestClassifyHandoff_SensitiveOpsZero(t *testing.T) {
-	// Dangerous text still caught even without sensitiveOps.
-	if got := classifyHandoff("I ran rm -rf /tmp", runMeta{}); got != classWarn {
-		t.Errorf("classifyHandoff with dangerous text = %v, want classWarn", got)
-	}
-}

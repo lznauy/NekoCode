@@ -1,4 +1,4 @@
-package reasoning
+package model
 
 import (
 	"context"
@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"strings"
 
-	"nekocode/bot/agent/runtime/messages"
 	"nekocode/bot/debug"
 	"nekocode/bot/tools"
 )
+
+const fallbackNoAction = "Sorry, I couldn't determine what to do"
 
 type ActionType int
 
@@ -37,7 +38,7 @@ type Result struct {
 	TextContent     string
 	Interrupted     bool
 	GarbledToolCall bool
-	IsError         bool // set when the LLM call itself failed (not a text response)
+	IsError         bool
 }
 
 func CommandResult() *Result {
@@ -61,7 +62,7 @@ func FromLLM(toolCalls []tools.ToolCallItem, textContent string, err error) *Res
 			return &Result{Thought: "Format correction", Action: ActionChat, GarbledToolCall: true}
 		}
 		if textContent == "" {
-			textContent = messages.FallbackNoAction
+			textContent = fallbackNoAction
 		}
 		return &Result{Thought: "Direct reply", Action: ActionChat, ActionInput: textContent}
 	}
@@ -89,8 +90,6 @@ func FromLLM(toolCalls []tools.ToolCallItem, textContent string, err error) *Res
 	}
 }
 
-// IsGarbledToolCall detects when a model erroneously serializes tool calls
-// into the text content instead of using the structured tool_calls field.
 func IsGarbledToolCall(text string) bool {
 	t := strings.TrimSpace(text)
 	if t == "" {

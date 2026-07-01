@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"nekocode/bot/agent/runtime/subagents"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/hooks"
 	aggov "nekocode/bot/policy"
@@ -20,7 +19,7 @@ type fakeHost struct {
 	ctxMgr     *ctxmgr.Manager
 	executor   *tools.Executor
 	gov        *aggov.Manager
-	subSlots   *subagents.SlotManager
+	subSlots   *SlotManager
 	step       int
 	stopReason hooks.StopReason
 	lastText   string
@@ -35,7 +34,7 @@ func newFakeHost() *fakeHost {
 		ctxMgr:   ctxmgr.NewSub("test", 128000, nil),
 		executor: tools.NewExecutor(tools.NewRegistry()),
 		gov:      aggov.NewManager(hookReg),
-		subSlots: subagents.NewSlotManager(),
+		subSlots: NewSlotManager(),
 	}
 }
 
@@ -43,7 +42,7 @@ func (h *fakeHost) Context() context.Context             { return h.ctx }
 func (h *fakeHost) ContextManager() *ctxmgr.Manager      { return h.ctxMgr }
 func (h *fakeHost) Executor() *tools.Executor            { return h.executor }
 func (h *fakeHost) Governance() *aggov.Manager           { return h.gov }
-func (h *fakeHost) SubSlots() *subagents.SlotManager     { return h.subSlots }
+func (h *fakeHost) SubSlots() *SlotManager               { return h.subSlots }
 func (h *fakeHost) InjectHint(hint *hooks.Hint)          { h.hints = append(h.hints, hint) }
 func (h *fakeHost) IncStep()                             { h.step++ }
 func (h *fakeHost) StopPostTool(reason hooks.StopReason) { h.stopReason = reason; h.lastText = "" }

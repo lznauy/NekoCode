@@ -1,9 +1,6 @@
 package runtime
 
-import (
-	"nekocode/bot/agent/runtime/messages"
-	"nekocode/bot/hooks"
-)
+import "nekocode/bot/hooks"
 
 // maxAgentSteps is the hard ceiling on agent loop iterations. Prevents
 // infinite loops when the LLM keeps producing tool calls or PostTurn hooks
@@ -19,6 +16,8 @@ const maxConsecutiveHints = 3
 // failures (after retries). Beyond this the LLM is likely broken.
 const maxConsecutiveFailures = 5
 
+const msgInterrupted = "Interrupted"
+
 type RunResult struct {
 	FinalOutput string
 	Error       error
@@ -26,6 +25,14 @@ type RunResult struct {
 }
 
 type RunCallback func(action, toolName, toolArgs, output string)
+
+type Loop struct {
+	Done             func() bool
+	StepLimitReached func() bool
+	Step             func() bool
+	FinishStep       func()
+	EvaluateStop     func()
+}
 
 type loopRunner struct {
 	agent *Agent
@@ -39,23 +46,45 @@ func (a *Agent) Run(input string, callback RunCallback) *RunResult {
 	return a.loopRunner.run(input, callback)
 }
 
-func (r *loopRunner) run(input string, callback RunCallback) *RunResult {
-	a := r.agent
-	r.startRun(input)
-
-	defer r.logGovernanceSummary()
-	r.applyUserSubmitHooks()
-
-	for !a.life.finished.Load() {
-		if r.stepLimitReached() {
+func RunLoop(loop Loop) {
+	for !loop.done() {
+		if loop.stepLimitReached() {
 			break
 		}
-		if finished := r.runTurn(input, callback); finished {
-			a.life.finished.Store(true)
+		if loop.Step() {
+			if loop.FinishStep != nil {
+				loop.FinishStep()
+			}
+			break
 		}
 	}
 
-	r.evaluateStop()
+	if loop.EvaluateStop != nil {
+		loop.EvaluateStop()
+	}
+}
+
+func (loop Loop) done() bool {
+	return loop.Done != nil && loop.Done()
+}
+
+func (loop Loop) stepLimitReached() bool {
+	return loop.StepLimitReached != nil && loop.StepLimitReached()
+}
+
+func (r *loopRunner) run(input string, callback RunCallback) *RunResult {
+	a := r.agent
+	r.startRun(input)
+	defer r.logGovernanceSummary()
+	r.applyUserSubmitHooks()
+
+	RunLoop(Loop{
+		Done:             func() bool { return a.life.finished.Load() },
+		StepLimitReached: r.stepLimitReached,
+		Step:             func() bool { return r.runTurn(input, callback) },
+		FinishStep:       func() { a.life.finished.Store(true) },
+		EvaluateStop:     r.evaluateStop,
+	})
 	return r.finishRun(callback)
 }
 
@@ -96,7 +125,7 @@ func (r *loopRunner) stepLimitReached() bool {
 func (r *loopRunner) finishRun(callback RunCallback) *RunResult {
 	a := r.agent
 	if a.getCtx().Err() != nil || a.run.stopReason == hooks.StopInterrupted {
-		return &RunResult{FinalOutput: messages.MsgInterrupted, Steps: a.run.step}
+		return &RunResult{FinalOutput: msgInterrupted, Steps: a.run.step}
 	}
 	if a.run.stopReason == hooks.StopCompleted {
 		output := a.run.finalText

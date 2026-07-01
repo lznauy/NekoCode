@@ -3,50 +3,38 @@ package subagent
 import (
 	"context"
 
+	"nekocode/bot/agent/runtime/model"
 	ctxmgr "nekocode/bot/contextmgr"
-	"nekocode/bot/llm"
 	"nekocode/bot/llm/types"
 	"nekocode/bot/tools"
 )
 
 func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []string, addTokens func(int, int), phase func(string)) ([]tools.ToolCallItem, string, error) {
-	var calls []tools.ToolCallItem
-	var textContent string
-	var reasoningContent string
-
 	toolDefs := e.filteredToolDefs(allowed)
-	err := llm.Retry(ctx, llm.DefaultRetryConfig, func() error {
-		result, err := tools.CallLLM(e.llmClient, tools.LLMCallOptions{
+	result, err := model.CallLLMWithRetry(ctx, e.llmClient, func() tools.LLMCallOptions {
+		return tools.LLMCallOptions{
 			Ctx:      ctx,
-			Messages: mgr.Build(true),
+			Messages: mgr.Build(),
 			ToolDefs: toolDefs,
-		Callbacks: tools.StreamCallbacks{
-			OnPhase: phase,
-			AddTokens: func(p, c int) {
-				if addTokens != nil {
-					addTokens(p, c)
-				}
+			Callbacks: tools.StreamCallbacks{
+				OnPhase: phase,
+				AddTokens: func(p, c int) {
+					if addTokens != nil {
+						addTokens(p, c)
+					}
+				},
 			},
-		},
 			CheckDone: func() bool { return false },
-		})
-		if err != nil {
-			return err
 		}
-
-		textContent = result.Text
-		reasoningContent = result.Reasoning
-		calls = result.ToolCalls
-		return nil
 	})
 	if err != nil {
 		return nil, "", err
 	}
 
-	if len(calls) > 0 {
-		mgr.AddAssistantToolCall(textContent, reasoningContent, tools.ToLLMToolCalls(calls))
+	if len(result.ToolCalls) > 0 {
+		mgr.AddAssistantToolCall(result.Text, result.Reasoning, tools.ToLLMToolCalls(result.ToolCalls))
 	}
-	return calls, textContent, nil
+	return result.ToolCalls, result.Text, nil
 }
 
 func (e *Engine) filteredToolDefs(allowed []string) []types.ToolDef {

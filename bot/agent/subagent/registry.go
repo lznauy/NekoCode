@@ -1,9 +1,20 @@
 package subagent
 
 import (
+	_ "embed"
+
 	"nekocode/bot/tools"
 	"nekocode/common"
 )
+
+//go:embed prompts/executor.md
+var executorPrompt string
+
+//go:embed prompts/verify.md
+var verifyPrompt string
+
+//go:embed prompts/researcher.md
+var researcherPrompt string
 
 type AgentType struct {
 	Name               string
@@ -21,19 +32,18 @@ type ToolCallEvent struct {
 }
 
 type RunConfig struct {
-	Prompt          string
-	AgentType       AgentType
-	Cwd             string
-	ProjectContext  string
-	Thoroughness    string
-	ContextWindow   int
-	OnPhase         func(phase string)
-	AddTokens       func(prompt, compl int)
-	DisableThinking bool
-	ConfirmFn       common.ConfirmFunc
-	Handoff         string                 // injected into system prompt for cross-agent context
-	OnToolCall      func(ev ToolCallEvent) // sub-agent tool execution callback
-	ToolState       *tools.ExecutionState
+	Prompt         string
+	AgentType      AgentType
+	Cwd            string
+	ProjectContext string
+	Thoroughness   string
+	ContextWindow  int
+	OnPhase        func(phase string)
+	AddTokens      func(prompt, compl int)
+	ConfirmFn      common.ConfirmFunc
+	Handoff        string                 // injected into system prompt for cross-agent context
+	OnToolCall     func(ev ToolCallEvent) // sub-agent tool execution callback
+	ToolState      *tools.ExecutionState
 }
 
 var (
@@ -42,6 +52,22 @@ var (
 )
 
 func register(a AgentType) { builtins.Register(a) }
+
+func init() {
+	register(AgentType{
+		Name: "executor", SystemPrompt: executorPrompt,
+		Tools: []string{"read", "write", "edit", "bash", "grep", "glob", "list"},
+	})
+	register(AgentType{
+		Name: "verify", SystemPrompt: verifyPrompt,
+		Tools: []string{"read", "grep", "glob", "list", "bash"},
+	})
+	register(AgentType{
+		Name: "researcher", SystemPrompt: researcherPrompt,
+		Tools:              []string{"read", "grep", "glob", "list", "web_search", "web_fetch"},
+		OmitProjectContext: true,
+	})
+}
 
 // RegisterPlugin registers a plugin-provided agent type.
 func RegisterPlugin(a AgentType) { plugins.Register(a) }

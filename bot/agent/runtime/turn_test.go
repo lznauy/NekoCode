@@ -134,7 +134,7 @@ func TestHandleText_IsError_WithPendingTasks_HintInjected(t *testing.T) {
 	}
 
 	a.applyTurnHints(nil)
-	msgs := a.deps.ctxMgr.Build(false)
+	msgs := a.deps.ctxMgr.Build()
 	if len(msgs) == 0 || msgs[len(msgs)-1].Role != "system" || !strings.Contains(msgs[len(msgs)-1].Content, `type="policy_block"`) {
 		t.Fatalf("expected pending hook hint in transient system layer, got %+v", msgs)
 	}

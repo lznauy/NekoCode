@@ -49,7 +49,7 @@ type MCPServerConfig struct {
 type Config struct {
 	Active         string                     `json:"active"` // name of the active model
 	ContextWindow  int                        `json:"context_window"`
-	FlashModel     string                     `json:"flash_model,omitempty"` // cheap model for sub-tasks (subagents)
+	FlashModel     string                     `json:"flash_model,omitempty"` // optional lightweight model; empty uses the active model
 	Models         []ModelConfig              `json:"models"`
 	ImageGenModels []ImageGenConfig           `json:"image_gen_models,omitempty"` // text-to-image models
 	MCPServers     map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
@@ -242,8 +242,8 @@ func Validate(cfg *Config) error {
 	return nil
 }
 
-// ResolveModel looks up a named model. If found, returns its full config.
-// If not found, falls back to the active model's config with the given name as the model field.
+// ResolveModel looks up a named model. Empty names use the active model.
+// Unknown names use the active provider settings with the given model name.
 func (c *Config) ResolveModel(name string) ModelConfig {
 	if name == "" {
 		return c.ActiveModelConfig()

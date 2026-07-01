@@ -4,7 +4,7 @@ import (
 	"nekocode/bot/llm/types"
 )
 
-func (m *Manager) Build(withTools bool) []types.Message {
+func (m *Manager) Build() []types.Message {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := m.ctx.BuildLayer0()

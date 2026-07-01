@@ -3,9 +3,6 @@ package toolrun
 import (
 	"context"
 
-	"nekocode/bot/agent/runtime/messages"
-	"nekocode/bot/agent/runtime/subagents"
-	"nekocode/bot/agent/runtime/toolflow"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/hooks"
 	aggov "nekocode/bot/policy"
@@ -20,7 +17,7 @@ type Host interface {
 	ContextManager() *ctxmgr.Manager
 	Executor() *tools.Executor
 	Governance() *aggov.Manager
-	SubSlots() *subagents.SlotManager
+	SubSlots() *SlotManager
 	InjectHint(*hooks.Hint)
 	IncStep()
 	StopPostTool(hooks.StopReason)
@@ -34,6 +31,13 @@ func New(host Host) *Runner {
 	return &Runner{host: host}
 }
 
+func policyRequireTool(tool, reason string) string {
+	if tool != "" {
+		return "必须先调用 " + tool + "：" + reason
+	}
+	return reason
+}
+
 func (r *Runner) ExecuteAndFeedback(calls []tools.ToolCallItem, textContent string, quota *budget.ToolQuota, callback Callback) bool {
 	if textContent != "" && callback != nil {
 		callback("think", "", "", textContent)
@@ -41,16 +45,16 @@ func (r *Runner) ExecuteAndFeedback(calls []tools.ToolCallItem, textContent stri
 
 	filtered := r.FilterToolCalls(calls, quota)
 	r.host.Executor().PreparePreviews(filtered.Allowed)
-	toolflow.EmitStartCallbacks(calls, filtered.Blocked, toolflow.Callback(callback))
+	emitStartCallbacks(calls, filtered.Blocked, callback)
 
 	cleanupSubagents := r.prepareSubagentCallbacks(filtered.Allowed, callback)
 	defer cleanupSubagents()
 
 	execResults := r.executeAllowedTools(filtered.Allowed, callback)
-	results := toolflow.MergeResults(calls, filtered.Blocked, execResults)
+	results := mergeResults(calls, filtered.Blocked, execResults)
 	r.recordToolCalls(calls, filtered.Blocked, results)
 
-	msgs := toolflow.EmitResultCallbacks(calls, results, toolflow.Callback(callback))
+	msgs := emitResultCallbacks(calls, results, callback)
 	postToolHints := r.evaluatePostToolUseHints(calls, filtered.Blocked, results)
 	r.addToolResultsAndHints(calls, msgs, filtered.PreToolHints, postToolHints)
 
@@ -75,7 +79,7 @@ func (r *Runner) ApplyPostToolHooks() bool {
 			r.host.InjectHint(&hooks.Hint{
 				Type:     "require_tool",
 				Severity: "critical",
-				Content:  requireToolReason(result.RequireTool.Tool, result.RequireTool.Reason),
+				Content:  policyRequireTool(result.RequireTool.Tool, result.RequireTool.Reason),
 			})
 		}
 		if result.BlockFinal != nil {
@@ -84,11 +88,4 @@ func (r *Runner) ApplyPostToolHooks() bool {
 		r.host.InjectHint(result.Hint)
 	}
 	return false
-}
-
-func requireToolReason(tool, reason string) string {
-	if tool == "" {
-		return reason
-	}
-	return messages.PolicyRequireTool(tool, reason)
 }

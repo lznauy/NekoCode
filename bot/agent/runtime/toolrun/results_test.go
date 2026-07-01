@@ -1,4 +1,4 @@
-package toolflow
+package toolrun
 
 import (
 	"strings"
@@ -18,7 +18,7 @@ func TestMergeResultsPreservesOriginalCallOrder(t *testing.T) {
 		{ID: "3", Name: "bash", Output: "bash ok"},
 	}
 
-	results := MergeResults(calls, map[int]string{1: "blocked"}, execResults)
+	results := mergeResults(calls, map[int]string{1: "blocked"}, execResults)
 	if len(results) != 3 {
 		t.Fatalf("results = %d, want 3", len(results))
 	}
@@ -29,7 +29,7 @@ func TestMergeResultsPreservesOriginalCallOrder(t *testing.T) {
 
 func TestEmitResultCallbacksUsesEffectiveOutput(t *testing.T) {
 	var gotOutput string
-	msgs := EmitResultCallbacks(
+	msgs := emitResultCallbacks(
 		[]tools.ToolCallItem{{ID: "1", Name: "read", Args: map[string]any{"path": "a.go"}}},
 		[]tools.ToolCallResult{{ID: "1", Name: "read", Output: "ok"}},
 		func(action, toolName, toolArgs, output string) {
@@ -46,7 +46,7 @@ func TestEmitResultCallbacksUsesEffectiveOutput(t *testing.T) {
 }
 
 func TestEmitResultCallbacksMarksErrors(t *testing.T) {
-	msgs := EmitResultCallbacks(
+	msgs := emitResultCallbacks(
 		[]tools.ToolCallItem{{ID: "1", Name: "bash", Args: map[string]any{"command": "false"}}},
 		[]tools.ToolCallResult{{ID: "1", Name: "bash", Error: "command failed: exit status 1"}},
 		nil,
@@ -59,7 +59,7 @@ func TestEmitResultCallbacksMarksErrors(t *testing.T) {
 
 func TestEmitStartCallbacksMarksBlockedCalls(t *testing.T) {
 	var events []string
-	EmitStartCallbacks([]tools.ToolCallItem{
+	emitStartCallbacks([]tools.ToolCallItem{
 		{Name: "read", Args: map[string]any{"path": "x.go"}},
 		{Name: "write", Args: map[string]any{"path": "x.go"}},
 	}, map[int]string{1: "blocked"}, func(action, toolName, toolArgs, output string) {

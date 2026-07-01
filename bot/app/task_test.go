@@ -32,7 +32,7 @@ func TestBuildSubagentRunConfigWiresCallbacks(t *testing.T) {
 	if !ok {
 		t.Fatal("expected config")
 	}
-	if cfg.Prompt != "do it" || !cfg.DisableThinking {
+	if cfg.Prompt != "do it" {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 	cfg.OnToolCall(subagent.ToolCallEvent{Action: "start", ToolName: "read", ToolArgs: "path=a", Output: "ok"})

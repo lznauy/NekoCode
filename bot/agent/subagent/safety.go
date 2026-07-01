@@ -6,6 +6,26 @@ import (
 	"nekocode/bot/tools"
 )
 
+var sensitivePathPatterns = []string{
+	".env", ".env.local", ".env.production",
+	"credentials", "secrets", "password",
+	".git/config", ".gitconfig",
+	"id_rsa", "id_ed25519", "private key",
+	".claude/settings.json", ".claude/settings.local.json",
+	"/etc/shadow", "/etc/passwd",
+}
+
+var dangerousCommandPatterns = []string{
+	"rm -rf", "rm -r", "rmdir",
+	"git push --force", "git push -f",
+	"git reset --hard",
+	"chmod 777", "chmod -r 777",
+	"> /dev/", "dd if=",
+	"mkfs.", "format ",
+	":(){ :|:& };:",
+	"curl", "wget",
+}
+
 func isSensitiveCall(c tools.ToolCallItem) bool {
 	switch c.Name {
 	case "bash":
@@ -42,14 +62,7 @@ func extractPaths(c tools.ToolCallItem) []string {
 
 func isSensitivePath(p string) bool {
 	lower := strings.ToLower(p)
-	for _, f := range []string{
-		".env", ".env.local", ".env.production",
-		"credentials", "secrets", "password",
-		".git/config", ".gitconfig",
-		"id_rsa", "id_ed25519", "private key",
-		".claude/settings.json", ".claude/settings.local.json",
-		"/etc/shadow", "/etc/passwd",
-	} {
+	for _, f := range sensitivePathPatterns {
 		if strings.Contains(lower, f) {
 			return true
 		}
@@ -59,16 +72,7 @@ func isSensitivePath(p string) bool {
 
 func isDangerousCommand(cmd string) bool {
 	lower := strings.ToLower(cmd)
-	for _, pat := range []string{
-		"rm -rf", "rm -r", "rmdir",
-		"git push --force", "git push -f",
-		"git reset --hard",
-		"chmod 777", "chmod -r 777",
-		"> /dev/", "dd if=",
-		"mkfs.", "format ",
-		":(){ :|:& };:",
-		"curl", "wget",
-	} {
+	for _, pat := range dangerousCommandPatterns {
 		if strings.Contains(lower, pat) {
 			return true
 		}

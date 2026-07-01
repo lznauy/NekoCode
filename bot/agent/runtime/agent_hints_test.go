@@ -16,13 +16,13 @@ func TestInjectHintUsesTransientLayerOnly(t *testing.T) {
 	}
 
 	a.applyTurnHints(nil)
-	msgs := a.deps.ctxMgr.Build(false)
+	msgs := a.deps.ctxMgr.Build()
 	if !messagesContain(msgs, `type="final_check"`) || !messagesContain(msgs, "run verification") {
 		t.Fatalf("expected transient final_check hint in build messages, got %+v", msgs)
 	}
 
 	a.deps.ctxMgr.SetHints("")
-	msgs = a.deps.ctxMgr.Build(false)
+	msgs = a.deps.ctxMgr.Build()
 	if messagesContain(msgs, `type="final_check"`) {
 		t.Fatalf("final_check hint leaked after clearing transient hints: %+v", msgs)
 	}

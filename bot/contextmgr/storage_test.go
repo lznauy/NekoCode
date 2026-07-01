@@ -196,7 +196,7 @@ func TestBuild_WithTools(t *testing.T) {
 	m := newManager()
 	m.SetContextWindow(100000)
 	m.Add("user", "hello")
-	msgs := m.Build(true)
+	msgs := m.Build()
 	if len(msgs) == 0 {
 		t.Error("Build should produce messages")
 	}
@@ -205,7 +205,7 @@ func TestBuild_WithTools(t *testing.T) {
 func TestBuild_WithoutTools(t *testing.T) {
 	m := newManager()
 	m.Add("user", "hello")
-	msgs := m.Build(false)
+	msgs := m.Build()
 	if len(msgs) == 0 {
 		t.Error("Build should produce messages even without tools")
 	}

@@ -1,4 +1,4 @@
-package subagents
+package toolrun
 
 import (
 	"fmt"
@@ -9,9 +9,6 @@ import (
 
 const maxSubSlots = 8
 
-// SlotManager controls sub-agent concurrency and color assignment.
-// Max 8 concurrent sub-agents. Each gets an exclusive color index 0-7.
-// Acquire blocks when all 8 slots are occupied.
 type SlotManager struct {
 	mu     sync.Mutex
 	cond   *sync.Cond
@@ -25,8 +22,6 @@ func NewSlotManager() *SlotManager {
 	return m
 }
 
-// Acquire blocks until a free slot is available, then assigns it.
-// Returns the color index and sub-agent info. ok is always true.
 func (m *SlotManager) Acquire(id, subType string) (colorIdx int, ok bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -45,8 +40,6 @@ func (m *SlotManager) Acquire(id, subType string) (colorIdx int, ok bool) {
 	return -1, false
 }
 
-// Release frees the slot occupied by the given sub-agent ID.
-// Idempotent: releasing an unknown ID is a no-op.
 func (m *SlotManager) Release(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -61,7 +54,6 @@ func (m *SlotManager) Release(id string) {
 	}
 }
 
-// String returns a debug representation.
 func (m *SlotManager) String() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()

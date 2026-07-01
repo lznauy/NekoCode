@@ -8,27 +8,26 @@ import (
 )
 
 func (e *Engine) newContextManager(cfg RunConfig) *ctxmgr.Manager {
-	ctxMgr := ctxmgr.NewSub(buildSystemPrompt(cfg), cfg.ContextWindow, e.mergeClient)
-	if cfg.Cwd != "" {
-		ctxMgr.Add("system", ctxfmt.FormatCwd(cfg.Cwd))
-	}
-	if cfg.ProjectContext != "" && !cfg.AgentType.OmitProjectContext {
-		ctxMgr.Add("system", cfg.ProjectContext)
-	}
-	return ctxMgr
+	return ctxmgr.NewSub(buildSystemPrompt(cfg), cfg.ContextWindow, e.mergeClient)
 }
 
 func buildSystemPrompt(cfg RunConfig) string {
-	systemPrompt := cfg.AgentType.SystemPrompt
+	parts := []string{cfg.AgentType.SystemPrompt}
 	if cfg.AgentType.Name == "researcher" && cfg.Thoroughness == thoroughDeep {
-		systemPrompt = strings.Replace(systemPrompt,
+		parts[0] = strings.Replace(parts[0],
 			"Focus on the specific question. For \"very thorough\": search across multiple directories and naming conventions.",
 			"Search across ALL packages, naming conventions, and locations. Read at least 5 files. Be exhaustive.", 1)
 	}
-	if cfg.Handoff != "" {
-		systemPrompt += "\n\n<handoff>\n" + cfg.Handoff + "\n</handoff>"
+	if cfg.Cwd != "" {
+		parts = append(parts, ctxfmt.FormatCwd(cfg.Cwd))
 	}
-	return systemPrompt
+	if cfg.ProjectContext != "" && !cfg.AgentType.OmitProjectContext {
+		parts = append(parts, cfg.ProjectContext)
+	}
+	if cfg.Handoff != "" {
+		parts = append(parts, "<handoff>\n"+cfg.Handoff+"\n</handoff>")
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func phaseReporter(cfg RunConfig) func(string) {
@@ -37,13 +36,4 @@ func phaseReporter(cfg RunConfig) func(string) {
 			cfg.OnPhase(p)
 		}
 	}
-}
-
-func (e *Engine) applyThinkingMode(cfg RunConfig) func() {
-	if !cfg.DisableThinking {
-		return func() {}
-	}
-	prev := e.llmClient.GetDisableThinking()
-	e.llmClient.SetDisableThinking(true)
-	return func() { e.llmClient.SetDisableThinking(prev) }
 }

@@ -18,7 +18,7 @@ import (
 type ContextStore interface {
 	Snapshot() ctxmgr.ManagerSnapshot
 	Restore(ctxmgr.ManagerSnapshot)
-	Build(includeSystem bool) []types.Message
+	Build() []types.Message
 	Clear()
 }
 
@@ -151,7 +151,7 @@ func (m *Manager) Export(path string) (string, int, error) {
 	if m.ctx == nil {
 		return "", 0, fmt.Errorf("session: context unavailable")
 	}
-	msgs := m.ctx.Build(false)
+	msgs := m.ctx.Build()
 	path, err := ExportMessages(msgs, path)
 	return path, len(msgs), err
 }
