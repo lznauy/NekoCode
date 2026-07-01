@@ -3,7 +3,7 @@ package app
 import (
 	"nekocode/bot/command"
 	ctxmgr "nekocode/bot/contextmgr"
-	"nekocode/bot/debug"
+	"nekocode/common/debug"
 	"nekocode/bot/extension/mcp"
 	"nekocode/bot/extension/plugin"
 	"nekocode/bot/extension/skill"

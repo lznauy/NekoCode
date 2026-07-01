@@ -2,7 +2,7 @@ package compact
 
 import (
 	"fmt"
-	"nekocode/bot/debug"
+	"nekocode/common/debug"
 	"strings"
 
 	"nekocode/bot/contextmgr/token"

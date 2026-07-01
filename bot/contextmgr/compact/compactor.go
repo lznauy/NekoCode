@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"nekocode/bot/debug"
+	"nekocode/common/debug"
 
 	ctxctx "nekocode/bot/contextmgr/context"
 	"nekocode/bot/contextmgr/token"

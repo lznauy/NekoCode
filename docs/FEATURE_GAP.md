@@ -1,48 +1,28 @@
-# NekoCode 功能缺失分析报告
+# NekoCode 功能对比报告
 
-> 基于对 `/home/lznauy/precode/NekoCode` 源码的逐模块审查，对比 Claude Code 的成熟能力，分析 NekoCode 当前已实现与缺失的功能。
-
----
-
-## 一、复盘修正
-
-本报告为 v0.3.2 版本的重新审查，修正了之前版本中的不准确之处：
-
-| 之前错误说法 | 实际情况 |
-|-------------|---------|
-| "没有 diff 工具" | `diff.go` 存在，且已升级为结构化 diff 模型（`diff_model.go`），支持 TUI diff 内联预览 |
-| "没有 skill 工具" | `bot/extension/skill/tool_skill.go` 实现了 `SkillTool`，动态注册到 toolRegistry |
-| "没有 project_info 工具" | `bot/index/projecttool/tool.go` 实现了 `ProjectInfoTool`，条件注册 |
-| "没有流式 API" | `llm/types/types.go` 定义了 `ChatStream` 接口，Anthropic 和 OpenAI 客户端均已实现 |
-| "没有 Markdown 渲染" | `tui/components/message/markdown.go` 使用 chroma/glamour 库渲染 |
-| "没有 diff 视图" | TUI 有 diff 颜色常量，edit 工具结果中展示 diff 预览 + 结构化 diff 模型 |
-| "没有鼠标支持" | TUI 启用鼠标模式，消息列表支持滚轮 |
-| "没有 plan 模式" | `/plan` 命令完整实现，`agent.SetPlanMode()` 存在 |
-| "Tab 补全缺失" | TUI 输入框支持 Tab/Shift+Tab 命令补全 |
-| "没有 /help" | 已实现，含动态 skill 命令列表 |
-| "没有 /model /config /context 等命令" | 均已实现 |
-| "没有 edit 后 lint" | `edit_lint.go` 对 Go 文件执行 gofmt 语法检查 |
+> 基于对 `/home/lznauy/precode/NekoCode` 源码的逐模块审查，与 Claude Code 成熟能力进行对比，分析 NekoCode 当前已实现与缺失的功能。
 
 ---
 
-## 二、已实现功能总览
+## 一、已实现功能总览
 
 ### 工具系统（13 个内置工具 + 3 个条件/动态工具）
 
 | 工具 | 文件 | 说明 |
 |------|------|------|
-| `bash` | tool_bash.go | Shell 执行，三级危险分类（forbidden/destructive/write/safe），heredoc 剥离 |
-| `read` | tool_read.go | 文件读取（文本/图片/PDF），支持行范围，输出 `[path#TAG]` 和行号内容 |
-| `write` | tool_write.go | 文件创建/覆写，自动创建父目录 |
-| `edit` | tool_edit.go | oldString/newString 内容锚定编辑，唯一匹配校验，自动快照 + 撤销 + gofmt lint |
-| `list` | tool_list.go | 目录列表 |
-| `tree` | tool_tree.go | 目录树，支持深度/条目限制 |
-| `glob` | tool_glob.go | 文件 glob 匹配，支持 `**` 递归 |
-| `grep` | tool_grep.go | 内容搜索（优先 rg，fallback grep），支持正则 + glob 过滤 + 上下文行 |
-| `web_search` | tool_websearch.go | 网页搜索 |
-| `web_fetch` | tool_webfetch.go | 网页抓取，URL 验证 + 重定向限制 |
-| `todo_write` | tool_todo.go | 任务列表管理，支持 TUI 回调 |
-| `task` | tool_task.go | 子 Agent 调度（researcher/executor/verify） |
+| `bash` | shell/tool_bash.go | Shell 执行，四级危险分类（LevelSafe/Write/Destructive/Forbidden），heredoc 剥离 |
+| `read` | filesystem/read/tool_read.go | 文件读取（文本/图片/PDF），支持行范围，输出 `[path#TAG]` 和行号内容 |
+| `write` | filesystem/write/tool_write.go | 文件创建/覆写，自动创建父目录 |
+| `edit` | filesystem/edit/tool_edit.go | oldString/newString 内容锚定编辑，唯一匹配校验，自动快照 + 撤销 + gofmt lint |
+| `list` | filesystem/list/tool_list.go | 目录列表 |
+| `tree` | filesystem/tree/tool_tree.go | 目录树，支持深度/条目限制 |
+| `glob` | filesystem/search/tool_glob.go | 文件 glob 匹配，支持 `**` 递归 |
+| `grep` | filesystem/search/tool_grep.go | 内容搜索（优先 rg，fallback grep），支持正则 + glob 过滤 + 上下文行 |
+| `web_search` | web/tool_websearch.go | 网页搜索 |
+| `web_fetch` | web/tool_webfetch.go | 网页抓取，URL 验证 + 重定向限制 |
+| `question` | question/tool_question.go | 向用户提问（结构化问题，支持单选/多选/自定义输入，等待回答） |
+| `todo_write` | todo/tool_todo.go | 任务列表管理，支持 GUI/TUI 回调 |
+| `task` | tasktool/tool_task.go | 子 Agent 调度（researcher/executor/verify） |
 | `project_info` | index/projecttool/tool.go | 代码索引查询（符号/文件/依赖/全文搜索）— 条件注册 |
 | `image_gen` | media/tool_image_gen.go | 图片生成（多模型配置）— 条件注册 |
 | `skill` | extension/skill/tool_skill.go | 技能加载工具 — 动态注册 |
@@ -90,7 +70,7 @@
 - **代码索引**：tree-sitter 多语言解析 + 图数据库 + 符号/依赖/全文搜索
 - **插件系统**：manifest 解析 + 命令注册 + Hook 注册 + 子 Agent 注册
 - **技能系统**：bundled 技能 + 文件加载 + 工具化 + 上下文注入
-- **命令系统**：`/plan`、`/sessions`、`/export`、`/model`、`/context` 等 13 个内置命令 + 动态 skill 命令
+- **命令系统**：`/help`、`/clear`、`/summarize`、`/new`、`/context`（含原 /stats 功能）、`/config`、`/model`、`/plan`、`/plugin`、`/sessions`、`/export` 共 11 个命令（含动态 skill 命令）
 - **MCP 客户端**：stdio 子进程模式，JSON-RPC 通信，工具发现
 - **LLM 层**：Anthropic + OpenAI 双协议，流式 API，重试机制
 - **配置**：provider/model/apiKey/baseURL + 图片生成模型配置
@@ -98,16 +78,16 @@
 
 ---
 
-## 三、功能缺失清单
+## 二、功能缺失清单
 
 ### 🔴 P0 — 阻碍基本可用性
 
 #### 1. Bash 安全机制薄弱
 
 ```
-当前：关键词黑名单（forbidden/destructive/write/safe 四级）
+当前：关键词模式匹配四级分类（LevelSafe / LevelWrite / LevelDestructive / LevelForbidden）
 缺失：
-  ❌ Bash AST 解析器 — 无法理解命令语法树，只能做字符串匹配
+  ❌ Bash AST 解析器 — 无法理解命令语法树，只能做字符串/前缀匹配
   ❌ 路径约束检查 — 无法限制文件访问范围（如只允许项目目录内操作）
   ❌ 沙箱执行 — 无容器/隔离环境执行
   ❌ 权限规则持久化 — 无法记住用户的 allow/deny 决定
@@ -117,7 +97,7 @@
 #### 2. 权限系统缺失
 
 ```
-Claude Code 有 21.6k 行权限代码，NekoCode 目前仅有基础确认：
+Claude Code 权限系统庞大，NekoCode 目前仅有基础确认：
   ✅ 工具级确认弹框（safe/modify/danger/blocked 四级）
   ❌ allow/deny 规则持久化
   ❌ 权限规则匹配引擎
@@ -146,12 +126,11 @@ Claude Code 有 21.6k 行权限代码，NekoCode 目前仅有基础确认：
 已有 13 内置 + 3 条件/动态工具，缺失的关键工具：
   ❌ LSP 工具 — 跳转定义、查找引用、诊断
   ❌ notebook 编辑 — Jupyter notebook 支持
-  ❌ ask_user_question — 向用户提问
   ❌ task 子工具 — task_list/get/update/stop/output（当前只有 task 创建）
   ❌ MCP 资源工具 — list_mcp_resources / read_mcp_resource
   ❌ 定时任务 — schedule_cron
   ❌ config 工具 — 读写配置
-  ❌ 独立 diff 工具 — 代码变更对比（当前 diff.go 是 edit 内部辅助）
+  ❌ 独立 diff 工具 — 代码变更对比（当前 diff 是 edit 内部辅助）
 ```
 
 ---
@@ -161,15 +140,14 @@ Claude Code 有 21.6k 行权限代码，NekoCode 目前仅有基础确认：
 #### 5. TUI 功能不完整
 
 ```
-已有：Markdown 渲染、diff 预览、鼠标滚轮、命令补全、基础组件
+已有：Markdown 渲染（glamour + chroma 语法高亮）、diff 预览、鼠标滚轮、命令补全、基础组件、
+      token 用量仪表盘（/context 显示 bar + used/total + sys/tools/todo/skills/msgs 分解）
 缺失：
-  ❌ 代码语法高亮 — glamour 不支持代码块语法高亮
   ❌ 文件树浏览器 — 无侧边栏文件浏览
   ❌ 多面板布局 — 无分屏（代码+对话+终端）
   ❌ 进度指示器 — 长时间操作无进度条
   ❌ 主题切换 — 仅 tokyo-night 硬编码
   ❌ 快捷键提示栏 — 无底部状态栏
-  ❌ 上下文可视化 — 无 token 用量仪表盘
   ❌ 搜索界面 — 无交互式搜索结果浏览
 ```
 
@@ -189,19 +167,21 @@ Claude Code 有 21.6k 行权限代码，NekoCode 目前仅有基础确认：
 #### 7. 上下文管理不完整
 
 ```
-已有：Head-Tail-Summary 压缩、持久化记忆、token 追踪、五级预警
+已有：Head-Tail-Summary 压缩、持久化记忆（手动 Build/Save）、token 追踪、五级预警、micro-compact 优先级裁剪（priorityLow/Medium/High）
+部分实现：
+  ⚠️ 摘要验证 — DESIGN.md 声称"二次校验"，但代码仅实现 XML block 提取（FormatCompactSummary），无实际验证逻辑
 缺失：
-  ❌ 智能上下文裁剪 — 基于重要性/相关性而非简单按时间
+  ❌ 记忆自动更新 — DESIGN.md 描述"10k token 后异步提取"，但代码仅实现手动 Build/Save，无自动触发机制
+  ❌ 智能上下文裁剪 — 基于内容相关性而非简单按时间
   ❌ 分层上下文 — 项目级/文件级/代码块级结构
   ❌ RAG 集成 — 无向量数据库检索增强
-  ❌ 上下文优先级排序 — 无相关性评分
-  ❌ 记忆自动更新 — 记忆需手动触发，无自动提取
 ```
 
 #### 8. 命令系统可扩展
 
 ```
-已有：/help、/new、/clear、/stats、/summarize、/context、/config、/model、/plan、/plugin、/sessions、/export、动态 skill
+已有（11 个命令，含动态 skill）：
+  /help、/clear、/summarize、/new、/context（含原 /stats 功能）、/config、/model、/plan、/plugin、/sessions、/export
 缺失：
   ❌ 命令别名
   ❌ 命令历史搜索
@@ -293,7 +273,7 @@ Claude Code 有 21.6k 行权限代码，NekoCode 目前仅有基础确认：
 
 ---
 
-## 四、NekoCode 的独特优势
+## 三、NekoCode 的独特优势
 
 相比 Claude Code，NekoCode 有以下亮点：
 
@@ -305,20 +285,22 @@ Claude Code 有 21.6k 行权限代码，NekoCode 目前仅有基础确认：
 6. **Hook 系统成熟** — 7 事件点 + 8 内置 Hook + 声明式插件 Hook
 7. **纯 Go SQLite** — 零 CGO 依赖，简化交叉编译
 8. **Edit Lint 集成** — Go 文件编辑后自动 gofmt 检查，防止语法错误积累
+9. **品牌一致性** — 独立设计的猫娘主题 logo + 全套平台图标资源（icns/ico/png），GUI/TUI 视觉统一
+10. **Prompt 编码纪律** — 针对 LLM 编码四大毛病（Karpathy 观察）的系统性 prompt 约束，覆盖主 agent + 子 agent + plan mode
 
 ---
 
-## 五、优先级建议
+## 四、优先级建议
 
 ```
 P0（必须立即补齐，否则无法作为 AI 编程助手使用）：
   1. Bash 安全增强（AST 解析 + 路径约束 + 沙箱）
   2. 权限系统（allow/deny 持久化规则）
-  3. 补充核心工具（LSP、ask_user_question、task 子工具）
+  3. 补充核心工具（LSP、task 子工具）
   4. 完善 CLI 入口（子命令 + 参数解析 + 帮助系统）
 
 P1（影响核心体验，应尽快实现）：
-  5. 代码语法高亮 + 文件树 + 多面板
+  5. 文件树 + 多面板
   6. LLM 模型路由 + Fallback + 更多模型支持
   7. 智能上下文裁剪 + RAG 集成
   8. 更多命令（/review、/commit、/diff 等）

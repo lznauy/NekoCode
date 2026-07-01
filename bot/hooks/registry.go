@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"nekocode/bot/debug"
+	"nekocode/common/debug"
 )
 
 type HookCounts struct {

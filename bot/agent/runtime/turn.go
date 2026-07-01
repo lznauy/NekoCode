@@ -200,6 +200,10 @@ func (r *turnRunner) applyFinalPolicyBlock(reasoning *ReasoningResult, reason st
 		reason = policyBlockFinal
 	}
 	a.run.lastText = reasoning.ActionInput
+	// Keep finalText in sync so finishRun won't fall through to Synthesize
+	// (which would otherwise append a spurious synthesized answer on top of
+	// the real final text the user already saw).
+	a.run.finalText = reasoning.ActionInput
 
 	retry, hint := a.run.gate.TryRetry(reason)
 	if !retry {

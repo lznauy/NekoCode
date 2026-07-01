@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"nekocode/bot/config"
-	"nekocode/bot/sdk/volcengine"
 	"nekocode/bot/tools/toolhelpers"
 )
 
@@ -48,7 +47,7 @@ func (t *ImageGenTool) executeJimeng(ctx context.Context, cfg config.ImageGenCon
 		model = "jimeng_t2i_v31"
 	}
 
-	signer := volcengine.NewSigner(cfg.APIKey, cfg.SecretKey, "cn-north-1", "cv")
+	signer := NewSigner(cfg.APIKey, cfg.SecretKey, "cn-north-1", "cv")
 	submitBody := map[string]any{
 		"req_key": model,
 		"prompt":  prompt,
@@ -84,7 +83,7 @@ func (t *ImageGenTool) executeJimeng(ctx context.Context, cfg config.ImageGenCon
 	return "", fmt.Errorf("no images returned, status: %s", result.Status)
 }
 
-func (t *ImageGenTool) jimengSubmit(ctx context.Context, signer *volcengine.Signer, baseURL string, body map[string]any) (string, error) {
+func (t *ImageGenTool) jimengSubmit(ctx context.Context, signer *Signer, baseURL string, body map[string]any) (string, error) {
 	respBody, err := t.jimengCallRaw(ctx, signer, baseURL, "CVSync2AsyncSubmitTask", body)
 	if err != nil {
 		return "", err
@@ -99,7 +98,7 @@ func (t *ImageGenTool) jimengSubmit(ctx context.Context, signer *volcengine.Sign
 	return result.Data.TaskID, nil
 }
 
-func (t *ImageGenTool) jimengPoll(ctx context.Context, signer *volcengine.Signer, baseURL string, queryBody map[string]any) (*jimengQueryRespData, error) {
+func (t *ImageGenTool) jimengPoll(ctx context.Context, signer *Signer, baseURL string, queryBody map[string]any) (*jimengQueryRespData, error) {
 	deadline := time.Now().Add(60 * time.Second)
 	backoff := 500 * time.Millisecond
 
@@ -134,7 +133,7 @@ func (t *ImageGenTool) jimengPoll(ctx context.Context, signer *volcengine.Signer
 	}
 }
 
-func (t *ImageGenTool) jimengCallRaw(ctx context.Context, signer *volcengine.Signer, baseURL, action string, body map[string]any) ([]byte, error) {
+func (t *ImageGenTool) jimengCallRaw(ctx context.Context, signer *Signer, baseURL, action string, body map[string]any) ([]byte, error) {
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal body: %w", err)

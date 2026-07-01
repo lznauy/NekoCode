@@ -1,7 +1,7 @@
 package compact
 
 import (
-	"nekocode/bot/debug"
+	"nekocode/common/debug"
 	"nekocode/bot/llm/types"
 )
 

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	ctxmgr "nekocode/bot/contextmgr"
-	"nekocode/bot/debug"
+	"nekocode/common/debug"
 	"nekocode/bot/hooks"
 	"nekocode/bot/llm"
 	"nekocode/bot/llm/types"

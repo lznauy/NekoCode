@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"nekocode/bot/debug"
+	"nekocode/common/debug"
 )
 
 const grepHeadLines = 50

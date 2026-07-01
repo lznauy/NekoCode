@@ -53,6 +53,23 @@ nekocode/
 │   └── nekocode-tui/
 │       └── main.go                 # TUI 程序入口
 ├── guiapp/                         # Wails 后端桥接实现
+│   ├── app.go                      #   App 结构体 + 事件推送
+│   ├── appicon.icns                #   macOS 应用图标（多分辨率）
+│   └── appicon.ico                 #   Windows 应用图标（多分辨率）
+├── gui/                            #   Wails 前端（React + Vite）
+│   ├── index.html
+│   ├── src/
+│   │   └── components/
+│   │       └── LogoMark.tsx        #   Logo 组件（猫娘图标，32×32 viewBox）
+│   └── public/
+│       └── logo/                   #   品牌资产源文件
+│           ├── logo.svg             #     完整品牌版（含 NEKOCODE 字）
+│           ├── logo-icon.svg        #     纯图标源
+│           ├── logo-icon-app.svg    #     favicon
+│           ├── appicon.icns         #     macOS 导出
+│           ├── appicon.ico          #     Windows 导出
+│           ├── icon_16..1024.png    #     中间产物
+│           └── build_icns.js        #     任意平台生成 ICNS 的脚本
 ├── common/                         # 公共类型
 │   ├── types.go                    #   DangerLevel / TodoItem / BotStats / CmdResult / SubSlot
 │   ├── confirm.go                  #   ConfirmRequest / ConfirmFunc / PhaseFunc / TodoFunc
@@ -537,7 +554,25 @@ Agent 循环硬限制：
 | `Snapshot() / Restore()` | 会话持久化 |
 | `FreshStart()` | 清空所有消息 |
 
-## 工具系统
+### Session 持久化实现
+
+保存链路（`bot/app/api.go` `RunAgent`）：
+
+```
+ag.Run()  →  ctxMgr.SetSystemPrompt()  →  SummarizeIfNeeded()  →  sess.Save()
+```
+
+- `sess.Save()`（`bot/session/manager.go`）调 `ctxMgr.Snapshot()` 捕获当前状态，再 `sess.Save()` 落盘到 `~/.nekocode/sessions/<id>/session.json`
+- `Snapshot()`（`bot/contextmgr/snapshot.go`）**深拷贝** `Messages` 后再返回，避免后续 `append` 共享 backing array 导致已捕获内容被覆盖
+- 触发时机：每次 `RunAgent` 结束自动保存；`/sessions`、`/export`、`/new` 等命令也会触发
+
+Agent 结束时的文本处理（`bot/agent/runtime/loop.go` `finishRun`）：
+
+- `finalText` 优先，为空时回退到 `lastText`
+- 仅在真正无文本产出时才调 `Synthesize()`（追加的总结消息是最后手段）
+- `applyFinalPolicyBlock`（`bot/agent/runtime/turn.go`）会同步设 `finalText = lastText`，避免无谓的 `Synthesize` 追加
+
+> **历史 bug**: `Snapshot()` 曾只拷贝 slice 头，叠加 `applyFinalPolicyBlock` 只设 `lastText` 不设 `finalText`，导致 `finishRun` 误走 `Synthesize` 路径，保存了一条用户没见过的假摘要覆盖真实最后内容。已通过深拷贝 + `finalText`/`lastText` 同步修复。
 
 ### Tool 接口
 

@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"nekocode/bot/config"
-	"nekocode/bot/debug"
+	"nekocode/common/debug"
 	"nekocode/bot/extension/mcp"
 	"nekocode/bot/extension/plugin"
 	"nekocode/common"

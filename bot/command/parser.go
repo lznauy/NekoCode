@@ -70,9 +70,8 @@ func RegisterDefaults(p *Parser, deps Deps) {
   /help        Show this help message
   /new         Start a new conversation (keeps summary)
   /clear       Clear all conversation history
-  /stats       Show context stats (messages, tokens, summary)
+  /context     Show context window breakdown (bar + used/total + detail)
   /summarize   Force context compression now
-  /context     Show detailed context window breakdown
   /config      Show current provider and model
   /model       List or switch models (/model <name>)
   /plan        Read-only exploration mode, approve before execution
@@ -87,8 +86,8 @@ func RegisterDefaults(p *Parser, deps Deps) {
 		return "Conversation history cleared.", true
 	})
 
-	p.Register("stats", func(cmd *Command) (string, bool) {
-		return ContextStats(deps.CtxMgr), true
+	p.Register("context", func(cmd *Command) (string, bool) {
+		return ContextReport(deps.CtxMgr, deps.ToolRegistry.Descriptors()), true
 	})
 
 	p.Register("summarize", func(cmd *Command) (string, bool) {
@@ -105,10 +104,6 @@ func RegisterDefaults(p *Parser, deps Deps) {
 			return "Failed to start new conversation: " + err.Error(), true
 		}
 		return result, true
-	})
-
-	p.Register("context", func(cmd *Command) (string, bool) {
-		return ContextReport(deps.CtxMgr, deps.ToolRegistry.Descriptors()), true
 	})
 
 	p.Register("config", func(cmd *Command) (string, bool) {

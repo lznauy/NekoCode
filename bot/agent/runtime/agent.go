@@ -7,7 +7,7 @@ import (
 	"nekocode/bot/agent/runtime/model"
 	"nekocode/bot/agent/runtime/toolrun"
 	ctxmgr "nekocode/bot/contextmgr"
-	"nekocode/bot/debug"
+	"nekocode/common/debug"
 	"nekocode/bot/hooks"
 	"nekocode/bot/llm/types"
 	aggov "nekocode/bot/policy"

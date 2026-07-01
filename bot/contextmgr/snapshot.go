@@ -21,6 +21,10 @@ type ManagerSnapshot struct {
 func (m *Manager) Snapshot() ManagerSnapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	// Deep-copy Messages so later appends to m.ctx.Messages cannot
+	// mutate the snapshot's backing array (classic Go slice aliasing bug).
+	msgs := make([]types.Message, len(m.ctx.Messages))
+	copy(msgs, m.ctx.Messages)
 	return ManagerSnapshot{
 		SystemPrompt:    m.ctx.SystemPrompt,
 		Skills:          m.ctx.Skills,
@@ -28,7 +32,7 @@ func (m *Manager) Snapshot() ManagerSnapshot {
 		Memory:          m.ctx.Memory,
 		Hints:           m.ctx.Hints,
 		CompactBoundary: m.ctx.CompactBoundary,
-		Messages:        m.ctx.Messages,
+		Messages:        msgs,
 		Budget:          m.ContextWindow,
 		Tracker:         m.Tracker.Snapshot(),
 	}

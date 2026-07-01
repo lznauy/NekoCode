@@ -1,4 +1,4 @@
-package volcengine
+package media
 
 import (
 	"crypto/hmac"

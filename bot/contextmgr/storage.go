@@ -2,7 +2,7 @@ package contextmgr
 
 import (
 	"nekocode/bot/contextmgr/compact"
-	"nekocode/bot/debug"
+	"nekocode/common/debug"
 	"nekocode/bot/llm/types"
 )
 

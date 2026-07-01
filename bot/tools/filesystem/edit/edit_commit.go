@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"nekocode/bot/debug"
+	"nekocode/common/debug"
 	"nekocode/bot/tools"
 	"nekocode/bot/tools/editcore"
 	"nekocode/bot/tools/toolhelpers"

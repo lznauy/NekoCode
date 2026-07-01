@@ -3,7 +3,7 @@ package toolrun
 import (
 	"fmt"
 
-	"nekocode/bot/debug"
+	"nekocode/common/debug"
 	"nekocode/bot/tools"
 
 	"github.com/google/uuid"

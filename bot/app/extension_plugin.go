@@ -5,7 +5,7 @@ import (
 
 	"nekocode/bot/agent/subagent"
 	"nekocode/bot/command"
-	"nekocode/bot/debug"
+	"nekocode/common/debug"
 	"nekocode/bot/extension/plugin"
 )
 

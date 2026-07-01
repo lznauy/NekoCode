@@ -2,7 +2,7 @@ package contextmgr
 
 import (
 	"nekocode/bot/contextmgr/token"
-	"nekocode/bot/debug"
+	"nekocode/common/debug"
 )
 
 // TruncateTo removes all messages from index n onward.

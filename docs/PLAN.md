@@ -177,6 +177,28 @@
 - 发现语法错误时注入 `[System]` 提示，防止错误积累
 - 框架可扩展支持其他语言的 linter
 
+### 84. System Prompt 编码纪律优化 ✅
+- 借鉴 Karpathy 观察的 LLM 编码四大毛病，新增三类约束：
+  - Think Before Coding：暴露假设、多义性让用户选、主动 push back
+  - Simplicity First：极简优先、反例、自检问题
+  - Surgical Changes：外科手术式改动、禁止顺手重构
+- 子 Agent prompt 同步落实（executor 强调改动纪律 + 验证闭环，verify 增加简洁性审查）
+- Plan Mode prompt 增加"最简设计 + 每步验证检查点 + 显式假设"
+
+### 85. GUI 品牌 Logo ✅
+- 设计猫娘主题 logo：黑猫脸 + 青绿 AI 发光瞳 + `</>` 编程符号
+- 暖紫→暖粉渐变底板，大圆角方形
+- 生成全套资源：SVG 源文件、favicon、macOS icns、Windows ICO、Flatpak PNG、多尺寸中间产物
+- GUI LogoMark 组件适配 17–28px 全尺寸
+- 资源位于 `gui/public/logo/`，ICNS 用 Node 脚本跨平台生成（无需 macOS `iconutil`）
+
+### 86. Session 保存丢内容 Bug 修复 ✅
+- 根因：`Snapshot()` 只拷贝 slice 头 + `applyFinalPolicyBlock` 只设 `lastText` 不设 `finalText`，导致 `finishRun` 误走 `Synthesize` 路径，保存了一条假摘要覆盖真实最后内容
+- 修复：
+  1. `Snapshot()` 深拷贝 `Messages`（`make + copy`）
+  2. `applyFinalPolicyBlock` 同步设 `finalText = lastText`
+  3. `finishRun` 在 `lastText != ""` 时直接返回，不再无条件 `Synthesize`
+
 ## P1.5 — Agent 治理层
 
 ### Agent Governance Layer 🟡

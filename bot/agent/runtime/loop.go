@@ -135,6 +135,12 @@ func (r *loopRunner) finishRun(callback RunCallback) *RunResult {
 		if output != "" {
 			return &RunResult{FinalOutput: output, Steps: a.run.step}
 		}
+		// finalText empty but lastText had content — prefer returning it
+		// directly over calling Synthesize(), which would append a spurious
+		// assistant message that the user never actually saw.
+		if a.run.lastText != "" {
+			return &RunResult{FinalOutput: a.run.lastText, Steps: a.run.step}
+		}
 	}
 	output := a.modelRunner.Synthesize()
 	if callback != nil {

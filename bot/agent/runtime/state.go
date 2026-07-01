@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"nekocode/bot/debug"
+	"nekocode/common/debug"
 	"nekocode/bot/hooks"
 	"nekocode/common"
 )

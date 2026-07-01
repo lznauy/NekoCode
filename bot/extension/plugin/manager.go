@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"nekocode/bot/debug"
+	"nekocode/common/debug"
 	"nekocode/bot/hooks"
 	"nekocode/common"
 )

@@ -6,7 +6,7 @@ import (
 
 	agentruntime "nekocode/bot/agent/runtime"
 	ctxmgr "nekocode/bot/contextmgr"
-	"nekocode/bot/debug"
+	"nekocode/common/debug"
 	"nekocode/bot/llm/types"
 	"nekocode/bot/tools"
 )

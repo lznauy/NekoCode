@@ -1,7 +1,7 @@
 package policy
 
 import (
-	"nekocode/bot/debug"
+	"nekocode/common/debug"
 )
 
 func (g *Manager) Summary() string {
