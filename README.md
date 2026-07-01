@@ -1,4 +1,4 @@
-# NekoCode 🐱 [edit 工具测试]
+# NekoCode 🐱
 
 <p align="center">
   <b>终端里的猫娘 AI 助手 &nbsp;·&nbsp; MIT 开源 &nbsp;·&nbsp; Go 单二进制</b>
