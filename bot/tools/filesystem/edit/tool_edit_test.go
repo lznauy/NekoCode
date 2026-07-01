@@ -150,11 +150,11 @@ func TestEditV2Revert(t *testing.T) {
 	if got := readFile(t, p); got != original {
 		t.Fatalf("unexpected reverted content:\n%s", got)
 	}
-	if !strings.Contains(result, "Reverted") {
-		t.Fatalf("expected revert message, got %q", result)
+	if !strings.Contains(result, "-2:TWO") || !strings.Contains(result, "+2:two") {
+		t.Fatalf("expected revert diff, got %q", result)
 	}
-	if !strings.Contains(result, "latest snapshot") || !strings.Contains(result, "keeps one latest pre-edit snapshot") {
-		t.Fatalf("expected single-layer revert note, got %q", result)
+	if strings.Contains(result, "Reverted to pre-edit state") || strings.Contains(result, "latest snapshot") {
+		t.Fatalf("expected diff-only revert output, got %q", result)
 	}
 }
 

@@ -8,7 +8,7 @@ import (
 type BlockType int
 
 const (
-	BlockTool    BlockType = iota
+	BlockTool BlockType = iota
 	BlockThought
 )
 
@@ -24,7 +24,7 @@ type ContentBlock struct {
 	SubColor  int    // -1 = main agent; 0-7 = sub-agent color index
 }
 
-// FilterFinalBlocks returns persistent tool blocks (edit, bash, write).
+// FilterFinalBlocks returns persistent tool blocks.
 func FilterFinalBlocks(blocks []ContentBlock) []ContentBlock {
 	out := make([]ContentBlock, 0, len(blocks))
 	for _, b := range blocks {
@@ -36,7 +36,7 @@ func FilterFinalBlocks(blocks []ContentBlock) []ContentBlock {
 }
 
 func IsPersistent(toolName string) bool {
-	return toolName == "edit" || toolName == "bash" || toolName == "write"
+	return toolName == "edit" || toolName == "diff" || toolName == "bash" || toolName == "write"
 }
 
 // ParseReadOutput extracts the displayable content from read tool output.
@@ -53,4 +53,3 @@ func ParseReadOutput(content string) string {
 	}
 	return content
 }
-

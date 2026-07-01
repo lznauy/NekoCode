@@ -1,5 +1,6 @@
 import { safeReplyConfirm } from '../lib/wails'
-import { EditDiff } from './run/EditDiff'
+import { isUnifiedDiffContent } from '../lib/diffFormat'
+import { UnifiedDiff } from './run/UnifiedDiff'
 
 export interface ConfirmEntry {
   id: string
@@ -23,7 +24,6 @@ function ConfirmDialog({
 
   const level = riskFor(entry.level)
   const isEdit = entry.toolName === 'edit'
-  const isEditRevert = isEdit && entry.args.revert === true
   const path = typeof entry.args.path === 'string' ? entry.args.path : ''
   const subject = subjectFor(entry)
   const visibleArgs = Object.entries(entry.args).filter(([k]) => showArg(entry, k))
@@ -64,13 +64,13 @@ function ConfirmDialog({
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {isEdit && !isEditRevert ? (
+          {isEdit ? (
             <div>
               {entry.args.replaceAll === true && (
                 <ReplaceAllNotice count={replacementCount} />
               )}
-              {entry.preview ? (
-                <EditDiff content={entry.preview} filePath={path} defaultCollapsed={false} skipHeader />
+              {entry.preview && isUnifiedDiffContent(entry.preview) ? (
+                <UnifiedDiff content={entry.preview} filePath={path} defaultCollapsed={false} skipHeader />
               ) : (
                 <div className="border-b border-border/30 px-4 py-3 text-[12px] text-warning">
                   未收到 edit diff 预览，将只显示调用参数。
@@ -196,7 +196,7 @@ function subjectFor(entry: ConfirmEntry): string {
 }
 
 function footerCopy(entry: ConfirmEntry): string {
-  if (entry.toolName === 'edit' && entry.args.revert === true) return '允许后将恢复该文件最近一次 edit 前的快照。'
+  if (entry.toolName === 'edit' && entry.args.revert === true) return '上方差异是本次 revert 将恢复的内容。'
   if (entry.toolName === 'edit' && entry.args.replaceAll === true) return 'replaceAll 会替换所有精确匹配，请确认替换范围。'
   if (entry.toolName === 'edit' && entry.preview) return '上方差异是本次 edit 将应用的内容。'
   if (entry.toolName === 'bash') return '命令会在当前工作区执行。'

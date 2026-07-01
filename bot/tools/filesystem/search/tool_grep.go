@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"nekocode/bot/tools/core"
 	"nekocode/bot/tools"
 	"nekocode/bot/tools/toolhelpers"
 )
@@ -22,8 +23,8 @@ func (t *GrepTool) Description() string {
 	return "Search file contents (rg or grep). Returns matching lines with line numbers. Supports regex, glob filtering, and context lines (-A/-B/-C)."
 }
 
-func (t *GrepTool) Parameters() []tools.Parameter {
-	return []tools.Parameter{
+func (t *GrepTool) Parameters() []core.Parameter {
+	return []core.Parameter{
 		{Name: "pattern", Type: "string", Required: true, Description: "Search pattern (regex)"},
 		{Name: "path", Type: "string", Required: false, Description: "Directory to search, default: current directory"},
 		{Name: "glob", Type: "string", Required: false, Description: "File filter pattern, e.g. *.go, *.py"},

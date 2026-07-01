@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"nekocode/bot/tools"
+	"nekocode/bot/tools/core"
 	"nekocode/common"
 )
 
@@ -18,15 +18,15 @@ type Tool struct {
 func NewTool() *Tool { return &Tool{} }
 
 func (t *Tool) Name() string                                     { return "question" }
-func (t *Tool) ExecutionMode(map[string]any) tools.ExecutionMode { return tools.ModeSequential }
+func (t *Tool) ExecutionMode(map[string]any) core.ExecutionMode { return core.ModeSequential }
 func (t *Tool) DangerLevel(map[string]any) common.DangerLevel    { return common.LevelSafe }
 
 func (t *Tool) Description() string {
 	return "Ask the user structured questions during execution and wait for their answers. Use this when a decision, preference, or clarification is required before continuing."
 }
 
-func (t *Tool) Parameters() []tools.Parameter {
-	return []tools.Parameter{
+func (t *Tool) Parameters() []core.Parameter {
+	return []core.Parameter{
 		{
 			Name:        "questions",
 			Type:        "array",

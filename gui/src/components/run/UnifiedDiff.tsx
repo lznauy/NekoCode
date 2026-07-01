@@ -1,28 +1,35 @@
-// EditDiff: edit 工具的 diff 预览。
-// 头: 一行可点的折叠头 (折叠时无独立 border);
-// 展开: 表格化渲染, +/- 行带浅背景, 不依赖次级 border。
+// UnifiedDiff: 统一 diff 渲染器，支持 edit 和 diff 工具的输出格式。
+// 格式: [path#TAG]\n+NNN:text\n-NNN:text\n NNN:text
 import { useMemo, useState } from 'react'
 
-interface EditDiffProps {
+interface UnifiedDiffProps {
   content: string
   defaultCollapsed?: boolean
   filePath?: string
-  /** 当 EditDiff 嵌套在已展开的 ActivityRow 中时隐藏自己的折叠头 */
+  /** 当嵌套在已展开的容器中时隐藏自己的折叠头 */
   skipHeader?: boolean
 }
 
 interface DiffLine {
-  kind: 'add' | 'del' | 'ctx' | 'fold' | 'sep' | 'header'
+  kind: 'add' | 'del' | 'ctx' | 'fold'
   text: string
   lineNo?: number
 }
 
-export function EditDiff({ content, defaultCollapsed = true, filePath, skipHeader }: EditDiffProps) {
+interface Summary {
+  path: string
+  add: number
+  del: number
+  ok: boolean
+  bad?: boolean
+}
+
+export function UnifiedDiff({ content, defaultCollapsed = true, filePath, skipHeader }: UnifiedDiffProps) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
   const summary = useMemo(() => parseSummary(content, filePath), [content, filePath])
   const lines = useMemo(() => parseDiff(content), [content])
 
-if (summary.bad) {
+  if (summary.bad) {
     return (
       <div className="border-t border-danger/20 px-3 pb-2 pt-2 font-mono text-[12px] leading-relaxed text-danger whitespace-pre-wrap">
         {content || '(无预览)'}
@@ -30,8 +37,6 @@ if (summary.bad) {
     )
   }
 
-  // skipHeader 模式下直接显示 diff 内容, 不包折叠按钮。
-  // 不再单独 rounded-md bg-surface 做法; 融入 ActivityRow 容器, 用顶分隔线衔接。
   if (skipHeader) {
     return (
       <div className="overflow-x-auto border-t border-border/30 font-mono text-[12px] leading-relaxed">
@@ -62,7 +67,7 @@ if (summary.bad) {
         className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[12px] hover:bg-surface-3/60"
       >
         <span className="font-mono text-text-3 text-[10px]">{collapsed ? '▸' : '▾'}</span>
-        <span>✏️</span>
+        <span>📋</span>
         <span className="font-mono text-text-2 truncate">{summary.path}</span>
         {summary.ok && (
           <span className="ml-auto flex items-center gap-1 font-mono text-[11px] tabular-nums">
@@ -99,23 +104,15 @@ if (summary.bad) {
 
 function rowClass(l: DiffLine): string {
   switch (l.kind) {
-    case 'add':    return 'bg-success/12'
-    case 'del':    return 'bg-danger/12 text-text-2'
+    case 'add':    return 'bg-success/20'
+    case 'del':    return 'bg-danger/20 text-text-2'
     case 'fold':   return 'text-text-3 italic'
-    case 'header': return 'bg-surface-3/50 text-text-2'
     default:       return ''
   }
 }
 
-interface Summary {
-  path: string
-  add: number
-  del: number
-  ok: boolean
-  bad?: boolean
-}
-
 function parseSummary(content: string, filePath?: string): Summary {
+  // Try structured diff first (base64 JSON)
   const structured = parseStructuredDiff(content)
   if (structured) {
     let add = 0, del = 0
@@ -123,17 +120,13 @@ function parseSummary(content: string, filePath?: string): Summary {
       if (line.kind === 'add') add++
       else if (line.kind === 'del') del++
     }
-    return {
-      path: filePath || structured.path || '(unknown)',
-      add,
-      del,
-      ok: add + del > 0,
-      bad: false,
-    }
+    return { path: filePath || structured.path || '(unknown)', add, del, ok: add + del > 0, bad: false }
   }
+
   if (!content || (!content.startsWith('[') && !filePath)) {
     return { path: filePath ?? '(unknown)', add: 0, del: 0, ok: false, bad: true }
   }
+
   let path = filePath ?? ''
   const firstNl = content.indexOf('\n')
   const header = firstNl === -1 ? content : content.slice(0, firstNl)
@@ -141,9 +134,12 @@ function parseSummary(content: string, filePath?: string): Summary {
     const tag = header.slice(1, -1)
     const h = tag.lastIndexOf('#')
     path = h > 0 ? tag.slice(0, h) : tag
+  } else if (header.startsWith('[write ') && header.endsWith(']')) {
+    path = header.slice('[write '.length, -1)
   } else if (!path) {
     path = header
   }
+
   let add = 0, del = 0
   for (const line of content.split('\n')) {
     const colon = line.indexOf(':')
@@ -156,6 +152,7 @@ function parseSummary(content: string, filePath?: string): Summary {
 }
 
 function parseDiff(content: string): DiffLine[] {
+  // Try structured diff first
   const structured = parseStructuredDiff(content)
   if (structured) {
     return structured.lines.map((l) => ({
@@ -164,23 +161,28 @@ function parseDiff(content: string): DiffLine[] {
       lineNo: l.line_no || undefined,
     }))
   }
+
   const out: DiffLine[] = []
   let sawSep = false
   for (const raw of content.split('\n')) {
     if (sawSep) break
-    if (raw.startsWith('[') && raw.endsWith(']') && raw.includes('#')) {
-      // skip the [path#hash] header line — it's internal, shown in ActivityRow
-      continue
-    }
+    // Skip [path#TAG] / [write path] header
+    if (isDiffHeaderLine(raw)) continue
+    // Separator
     if (raw.trim() === '---') {
-      // --- 是后端 preview 区段和正文之间的内部分隔标记, GUI 不显示。
       sawSep = true
       break
     }
-    if (raw.startsWith('…')) {
+    // Fold marker
+    if (raw.startsWith('…') || raw.startsWith('...')) {
       out.push({ kind: 'fold', text: raw })
       continue
     }
+    if (raw.trim() === '(no changes)') {
+      out.push({ kind: 'fold', text: raw.trim() })
+      continue
+    }
+    // Parse prefixed line: +NNN:text, -NNN:text, NNN:text
     const colon = raw.indexOf(':')
     if (colon <= 0) continue
     const prefix = raw.slice(0, colon).trimStart()
@@ -199,6 +201,11 @@ function parseDiff(content: string): DiffLine[] {
     out.push({ kind, text, lineNo })
   }
   return out
+}
+
+function isDiffHeaderLine(line: string): boolean {
+  if (!line.startsWith('[') || !line.endsWith(']')) return false
+  return line.includes('#') || line.startsWith('[write ')
 }
 
 interface StructuredDiff {

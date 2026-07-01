@@ -24,12 +24,12 @@ describe('ActivityRow', () => {
     expect(screen.queryByRole('table')).toBeNull()
   })
 
-  it('renders edit revert output as plain tool information', () => {
+  it('renders edit revert output as a diff table', () => {
     const step: ToolStep = {
       id: 'edit-revert',
       toolName: 'edit',
       args: 'path=/tmp/file.go,revert=true',
-      output: '[/tmp/file.go#TAG]\nReverted to pre-edit state (latest snapshot).\nNote: edit keeps one latest pre-edit snapshot per file.',
+      output: '[/tmp/file.go#TAG]\n-1:changed\n+1:original\n',
       status: 'done',
       isError: false,
       collapsed: false,
@@ -38,9 +38,9 @@ describe('ActivityRow', () => {
 
     render(<ActivityRow step={step} toggleStep={toggleStep} />)
 
-    expect(screen.getByText(/Reverted to pre-edit state/)).toBeInTheDocument()
-    expect(screen.getByText(/keeps one latest pre-edit snapshot/)).toBeInTheDocument()
-    expect(screen.queryByRole('table')).toBeNull()
+    expect(screen.getByRole('table')).toBeInTheDocument()
+    expect(screen.getByText('changed')).toBeInTheDocument()
+    expect(screen.getByText('original')).toBeInTheDocument()
   })
 
   it('calls toggleStep when the expand/collapse button is clicked', async () => {
@@ -102,5 +102,43 @@ describe('ActivityRow', () => {
     expect(screen.getByText('search')).toBeInTheDocument()
     expect(screen.getByText('query: "flakes"')).toBeInTheDocument()
     expect(screen.getByText('flake documentation')).toBeInTheDocument()
+  })
+
+  it('renders write completion with tag but no diff as plain text', () => {
+    const step: ToolStep = {
+      id: 'write-no-diff',
+      toolName: 'write',
+      args: 'path=/tmp/file.go,content=same',
+      output: '[/tmp/file.go#TAG] Written (4 chars)',
+      status: 'done',
+      isError: false,
+      collapsed: false,
+    }
+    const toggleStep = vi.fn()
+
+    render(<ActivityRow step={step} toggleStep={toggleStep} />)
+
+    expect(screen.getByText('[/tmp/file.go#TAG] Written (4 chars)')).toBeInTheDocument()
+    expect(screen.queryByRole('table')).toBeNull()
+  })
+
+  it('renders write diff output as a diff table', () => {
+    const step: ToolStep = {
+      id: 'write-diff',
+      toolName: 'write',
+      args: 'path=/tmp/file.go,content=next',
+      output: '[/tmp/file.go#TAG]\n[write /tmp/file.go]\n-1:old\n+1:next\n',
+      status: 'done',
+      isError: false,
+      collapsed: false,
+    }
+    const toggleStep = vi.fn()
+
+    render(<ActivityRow step={step} toggleStep={toggleStep} />)
+
+    expect(screen.getByRole('table')).toBeInTheDocument()
+    expect(screen.getByText('old')).toBeInTheDocument()
+    expect(screen.getByText('next')).toBeInTheDocument()
+    expect(screen.queryByText('[write /tmp/file.go]')).toBeNull()
   })
 })

@@ -10,7 +10,7 @@ import { ImageGrid } from './ImageGrid'
 import { TasksList } from './TasksList'
 import { ThinkingCard } from './ThinkingCard'
 
-const PERSISTENT = new Set(['edit', 'bash', 'write'])
+const PERSISTENT = new Set(['edit', 'diff', 'bash', 'write'])
 const persistentTool = (name: string) => PERSISTENT.has(name)
 
 interface RunCardProps {
@@ -29,7 +29,7 @@ const PHASE_LABEL: Record<NonNullable<Msg['phase']>, string> = {
 export const RunCard = memo(function RunCard({ msg, toggleStep }: RunCardProps) {
   const streaming = msg.streaming
   const phase = msg.phase ?? (streaming ? 'thinking' : 'ready')
-  // 流式中显示全部工具步骤；结束后只保留持久化工具（edit/bash/write），与 session view 一致。
+  // 流式中显示全部工具步骤；结束后只保留持久化工具，与 session view 一致。
   const allSteps = msg.steps ?? []
   const steps = streaming ? allSteps : allSteps.filter((s) => persistentTool(s.toolName))
   const toolCount = allSteps.length

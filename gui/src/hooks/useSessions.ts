@@ -113,7 +113,7 @@ function normalizeSessions(list: SessionMeta[] | null | undefined): SessionMeta[
 }
 
 // mapDisplayMessage 将服务端 DisplayMessage 转换为前端 Msg。
-// Blocks（edit/write/bash）映射为 msg.steps，由 RunCard/ActivityRow/EditDiff 渲染。
+// Blocks 映射为 msg.steps，由 RunCard/ActivityRow/UnifiedDiff 渲染。
 // Images 映射为 msg.images，由 ImageGrid 渲染。
 function mapDisplayMessage(m: DisplayMessage): Msg {
   const role = m.Role as Msg['role']

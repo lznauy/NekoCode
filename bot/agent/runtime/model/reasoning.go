@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"nekocode/common/debug"
-	"nekocode/bot/tools"
+	"nekocode/bot/tools/core"
 )
 
 const fallbackNoAction = "Sorry, I couldn't determine what to do"
@@ -34,7 +34,7 @@ type Result struct {
 	Thought         string
 	Action          ActionType
 	ActionInput     string
-	ToolCalls       []tools.ToolCallItem
+	ToolCalls       []core.ToolCallItem
 	TextContent     string
 	Interrupted     bool
 	GarbledToolCall bool
@@ -45,7 +45,7 @@ func CommandResult() *Result {
 	return &Result{Thought: "User entered a command", Action: ActionChat}
 }
 
-func FromLLM(toolCalls []tools.ToolCallItem, textContent string, err error) *Result {
+func FromLLM(toolCalls []core.ToolCallItem, textContent string, err error) *Result {
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return &Result{Thought: "User interrupted", Action: ActionChat, Interrupted: true}
@@ -72,7 +72,7 @@ func FromLLM(toolCalls []tools.ToolCallItem, textContent string, err error) *Res
 		return &Result{
 			Thought:     "Call tool: " + tc.Name,
 			Action:      ActionExecuteTool,
-			ActionInput: tc.Name + ":" + tools.FormatArgs(tc.Args),
+			ActionInput: tc.Name + ":" + core.FormatArgs(tc.Args),
 			ToolCalls:   toolCalls,
 			TextContent: textContent,
 		}

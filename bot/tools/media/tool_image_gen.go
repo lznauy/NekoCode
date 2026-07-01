@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"nekocode/bot/config"
+	"nekocode/bot/tools/core"
 	"nekocode/bot/tools"
 	"nekocode/bot/tools/toolhelpers"
 )
@@ -30,8 +31,8 @@ func (t *ImageGenTool) Description() string {
 	return "Generate images from text prompts using configured text-to-image models. Images are saved to local files and links are returned."
 }
 
-func (t *ImageGenTool) Parameters() []tools.Parameter {
-	return []tools.Parameter{
+func (t *ImageGenTool) Parameters() []core.Parameter {
+	return []core.Parameter{
 		{Name: "prompt", Type: "string", Required: true, Description: "Chinese or English text prompt for image generation, recommended ≤120 chars, max 800"},
 		{Name: "output_dir", Type: "string", Required: false, Description: "Directory to save generated images. Defaults to current working directory."},
 		{Name: "width", Type: "integer", Required: false, Description: "Image width, default 1328. Must also set height."},

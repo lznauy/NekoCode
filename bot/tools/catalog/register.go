@@ -3,6 +3,7 @@ package catalog
 import (
 	"nekocode/bot/config"
 	"nekocode/bot/tools"
+	"nekocode/bot/tools/diff"
 	edittool "nekocode/bot/tools/filesystem/edit"
 	listtool "nekocode/bot/tools/filesystem/list"
 	readtool "nekocode/bot/tools/filesystem/read"
@@ -31,6 +32,7 @@ func RegisterAll(r *tools.Registry, imageGenModels []config.ImageGenConfig) {
 	r.Register(question.NewTool())
 	r.Register(&todo.TodoWriteTool{})
 	r.Register(tasktool.NewTaskTool())
+	r.Register(diff.NewTool())
 
 	if len(imageGenModels) > 0 {
 		r.Register(media.NewImageGenTool(imageGenModels))

@@ -6,7 +6,7 @@
 
 ## 一、已实现功能总览
 
-### 工具系统（13 个内置工具 + 3 个条件/动态工具）
+### 工具系统（14 个内置工具 + 3 个条件/动态工具）
 
 | 工具 | 文件 | 说明 |
 |------|------|------|
@@ -21,6 +21,7 @@
 | `web_search` | web/tool_websearch.go | 网页搜索 |
 | `web_fetch` | web/tool_webfetch.go | 网页抓取，URL 验证 + 重定向限制 |
 | `question` | question/tool_question.go | 向用户提问（结构化问题，支持单选/多选/自定义输入，等待回答） |
+| `diff` | diff/ | Unified diff between two texts or files (preview changes, compare versions) |
 | `todo_write` | todo/tool_todo.go | 任务列表管理，支持 GUI/TUI 回调 |
 | `task` | tasktool/tool_task.go | 子 Agent 调度（researcher/executor/verify） |
 | `project_info` | index/projecttool/tool.go | 代码索引查询（符号/文件/依赖/全文搜索）— 条件注册 |
@@ -123,14 +124,13 @@ Claude Code 权限系统庞大，NekoCode 目前仅有基础确认：
 #### 4. 工具种类不足
 
 ```
-已有 13 内置 + 3 条件/动态工具，缺失的关键工具：
+已有 14 内置 + 3 条件/动态工具，缺失的关键工具：
   ❌ LSP 工具 — 跳转定义、查找引用、诊断
   ❌ notebook 编辑 — Jupyter notebook 支持
   ❌ task 子工具 — task_list/get/update/stop/output（当前只有 task 创建）
   ❌ MCP 资源工具 — list_mcp_resources / read_mcp_resource
   ❌ 定时任务 — schedule_cron
   ❌ config 工具 — 读写配置
-  ❌ 独立 diff 工具 — 代码变更对比（当前 diff 是 edit 内部辅助）
 ```
 
 ---

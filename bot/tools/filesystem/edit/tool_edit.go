@@ -6,9 +6,8 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"path/filepath"
 
-	"nekocode/bot/tools"
+	"nekocode/bot/tools/core"
 	"nekocode/bot/tools/toolhelpers"
 )
 
@@ -29,8 +28,8 @@ func (t *EditTool) Description() string {
 	return editDescription
 }
 
-func (t *EditTool) Parameters() []tools.Parameter {
-	return []tools.Parameter{
+func (t *EditTool) Parameters() []core.Parameter {
+	return []core.Parameter{
 		{Name: "path", Type: "string", Required: true,
 			Description: "Absolute path to the file to edit."},
 		{Name: "oldString", Type: "string", Required: false,
@@ -55,7 +54,7 @@ func (t *EditTool) Preview(args map[string]any) string {
 		return ""
 	}
 	if rv, _ := args["revert"].(bool); rv {
-		return fmt.Sprintf("(revert: %s)", filepath.Base(path))
+		return t.previewRevertSnapshot(path)
 	}
 	return t.previewEdit(args)
 }

@@ -7,11 +7,13 @@ import (
 	"nekocode/bot/hooks"
 	"nekocode/bot/llm/types"
 	"nekocode/bot/tools"
+	"nekocode/bot/tools/core"
+	"nekocode/bot/tools/runner"
 	"nekocode/common"
 )
 
-func (e *Engine) newExecutor(cfg RunConfig) (*tools.Executor, func()) {
-	executor := tools.NewExecutor(e.toolRegistry)
+func (e *Engine) newExecutor(cfg RunConfig) (*runner.Executor, func()) {
+	executor := runner.NewExecutor(e.toolRegistry)
 	executor.SetConfirmFn(func(req common.ConfirmRequest) bool {
 		return req.Level < common.LevelWrite
 	})
@@ -33,7 +35,7 @@ func (e *Engine) newExecutor(cfg RunConfig) (*tools.Executor, func()) {
 	}
 }
 
-func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ctxmgr.Manager, executor *tools.Executor, calls []tools.ToolCallItem, state *runState, phase func(string), subLog func(string, ...any)) {
+func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ctxmgr.Manager, executor *runner.Executor, calls []core.ToolCallItem, state *runState, phase func(string), subLog func(string, ...any)) {
 	var toolNames []string
 	for _, c := range calls {
 		toolNames = append(toolNames, c.Name)
@@ -42,7 +44,7 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 			cfg.OnToolCall(ToolCallEvent{
 				Action:   "tool_start",
 				ToolName: c.Name,
-				ToolArgs: tools.FormatArgs(c.Args),
+				ToolArgs: core.FormatArgs(c.Args),
 			})
 		}
 	}
@@ -59,7 +61,7 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 		if cfg.OnToolCall != nil {
 			cfg.OnToolCall(ToolCallEvent{
 				Action: "execute_tool", ToolName: calls[i].Name,
-				ToolArgs: tools.FormatArgs(calls[i].Args), Output: content,
+				ToolArgs: core.FormatArgs(calls[i].Args), Output: content,
 			})
 		}
 	}
@@ -67,7 +69,7 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 	applyReadOnlySpiralGuard(ctxMgr, calls, state)
 }
 
-func applyReadOnlySpiralGuard(ctxMgr *ctxmgr.Manager, calls []tools.ToolCallItem, state *runState) {
+func applyReadOnlySpiralGuard(ctxMgr *ctxmgr.Manager, calls []core.ToolCallItem, state *runState) {
 	if tools.IsAllExploratory(calls) {
 		state.readOnlyStreak++
 		if hint := evaluateReadOnlySpiralHook(state.readOnlyStreak); hint != nil {

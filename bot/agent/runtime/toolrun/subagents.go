@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"nekocode/common/debug"
+	"nekocode/bot/tools/core"
 	"nekocode/bot/tools"
 
 	"github.com/google/uuid"
@@ -14,7 +15,7 @@ type subSlotInfo struct {
 	colorIdx int
 }
 
-func (r *Runner) prepareSubagentCallbacks(allowed []tools.ToolCallItem, callback Callback) func() {
+func (r *Runner) prepareSubagentCallbacks(allowed []core.ToolCallItem, callback Callback) func() {
 	var taskInfos []subSlotInfo
 	for i, c := range allowed {
 		if c.Name != "task" {

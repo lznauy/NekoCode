@@ -27,6 +27,25 @@ func TestDisplayMessagesKeepsPersistentToolBlocks(t *testing.T) {
 	}
 }
 
+func TestDisplayMessagesKeepsDiffToolBlock(t *testing.T) {
+	msgs := []types.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []types.ToolCall{
+				{ID: "diff-call", Function: types.FunctionCall{Name: "diff", Arguments: `{"source":"/tmp/a.go"}`}},
+			},
+		},
+		{Role: "tool", ToolCallID: "diff-call", Content: "[/tmp/a.go#diff]\n-1:old\n+1:new\n"},
+	}
+	got := DisplayMessages(msgs, 0)
+	if len(got) != 1 || len(got[0].Blocks) != 1 {
+		t.Fatalf("display messages = %+v, want diff block", got)
+	}
+	if got[0].Blocks[0].ToolName != "diff" || got[0].Blocks[0].Args != `{"source":"/tmp/a.go"}` {
+		t.Fatalf("block = %+v, want diff args preserved", got[0].Blocks[0])
+	}
+}
+
 func TestDisplayMessagesFiltersInternalMessages(t *testing.T) {
 	msgs := []types.Message{
 		{Role: "user", Source: "hint", Content: "hidden"},

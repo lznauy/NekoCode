@@ -3,8 +3,9 @@
 import { memo, useCallback, useId, useMemo, useRef } from 'react'
 import type { ToolStep } from '../../types/events'
 import { useScrollContainer } from '../MessageList'
+import { isUnifiedDiffContent } from '../../lib/diffFormat'
 import { compactArgs, editSummary, isMCPTool, pathFromArgs, prettyTool, toolDetail } from './helpers'
-import { EditDiff } from './EditDiff'
+import { UnifiedDiff } from './UnifiedDiff'
 
 interface ActivityRowProps {
   step: ToolStep
@@ -27,12 +28,7 @@ export const ActivityRow = memo(function ActivityRow({ step, toggleStep }: Activ
   const scrollRef = useScrollContainer()
   const bodyId = useId()
   const expanded = !step.collapsed
-  // edit 成功后保留 preview diff; 运行中显示 preview; 其余完成状态显示 output。
-  const content = step.toolName === 'edit'
-    ? (step.preview || step.output || '')
-    : step.status === 'running'
-      ? (step.preview || '')
-      : (step.output || '')
+  const content = contentForStep(step)
   const canExpand = !!content
 
   const handleToggle = useCallback(() => {
@@ -184,12 +180,8 @@ function ToolGlyph({ name }: { name: string }) {
 }
 
 function RowBody({ id, step }: { id: string; step: ToolStep }) {
-  // edit 成功后保留 preview diff; 运行中显示 preview; 其余完成状态显示 output。
-  const content = step.toolName === 'edit'
-    ? (step.preview || step.output || '')
-    : step.status === 'running'
-      ? (step.preview || '')
-      : (step.output || '')
+  const isDiffTool = isDiffPreviewTool(step.toolName)
+  const content = contentForStep(step)
   if (step.toolName === 'edit' && step.isError) {
     return (
       <div id={id} className={`border-t px-3 pb-2 pt-2 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap [overflow-wrap:break-word] ${step.status === 'blocked' ? 'border-warning/20 text-warning' : 'border-danger/20 text-danger'}`}>
@@ -197,15 +189,22 @@ function RowBody({ id, step }: { id: string; step: ToolStep }) {
       </div>
     )
   }
-  if (step.toolName === 'edit' && isEditRevertOutput(content)) {
+  if (step.toolName === 'diff' && step.isError) {
     return (
-      <div id={id} className="border-t border-success/20 px-3 pb-2 pt-2 font-mono text-[11.5px] leading-relaxed text-text-2 whitespace-pre-wrap [overflow-wrap:break-word]">
-        {content}
+      <div id={id} className={`border-t px-3 pb-2 pt-2 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap [overflow-wrap:break-word] ${step.status === 'blocked' ? 'border-warning/20 text-warning' : 'border-danger/20 text-danger'}`}>
+        {content || 'diff failed'}
       </div>
     )
   }
-  if (step.toolName === 'edit') {
-    return <div id={id}><EditDiff content={content} filePath={pathFromArgs(step.args)} defaultCollapsed={false} skipHeader /></div>
+  if (step.toolName === 'write' && step.isError) {
+    return (
+      <div id={id} className={`border-t px-3 pb-2 pt-2 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap [overflow-wrap:break-word] ${step.status === 'blocked' ? 'border-warning/20 text-warning' : 'border-danger/20 text-danger'}`}>
+        {content || 'write failed'}
+      </div>
+    )
+  }
+  if (isDiffTool && isUnifiedDiffContent(content)) {
+    return <div id={id}><UnifiedDiff content={content} filePath={pathFromArgs(step.args)} defaultCollapsed={false} skipHeader /></div>
   }
   if (step.isError) {
     return (
@@ -227,6 +226,12 @@ function RowBody({ id, step }: { id: string; step: ToolStep }) {
   )
 }
 
-function isEditRevertOutput(content: string): boolean {
-  return content.includes('Reverted to pre-edit state')
+function contentForStep(step: ToolStep): string {
+  if (isDiffPreviewTool(step.toolName)) return step.preview || step.output || ''
+  if (step.status === 'running') return step.preview || ''
+  return step.output || ''
+}
+
+function isDiffPreviewTool(toolName: string): boolean {
+  return toolName === 'edit' || toolName === 'diff' || toolName === 'write'
 }

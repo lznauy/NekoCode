@@ -1,26 +1,25 @@
 package tools
 
 import (
-	"reflect"
 	"testing"
 
 	"nekocode/bot/tools/core"
 )
 
 func TestToToolDefs(t *testing.T) {
-	defs := ToToolDefs(nil)
+	defs := core.ToToolDefs(nil)
 	if len(defs) != 0 {
 		t.Error("expected empty")
 	}
 
-	descs := []Descriptor{{
+	descs := []core.Descriptor{{
 		Name: "test", Description: "a test tool",
-		Parameters: []Parameter{
+		Parameters: []core.Parameter{
 			{Name: "path", Type: "string", Required: true, Description: "file path"},
 			{Name: "depth", Type: "integer", Required: false, Description: "how deep"},
 		},
 	}}
-	defs = ToToolDefs(descs)
+	defs = core.ToToolDefs(descs)
 	if len(defs) != 1 {
 		t.Fatal("expected 1 def")
 	}
@@ -43,20 +42,14 @@ func TestToToolDefs(t *testing.T) {
 }
 
 func TestFormatArgsFacade(t *testing.T) {
-	got := FormatArgs(map[string]any{"b": "plain", "a": "x,y", "_preview": "hidden"})
+	got := core.FormatArgs(map[string]any{"b": "plain", "a": "x,y", "_preview": "hidden"})
 	if got != `a="x,y",b=plain` {
-		t.Fatalf("FormatArgs() = %q", got)
+		t.Fatalf("core.FormatArgs() = %q", got)
 	}
 }
 
 func TestCoreAliases(t *testing.T) {
-	if reflect.TypeOf(ToolCallItem{}) != reflect.TypeOf(core.ToolCallItem{}) {
-		t.Fatal("ToolCallItem facade is not the core type")
-	}
-	if reflect.TypeOf(Descriptor{}) != reflect.TypeOf(core.Descriptor{}) {
-		t.Fatal("Descriptor facade is not the core type")
-	}
-	if ModeParallel == ModeSequential {
+	if core.ModeParallel == core.ModeSequential {
 		t.Fatal("execution mode aliases collapsed")
 	}
 }

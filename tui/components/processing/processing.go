@@ -193,9 +193,8 @@ func (p *ProcessingItem) finishToolBlock(subID, toolName, output string) {
 			// formatEditResult returns "[path#TAG]\n..." on success;
 			// errors do not start with "[".
 			isError := !strings.HasPrefix(output, "[")
-			isRevert := strings.Contains(output, "Reverted to pre-edit state")
 			b.Content = output
-			if isError || isRevert {
+			if isError {
 				b.IsError = true
 			}
 		} else {

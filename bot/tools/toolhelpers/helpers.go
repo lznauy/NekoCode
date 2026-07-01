@@ -4,28 +4,28 @@ import (
 	"fmt"
 	"os"
 
-	"nekocode/bot/tools"
+	"nekocode/bot/tools/core"
 	"nekocode/common"
 )
 
 type SafeReadOnlyTool struct{}
 
-func (t *SafeReadOnlyTool) ExecutionMode(map[string]any) tools.ExecutionMode {
-	return tools.ModeParallel
+func (t *SafeReadOnlyTool) ExecutionMode(map[string]any) core.ExecutionMode {
+	return core.ModeParallel
 }
 func (t *SafeReadOnlyTool) DangerLevel(map[string]any) common.DangerLevel { return common.LevelSafe }
 
 type SequentialSafeTool struct{}
 
-func (t *SequentialSafeTool) ExecutionMode(map[string]any) tools.ExecutionMode {
-	return tools.ModeSequential
+func (t *SequentialSafeTool) ExecutionMode(map[string]any) core.ExecutionMode {
+	return core.ModeSequential
 }
 func (t *SequentialSafeTool) DangerLevel(map[string]any) common.DangerLevel { return common.LevelSafe }
 
 type WriteModeTool struct{}
 
-func (t *WriteModeTool) ExecutionMode(map[string]any) tools.ExecutionMode {
-	return tools.ModeSequential
+func (t *WriteModeTool) ExecutionMode(map[string]any) core.ExecutionMode {
+	return core.ModeSequential
 }
 func (t *WriteModeTool) DangerLevel(map[string]any) common.DangerLevel { return common.LevelWrite }
 

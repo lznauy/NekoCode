@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"nekocode/bot/tools/core"
 	"nekocode/common"
 	"strings"
 	"sync"
 
-	"nekocode/bot/tools"
 	"nekocode/bot/tools/toolhelpers"
 )
 
@@ -30,8 +30,8 @@ func (t *TodoWriteTool) Description() string {
 	return "Update the task list (record only, not for planning). Each call fully replaces the list. Write the complete list in one call — never append. Format: [{\"content\":\"...\",\"status\":\"pending|in_progress|completed\"}]"
 }
 
-func (t *TodoWriteTool) Parameters() []tools.Parameter {
-	return []tools.Parameter{
+func (t *TodoWriteTool) Parameters() []core.Parameter {
+	return []core.Parameter{
 		{Name: "todos", Type: "string", Required: true, Description: "JSON task list: [{\"content\":\"...\",\"status\":\"pending|in_progress|completed\"}]"},
 	}
 }

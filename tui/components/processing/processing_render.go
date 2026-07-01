@@ -36,7 +36,7 @@ func (p *ProcessingItem) Render(width int) string {
 	if s := p.renderThinkingSection(contentW); s != "" {
 		sections = append(sections, s)
 	}
-	sections = append(sections, p.renderHeader())
+	sections = append(sections, p.renderHeader(contentW))
 
 	body := strings.Join(sections, "\n")
 	card := lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color(styles.Primary)).
@@ -48,7 +48,7 @@ func (p *ProcessingItem) Render(width int) string {
 	return card
 }
 
-func (p *ProcessingItem) renderHeader() string {
+func (p *ProcessingItem) renderHeader(width int) string {
 	s := p.spinnerView
 	if s == "" {
 		s = "..."
@@ -57,18 +57,51 @@ func (p *ProcessingItem) renderHeader() string {
 	if l == "" {
 		l = "Thinking"
 	}
-	sk := ""
+
+	var meta []string
 	if p.skill != "" {
-		sk = " " + p.sty.Yellow.Render("skill:"+p.skill)
+		meta = append(meta, p.sty.Yellow.Render("skill:"+p.skill))
 	}
-	tp := ""
 	if p.tokenPrompt > 0 || p.tokenCompl > 0 {
-		tp = " " + p.sty.Muted.Render("↑"+common.FormatTokens(p.tokenPrompt)+" ↓"+common.FormatTokens(p.tokenCompl))
+		meta = append(meta, p.sty.Muted.Render("↑"+common.FormatTokens(p.tokenPrompt)+" ↓"+common.FormatTokens(p.tokenCompl)))
 	}
 	if p.compactCount > 0 {
-		tp += " " + p.sty.Muted.Render(fmt.Sprintf("🧹%d", p.compactCount))
+		meta = append(meta, p.sty.Muted.Render(fmt.Sprintf("🧹%d", p.compactCount)))
 	}
-	return p.sty.Teal.Render(s) + " " + p.sty.Base.Render(l) + sk + tp
+
+	spinner := p.sty.Teal.Render(s)
+	tail := strings.Join(meta, "   ")
+	statusW := width - lipgloss.Width(spinner) - 3
+	if tail != "" {
+		statusW -= lipgloss.Width(tail) + 3
+	}
+	if statusW < 10 {
+		statusW = 10
+	}
+
+	line := spinner + "   " + p.sty.Base.Render(truncatePlain(l, statusW))
+	if tail != "" {
+		line += "   " + tail
+	}
+	return line
+}
+
+func truncatePlain(s string, width int) string {
+	if width <= 0 || lipgloss.Width(s) <= width {
+		return s
+	}
+	if width <= 1 {
+		return "…"
+	}
+	var out strings.Builder
+	for _, r := range s {
+		next := out.String() + string(r)
+		if lipgloss.Width(next)+1 > width {
+			break
+		}
+		out.WriteRune(r)
+	}
+	return out.String() + "…"
 }
 
 // -- summary ---------------------------------------------------------------
@@ -114,7 +147,7 @@ func (p *ProcessingItem) renderSummary() string {
 	if len(parts) == 0 {
 		return header + "\n"
 	}
-	return header + p.sty.Subtle.Render(" · " + strings.Join(parts, " · ")) + "\n"
+	return header + p.sty.Subtle.Render(" · "+strings.Join(parts, " · ")) + "\n"
 }
 
 // -- activity section -------------------------------------------------------
@@ -201,38 +234,38 @@ func (p *ProcessingItem) renderTodos(w int) string {
 	if p.cachedTodosW < 0 || w != p.cachedTodosW {
 		green := lipgloss.NewStyle().Foreground(lipgloss.Color(styles.DiffGreen))
 		var sb strings.Builder
-		
+
 		sep := p.sty.Yellow.Render("── tasks " + strings.Repeat("─", w-lipgloss.Width("── tasks ")))
 		sb.WriteString(sep)
 		sb.WriteString("\n")
 		for line := range strings.SplitSeq(p.todos, "\n") {
 			switch {
 			case strings.HasPrefix(line, "✓ All"):
-								sb.WriteString("  ")
+				sb.WriteString("  ")
 				sb.WriteString(green.Render(line))
 				sb.WriteByte('\n')
 			case strings.HasPrefix(line, "Tasks "):
-								sb.WriteString("  ")
+				sb.WriteString("  ")
 				sb.WriteString(p.sty.Muted.Render(line))
 				sb.WriteByte('\n')
 			case strings.HasPrefix(line, "·"):
-								sb.WriteString("  ")
+				sb.WriteString("  ")
 				sb.WriteString(p.sty.Muted.Render(line))
 				sb.WriteByte('\n')
 			case strings.HasPrefix(line, "▸"):
-								sb.WriteString("  ")
+				sb.WriteString("  ")
 				sb.WriteString(p.sty.Teal.Render(line))
 				sb.WriteByte('\n')
 			case strings.HasPrefix(line, "✓"):
-								sb.WriteString("  ")
+				sb.WriteString("  ")
 				sb.WriteString(green.Render(line))
 				sb.WriteByte('\n')
 			default:
-								sb.WriteString("  ")
+				sb.WriteString("  ")
 				sb.WriteString(line)
 				sb.WriteByte('\n')
 			}
-			
+
 		}
 		p.cachedTodos = sb.String()
 		p.cachedTodosW = w
@@ -257,7 +290,7 @@ func (p *ProcessingItem) renderOutputSection(w int) string {
 	sb.WriteString(sep)
 	sb.WriteString("\n")
 	sb.WriteString(content)
-	
+
 	return sb.String()
 }
 
@@ -273,7 +306,6 @@ func (p *ProcessingItem) renderThinkingSection(w int) string {
 	sb.WriteString(sep)
 	sb.WriteString("\n")
 	sb.WriteString(RenderFixed(WrapPlain(p.ThinkingText(), w), thinkLines, false, p.sty.Muted))
-	
+
 	return sb.String()
 }
-

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"nekocode/bot/tools"
+	"nekocode/bot/tools/core"
 	"nekocode/common"
 )
 
@@ -32,10 +32,10 @@ func (t *MCPTool) Description() string {
 	return fmt.Sprintf("[MCP:%s] %s", t.client.Name, t.def.Description)
 }
 
-func (t *MCPTool) Parameters() []tools.Parameter {
-	var params []tools.Parameter
+func (t *MCPTool) Parameters() []core.Parameter {
+	var params []core.Parameter
 	for name, prop := range t.def.InputSchema.Properties {
-		p := tools.Parameter{
+		p := core.Parameter{
 			Name:        name,
 			Type:        prop.Type,
 			Description: prop.Description,
@@ -46,8 +46,8 @@ func (t *MCPTool) Parameters() []tools.Parameter {
 	return params
 }
 
-func (t *MCPTool) ExecutionMode(args map[string]any) tools.ExecutionMode {
-	return tools.ModeSequential
+func (t *MCPTool) ExecutionMode(args map[string]any) core.ExecutionMode {
+	return core.ModeSequential
 }
 
 func (t *MCPTool) DangerLevel(args map[string]any) common.DangerLevel {

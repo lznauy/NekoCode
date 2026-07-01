@@ -7,7 +7,7 @@ import (
 
 	"nekocode/bot/policy/ledger"
 	"nekocode/bot/policy/semantics"
-	"nekocode/bot/tools"
+	"nekocode/bot/tools/core"
 )
 
 func TestPreEditBlockReasonRequiresLedgerReadForExistingFile(t *testing.T) {
@@ -17,7 +17,7 @@ func TestPreEditBlockReasonRequiresLedgerReadForExistingFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tc := tools.ToolCallItem{Name: "write", Args: map[string]any{"path": path}}
+	tc := core.ToolCallItem{Name: "write", Args: map[string]any{"path": path}}
 	if got := preToolBlockReasonForTest(a, tc); got == "" {
 		t.Fatal("expected existing unread file to be blocked")
 	}
@@ -39,7 +39,7 @@ func TestPreEditBlockReasonAllowsEditWithSufficientAnchor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tc := tools.ToolCallItem{Name: "edit", Args: map[string]any{
+	tc := core.ToolCallItem{Name: "edit", Args: map[string]any{
 		"path": path,
 		"oldString": strings.Join([]string{
 			"package main",
@@ -63,7 +63,7 @@ func TestPreEditBlockReasonBlocksEditWithShortAnchor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tc := tools.ToolCallItem{Name: "edit", Args: map[string]any{
+	tc := core.ToolCallItem{Name: "edit", Args: map[string]any{
 		"path":      path,
 		"oldString": "main",
 		"newString": "app",
@@ -76,7 +76,7 @@ func TestPreEditBlockReasonBlocksEditWithShortAnchor(t *testing.T) {
 func TestPreEditBlockReasonAllowsNewFile(t *testing.T) {
 	a := newTestAgent()
 	path := t.TempDir() + "/new.go"
-	tc := tools.ToolCallItem{Name: "write", Args: map[string]any{"path": path}}
+	tc := core.ToolCallItem{Name: "write", Args: map[string]any{"path": path}}
 	if got := preToolBlockReasonForTest(a, tc); got != "" {
 		t.Fatalf("expected new file write to pass, got %q", got)
 	}

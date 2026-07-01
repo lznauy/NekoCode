@@ -9,6 +9,7 @@ import (
 	"nekocode/bot/llm/types"
 	aggov "nekocode/bot/policy"
 	"nekocode/bot/policy/budget"
+	"nekocode/bot/tools/core"
 	"nekocode/bot/tools"
 )
 
@@ -21,8 +22,8 @@ func newTestAgent() *Agent {
 	return a
 }
 
-func preToolBlockReasonForTest(a *Agent, tc tools.ToolCallItem) string {
-	filtered := a.toolRunner.FilterToolCalls([]tools.ToolCallItem{tc}, &budget.ToolQuota{MaxSlots: 8})
+func preToolBlockReasonForTest(a *Agent, tc core.ToolCallItem) string {
+	filtered := a.toolRunner.FilterToolCalls([]core.ToolCallItem{tc}, &budget.ToolQuota{MaxSlots: 8})
 	return filtered.Blocked[0]
 }
 

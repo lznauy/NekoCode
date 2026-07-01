@@ -7,11 +7,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"nekocode/common/debug"
 	"nekocode/bot/tools"
+	"nekocode/bot/tools/diff"
 	"nekocode/bot/tools/editcore"
 	"nekocode/bot/tools/toolhelpers"
 	"nekocode/common"
+	"nekocode/common/debug"
 )
 
 type preflightResult struct {
@@ -36,12 +37,40 @@ func (t *EditTool) revertSnapshot(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("revert: no snapshot for %s: %w", filepath.Base(safePath), err)
 	}
+	currentData, err := os.ReadFile(safePath)
+	if err != nil {
+		return "", fmt.Errorf("revert: read current file failed: %w", err)
+	}
 	mode := toolhelpers.GetFileMode(safePath)
 	if err := os.WriteFile(safePath, preData, mode); err != nil {
 		return "", fmt.Errorf("revert: write failed: %w", err)
 	}
 	newTag := tools.RecordSnapshot(safePath, string(preData))
-	return fmt.Sprintf("[%s#%s]\nReverted to pre-edit state (latest snapshot).\nSnapshot: %s\nNote: edit keeps one latest pre-edit snapshot per file; repeated revert restores this same snapshot until another edit records a new one.\n", safePath, newTag, undoFile), nil
+	return renderRevertDiff(safePath, newTag, string(currentData), string(preData)), nil
+}
+
+func (t *EditTool) previewRevertSnapshot(path string) string {
+	safePath, err := tools.ValidatePath(path)
+	if err != nil {
+		return ""
+	}
+	preData, err := os.ReadFile(snapshotUndoPath(safePath))
+	if err != nil {
+		return ""
+	}
+	currentData, err := os.ReadFile(safePath)
+	if err != nil {
+		return ""
+	}
+	return renderRevertDiff(safePath, "revert", string(currentData), string(preData))
+}
+
+func renderRevertDiff(path, tag, currentText, restoredText string) string {
+	return diff.RenderTextChange(currentText, restoredText, diff.TextChangeOptions{
+		Context:      diff.DefaultContext,
+		Header:       diff.TagHeader(path, tag),
+		NoChangeText: diff.NoChanges,
+	})
 }
 
 func writeUndoSnapshot(pe preflightResult) {

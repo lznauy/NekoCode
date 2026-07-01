@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"nekocode/bot/tools"
+	"nekocode/bot/tools/core"
 	"nekocode/bot/tools/toolhelpers"
 )
 
@@ -19,8 +20,8 @@ func (t *ListTool) Description() string {
 	return "List directory contents. ALWAYS use List — NEVER invoke ls as Bash. Returns files and subdirectories sorted by name."
 }
 
-func (t *ListTool) Parameters() []tools.Parameter {
-	return []tools.Parameter{
+func (t *ListTool) Parameters() []core.Parameter {
+	return []core.Parameter{
 		{Name: "path", Type: "string", Required: true, Description: "Directory path to list"},
 	}
 }

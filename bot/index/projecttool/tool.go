@@ -10,7 +10,7 @@ import (
 
 	graphpkg "nekocode/bot/index/graph"
 	"nekocode/bot/index/service"
-	"nekocode/bot/tools"
+	"nekocode/bot/tools/core"
 	"nekocode/common"
 )
 
@@ -30,16 +30,16 @@ func (t *ProjectInfoTool) Name() string { return "project_info" }
 func (t *ProjectInfoTool) DangerLevel(args map[string]any) common.DangerLevel {
 	return common.LevelSafe
 }
-func (t *ProjectInfoTool) ExecutionMode(args map[string]any) tools.ExecutionMode {
-	return tools.ModeParallel
+func (t *ProjectInfoTool) ExecutionMode(args map[string]any) core.ExecutionMode {
+	return core.ModeParallel
 }
 
 func (t *ProjectInfoTool) Description() string {
 	return "Pre-built project index. ALWAYS use this FIRST for: finding symbols (symbol:), finding files (file:), checking dependencies (deps:), full-text search (search:), or getting project overview (skeleton). Faster and more accurate than grep/glob for code structure queries."
 }
 
-func (t *ProjectInfoTool) Parameters() []tools.Parameter {
-	return []tools.Parameter{
+func (t *ProjectInfoTool) Parameters() []core.Parameter {
+	return []core.Parameter{
 		{
 			Name:        "query",
 			Type:        "string",

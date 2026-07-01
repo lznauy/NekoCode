@@ -4,13 +4,13 @@ import (
 	"testing"
 
 	ctxmgr "nekocode/bot/contextmgr"
-	"nekocode/bot/tools"
+	"nekocode/bot/tools/core"
 )
 
 func TestApplyReadOnlySpiralGuardInjectsReminderAfterThreeExploratoryBatches(t *testing.T) {
 	ctxMgr := ctxmgr.NewSub("system", 128000, nil)
 	state := newRunState()
-	calls := []tools.ToolCallItem{{Name: "read", Args: map[string]any{"path": "a.go"}}}
+	calls := []core.ToolCallItem{{Name: "read", Args: map[string]any{"path": "a.go"}}}
 
 	before := ctxMgr.Len()
 	applyReadOnlySpiralGuard(ctxMgr, calls, state)
@@ -31,7 +31,7 @@ func TestApplyReadOnlySpiralGuardInjectsReminderAfterThreeExploratoryBatches(t *
 func TestApplyReadOnlySpiralGuardResetsOnMutation(t *testing.T) {
 	ctxMgr := ctxmgr.NewSub("system", 128000, nil)
 	state := &runState{readOnlyStreak: 2}
-	applyReadOnlySpiralGuard(ctxMgr, []tools.ToolCallItem{{Name: "write", Args: map[string]any{"path": "a.go"}}}, state)
+	applyReadOnlySpiralGuard(ctxMgr, []core.ToolCallItem{{Name: "write", Args: map[string]any{"path": "a.go"}}}, state)
 	if state.readOnlyStreak != 0 {
 		t.Fatalf("readOnlyStreak = %d, want reset", state.readOnlyStreak)
 	}

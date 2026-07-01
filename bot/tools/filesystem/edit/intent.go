@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"nekocode/bot/tools"
+	"nekocode/bot/tools/diff"
 	"nekocode/bot/tools/editcore"
 	"nekocode/bot/tools/toolhelpers"
 )
@@ -60,7 +61,7 @@ func (t *EditTool) previewEdit(args map[string]any) string {
 		path, _ := args["path"].(string)
 		return fmt.Sprintf("(%s: %v)", filepath.Base(path), err)
 	}
-	preview := buildDiffPreview(plan.NormalizedBefore, plan.NormalizedAfter, plan.Hunks)
+	preview := diff.RenderTextChange(plan.NormalizedBefore, plan.NormalizedAfter, editTextChangeOptions)
 	if plan.ReplaceAll {
 		preview = fmt.Sprintf("(%d replacements)\n%s", len(plan.Hunks), preview)
 	}
@@ -250,7 +251,7 @@ func ambiguousMatchError(text string, matches []textMatch, label string, mention
 
 func trimLineMatches(text, oldString string) []textMatch {
 	spans := splitLineSpans(text)
-	needleLines := splitDiffLines(strings.Trim(oldString, "\n"))
+	needleLines := diff.SplitLines(strings.Trim(oldString, "\n"))
 	if len(needleLines) == 0 || len(needleLines) > len(spans) {
 		return nil
 	}
@@ -288,8 +289,8 @@ func applyMatches(text, replacement string, matches []textMatch) (string, []edit
 		oldSegment := text[m.Start:m.End]
 		effectiveReplacement := replacementForMatch(replacement, oldSegment, m)
 		oldStart := lineNumberAtOffset(text, m.Start)
-		oldLines := splitDiffLines(oldSegment)
-		newLines := splitDiffLines(effectiveReplacement)
+		oldLines := diff.SplitLines(oldSegment)
+		newLines := diff.SplitLines(effectiveReplacement)
 		newStart := oldStart + lineDelta
 		hunks = append(hunks, editHunk{
 			OldStart: oldStart,
@@ -334,14 +335,6 @@ func splitLineSpans(text string) []lineSpan {
 		offset += len(part)
 	}
 	return spans
-}
-
-func splitDiffLines(text string) []string {
-	text = strings.TrimSuffix(text, "\n")
-	if text == "" {
-		return nil
-	}
-	return strings.Split(text, "\n")
 }
 
 func lineNumberAtOffset(text string, offset int) int {

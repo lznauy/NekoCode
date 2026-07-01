@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"nekocode/bot/tools/core"
 	"nekocode/common"
 )
 
@@ -37,8 +38,8 @@ func (t *WebFetchTool) Description() string {
 	return "Fetch web page as text. When quoting, cite source URL and keep quotes ≤125 chars."
 }
 
-func (t *WebFetchTool) Parameters() []tools.Parameter {
-	return []tools.Parameter{
+func (t *WebFetchTool) Parameters() []core.Parameter {
+	return []core.Parameter{
 		{Name: "url", Type: "string", Required: true, Description: "Web page URL to fetch"},
 		{Name: "prompt", Type: "string", Required: false, Description: "Content extraction hint, e.g. 'extract API parameters'"},
 	}

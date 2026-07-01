@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"nekocode/bot/tools/core"
 	"nekocode/common"
 )
 
@@ -32,8 +33,8 @@ func (t *WebSearchTool) Description() string {
 	return "Search the web. Include a \"Sources:\" section with [Title](URL) links after answering."
 }
 
-func (t *WebSearchTool) Parameters() []tools.Parameter {
-	return []tools.Parameter{
+func (t *WebSearchTool) Parameters() []core.Parameter {
+	return []core.Parameter{
 		{Name: "query", Type: "string", Required: true, Description: "Search query"},
 		{Name: "numResults", Type: "number", Required: false, Description: "Number of results, default 8, max 15"},
 	}

@@ -3,7 +3,7 @@ package subagent
 import (
 	"strings"
 
-	"nekocode/bot/tools"
+	"nekocode/bot/tools/core"
 )
 
 var sensitivePathPatterns = []string{
@@ -26,7 +26,7 @@ var dangerousCommandPatterns = []string{
 	"curl", "wget",
 }
 
-func isSensitiveCall(c tools.ToolCallItem) bool {
+func isSensitiveCall(c core.ToolCallItem) bool {
 	switch c.Name {
 	case "bash":
 		cmd, _ := c.Args["command"].(string)
@@ -53,7 +53,7 @@ func isSensitiveCall(c tools.ToolCallItem) bool {
 	return false
 }
 
-func extractPaths(c tools.ToolCallItem) []string {
+func extractPaths(c core.ToolCallItem) []string {
 	if p, ok := c.Args["path"].(string); ok && p != "" {
 		return []string{p}
 	}

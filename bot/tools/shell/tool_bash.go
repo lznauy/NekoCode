@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"nekocode/bot/tools"
 	"nekocode/bot/tools/toolhelpers"
+	"nekocode/bot/tools/core"
 	"nekocode/common"
 )
 
@@ -16,7 +16,7 @@ const defaultBashTimeout = 120 * time.Second
 type BashTool struct{}
 
 func (t *BashTool) Name() string                                     { return "bash" }
-func (t *BashTool) ExecutionMode(map[string]any) tools.ExecutionMode { return tools.ModeSequential }
+func (t *BashTool) ExecutionMode(map[string]any) core.ExecutionMode { return core.ModeSequential }
 
 func (t *BashTool) Description() string {
 	return "Execute shell commands. " + strconv.Itoa(int(defaultBashTimeout.Seconds())) + "s timeout by default, configurable via timeout_ms parameter (max 600s). " +
@@ -27,8 +27,8 @@ func (t *BashTool) Description() string {
 		"Never git push --force or skip hooks."
 }
 
-func (t *BashTool) Parameters() []tools.Parameter {
-	return []tools.Parameter{
+func (t *BashTool) Parameters() []core.Parameter {
+	return []core.Parameter{
 		{Name: "command", Type: "string", Required: true, Description: "The command to execute"},
 		{Name: "timeout_ms", Type: "number", Required: false, Description: "Timeout in milliseconds (default 120000, max 600000)"},
 	}

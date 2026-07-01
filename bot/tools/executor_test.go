@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"nekocode/bot/tools/core"
+	"nekocode/bot/tools/runner"
 	"nekocode/common"
 )
 
@@ -16,7 +18,7 @@ func (t *forbiddenTool) DangerLevel(map[string]any) common.DangerLevel { return 
 type writeTool struct{ testTool }
 
 func (t *writeTool) DangerLevel(map[string]any) common.DangerLevel { return common.LevelWrite }
-func (t *writeTool) ExecutionMode(map[string]any) ExecutionMode    { return ModeSequential }
+func (t *writeTool) ExecutionMode(map[string]any) core.ExecutionMode    { return core.ModeSequential }
 
 func TestExecutorBatch(t *testing.T) {
 	r := NewRegistry()
@@ -24,7 +26,7 @@ func TestExecutorBatch(t *testing.T) {
 	r.Register(&testTool{name: "safe"})
 	r.Register(&forbiddenTool{testTool{name: "blocked"}})
 	r.Register(&writeTool{testTool{name: "writer"}})
-	e := NewExecutor(r)
+	e := runner.NewExecutor(r)
 
 	// Empty batch.
 	results := e.ExecuteBatch(context.Background(), nil)
@@ -33,7 +35,7 @@ func TestExecutorBatch(t *testing.T) {
 	}
 
 	// Forbidden tool is blocked.
-	results = e.ExecuteBatch(context.Background(), []ToolCallItem{
+	results = e.ExecuteBatch(context.Background(), []core.ToolCallItem{
 		{ID: "1", Name: "blocked"},
 	})
 	if results[0].Error == "" {
@@ -41,7 +43,7 @@ func TestExecutorBatch(t *testing.T) {
 	}
 
 	// Safe tool runs.
-	results = e.ExecuteBatch(context.Background(), []ToolCallItem{
+	results = e.ExecuteBatch(context.Background(), []core.ToolCallItem{
 		{ID: "2", Name: "safe"},
 	})
 	if results[0].Error != "" || results[0].Output != "ok" {
@@ -53,9 +55,9 @@ func TestExecutorBatchPreservesCallOrderAcrossModes(t *testing.T) {
 	r := NewRegistry()
 	r.Register(&testTool{name: "read"})
 	r.Register(&writeTool{testTool{name: "write"}})
-	e := NewExecutor(r)
+	e := runner.NewExecutor(r)
 
-	results := e.ExecuteBatch(context.Background(), []ToolCallItem{
+	results := e.ExecuteBatch(context.Background(), []core.ToolCallItem{
 		{ID: "1", Name: "write", Args: map[string]any{"path": "a.go"}},
 		{ID: "2", Name: "read", Args: map[string]any{"path": "a.go"}},
 		{ID: "3", Name: "write", Args: map[string]any{"path": "b.go"}},
@@ -71,10 +73,10 @@ func TestExecutorBatchPreservesCallOrderAcrossModes(t *testing.T) {
 func TestExecutorPlanMode(t *testing.T) {
 	r := NewRegistry()
 	r.Register(&writeTool{testTool{name: "writer"}})
-	e := NewExecutor(r)
+	e := runner.NewExecutor(r)
 	e.SetPlanMode(true)
 
-	results := e.ExecuteBatch(context.Background(), []ToolCallItem{
+	results := e.ExecuteBatch(context.Background(), []core.ToolCallItem{
 		{ID: "1", Name: "writer"},
 	})
 	if results[0].Error == "" {
@@ -85,12 +87,12 @@ func TestExecutorPlanMode(t *testing.T) {
 func TestExecutorConfirm(t *testing.T) {
 	r := NewRegistry()
 	r.Register(&writeTool{testTool{name: "writer"}})
-	e := NewExecutor(r)
+	e := runner.NewExecutor(r)
 
 	// Deny all writes.
 	e.SetConfirmFn(func(req common.ConfirmRequest) bool { return false })
 
-	results := e.ExecuteBatch(context.Background(), []ToolCallItem{
+	results := e.ExecuteBatch(context.Background(), []core.ToolCallItem{
 		{ID: "1", Name: "writer"},
 	})
 	if results[0].Error == "" {
@@ -102,12 +104,12 @@ func TestExecutorDoesNotOwnReadBeforeWriteGovernance(t *testing.T) {
 	r := NewRegistry()
 	r.Register(&testTool{name: "read"})
 	r.Register(&writeTool{testTool{name: "write"}})
-	e := NewExecutor(r)
+	e := runner.NewExecutor(r)
 
 	// Read-before-write is governed by agent ledger policy, not executor-local
 	// state. The executor must not reject a call solely because it lacks local
 	// read history, otherwise bash/read evidence recorded in the ledger is ignored.
-	results := e.ExecuteBatch(context.Background(), []ToolCallItem{
+	results := e.ExecuteBatch(context.Background(), []core.ToolCallItem{
 		{ID: "1", Name: "write", Args: map[string]any{"path": "existing.go"}},
 	})
 	if results[0].Error != "" {

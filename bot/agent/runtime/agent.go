@@ -11,6 +11,7 @@ import (
 	"nekocode/bot/hooks"
 	"nekocode/bot/llm/types"
 	aggov "nekocode/bot/policy"
+	"nekocode/bot/tools/runner"
 	"nekocode/bot/tools"
 	"nekocode/common"
 )
@@ -30,7 +31,7 @@ type agentDeps struct {
 	ctxMgr       *ctxmgr.Manager
 	llmClient    types.LLM
 	toolRegistry *tools.Registry
-	executor     *tools.Executor
+	executor     *runner.Executor
 	subSlotMgr   *toolrun.SlotManager
 	gov          *aggov.Manager
 }
@@ -40,7 +41,7 @@ func newAgentDeps(ctxMgr *ctxmgr.Manager, llmClient types.LLM, toolRegistry *too
 		ctxMgr:       ctxMgr,
 		llmClient:    llmClient,
 		toolRegistry: toolRegistry,
-		executor:     tools.NewExecutor(toolRegistry),
+		executor:     runner.NewExecutor(toolRegistry),
 		subSlotMgr:   toolrun.NewSlotManager(),
 	}
 }

@@ -7,20 +7,21 @@ import (
 	"nekocode/common/debug"
 	"nekocode/bot/hooks"
 	"nekocode/bot/policy/budget"
+	"nekocode/bot/tools/core"
 	"nekocode/bot/tools"
 )
 
 type FilteredCalls struct {
-	Allowed      []tools.ToolCallItem
+	Allowed      []core.ToolCallItem
 	Blocked      map[int]string
 	PreToolHints []*hooks.Hint
 }
 
 const policyBlockedDefault = "blocked by policy"
 
-func (r *Runner) FilterToolCalls(calls []tools.ToolCallItem, quota *budget.ToolQuota) FilteredCalls {
+func (r *Runner) FilterToolCalls(calls []core.ToolCallItem, quota *budget.ToolQuota) FilteredCalls {
 	out := FilteredCalls{
-		Allowed: make([]tools.ToolCallItem, 0, len(calls)),
+		Allowed: make([]core.ToolCallItem, 0, len(calls)),
 		Blocked: make(map[int]string),
 	}
 	for i, c := range calls {
@@ -39,7 +40,7 @@ func (r *Runner) FilterToolCalls(calls []tools.ToolCallItem, quota *budget.ToolQ
 	return out
 }
 
-func (r *Runner) applyPreToolPolicy(c tools.ToolCallItem, blocked map[int]string, idx int, hints *[]*hooks.Hint) bool {
+func (r *Runner) applyPreToolPolicy(c core.ToolCallItem, blocked map[int]string, idx int, hints *[]*hooks.Hint) bool {
 	gov := r.host.Governance()
 	if gov == nil || gov.HookReg == nil {
 		return false
@@ -70,7 +71,7 @@ func policyBlockedStop(stop string) string {
 	return "blocked by stop policy: " + stop
 }
 
-func (r *Runner) preparePreToolHookState(tc tools.ToolCallItem) {
+func (r *Runner) preparePreToolHookState(tc core.ToolCallItem) {
 	gov := r.host.Governance()
 	if gov == nil || gov.Ledger == nil {
 		return

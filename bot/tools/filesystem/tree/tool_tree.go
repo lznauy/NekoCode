@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"nekocode/bot/tools"
+	"nekocode/bot/tools/core"
 	"nekocode/bot/tools/toolhelpers"
 )
 
@@ -21,8 +21,8 @@ func (t *TreeTool) Description() string {
 	return "Show directory tree. depth (default 3, max 6), limit (default 400). Ignores hidden files."
 }
 
-func (t *TreeTool) Parameters() []tools.Parameter {
-	return []tools.Parameter{
+func (t *TreeTool) Parameters() []core.Parameter {
+	return []core.Parameter{
 		{Name: "path", Type: "string", Required: true, Description: "Directory to show (absolute path)"},
 		{Name: "depth", Type: "integer", Required: false, Description: "Levels deep (default 3, max 6)"},
 		{Name: "limit", Type: "integer", Required: false, Description: "Max entries to show (default 400, max 800)"},

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"nekocode/bot/tools"
+	"nekocode/bot/tools/core"
 	"nekocode/bot/tools/toolhelpers"
 )
 
@@ -24,8 +25,8 @@ func (t *TaskTool) Description() string {
 	return "Delegate multi-step work to an isolated sub-agent. Only the main agent can use this tool — sub-agents cannot spawn nested agents. Include full context in prompt since the subagent cannot see your conversation. Types: researcher (search/analyze), executor (write/edit), verify (validate changes). For simple tasks (single file, one grep), use direct tools instead."
 }
 
-func (t *TaskTool) Parameters() []tools.Parameter {
-	return []tools.Parameter{
+func (t *TaskTool) Parameters() []core.Parameter {
+	return []core.Parameter{
 		{Name: "type", Type: "string", Required: true,
 			Description: "researcher | executor | verify"},
 		{Name: "prompt", Type: "string", Required: true,

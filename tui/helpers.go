@@ -13,6 +13,20 @@ import (
 func formatBriefArgs(toolName, toolArgs string) string {
 	parse := func(s string) map[string]string {
 		m := make(map[string]string)
+		if strings.HasPrefix(strings.TrimSpace(s), "{") {
+			var raw map[string]any
+			if err := json.Unmarshal([]byte(s), &raw); err == nil {
+				for k, v := range raw {
+					switch t := v.(type) {
+					case string:
+						m[k] = t
+					default:
+						m[k] = fmt.Sprint(t)
+					}
+				}
+				return m
+			}
+		}
 		for _, pair := range common.SplitPairs(s) {
 			kv := strings.SplitN(pair, "=", 2)
 			if len(kv) == 2 {

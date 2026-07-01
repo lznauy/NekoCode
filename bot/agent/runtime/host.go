@@ -8,6 +8,7 @@ import (
 	"nekocode/bot/hooks"
 	"nekocode/bot/llm/types"
 	aggov "nekocode/bot/policy"
+	"nekocode/bot/tools/runner"
 	"nekocode/bot/tools"
 )
 
@@ -23,7 +24,7 @@ func (h runnerHost) ContextManager() *ctxmgr.Manager {
 	return h.agent.deps.ctxMgr
 }
 
-func (h runnerHost) Executor() *tools.Executor {
+func (h runnerHost) Executor() *runner.Executor {
 	return h.agent.deps.executor
 }
 

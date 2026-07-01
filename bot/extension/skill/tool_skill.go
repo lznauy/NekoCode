@@ -3,9 +3,9 @@ package skill
 import (
 	"context"
 	"fmt"
+	"nekocode/bot/tools/core"
 	"nekocode/common"
 
-	"nekocode/bot/tools"
 )
 
 // SkillTool implements tools.Tool to let the model load skills by name.
@@ -27,8 +27,8 @@ func (t *SkillTool) Description() string {
 	return "Load a skill's instructions and workflows by name. Use when a task matches an available skill. Do NOT reload a skill already loaded via slash command — if the skill content is already in context, use it directly."
 }
 
-func (t *SkillTool) Parameters() []tools.Parameter {
-	return []tools.Parameter{
+func (t *SkillTool) Parameters() []core.Parameter {
+	return []core.Parameter{
 		{
 			Name:        "name",
 			Type:        "string",
@@ -38,8 +38,8 @@ func (t *SkillTool) Parameters() []tools.Parameter {
 	}
 }
 
-func (t *SkillTool) ExecutionMode(args map[string]any) tools.ExecutionMode {
-	return tools.ModeSequential
+func (t *SkillTool) ExecutionMode(args map[string]any) core.ExecutionMode {
+	return core.ModeSequential
 }
 
 func (t *SkillTool) DangerLevel(args map[string]any) common.DangerLevel {

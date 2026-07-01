@@ -5,7 +5,7 @@ import (
 	"nekocode/bot/hooks"
 	aggov "nekocode/bot/policy"
 	"nekocode/bot/policy/budget"
-	"nekocode/bot/tools"
+	"nekocode/bot/tools/core"
 )
 
 type turnRunner struct {
@@ -79,7 +79,7 @@ func (r *turnRunner) retryAfterInterruptedReasoning(reasoning *ReasoningResult, 
 	return true
 }
 
-func (r *turnRunner) handleToolCalls(calls []tools.ToolCallItem, reasoning *ReasoningResult, quota *budget.ToolQuota, callback RunCallback) bool {
+func (r *turnRunner) handleToolCalls(calls []core.ToolCallItem, reasoning *ReasoningResult, quota *budget.ToolQuota, callback RunCallback) bool {
 	a := r.agent
 	a.run.consecutiveHints = 0
 	a.run.consecutiveFailures = 0

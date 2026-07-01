@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import type { MutableRefObject } from 'react'
 import { genId } from '../lib/id'
+import { isUnifiedDiffContent } from '../lib/diffFormat'
 import { safeAbort, safeSendMessage } from '../lib/wails'
 import { useWailsEvents } from './useWailsEvents'
 import type {
@@ -205,15 +206,14 @@ export function useChat(): UseChatReturn {
       if (isEdit) {
         // 与 TUI finishToolBlock 一致：edit 成功时用最终输出替换运行时 preview，
         // 保证 relocated/rebased edits 展示准确提交 diff。
-        const isRevert = output.includes('Reverted to pre-edit state')
-        if (e.isError || isRevert || !output.startsWith('[')) {
+        if (e.isError || !isUnifiedDiffContent(output)) {
           preview = undefined
         } else {
           preview = output
           output = ''
         }
       } else if (!isPersistent && !e.isError) {
-        // 非持久化工具在成功后丢弃中间 preview/output，与 session view 只保留 edit/bash/write 一致。
+        // 非持久化工具在成功后丢弃中间 preview/output，与 session view 的持久工具集合一致。
         output = ''
         preview = undefined
       }
@@ -224,7 +224,7 @@ export function useChat(): UseChatReturn {
         preview,
         isError: e.isError,
         status: e.isError ? 'error' : 'done',
-        // edit/bash 默认保持展开，write 默认收起，与 ActivityRow 原本地状态一致。
+        // edit/bash 默认保持展开，write/diff 默认收起，与 ActivityRow 原本地状态一致。
         collapsed: !(e.toolName === 'edit' || e.toolName === 'bash'),
       }
       return {
@@ -476,7 +476,7 @@ function addActivity(current: Msg['activity'] | undefined, delta: NonNullable<Ms
 }
 
 function persistentTool(name: string): boolean {
-  return name === 'edit' || name === 'bash' || name === 'write'
+  return name === 'edit' || name === 'diff' || name === 'bash' || name === 'write'
 }
 
 function resetBuffers(

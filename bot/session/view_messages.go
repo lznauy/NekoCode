@@ -108,7 +108,7 @@ func displayAssistantMessage(msgs []types.Message, idx int, toolNames, toolArgs 
 }
 
 func isPersistentTool(name string) bool {
-	return name == "edit" || name == "write" || name == "bash"
+	return name == "edit" || name == "diff" || name == "write" || name == "bash"
 }
 
 // image tool name set — matches the tool Name() registered by ImageGenTool.

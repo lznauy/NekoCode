@@ -8,6 +8,7 @@ import (
 	"nekocode/bot/hooks"
 	"nekocode/bot/prompt/planmode"
 	"nekocode/bot/tools"
+	"nekocode/bot/tools/core"
 	"nekocode/common"
 )
 
@@ -151,7 +152,7 @@ func ContextStats(ctxMgr *ctxmgr.Manager) string {
 }
 
 // ContextReport returns a detailed context window breakdown.
-func ContextReport(ctxMgr *ctxmgr.Manager, toolDescs []tools.Descriptor) string {
+func ContextReport(ctxMgr *ctxmgr.Manager, toolDescs []core.Descriptor) string {
 	r := ctxMgr.Report()
 	r.ToolDefCount = len(toolDescs)
 	r.ToolDefTokens = EstimateToolDefTokens(toolDescs)
@@ -195,7 +196,7 @@ func ClearSkillContext(ctxMgr *ctxmgr.Manager, st *SkillState) {
 	st.MsgEnd = 0
 }
 
-func EstimateToolDefTokens(descs []tools.Descriptor) int {
+func EstimateToolDefTokens(descs []core.Descriptor) int {
 	n := 0
 	for _, d := range descs {
 		n += len(d.Name) + len(d.Description) + 80

@@ -11,13 +11,15 @@ import (
 	"nekocode/bot/hooks"
 	aggov "nekocode/bot/policy"
 	"nekocode/bot/policy/budget"
+	"nekocode/bot/tools/core"
 	"nekocode/bot/tools"
+	"nekocode/bot/tools/runner"
 )
 
 type fakeHost struct {
 	ctx        context.Context
 	ctxMgr     *ctxmgr.Manager
-	executor   *tools.Executor
+	executor   *runner.Executor
 	gov        *aggov.Manager
 	subSlots   *SlotManager
 	step       int
@@ -32,7 +34,7 @@ func newFakeHost() *fakeHost {
 	return &fakeHost{
 		ctx:      context.Background(),
 		ctxMgr:   ctxmgr.NewSub("test", 128000, nil),
-		executor: tools.NewExecutor(tools.NewRegistry()),
+		executor: runner.NewExecutor(tools.NewRegistry()),
 		gov:      aggov.NewManager(hookReg),
 		subSlots: NewSlotManager(),
 	}
@@ -40,7 +42,7 @@ func newFakeHost() *fakeHost {
 
 func (h *fakeHost) Context() context.Context             { return h.ctx }
 func (h *fakeHost) ContextManager() *ctxmgr.Manager      { return h.ctxMgr }
-func (h *fakeHost) Executor() *tools.Executor            { return h.executor }
+func (h *fakeHost) Executor() *runner.Executor            { return h.executor }
 func (h *fakeHost) Governance() *aggov.Manager           { return h.gov }
 func (h *fakeHost) SubSlots() *SlotManager               { return h.subSlots }
 func (h *fakeHost) InjectHint(hint *hooks.Hint)          { h.hints = append(h.hints, hint) }
@@ -60,7 +62,7 @@ func TestFilterToolCallsAppliesPreToolPolicyBlock(t *testing.T) {
 		},
 	})
 
-	filtered := New(host).FilterToolCalls([]tools.ToolCallItem{
+	filtered := New(host).FilterToolCalls([]core.ToolCallItem{
 		{Name: "read", Args: map[string]any{"path": "x.go"}},
 	}, &budget.ToolQuota{MaxSlots: 8})
 
@@ -79,7 +81,7 @@ func TestFilterToolCallsReadBeforeWriteBlockComesFromHook(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	filtered := New(host).FilterToolCalls([]tools.ToolCallItem{
+	filtered := New(host).FilterToolCalls([]core.ToolCallItem{
 		{Name: "write", Args: map[string]any{"path": path}},
 	}, &budget.ToolQuota{MaxSlots: 8})
 

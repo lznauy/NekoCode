@@ -3,12 +3,12 @@ package command
 import (
 	"testing"
 
-	"nekocode/bot/tools"
+	"nekocode/bot/tools/core"
 )
 
 func TestEstimateToolDefTokens(t *testing.T) {
-	descs := []tools.Descriptor{
-		{Name: "read", Description: "read files", Parameters: []tools.Parameter{
+	descs := []core.Descriptor{
+		{Name: "read", Description: "read files", Parameters: []core.Parameter{
 			{Name: "path", Type: "string", Description: "file path"},
 		}},
 	}

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"nekocode/bot/tools"
+	"nekocode/bot/tools/core"
 	"nekocode/bot/tools/toolhelpers"
 )
 
@@ -22,8 +22,8 @@ func (t *GlobTool) Description() string {
 	return "Find files matching a glob pattern. Supports ** for recursive directory search (e.g. \"src/**/*.go\"). Returns newline-separated file paths."
 }
 
-func (t *GlobTool) Parameters() []tools.Parameter {
-	return []tools.Parameter{
+func (t *GlobTool) Parameters() []core.Parameter {
+	return []core.Parameter{
 		{Name: "pattern", Type: "string", Required: true, Description: "Glob pattern, e.g. \"*.go\" or \"src/**/*.md\". ** matches zero or more directories."},
 		{Name: "path", Type: "string", Required: false, Description: "Base directory for the search (default: current working directory)"},
 	}

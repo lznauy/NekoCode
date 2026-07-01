@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"nekocode/bot/tools"
+	"nekocode/bot/tools/core"
 	"nekocode/bot/tools/toolhelpers"
 )
 
@@ -18,8 +18,8 @@ func (t *ReadTool) Description() string {
 	return "Read file contents (text, images, PDF). Absolute path required. Use startLine/endLine for range, max 500 lines. Text output includes [path#TAG], a VIEW line with rev/window metadata for JSON edit intents, then clean lineNo:content lines."
 }
 
-func (t *ReadTool) Parameters() []tools.Parameter {
-	return []tools.Parameter{
+func (t *ReadTool) Parameters() []core.Parameter {
+	return []core.Parameter{
 		{Name: "path", Type: "string", Required: true, Description: "File path (absolute)"},
 		{Name: "startLine", Type: "integer", Required: true, Description: "First line to read (1-based)"},
 		{Name: "endLine", Type: "integer", Required: true, Description: "Last line to read (inclusive, >= startLine)"},

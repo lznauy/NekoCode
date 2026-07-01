@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"nekocode/bot/tools/core"
 	"nekocode/bot/tools/editcore"
 	"nekocode/bot/tools/execution"
 	"nekocode/bot/tools/netclient"
@@ -33,7 +34,7 @@ func NewToolHTTPClient(timeout time.Duration) *http.Client {
 	return netclient.NewHTTPClient(timeout)
 }
 
-func IsAllExploratory(calls []ToolCallItem) bool {
+func IsAllExploratory(calls []core.ToolCallItem) bool {
 	return semantics.IsAllExploratory(calls)
 }
 

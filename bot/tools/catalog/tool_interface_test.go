@@ -3,7 +3,7 @@ package catalog
 import (
 	"testing"
 
-	"nekocode/bot/tools"
+	"nekocode/bot/tools/core"
 	edittool "nekocode/bot/tools/filesystem/edit"
 	listtool "nekocode/bot/tools/filesystem/list"
 	readtool "nekocode/bot/tools/filesystem/read"
@@ -20,24 +20,24 @@ import (
 // TestInterface verifies Name / Params / ExecutionMode / DangerLevel for every tool.
 func TestInterface(t *testing.T) {
 	tests := []struct {
-		tool      tools.Tool
+		tool      core.Tool
 		name      string
-		mode      tools.ExecutionMode
+		mode      core.ExecutionMode
 		level     common.DangerLevel
 		minParams int
 	}{
-		{&readtool.ReadTool{}, "read", tools.ModeParallel, common.LevelSafe, 3},
-		{&writetool.WriteTool{}, "write", tools.ModeSequential, common.LevelWrite, 2},
-		{&edittool.EditTool{}, "edit", tools.ModeSequential, common.LevelWrite, 5},
-		{&shell.BashTool{}, "bash", tools.ModeSequential, common.LevelWrite, 1},
-		{&searchtool.GlobTool{}, "glob", tools.ModeParallel, common.LevelSafe, 1},
-		{&searchtool.GrepTool{}, "grep", tools.ModeParallel, common.LevelSafe, 1},
-		{&listtool.ListTool{}, "list", tools.ModeParallel, common.LevelSafe, 1},
-		{&treetool.TreeTool{}, "tree", tools.ModeParallel, common.LevelSafe, 1},
-		{&todo.TodoWriteTool{}, "todo_write", tools.ModeSequential, common.LevelSafe, 1},
-		{tasktool.NewTaskTool(), "task", tools.ModeParallel, common.LevelSafe, 1},
-		{web.NewWebSearchTool(), "web_search", tools.ModeParallel, common.LevelSafe, 1},
-		{web.NewWebFetchTool(), "web_fetch", tools.ModeParallel, common.LevelSafe, 1},
+		{&readtool.ReadTool{}, "read", core.ModeParallel, common.LevelSafe, 3},
+		{&writetool.WriteTool{}, "write", core.ModeSequential, common.LevelWrite, 2},
+		{&edittool.EditTool{}, "edit", core.ModeSequential, common.LevelWrite, 5},
+		{&shell.BashTool{}, "bash", core.ModeSequential, common.LevelWrite, 1},
+		{&searchtool.GlobTool{}, "glob", core.ModeParallel, common.LevelSafe, 1},
+		{&searchtool.GrepTool{}, "grep", core.ModeParallel, common.LevelSafe, 1},
+		{&listtool.ListTool{}, "list", core.ModeParallel, common.LevelSafe, 1},
+		{&treetool.TreeTool{}, "tree", core.ModeParallel, common.LevelSafe, 1},
+		{&todo.TodoWriteTool{}, "todo_write", core.ModeSequential, common.LevelSafe, 1},
+		{tasktool.NewTaskTool(), "task", core.ModeParallel, common.LevelSafe, 1},
+		{web.NewWebSearchTool(), "web_search", core.ModeParallel, common.LevelSafe, 1},
+		{web.NewWebFetchTool(), "web_fetch", core.ModeParallel, common.LevelSafe, 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

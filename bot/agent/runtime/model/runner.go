@@ -10,9 +10,11 @@ import (
 	"nekocode/bot/hooks"
 	"nekocode/bot/llm"
 	"nekocode/bot/llm/types"
+	"nekocode/bot/tools/llmstream"
 	aggov "nekocode/bot/policy"
 	"nekocode/bot/tools"
 
+	"nekocode/bot/tools/core"
 	"nekocode/common"
 )
 
@@ -39,11 +41,11 @@ func New(host Host) *Runner {
 	return &Runner{host: host}
 }
 
-func CallLLMWithRetry(ctx context.Context, client types.LLM, buildOptions func() tools.LLMCallOptions) (*tools.LLMCallResult, error) {
-	var result *tools.LLMCallResult
+func CallLLMWithRetry(ctx context.Context, client types.LLM, buildOptions func() llmstream.LLMCallOptions) (*llmstream.LLMCallResult, error) {
+	var result *llmstream.LLMCallResult
 	err := WithRetry(ctx, func() error {
 		var err error
-		result, err = tools.CallLLM(client, buildOptions())
+		result, err = llmstream.CallLLM(client, buildOptions())
 		return err
 	})
 	return result, err
@@ -59,13 +61,13 @@ func (r *Runner) Reason(input string) *Result {
 	return FromLLM(toolCalls, textContent, err)
 }
 
-func (r *Runner) callLLMForTool() ([]tools.ToolCallItem, string, error) {
-	toolDefs := tools.ToToolDefs(r.host.ToolRegistry().Descriptors())
+func (r *Runner) callLLMForTool() ([]core.ToolCallItem, string, error) {
+	toolDefs := core.ToToolDefs(r.host.ToolRegistry().Descriptors())
 	messages := r.host.ContextManager().Build()
 	messages = r.applyPreModelRequestHooks(messages)
 
-	result, err := CallLLMWithRetry(r.host.Context(), r.host.LLM(), func() tools.LLMCallOptions {
-		return tools.LLMCallOptions{
+	result, err := CallLLMWithRetry(r.host.Context(), r.host.LLM(), func() llmstream.LLMCallOptions {
+		return llmstream.LLMCallOptions{
 			Ctx:       r.host.Context(),
 			Messages:  messages,
 			ToolDefs:  toolDefs,
@@ -82,7 +84,7 @@ func (r *Runner) callLLMForTool() ([]tools.ToolCallItem, string, error) {
 		r.host.SetLastReason(result.Reasoning)
 	}
 	if len(result.ToolCalls) > 0 {
-		r.host.ContextManager().AddAssistantToolCall(textContent, r.host.LastReason(), tools.ToLLMToolCalls(result.ToolCalls))
+		r.host.ContextManager().AddAssistantToolCall(textContent, r.host.LastReason(), llmstream.ToLLMToolCalls(result.ToolCalls))
 	}
 	return result.ToolCalls, textContent, nil
 }
@@ -125,7 +127,7 @@ func (r *Runner) streamSynthesize(ctx context.Context) (string, error) {
 	messages := r.host.ContextManager().Build()
 	messages = append(messages, types.Message{Role: "user", Content: synthesizePrompt})
 
-	result, err := tools.CallLLM(r.host.LLM(), tools.LLMCallOptions{
+	result, err := llmstream.CallLLM(r.host.LLM(), llmstream.LLMCallOptions{
 		Ctx:       ctx,
 		Messages:  messages,
 		Callbacks: r.streamCallbacks(),
@@ -168,8 +170,8 @@ func countToolResults(messages []types.Message) int64 {
 	return count
 }
 
-func (r *Runner) streamCallbacks() tools.StreamCallbacks {
-	return tools.StreamCallbacks{
+func (r *Runner) streamCallbacks() llmstream.StreamCallbacks {
+	return llmstream.StreamCallbacks{
 		OnText: func(delta string) {
 			r.host.StreamText(delta)
 		},

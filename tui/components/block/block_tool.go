@@ -14,37 +14,109 @@ func renderToolLine(b ContentBlock, width int, sty *styles.Styles) string {
 
 	summary := b.ToolArgs
 	if b.Content != "" {
-		if b.Collapsed {
-			summary = toolSummary(b)
-		} else if b.ToolName == "edit" {
-			summary = toolSummary(b)
-		}
+		summary = toolSummary(b)
 	}
 
-	arrow := ""
+	toggle := ""
 	if running {
-		arrow = " " + sty.Subtle.Render("\u2026")
+		toggle = sty.Yellow.Render("…")
 	} else if b.Content != "" {
 		if b.Collapsed {
-			arrow = " " + sty.Subtle.Render("[+]")
+			toggle = sty.Subtle.Render("▸")
 		} else {
-			arrow = " " + sty.Subtle.Render("[-]")
+			toggle = sty.Subtle.Render("▾")
 		}
 	}
 
 	bullet, bulletStyle := styles.BulletForBlock(b.SubID, b.SubColor, sty.Teal)
-	header := fmt.Sprintf("%s %s %s%s", bullet, b.ToolName, summary, arrow)
-	accentLine := "  " + bulletStyle.Render(header)
+	nameStyle := sty.Blue.Bold(true)
+	if b.IsError {
+		nameStyle = sty.Red.Bold(true)
+	} else if running {
+		nameStyle = sty.Yellow.Bold(true)
+	}
+	status := toolStatus(b, sty)
+	headPrefix := fmt.Sprintf("%s %s", bulletStyle.Render(bullet), nameStyle.Render(b.ToolName))
+	headSuffix := strings.TrimSpace(strings.Join([]string{status, toggle}, " "))
+	summaryW := width - lipgloss.Width(headPrefix) - lipgloss.Width(headSuffix) - 6
+	if summaryW < 12 {
+		summaryW = 12
+	}
+	summaryText := truncateForWidth(summary, summaryW)
+	header := "  " + headPrefix
+	if summaryText != "" {
+		header += " " + renderSummary(summaryText, sty)
+	}
+	if headSuffix != "" {
+		header += " " + headSuffix
+	}
+	accentLine := header
 
 	if running || b.Collapsed {
 		return accentLine
 	}
 
-	contentW := width - 6
+	contentW := width - 12
 	contentW = max(contentW, 10)
 	rendered := renderToolContent(b, contentW, sty)
-	indented := lipgloss.NewStyle().PaddingLeft(2).Render(rendered)
-	return lipgloss.JoinVertical(lipgloss.Left, accentLine, indented)
+	return lipgloss.JoinVertical(lipgloss.Left, accentLine, renderToolBody(rendered, sty))
+}
+
+func toolStatus(b ContentBlock, sty *styles.Styles) string {
+	switch {
+	case b.IsError:
+		return sty.Red.Render("error")
+	case !b.Done:
+		return sty.Yellow.Render("running")
+	default:
+		return ""
+	}
+}
+
+func renderSummary(summary string, sty *styles.Styles) string {
+	if strings.HasPrefix(summary, "(+") {
+		return sty.Yellow.Render(summary)
+	}
+	if strings.Contains(summary, "(+") {
+		idx := strings.LastIndex(summary, "(+")
+		return sty.Muted.Render(summary[:idx]) + " " + sty.Yellow.Render(summary[idx:])
+	}
+	return sty.Muted.Render(summary)
+}
+
+func renderToolBody(rendered string, sty *styles.Styles) string {
+	if rendered == "" {
+		return ""
+	}
+	rail := sty.Border.Render(styles.Vertical)
+	var out strings.Builder
+	for line := range strings.SplitSeq(rendered, "\n") {
+		out.WriteString("    ")
+		out.WriteString(rail)
+		out.WriteString("  ")
+		out.WriteString(line)
+		out.WriteByte('\n')
+	}
+	return strings.TrimRight(out.String(), "\n")
+}
+
+func truncateForWidth(s string, width int) string {
+	if width <= 0 || lipgloss.Width(s) <= width {
+		return s
+	}
+	if width <= 1 {
+		return "…"
+	}
+	runes := []rune(s)
+	var out strings.Builder
+	for _, r := range runes {
+		next := out.String() + string(r)
+		if lipgloss.Width(next)+1 > width {
+			break
+		}
+		out.WriteRune(r)
+	}
+	return out.String() + "…"
 }
 
 func editSummary(b ContentBlock) string {
@@ -54,21 +126,7 @@ func editSummary(b ContentBlock) string {
 			return b.Content[idx : idx+end+1]
 		}
 	}
-	add, del := 0, 0
-	for line := range strings.SplitSeq(b.Content, "\n") {
-		if colon := strings.IndexByte(line, ':'); colon > 0 {
-			trimmed := strings.TrimLeft(line[:colon], " ")
-			if len(trimmed) > 0 && trimmed[0] == '+' {
-				add++
-			} else if len(trimmed) > 0 && trimmed[0] == '-' {
-				del++
-			}
-		}
-	}
-	if add+del > 0 {
-		return fmt.Sprintf("(+%d -%d)", add, del)
-	}
-	return ""
+	return diffChangeSummary(b.Content)
 }
 
 func toolSummary(b ContentBlock) string {
@@ -80,9 +138,67 @@ func toolSummary(b ContentBlock) string {
 			return b.ToolArgs + " " + s
 		}
 		return b.ToolArgs
+	case "diff":
+		if s := diffSummary(b); s != "" {
+			return s
+		}
+		return b.ToolArgs
+	case "write":
+		if s := writeSummary(b); s != "" {
+			return s
+		}
+		return b.ToolArgs
 	default:
 		return b.ToolArgs
 	}
+}
+
+// writeSummary extracts info from write output for display in tool header.
+func writeSummary(b ContentBlock) string {
+	if strings.HasPrefix(b.Content, "[write ") {
+		// [write path] header
+		if idx := strings.IndexByte(b.Content, ']'); idx > 6 {
+			return b.Content[7:idx]
+		}
+	}
+	return diffChangeSummary(b.Content)
+}
+
+// diffSummary extracts file path from diff output for display in tool header.
+func diffSummary(b ContentBlock) string {
+	// New format uses [path#diff] header like edit
+	if strings.HasPrefix(b.Content, "[") {
+		if idx := strings.IndexByte(b.Content, ']'); idx > 1 {
+			header := b.Content[1:idx]
+			if hashIdx := strings.LastIndexByte(header, '#'); hashIdx > 0 {
+				return header[:hashIdx]
+			}
+			return header
+		}
+	}
+	return diffChangeSummary(b.Content)
+}
+
+func diffChangeSummary(content string) string {
+	add, del := countDiffChanges(content)
+	if add+del == 0 {
+		return ""
+	}
+	return fmt.Sprintf("(+%d -%d)", add, del)
+}
+
+func countDiffChanges(content string) (add, del int) {
+	for line := range strings.SplitSeq(content, "\n") {
+		if colon := strings.IndexByte(line, ':'); colon > 0 {
+			trimmed := strings.TrimLeft(line[:colon], " ")
+			if len(trimmed) > 0 && trimmed[0] == '+' {
+				add++
+			} else if len(trimmed) > 0 && trimmed[0] == '-' {
+				del++
+			}
+		}
+	}
+	return add, del
 }
 
 func extractReadSummary(c string) string {
@@ -155,8 +271,8 @@ func renderEditPreview(content string, width int, sty *styles.Styles) string {
 
 	var out strings.Builder
 	for line := range strings.SplitSeq(content, "\n") {
-		// Header: [path#TAG] — must contain '#' to avoid matching code like "[array]"
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") && strings.Contains(line, "#") {
+		// Header: [path#TAG] / [write path]
+		if isDiffHeaderLine(line) {
 			continue
 		}
 		// Ellipsis: … (N unchanged lines)
@@ -215,6 +331,13 @@ func renderEditPreview(content string, width int, sty *styles.Styles) string {
 	return strings.TrimRight(out.String(), "\n")
 }
 
+func isDiffHeaderLine(line string) bool {
+	if !strings.HasPrefix(line, "[") || !strings.HasSuffix(line, "]") {
+		return false
+	}
+	return strings.Contains(line, "#") || strings.HasPrefix(line, "[write ")
+}
+
 func pad4(n int) string {
 	s := fmt.Sprintf("%d", n)
 	for len(s) < 4 {
@@ -223,21 +346,30 @@ func pad4(n int) string {
 	return s + " "
 }
 
-
 func renderToolContent(b ContentBlock, contentW int, sty *styles.Styles) string {
 	switch b.ToolName {
 	case "read":
 		return sty.Muted.MaxWidth(contentW).Render(ParseReadOutput(b.Content))
 	case "edit":
-		// formatEditResult (diff.go) returns "[path#TAG]\n+NNN: ..." on
-		// success and goes through renderEditPreview.  Errors (e.g.
-		// "file X has not been read yet") are plain text — render them
-		// with sty.Muted like every other tool.  finishToolBlock sets
-		// IsError when the output does not start with "[".
 		if b.IsError {
 			return sty.Muted.MaxWidth(contentW).Render(b.Content)
 		}
 		return renderEditPreview(b.Content, contentW, sty)
+	case "diff":
+		// diff uses same format as edit (+NNN:text, -NNN:text, [path#TAG] header)
+		if b.IsError {
+			return sty.Muted.MaxWidth(contentW).Render(b.Content)
+		}
+		return renderEditPreview(b.Content, contentW, sty)
+	case "write":
+		// write uses diff format when showing changes
+		if b.IsError {
+			return sty.Muted.MaxWidth(contentW).Render(b.Content)
+		}
+		if hasDiffPreviewContent(b.Content) {
+			return renderEditPreview(b.Content, contentW, sty)
+		}
+		return sty.Muted.MaxWidth(contentW).Render(b.Content)
 	case "bash":
 		c := strings.TrimSpace(b.Content)
 		if c == "" {
@@ -253,4 +385,37 @@ func renderToolContent(b ContentBlock, contentW int, sty *styles.Styles) string 
 	default:
 		return sty.Muted.MaxWidth(contentW).Render(b.Content)
 	}
+}
+
+func hasDiffPreviewContent(content string) bool {
+	first, _, _ := strings.Cut(content, "\n")
+	if strings.HasPrefix(first, "[write ") && strings.HasSuffix(first, "]") {
+		return true
+	}
+	if strings.HasPrefix(first, "[") && strings.HasSuffix(first, "]") && strings.Contains(first, "#") {
+		return true
+	}
+	for line := range strings.SplitSeq(content, "\n") {
+		colon := strings.IndexByte(line, ':')
+		if colon <= 1 {
+			continue
+		}
+		prefix := line[:colon]
+		if (prefix[0] == '+' || prefix[0] == '-') && isDigits(prefix[1:]) {
+			return true
+		}
+	}
+	return false
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }

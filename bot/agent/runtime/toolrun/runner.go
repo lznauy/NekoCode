@@ -7,7 +7,8 @@ import (
 	"nekocode/bot/hooks"
 	aggov "nekocode/bot/policy"
 	"nekocode/bot/policy/budget"
-	"nekocode/bot/tools"
+	"nekocode/bot/tools/core"
+	"nekocode/bot/tools/runner"
 )
 
 type Callback func(action, toolName, toolArgs, output string)
@@ -15,7 +16,7 @@ type Callback func(action, toolName, toolArgs, output string)
 type Host interface {
 	Context() context.Context
 	ContextManager() *ctxmgr.Manager
-	Executor() *tools.Executor
+	Executor() *runner.Executor
 	Governance() *aggov.Manager
 	SubSlots() *SlotManager
 	InjectHint(*hooks.Hint)
@@ -38,7 +39,7 @@ func policyRequireTool(tool, reason string) string {
 	return reason
 }
 
-func (r *Runner) ExecuteAndFeedback(calls []tools.ToolCallItem, textContent string, quota *budget.ToolQuota, callback Callback) bool {
+func (r *Runner) ExecuteAndFeedback(calls []core.ToolCallItem, textContent string, quota *budget.ToolQuota, callback Callback) bool {
 	if textContent != "" && callback != nil {
 		callback("think", "", "", textContent)
 	}
@@ -54,7 +55,7 @@ func (r *Runner) ExecuteAndFeedback(calls []tools.ToolCallItem, textContent stri
 	results := mergeResults(calls, filtered.Blocked, execResults)
 	r.recordToolCalls(calls, filtered.Blocked, results)
 
-	msgs := emitResultCallbacks(calls, results, callback)
+	msgs := emitResultCallbacks(calls, filtered.Blocked, results, callback)
 	postToolHints := r.evaluatePostToolUseHints(calls, filtered.Blocked, results)
 	r.addToolResultsAndHints(calls, msgs, filtered.PreToolHints, postToolHints)
 

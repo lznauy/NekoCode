@@ -3,25 +3,28 @@ package edit
 import (
 	"fmt"
 	"strings"
+
+	"nekocode/bot/tools/diff"
 )
 
+var editTextChangeOptions = diff.TextChangeOptions{
+	Context:      diff.DefaultContext,
+	NoChangeText: diff.NoChanges,
+}
+
+// formatEditResult renders edit result with file header + diff preview + changed lines.
 func formatEditResult(path string, oldText, newText string, hunks []editHunk, newTag string) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "[%s#%s]\n", path, newTag)
-	preview := buildDiffPreview(oldText, newText, hunks)
-	if preview == "" {
-		sb.WriteString("(no changes)\n")
-	} else {
-		sb.WriteString(preview)
-	}
+	fmt.Fprintf(&sb, "%s\n", diff.TagHeader(path, newTag))
+	sb.WriteString(diff.RenderTextChange(oldText, newText, editTextChangeOptions))
 
-	newLines := splitDiffLines(newText)
-	changedSet := buildChangedLineSet(hunks)
+	newLines := diff.SplitLines(newText)
 	if len(newLines) == 0 {
 		return sb.String()
 	}
 	sb.WriteString("\n---\n")
 	shown := shownLinesForHunks(hunks, len(newLines), 3)
+	changedSet := buildChangedLineSet(hunks)
 	var lastShown int
 	for line := 1; line <= len(newLines); line++ {
 		if !shown[line] {
@@ -41,53 +44,12 @@ func formatEditResult(path string, oldText, newText string, hunks []editHunk, ne
 	return sb.String()
 }
 
-func buildDiffPreview(oldText, newText string, hunks []editHunk) string {
-	if oldText == newText {
-		return "(no changes)"
-	}
-	oldLines := splitDiffLines(oldText)
-	var sb strings.Builder
-	shownOld := make(map[int]bool)
-	var lastShown int
-	for _, h := range hunks {
-		ctxStart := max(1, h.OldStart-3)
-		for line := ctxStart; line < h.OldStart && line <= len(oldLines); line++ {
-			if shownOld[line] {
-				continue
-			}
-			writeDiffGap(&sb, lastShown, line)
-			fmt.Fprintf(&sb, " %d:%s\n", line, oldLines[line-1])
-			shownOld[line] = true
-			lastShown = line
-		}
-		for i, line := range h.OldLines {
-			lineNo := h.OldStart + i
-			fmt.Fprintf(&sb, "-%d:%s\n", lineNo, line)
-			shownOld[lineNo] = true
-			lastShown = lineNo
-		}
-		for i, line := range h.NewLines {
-			fmt.Fprintf(&sb, "+%d:%s\n", h.NewStart+i, line)
-		}
-		ctxEnd := min(len(oldLines), h.OldEnd+3)
-		for line := h.OldEnd + 1; line <= ctxEnd; line++ {
-			if shownOld[line] {
-				continue
-			}
-			writeDiffGap(&sb, lastShown, line)
-			fmt.Fprintf(&sb, " %d:%s\n", line, oldLines[line-1])
-			shownOld[line] = true
-			lastShown = line
-		}
-	}
-	return strings.TrimRight(sb.String(), "\n")
-}
-
+// shownLinesForHunks determines which lines to display given hunk positions.
 func shownLinesForHunks(hunks []editHunk, total, context int) map[int]bool {
 	shown := make(map[int]bool)
 	for _, h := range hunks {
-		start := max(1, h.NewStart-context)
-		end := min(total, max(h.NewEnd, h.NewStart)+context)
+		start := maxInt(1, h.NewStart-context)
+		end := minInt(total, maxInt(h.NewEnd, h.NewStart)+context)
 		for line := start; line <= end; line++ {
 			shown[line] = true
 		}
@@ -95,13 +57,20 @@ func shownLinesForHunks(hunks []editHunk, total, context int) map[int]bool {
 	return shown
 }
 
-func writeDiffGap(sb *strings.Builder, lastShown, next int) {
-	if lastShown > 0 && next > lastShown+1 {
-		gap := next - lastShown - 1
-		if gap >= 8 {
-			fmt.Fprintf(sb, " … (%d unchanged lines)\n", gap)
+// buildChangedLineSet returns the set of new line numbers that were changed.
+func buildChangedLineSet(hunks []editHunk) map[int]bool {
+	result := make(map[int]bool)
+	for _, h := range hunks {
+		if len(h.NewLines) == 0 {
+			continue
+		}
+		for line := h.NewStart; line <= h.NewEnd; line++ {
+			if line > 0 {
+				result[line] = true
+			}
 		}
 	}
+	return result
 }
 
 func writeGap(sb *strings.Builder, lastShown, next int) {
@@ -117,4 +86,18 @@ func writeGap(sb *strings.Builder, lastShown, next int) {
 			fmt.Fprintf(sb, "… (%d unchanged lines)\n", gap)
 		}
 	}
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

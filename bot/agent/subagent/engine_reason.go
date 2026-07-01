@@ -6,17 +6,18 @@ import (
 	"nekocode/bot/agent/runtime/model"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/llm/types"
-	"nekocode/bot/tools"
+	"nekocode/bot/tools/llmstream"
+	"nekocode/bot/tools/core"
 )
 
-func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []string, addTokens func(int, int), phase func(string)) ([]tools.ToolCallItem, string, error) {
+func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []string, addTokens func(int, int), phase func(string)) ([]core.ToolCallItem, string, error) {
 	toolDefs := e.filteredToolDefs(allowed)
-	result, err := model.CallLLMWithRetry(ctx, e.llmClient, func() tools.LLMCallOptions {
-		return tools.LLMCallOptions{
+	result, err := model.CallLLMWithRetry(ctx, e.llmClient, func() llmstream.LLMCallOptions {
+		return llmstream.LLMCallOptions{
 			Ctx:      ctx,
 			Messages: mgr.Build(),
 			ToolDefs: toolDefs,
-			Callbacks: tools.StreamCallbacks{
+			Callbacks: llmstream.StreamCallbacks{
 				OnPhase: phase,
 				AddTokens: func(p, c int) {
 					if addTokens != nil {
@@ -32,7 +33,7 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 	}
 
 	if len(result.ToolCalls) > 0 {
-		mgr.AddAssistantToolCall(result.Text, result.Reasoning, tools.ToLLMToolCalls(result.ToolCalls))
+		mgr.AddAssistantToolCall(result.Text, result.Reasoning, llmstream.ToLLMToolCalls(result.ToolCalls))
 	}
 	return result.ToolCalls, result.Text, nil
 }
@@ -43,7 +44,7 @@ func (e *Engine) filteredToolDefs(allowed []string) []types.ToolDef {
 	for _, n := range allowed {
 		set[n] = true
 	}
-	var filtered []tools.Descriptor
+	var filtered []core.Descriptor
 	for _, d := range all {
 		if d.Name == taskToolName {
 			continue
@@ -52,5 +53,5 @@ func (e *Engine) filteredToolDefs(allowed []string) []types.ToolDef {
 			filtered = append(filtered, d)
 		}
 	}
-	return tools.ToToolDefs(filtered)
+	return core.ToToolDefs(filtered)
 }

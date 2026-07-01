@@ -60,22 +60,23 @@ describe('ConfirmDialog', () => {
     expect(screen.getByText(/请重点确认范围/)).toBeInTheDocument()
   })
 
-  it('shows revert preview as plain tool content', () => {
+  it('shows revert preview as diff content', () => {
     render(
       <ConfirmDialog
         entry={{
           id: 'confirm-revert',
           toolName: 'edit',
           args: { path: '/tmp/file.go', revert: true },
-          preview: '(revert: file.go)',
+          preview: '[/tmp/file.go#revert]\n-1:changed\n+1:original\n',
           level: 1,
         }}
         onDone={vi.fn()}
       />,
     )
 
-    expect(screen.getByText('(revert: file.go)')).toBeInTheDocument()
-    expect(screen.getByText('允许后将恢复该文件最近一次 edit 前的快照。')).toBeInTheDocument()
-    expect(screen.queryByRole('table')).toBeNull()
+    expect(screen.getByRole('table')).toBeInTheDocument()
+    expect(screen.getByText('changed')).toBeInTheDocument()
+    expect(screen.getByText('original')).toBeInTheDocument()
+    expect(screen.getByText('上方差异是本次 revert 将恢复的内容。')).toBeInTheDocument()
   })
 })

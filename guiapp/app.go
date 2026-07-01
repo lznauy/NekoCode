@@ -294,7 +294,6 @@ func (a *App) dispatchStep(action, toolName, toolArgs, output string) {
 		})
 	case "tool_blocked":
 		id := uuid.NewString()
-		a.pushPendingTool(toolName, id)
 		runtime.EventsEmit(a.ctx, "agent:tool_start", map[string]any{
 			"id":       id,
 			"toolName": toolName,

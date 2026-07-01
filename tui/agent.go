@@ -139,7 +139,7 @@ func (m *Model) onAgentStep(finalResponse *string) func(string, string, string, 
 				Collapsed: !block.IsPersistent(toolName),
 			})
 		case action == "tool_blocked":
-			// Blocked by quota — create a tool block showing the rejection reason.
+			// Blocked by policy — create a completed error block showing the rejection reason.
 			m.Messages.ProcessToolBlock(block.ContentBlock{
 				Type:      block.BlockTool,
 				ToolName:  toolName,
@@ -147,6 +147,7 @@ func (m *Model) onAgentStep(finalResponse *string) func(string, string, string, 
 				Content:   output,
 				Collapsed: false,
 				Done:      true,
+				IsError:   true,
 			})
 		case action == "tool_preview":
 			m.Messages.UpdateToolPreview(toolName, output)
@@ -180,8 +181,10 @@ func (m *Model) loadSessionMessages() {
 			blocks = append(blocks, block.ContentBlock{
 				Type:      block.BlockTool,
 				ToolName:  b.ToolName,
+				ToolArgs:  formatBriefArgs(b.ToolName, b.Args),
 				Content:   b.Content,
 				Done:      true,
+				IsError:   b.IsError,
 				Collapsed: false, // persistent tools always expanded
 			})
 		}

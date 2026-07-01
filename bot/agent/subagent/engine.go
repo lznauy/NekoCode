@@ -9,6 +9,8 @@ import (
 	"nekocode/common/debug"
 	"nekocode/bot/llm/types"
 	"nekocode/bot/tools"
+	"nekocode/bot/tools/core"
+	"nekocode/bot/tools/runner"
 )
 
 const (
@@ -61,7 +63,7 @@ func (s *runState) meta(ctxMgr *ctxmgr.Manager) runMeta {
 	}
 }
 
-func (s *runState) recordCalls(calls []tools.ToolCallItem) {
+func (s *runState) recordCalls(calls []core.ToolCallItem) {
 	s.toolUseCount += len(calls)
 	for _, c := range calls {
 		if isSensitiveCall(c) {
@@ -111,7 +113,7 @@ type engineRun struct {
 	ctx      context.Context
 	cfg      RunConfig
 	ctxMgr   *ctxmgr.Manager
-	executor *tools.Executor
+	executor *runner.Executor
 	state    *runState
 	phase    func(string)
 	log      func(string, ...any)
