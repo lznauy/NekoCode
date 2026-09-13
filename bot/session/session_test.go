@@ -54,6 +54,7 @@ func TestSnapshotCaptureContext(t *testing.T) {
 				CacheMissTokens: 60,
 			},
 		},
+		PrefixBaseline: ctxmgr.PrefixBaseline{System: "syshash", Tools: "toolshash"},
 	}
 	sess.CaptureContext(snap, 10, 20, map[string]bool{"b": true, "a": true, "skip": false})
 
@@ -68,6 +69,9 @@ func TestSnapshotCaptureContext(t *testing.T) {
 	}
 	if sess.TrackerPrompt != 1000 || sess.TrackerCompletion != 0 || sess.TrackerNewTokens != 50 || sess.CacheHitTokens != 70 || sess.CacheMissTokens != 30 || sess.SubCount != 2 || sess.SubTokens != 500 || sess.SubCacheHit != 40 || sess.SubCacheMiss != 60 {
 		t.Fatalf("tracker fields not applied: %+v", sess)
+	}
+	if sess.PrefixSystemHash != "syshash" || sess.PrefixToolsHash != "toolshash" {
+		t.Fatalf("prefix baseline not persisted: %+v", sess)
 	}
 }
 
@@ -93,6 +97,9 @@ func TestSnapshotContextSnapshot(t *testing.T) {
 		SubTokens:         500,
 		SubCacheHit:       40,
 		SubCacheMiss:      60,
+
+		PrefixSystemHash: "syshash",
+		PrefixToolsHash:  "toolshash",
 	}
 	got := sess.ContextSnapshot()
 	if got.SystemPrompt != "sys" || got.Skills != "skills" || got.Budget != 50 {
@@ -106,6 +113,9 @@ func TestSnapshotContextSnapshot(t *testing.T) {
 	}
 	if got.Tracker.LastPromptTokens != 1000 || got.Tracker.NewMessageTokens != 50 {
 		t.Fatalf("tracker token state mismatch: %+v", got.Tracker)
+	}
+	if got.PrefixBaseline.System != "syshash" || got.PrefixBaseline.Tools != "toolshash" {
+		t.Fatalf("prefix baseline mismatch: %+v", got.PrefixBaseline)
 	}
 }
 
@@ -143,6 +153,65 @@ func TestManagerSaveRemovesEmptySession(t *testing.T) {
 	}
 	if len(loaded.Messages) != 2 {
 		t.Fatalf("saved messages = %d, want 2", len(loaded.Messages))
+	}
+}
+
+// The prefix diagnostics must survive a real save/load, or a resumed process
+// cannot tell whether it changed the cached head, and /context would blank the
+// per-turn figures.
+func TestManagerPersistsPrefixDiagnostics(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := New("/tmp/work")
+	snapshot := m.StartNew()
+	messages := []types.Message{{Role: "user", Content: "hello"}}
+	snapshot.CaptureContext(ctxmgr.ManagerSnapshot{
+		SystemPrompt:   "sys",
+		Messages:       messages,
+		PrefixBaseline: ctxmgr.PrefixBaseline{System: "syshash", Tools: "toolshash"},
+		PrefixTurn: &ctxmgr.PrefixTurnStats{
+			Requests: 2, HitTokens: 5, MissTokens: 7,
+			PeakMiss: ctxmgr.PrefixCallStats{Request: 1, MissTokens: 7, Parts: []string{"history"}},
+		},
+		CompactCount: 2,
+		TrimCount:    40,
+	}, 0, 0, nil)
+
+	if err := m.Save(snapshot); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := load(snapshot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := loaded.ContextSnapshot()
+	if got.PrefixBaseline.System != "syshash" || got.PrefixBaseline.Tools != "toolshash" {
+		t.Fatalf("baseline did not survive save/load: %+v", got.PrefixBaseline)
+	}
+	if got.PrefixTurn == nil || got.PrefixTurn.Requests != 2 || got.PrefixTurn.HitTokens != 5 || got.PrefixTurn.MissTokens != 7 {
+		t.Fatalf("turn did not survive save/load: %+v", got.PrefixTurn)
+	}
+	if parts := got.PrefixTurn.PeakMiss.Parts; len(parts) != 1 || parts[0] != "history" {
+		t.Fatalf("turn attribution lost: %+v", got.PrefixTurn.PeakMiss)
+	}
+	// The archive counters must come back with the archive itself.
+	if got.CompactCount != 2 || got.TrimCount != 40 {
+		t.Fatalf("archive counters did not survive save/load: %d/%d", got.CompactCount, got.TrimCount)
+	}
+
+	// Pin the on-disk keys: renaming a Go field must not silently invalidate
+	// sessions saved by an earlier build.
+	raw, err := os.ReadFile(filepath.Join(dir(), snapshot.ID, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"prefix_turn"`, `"requests"`, `"hit_tokens"`, `"miss_tokens"`, `"peak_miss"`, `"lowest_hit"`, `"compact_count"`, `"trim_count"`} {
+		if !strings.Contains(string(raw), key) {
+			t.Errorf("session.json is missing %s: %s", key, raw)
+		}
+	}
+	if strings.Contains(string(raw), `"Requests"`) || strings.Contains(string(raw), `"PeakMiss"`) {
+		t.Errorf("session.json leaked Go field names: %s", raw)
 	}
 }
 

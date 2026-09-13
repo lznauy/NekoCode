@@ -54,6 +54,7 @@ func TestInterface(t *testing.T) {
 		{task.NewTaskTool(), "task", core.ModeParallel, 1},
 		{web.NewWebSearchTool(), "web_search", core.ModeParallel, 1},
 		{web.NewWebFetchTool(), "web_fetch", core.ModeParallel, 1},
+		{web.NewWebExtractTool(), "web_extract", core.ModeParallel, 1},
 	}
 	tests = append(tests, lspCases...)
 

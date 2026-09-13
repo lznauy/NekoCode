@@ -88,6 +88,7 @@ var builtinRules = []Rule{
 	{Tool: "task", Effect: EffectAllow, Source: "builtin"},
 	{Tool: "web_search", Effect: EffectAllow, Source: "builtin"},
 	{Tool: "web_fetch", Effect: EffectAllow, Source: "builtin"},
+	{Tool: "web_extract", Effect: EffectAllow, Source: "builtin"},
 	{Tool: "question", Effect: EffectAllow, Source: "builtin"},
 }
 

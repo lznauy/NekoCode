@@ -9,11 +9,11 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/demo.gif" width="90%" alt="NekoCode demo">
+  <img src="images/demo.gif" width="90%" alt="NekoCode demo">
 </p>
 
 <p align="center">
-  <a href="README.md">简体中文</a> · <b>English</b>
+  <a href="../README.md">简体中文</a> · <b>English</b>
 </p>
 
 ---
@@ -101,7 +101,7 @@ NekoCode supports the stable Agent Client Protocol v1. Configure your editor to 
 nekocode-tui --acp
 ```
 
-ACP mode communicates over stdio and does not start the TUI. Session configuration is scoped to the current ACP connection and never overwrites global user configuration. Client-supplied stdio MCP processes are disabled by default; use `nekocode-tui --acp --allow-client-mcp` only when the client and its workspace configuration are fully trusted. See [docs/ACP.md](docs/ACP.md) for capabilities and limits.
+ACP mode communicates over stdio and does not start the TUI. Session configuration is scoped to the current ACP connection and never overwrites global user configuration. Client-supplied stdio MCP processes are disabled by default; use `nekocode-tui --acp --allow-client-mcp` only when the client and its workspace configuration are fully trusted. See [ACP.md](ACP.md) for capabilities and limits.
 
 ## Star History
 
@@ -115,7 +115,7 @@ ACP mode communicates over stdio and does not start the TUI. Session configurati
 
 ## Learn More
 
-- Detailed usage and configuration guide: [User Guide](docs/USER_GUIDE.md)
+- Detailed usage and configuration guide: [User Guide](USER_GUIDE.md)
 - The desktop (GUI) version is not yet shipped with releases; it is still under active development
 
 NekoCode is still in testing and has not been validated for large production deployments.
@@ -124,17 +124,21 @@ The developer documents cover tool design, prefix caching, context compaction, a
 
 ## For Developers
 
-- [ARCHITECTURE.md](docs/ARCHITECTURE.md): overall architecture, agent loop, tool system, and technical details
-- [CI_CD.md](docs/CI_CD.md): CI, release gates, artifact verification, and failure handling (Chinese)
-- [RUNTIME_APP_GUIDE.md](docs/RUNTIME_APP_GUIDE.md): build your own AI application on top of the runtime
-- [RUNTIME_HTTP_API.md](docs/RUNTIME_HTTP_API.md): Runtime HTTP/SSE protocol
+- [ACP.md](ACP.md): ACP v1 methods, capability negotiation, and NekoCode implementation status (Chinese)
+- [ARCHITECTURE.md](ARCHITECTURE.md): overall architecture, agent loop, tool system, and technical details
+- [CI_CD.md](CI_CD.md): CI, release gates, artifact verification, and failure handling (Chinese)
+- [RUNTIME_APP_GUIDE.md](RUNTIME_APP_GUIDE.md): build your own AI application on top of the runtime
+- [RUNTIME_HTTP_API.md](RUNTIME_HTTP_API.md): Runtime HTTP/SSE protocol
+- [CHANGELOG.md](CHANGELOG.md): release history (Chinese)
 
 ## Contributing
 
 - [CONTRIBUTING.en.md](CONTRIBUTING.en.md): contribution guide, coding standards, and test requirements
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): community conduct expectations
+- [GOVERNANCE.md](GOVERNANCE.md): maintainer and release responsibilities
 - [SECURITY.md](SECURITY.md): how to report security vulnerabilities
 - [SUPPORT.md](SUPPORT.md): supported environments and help channels
 
 ## License
 
-NekoCode is available under the [MIT License](LICENSE).
+NekoCode is available under the [MIT License](../LICENSE).

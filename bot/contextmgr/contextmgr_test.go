@@ -17,8 +17,21 @@ func (c *usageTestClient) Chat(context.Context, []types.Message, []types.ToolDef
 	return c.response, c.err
 }
 
-func (*usageTestClient) ChatStream(context.Context, []types.Message, []types.ToolDef) (<-chan types.StreamToken, <-chan error) {
-	return nil, nil
+func (c *usageTestClient) ChatStream(context.Context, []types.Message, []types.ToolDef) (<-chan types.StreamToken, <-chan error) {
+	tokens := make(chan types.StreamToken, 2)
+	errs := make(chan error, 1)
+	if c.response != nil {
+		if len(c.response.Choices) > 0 {
+			tokens <- types.StreamToken{Content: c.response.Choices[0].Message.Content}
+		}
+		tokens <- types.StreamToken{Usage: &c.response.Usage}
+	}
+	if c.err != nil {
+		errs <- c.err
+	}
+	close(tokens)
+	close(errs)
+	return tokens, errs
 }
 
 func (*usageTestClient) SetMaxTokens(int)         {}
@@ -39,7 +52,7 @@ func TestNewBuildsLayeredContext(t *testing.T) {
 	}
 }
 
-func TestSummarizerRecordsNonStreamingUsage(t *testing.T) {
+func TestSummarizerRecordsStreamingUsage(t *testing.T) {
 	client := &usageTestClient{response: &types.Response{
 		Choices: []types.Choice{{Message: types.Message{Content: "a complete summary"}}},
 		Usage: types.StreamUsage{
@@ -48,6 +61,7 @@ func TestSummarizerRecordsNonStreamingUsage(t *testing.T) {
 		},
 	}}
 	m := New(Config{})
+	m.SetSessionIDProvider(func() string { return "session-compaction" })
 	var recordedUsage types.StreamUsage
 	m.SetLLMUsageRecorder(func(usage types.StreamUsage) { recordedUsage = usage })
 	var recordedCall calllog.Record
@@ -62,7 +76,7 @@ func TestSummarizerRecordsNonStreamingUsage(t *testing.T) {
 	if recordedUsage.TotalTokens != 120 || recordedUsage.ReasoningTokens != 5 {
 		t.Fatalf("run usage = %+v", recordedUsage)
 	}
-	if recordedCall.Source != "compaction" || recordedCall.Model != "compact-model" || recordedCall.TotalTokens != 120 || recordedCall.ReasoningTokens != 5 {
+	if recordedCall.Source != "compaction" || recordedCall.SessionID != "session-compaction" || recordedCall.Model != "compact-model" || recordedCall.TotalTokens != 120 || recordedCall.ReasoningTokens != 5 {
 		t.Fatalf("calllog = %+v", recordedCall)
 	}
 	if recordedCall.BaseURL != "https://example.com" {

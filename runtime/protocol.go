@@ -35,6 +35,7 @@ const (
 	EventAssistantDelta    = core.EventAssistantDelta
 	EventReasoningDelta    = core.EventReasoningDelta
 	EventPhaseChanged      = core.EventPhaseChanged
+	EventCompaction        = core.EventCompaction
 	EventToolStarted       = core.EventToolStarted
 	EventToolBlocked       = core.EventToolBlocked
 	EventToolPreview       = core.EventToolPreview
@@ -60,6 +61,7 @@ type EventFilter = core.EventFilter
 type MessagePayload = core.MessagePayload
 type DeltaPayload = core.DeltaPayload
 type PhasePayload = core.PhasePayload
+type CompactionPayload = protocol.CompactionEvent
 type TodoItem = protocol.TodoItem
 
 // LocalCommandResult and its values classify ExecuteLocalCommand outcomes.

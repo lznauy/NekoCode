@@ -13,6 +13,6 @@
 - [ ] Build passes (`go build ./...`)
 - [ ] Tests pass (`go test ./...`)
 - [ ] Race detector passes (`go test -race ./bot/... ./runtime/...`)
-- [ ] CHANGELOG.md updated (if user-facing change)
+- [ ] `docs/CHANGELOG.md` updated (if user-facing change)
 - [ ] Documentation updated (if behavior, configuration, or APIs changed)
 - [ ] Manual testing done

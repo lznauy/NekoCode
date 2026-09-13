@@ -8,7 +8,7 @@ import (
 
 type ChatMessage struct {
 	Role            string
-	Title           string // optional header label (e.g. "/help", "/summarize")
+	Title           string // optional header label (e.g. "/help", "/compact")
 	Content         string
 	Reasoning       string
 	RenderedContent string

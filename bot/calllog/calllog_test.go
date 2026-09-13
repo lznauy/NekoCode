@@ -83,3 +83,61 @@ func TestShortDigest(t *testing.T) {
 		t.Fatalf("ShortDigest = %q", got)
 	}
 }
+
+// captureWrite redirects the package sink and registers cleanup so a test can
+// assert on real Write output without touching the user's log directory.
+func captureWrite(t *testing.T) *sink {
+	t.Helper()
+	s := &sink{path: filepath.Join(t.TempDir(), "calls.jsonl")}
+	original := defaultSink
+	defaultSink = s
+	t.Cleanup(func() {
+		defaultSink = original
+	})
+	return s
+}
+
+func readRecords(t *testing.T, path string) []Record {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	var records []Record
+	for i, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec Record
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("line %d not JSON: %v", i+1, err)
+		}
+		records = append(records, rec)
+	}
+	return records
+}
+
+func TestWriteKeepsExplicitSessionID(t *testing.T) {
+	s := captureWrite(t)
+
+	Write(Record{Source: "main", SessionID: "explicit"})
+
+	records := readRecords(t, s.path)
+	if len(records) != 1 || records[0].SessionID != "explicit" {
+		t.Fatalf("records = %+v", records)
+	}
+}
+
+func TestWriteOmitsSessionWithoutProvider(t *testing.T) {
+	s := captureWrite(t)
+
+	Write(Record{Source: "main"})
+
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	if strings.Contains(string(data), `"session"`) {
+		t.Fatalf("record should omit session when no provider is registered: %s", data)
+	}
+}

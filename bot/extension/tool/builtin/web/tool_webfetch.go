@@ -16,19 +16,52 @@ import (
 	"nekocode/util/text"
 )
 
+// maxFetchRunes is the content budget a fetched page is trimmed to.
+const maxFetchRunes = 3000
+
 type WebFetchTool struct {
 	toolutil.SafeReadOnlyTool
 	client *http.Client
 }
 
 func NewWebFetchTool() *WebFetchTool {
+	return &WebFetchTool{client: newDirectClient()}
+}
+
+// newDirectClient builds the client used for user-supplied URLs: it deliberately
+// ignores process proxy variables, because the custom DialContext validates and
+// pins the actual destination IP, and an HTTP proxy would make it validate only
+// the proxy address, weakening the SSRF boundary. The extractor hop of
+// web_extract uses a different client for a constant destination.
+func newDirectClient() *http.Client {
 	transport := utilhttp.NewSharedTransport()
-	// Deliberately ignore process proxy variables. The custom DialContext
-	// validates and pins the actual destination IP; an HTTP proxy would make
-	// it validate only the proxy address and would weaken the SSRF boundary.
 	transport.Proxy = nil
+	transport.DialContext = hardenedDialer(false, "")
+
+	client := &http.Client{Transport: transport, Timeout: 15 * time.Second}
+	client.CheckRedirect = checkRedirect
+	return client
+}
+
+// checkRedirect keeps every hop, redirect targets included, inside the public
+// network.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 5 {
+		return fmt.Errorf("too many redirects")
+	}
+	return validateURL(req.URL.String())
+}
+
+// hardenedDialer resolves and pins the destination IP, refusing private
+// addresses. When allowProxy is set, the address of the proxy configured for
+// rawURL is dialed as-is: that address is the user's own egress, and the proxy
+// resolves the real destination on our behalf.
+func hardenedDialer(allowProxy bool, proxyHostPort string) func(context.Context, string, string) (net.Conn, error) {
 	dialer := &net.Dialer{}
-	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		if allowProxy && proxyHostPort != "" && address == proxyHostPort {
+			return dialer.DialContext(ctx, network, address)
+		}
 		host, port, err := net.SplitHostPort(address)
 		if err != nil {
 			return nil, fmt.Errorf("invalid destination: %w", err)
@@ -53,14 +86,6 @@ func NewWebFetchTool() *WebFetchTool {
 		}
 		return nil, fmt.Errorf("destination has no public IP address")
 	}
-	c := &http.Client{Transport: transport, Timeout: 15 * time.Second}
-	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 5 {
-			return fmt.Errorf("too many redirects")
-		}
-		return validateURL(req.URL.String())
-	}
-	return &WebFetchTool{client: c}
 }
 
 func (t *WebFetchTool) Name() string { return "web_fetch" }
@@ -88,6 +113,16 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) (string
 
 	prompt := toolutil.OptStringArg(args, "prompt", "")
 
+	content, err := fetchPageDirect(ctx, t.client, rawURL)
+	if err != nil {
+		return "", err
+	}
+	return finalizeContent(content, prompt), nil
+}
+
+// fetchPageDirect fetches rawURL straight from the origin and converts HTML to
+// Markdown. Shared by web_fetch and by the local fallback of web_extract.
+func fetchPageDirect(ctx context.Context, client *http.Client, rawURL string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to build request: %w", err)
@@ -95,7 +130,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) (string
 	req.Header.Set("User-Agent", "NekoCode/1.0")
 	req.Header.Set("Accept", "text/html,text/plain,*/*")
 
-	resp, err := t.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("request failed: %w", err)
 	}
@@ -110,26 +145,26 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) (string
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
 
-	contentType := resp.Header.Get("Content-Type")
-	var content string
-	if strings.Contains(contentType, "text/html") {
-		content = html2md(string(body))
-	} else {
-		content = string(body)
+	if strings.Contains(resp.Header.Get("Content-Type"), "text/html") {
+		return html2md(string(body)), nil
 	}
+	return string(body), nil
+}
 
+// finalizeContent applies the shared post-processing: drop ANSI escapes, report
+// an empty page, optionally filter by the caller's hint, then trim the budget.
+func finalizeContent(content, prompt string) string {
 	content = toolutil.StripAnsi(content)
 
 	if content == "" {
-		return "Page content is empty", nil
+		return "Page content is empty"
 	}
 
 	if prompt != "" {
 		content = extractRelevant(content, prompt)
 	}
 
-	content = text.TruncateByRune(content, 3000)
-	return content, nil
+	return text.TruncateByRune(content, maxFetchRunes)
 }
 
 func validateURL(rawURL string) error {

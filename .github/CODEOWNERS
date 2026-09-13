@@ -1,6 +1,6 @@
 * @lznauy
 
 /.github/ @lznauy
-/SECURITY.md @lznauy
+/docs/SECURITY.md @lznauy
 /scripts/install.sh @lznauy
 /bot/extension/tool/runtime/permission/ @lznauy

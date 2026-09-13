@@ -99,13 +99,11 @@ func (m *Manager) LoadedSet() map[string]bool {
 }
 
 // MarkLoaded records that a skill's content has been injected into the
-// conversation. It deliberately does NOT refresh the prompt's skill list:
-// that list lives in the cache-stable prefix, so rewriting it mid-session
-// would invalidate the provider's cached prefix for the whole history.
-// The list is rebuilt at session boundaries instead (ClearLoaded on
-// /new, session restore, or startup), where a prefix change
-// costs nothing — the injected skill content itself already tells the
-// model everything it needs for the current session.
+// conversation. It no longer touches the prompt's skill list: loaded state is
+// per-session bookkeeping used by the skill tool (so a reload after context
+// compaction still works) and by session persistence. The list itself stays a
+// pure function of the registry, which keeps the cached prefix byte-identical
+// across a session restore.
 func (m *Manager) MarkLoaded(name string) {
 	if m == nil || m.reg == nil {
 		return
@@ -118,14 +116,16 @@ func (m *Manager) ClearLoaded() {
 		return
 	}
 	m.reg.ClearLoaded()
-	m.RefreshList()
 }
 
+// RefreshList re-renders the prompt's skill list. It is idempotent: the list
+// depends only on the registry and the context window, so calling it at any
+// point cannot invalidate a cached prefix unless the registry really changed.
 func (m *Manager) RefreshList() {
 	if m == nil || m.ctx == nil || m.reg == nil {
 		return
 	}
-	m.ctx.SetSkillList(buildSkillListText(m.reg.List(), m.reg.LoadedSet(), m.contextWindow))
+	m.ctx.SetSkillList(buildSkillListText(m.reg.List(), m.contextWindow))
 }
 
 func (m *Manager) RegisterTool() {

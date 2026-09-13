@@ -6,7 +6,7 @@ for comparison, but they do not receive routine support.
 
 ## Before asking for help
 
-Check [README.md](README.md), [docs/USER_GUIDE.md](docs/USER_GUIDE.md), and
+Check [README.md](../README.md), [USER_GUIDE.md](USER_GUIDE.md), and
 existing issues. Include the NekoCode version, operating system, provider and
 model, relevant configuration with secrets removed, and a minimal reproduction.
 

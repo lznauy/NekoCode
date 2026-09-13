@@ -147,8 +147,7 @@ NekoCode 以 `nekocode-tui --acp` 启动即为 ACP v1 Agent（`acp.RunStdio`）�
 - **客户端 MCP 安全边界**：默认禁用；`--allow-client-mcp` 显式开启后，每次最多
   16 个 server、配置总计最多 64 KiB，替换失败保留当前集合
 - **测试**：`acp` 包单元测试（假后端）+ `util/acp-probe` 端到端一致性回归
-  （spawn 真实进程，覆盖全部方法、错误码、MCP 握手、真实模型对话与回放），
-  在 Zed 中的接入配置见根 `README.md`
+  （spawn 真实进程，覆盖全部方法、错误码、MCP 握手、真实模型对话与回放）
 
 ### 未实现
 

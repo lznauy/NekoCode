@@ -40,8 +40,10 @@ func (m *Model) View() tea.View {
 			parts = append(parts, bar)
 		}
 	}
+	questionIdx := -1
 	if m.state == stateQuestioning {
 		if bar := m.QuestionBar.View(m.Width, m.Height); bar != "" {
+			questionIdx = len(parts)
 			parts = append(parts, bar)
 		}
 	}
@@ -58,18 +60,29 @@ func (m *Model) View() tea.View {
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 
-	c := m.Input.Cursor()
-	if c != nil {
-		// Input is at parts[-1] (no suggestions) or parts[-2] (with suggestions).
-		inputIdx := len(parts) - 1
-		if m.Suggestions.Visible() {
-			inputIdx = len(parts) - 2
+	var c *tea.Cursor
+	if m.state == stateQuestioning {
+		// The question bar owns keyboard focus while it is open: show the
+		// terminal cursor on its custom input row when active, and hide the
+		// main input cursor otherwise so focus is not misleading.
+		if qc := m.QuestionBar.Cursor(m.Width, m.Height); qc != nil && questionIdx >= 0 {
+			for _, p := range parts[:questionIdx] {
+				qc.Y += lipgloss.Height(p)
+			}
+			c = qc
 		}
-		inputY := 0
-		for _, p := range parts[:inputIdx] {
-			inputY += lipgloss.Height(p)
+	} else {
+		c = m.Input.Cursor()
+		if c != nil {
+			// Input is at parts[-1] (no suggestions) or parts[-2] (with suggestions).
+			inputIdx := len(parts) - 1
+			if m.Suggestions.Visible() {
+				inputIdx = len(parts) - 2
+			}
+			for _, p := range parts[:inputIdx] {
+				c.Y += lipgloss.Height(p)
+			}
 		}
-		c.Y += inputY
 	}
 	v.Cursor = c
 

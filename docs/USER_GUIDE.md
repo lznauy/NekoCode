@@ -1,6 +1,6 @@
 # NekoCode 使用指南
 
-本文档面向使用者，介绍如何安装、配置和日常使用 NekoCode，包括连接 Telegram / 飞书 / QQ / 企业微信机器人、安装技能（Skill）与插件（Plugin)、配置 MCP 服务等内容。
+本文档面向使用者，介绍如何安装、配置和日常使用 NekoCode，包括连接 Telegram / 飞书 / QQ / 企业微信机器人、安装技能（Skill）与插件（Plugin）、配置 MCP 服务等内容。
 
 ---
 
@@ -12,7 +12,7 @@
 curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/lznauy/NekoCode/master/scripts/install.sh | sh
 ```
 
-脚本会自动识别系统（Linux / macOS）和架构，下载最新版本并安装到 `~/.local/bin`（无需 sudo)。安装完成后运行：
+脚本会自动识别系统（Linux / macOS）和架构，下载最新版本并安装到 `~/.local/bin`（无需 sudo）。安装完成后运行：
 
 ```bash
 nekocode-tui
@@ -22,14 +22,14 @@ nekocode-tui
 
 其他安装方式：
 
-- 指定版本：`curl -fsSL ... | sh -s -- --version v0.5.0`
-- 指定目录：`curl -fsSL ... | sh -s -- --dir /你的/目录`
-- 源码编译（需要 Go 环境）:`go build -o nekocode-tui ./cmd/tui`
+- 指定版本：`curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/lznauy/NekoCode/master/scripts/install.sh | sh -s -- --version v0.5.0`
+- 指定目录：`curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/lznauy/NekoCode/master/scripts/install.sh | sh -s -- --dir /你的/目录`
+- 源码编译（需要 Go 1.25.12+）：`go build -o nekocode-tui ./cmd/tui`
 - Windows 用户：请通过 WSL 运行
 
 ## 二、首次配置：接入模型
 
-NekoCode 需要一个模型服务商的 API Key 才能工作。首次使用前，创建配置文件 `~/.nekocode/config.json`:
+NekoCode 需要一个模型服务商的 API Key 才能工作。首次使用前，创建配置文件 `~/.nekocode/config.json`：
 
 ```json
 {
@@ -89,8 +89,8 @@ GUI 使用同一份命令数据：输入 `/` 后在输入框上方弹出面板�
 |---|---|
 | `/help` | 显示帮助 |
 | `/new` | 创建一个不继承旧上下文的空白会话 |
-| `/context` | 查看上下文用量，以及整场会话/上一轮的缓存命中率和异常归因 |
-| `/summarize` | 立即压缩上下文（对话太长时用） |
+| `/context` | 查看上下文用量，以及整场会话/上一轮的缓存命中率和异常归因；重载会话后在跑完新一轮之前，逐轮数据来自会话文件（仍显示为 `Last turn`）；供应商未上报缓存明细时显示 `cache usage not reported`，不会误记为 0% 命中 |
+| `/compact` | 立即压缩上下文（对话太长时用） |
 | `/rewind [turn]` | 打开 checkpoint 菜单；也可手动指定 turn，回滚该回合及之后的文件改动，并向模型追加隐藏的精确回滚清单 |
 | `/model [名字]` | 打开模型菜单；也可手动指定名字切换模型 |
 | `/effort [级别]` | 打开当前模型的推理强度菜单；只显示该模型支持的级别，未知模型仅提供 `auto` |
@@ -102,6 +102,10 @@ GUI 使用同一份命令数据：输入 `/` 后在输入框上方弹出面板�
 | `/connect` | 连接 IM 平台（见下一节） |
 | `/disconnect <平台>` | 断开某个 IM 平台 |
 | `$<技能名>` | 使用技能（见「技能」一节） |
+
+### 上下文压缩
+
+自动压缩和 `/compact` 会在状态框实时流式展示正在生成的摘要，并显示触发方式、消息数、估算 token 用量和完成耗时。完成后以工具条目（`ฅ Compacted …`；终端过窄时标题与统计信息会分成两行）保留在消息流中；失败时保留错误信息与已收到的部分内容。压缩只裁剪发送给 LLM 的活动上下文，完整原始消息保存在 session 的 `transcript.jsonl` 中，重新加载和导出时仍然可见。每次压缩前还会在 session 的 `backups/` 目录保存当时的 `session.json`；备份失败则取消压缩。
 
 ### 快捷键
 
@@ -309,11 +313,12 @@ MCP(Model Context Protocol）可以为 AI 接入外部工具和数据源（数�
 | `~/.nekocode/sessions/` | 会话存档 | ❌ 自动管理 |
 | `~/.nekocode/exports/` | `/export` 导出的对话 | ❌ 自动管理 |
 
-### config.json 完整示例
+### config.json 综合示例
 
 ```json
 {
   "active": "deepseek",
+  "flash_model": "deepseek",
   "auto_compact_percent": 80,
   "models": [
     {
@@ -335,6 +340,16 @@ MCP(Model Context Protocol）可以为 AI 接入外部工具和数据源（数�
       "reasoning_effort": "high"
     }
   ],
+  "image_gen_models": [
+    {
+      "name": "jimeng",
+      "provider": "jimeng",
+      "api_key": "access-key",
+      "secret_key": "secret-key",
+      "model": "jimeng_t2i_v31",
+      "base_url": "https://visual.volcengineapi.com"
+    }
+  ],
   "mcp_servers": {
     "filesystem": {
       "command": "npx",
@@ -344,7 +359,15 @@ MCP(Model Context Protocol）可以为 AI 接入外部工具和数据源（数�
   },
   "permissions": {
     "allow": ["Bash(npm run *)", "Read"],
-    "deny": ["Bash(rm -rf *)"]
+    "ask": ["Bash(git push *)"],
+    "deny": ["Bash(rm -rf *)"],
+    "sandbox": {
+      "Bash(go test *)": {
+        "sandbox_mode": "workspace-write",
+        "network": false,
+        "writable_roots": ["/tmp"]
+      }
+    }
   },
   "workspaces": [
     {"path": "/home/me/other-project", "access": "read-only"}
@@ -354,11 +377,13 @@ MCP(Model Context Protocol）可以为 AI 接入外部工具和数据源（数�
 
 主要字段说明：
 
-- `active` / `models`：模型配置（见「首次配置」)
+- `active` / `models`：模型配置（见「首次配置」）
+- `flash_model`：可选的轻量模型配置名，用于压缩和子 Agent 等辅助请求；省略时跟随 `active`
+- `image_gen_models`：可选的图片生成模型列表；只有配置后才会注册 `image_gen` 工具
 - `reasoning_effort`：可选的模型推理强度，留空或设为 `auto` 时使用模型默认值。可选级别由模型能力表决定，`/effort` 和配置界面只展示当前模型支持的值；未知模型严格退化为 `auto`，`none`（界面显示为 Off）也只在模型明确支持关闭推理时出现。OpenAI 与 Anthropic 协议适配器只翻译已解析的生效值，不根据协议猜测模型能力
 - `context_window`：上下文窗口大小。**这是模型的属性，通常不用填**——NekoCode 内置了常见模型的对照表，会根据模型名自动确定（如 deepseek 1M、Claude 200K~1M、Gemini 1M)。需要精确控制时（比如自部署模型），在 `models[]` 里给对应模型填 `context_window`：单模型覆盖 > 内置表 > 默认 128K。GUI 概览只读显示当前模型的有效窗口；模型卡片中的“上下文窗口覆盖”留空即保持自动解析，不会把默认值固化进配置
 - `auto_compact_percent`：自动摘要压缩的上下文占用门限，范围 1～99，默认 80。达到门限后执行一次全量摘要替换；压缩后若仍达到模型窗口上限，才返回上下文已满错误
-- `permissions`：权限规则（见下一节）
+- `permissions`：权限规则（见下一节）；`allow`、`ask`、`deny` 分别表示允许、询问和拒绝，`sandbox` 可为匹配的 Shell 命令指定 `read-only`、`workspace-write` 或 `host` 执行环境
 - `workspaces`：允许 AI 访问的项目外目录，`access` 为 `read-only` 或 `read-write`
 
 ## 九、权限与安全

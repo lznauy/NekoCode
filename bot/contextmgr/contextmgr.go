@@ -4,6 +4,7 @@ package contextmgr
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"nekocode/bot/contextmgr/token"
 	"nekocode/bot/provider"
 	"nekocode/bot/provider/types"
+	"nekocode/protocol"
 )
 
 type Manager struct {
@@ -24,8 +26,12 @@ type Manager struct {
 	// runtimePrompt is evaluated for every Build and excluded from snapshots.
 	runtimePrompt func() string
 
-	usageMu       sync.RWMutex
-	usageRecorder func(types.StreamUsage)
+	usageMu            sync.RWMutex
+	usageRecorder      func(types.StreamUsage)
+	compactionObserver func(protocol.CompactionEvent)
+	sessionIDProvider  func() string
+	beforeCompaction   func(string) error
+	afterCompaction    func()
 }
 
 type managerState struct {
@@ -47,6 +53,13 @@ type managerState struct {
 	// runtimePolicy is controller-owned, per-run policy state (for example
 	// plan mode). BuildRequest folds it into the next tagged runtime snapshot.
 	runtimePolicy string
+	// restoredTurn is the last turn recorded in the session file. It is shown
+	// only until this process completes a turn of its own, so a reloaded
+	// session keeps reporting the previous turn instead of going blank.
+	restoredTurn PrefixTurnStats
+	// transcript is the append-only, user-visible conversation. Compaction and
+	// context repair mutate ctx.Messages but never this record.
+	transcript []types.Message
 }
 
 type appendProjection struct {
@@ -78,31 +91,69 @@ type Config struct {
 var writeCompactionRecord = calllog.Write
 
 func (m *Manager) makeSummarizer(ctx context.Context, client provider.LLM) Summarizer {
+	return m.streamingSummarizer(ctx, client, nil)
+}
+
+func (m *Manager) streamingSummarizer(ctx context.Context, client provider.LLM, delta func(string)) Summarizer {
 	return func(msgs []types.Message, prevSummary string) (string, error) {
 		start := time.Now()
-		resp, err := client.Chat(ctx, buildSummaryMessages(msgs, prevSummary), nil)
-		var summary string
-		if err == nil {
-			if resp != nil && len(resp.Choices) > 0 {
-				summary = resp.Choices[0].Message.Content
-			}
-			if summary == "" {
-				err = fmt.Errorf("no response from summarizer")
-			}
-		}
+		tokens, errs := client.ChatStream(ctx, buildSummaryMessages(msgs, prevSummary), nil)
+		var summary strings.Builder
 		var usage types.StreamUsage
-		if resp != nil {
-			usage = resp.Usage
-			usage.Normalize()
-			m.recordLLMUsage(usage)
+		var err error
+		cancelled := ctx.Done()
+		for tokens != nil || errs != nil {
+			select {
+			case <-cancelled:
+				err = ctx.Err()
+				// Providers may already be blocked sending a token. Drain their
+				// cancelled request to closure and retain final usage accounting.
+				cancelled = nil
+			case tok, ok := <-tokens:
+				if !ok {
+					tokens = nil
+					continue
+				}
+				if tok.Usage != nil {
+					usage.Merge(tok.Usage)
+				}
+				if tok.Content != "" && ctx.Err() == nil {
+					summary.WriteString(tok.Content)
+					if delta != nil {
+						delta(tok.Content)
+					}
+				}
+			case streamErr, ok := <-errs:
+				if !ok {
+					errs = nil
+					continue
+				}
+				if streamErr != nil {
+					err = streamErr
+				}
+			}
 		}
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+		if err == nil && strings.TrimSpace(summary.String()) == "" {
+			err = fmt.Errorf("no response from summarizer")
+		}
+		usage.Normalize()
+		m.recordLLMUsage(usage)
 		m.writeCompactionCall(client, usage, start, err)
-		return summary, err
+		return summary.String(), err
 	}
 }
 
 func (m *Manager) writeCompactionCall(client provider.LLM, usage types.StreamUsage, start time.Time, callErr error) {
 	rec := calllog.Record{TS: time.Now(), Source: "compaction", DurMs: time.Since(start).Milliseconds()}
+	m.usageMu.RLock()
+	sessionIDProvider := m.sessionIDProvider
+	m.usageMu.RUnlock()
+	if sessionIDProvider != nil {
+		rec.SessionID = sessionIDProvider()
+	}
 	rec.SetUsage(usage)
 	if source, ok := client.(interface{ RequestMeta() types.RequestMeta }); ok {
 		meta := source.RequestMeta()
@@ -114,6 +165,13 @@ func (m *Manager) writeCompactionCall(client provider.LLM, usage types.StreamUsa
 	}
 	rec.Err = calllog.ErrorSummary(callErr)
 	writeCompactionRecord(rec)
+}
+
+// SetSessionIDProvider scopes compaction call logs to this manager instance.
+func (m *Manager) SetSessionIDProvider(provider func() string) {
+	m.usageMu.Lock()
+	m.sessionIDProvider = provider
+	m.usageMu.Unlock()
 }
 
 func (m *Manager) recordLLMUsage(usage types.StreamUsage) {
@@ -128,7 +186,7 @@ func (m *Manager) recordLLMUsage(usage types.StreamUsage) {
 	}
 }
 
-// SetLLMUsageRecorder connects non-streaming compaction calls to the owning
+// SetLLMUsageRecorder connects compaction calls to the owning
 // run's token meter. It does not affect the per-call JSONL record.
 func (m *Manager) SetLLMUsageRecorder(recorder func(types.StreamUsage)) {
 	m.usageMu.Lock()
@@ -152,6 +210,9 @@ func New(cfg Config) *Manager {
 		summarizer = m.makeSummarizer(context.Background(), cfg.CompactionModel)
 	}
 	m.initCompressor(summarizer, cfg.AutoCompactPercent)
+	if cfg.Summarizer == nil {
+		m.state.compressor.model = cfg.CompactionModel
+	}
 	return m
 }
 

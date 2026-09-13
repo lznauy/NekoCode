@@ -70,9 +70,9 @@ End by asking for approval to leave plan mode and implement. Do not write code o
 </plan-mode>`
 }
 
-// ForceSummarize compacts context now. When force is true, it bypasses the
+// ForceCompact compacts context now. When force is true, it bypasses the
 // automatic token-budget threshold used by normal lifecycle calls.
-func ForceSummarize(ctxMgr *ctxmgr.Manager, force bool) (string, error) {
+func ForceCompact(ctx context.Context, ctxMgr *ctxmgr.Manager, force bool) (string, error) {
 	before := ctxMgr.Status()
 	if before.Messages <= 2 {
 		return "Conversation too short, nothing to compact.", nil
@@ -80,9 +80,9 @@ func ForceSummarize(ctxMgr *ctxmgr.Manager, force bool) (string, error) {
 	var compacted bool
 	var err error
 	if force {
-		compacted, err = ctxMgr.Summarize()
+		compacted, err = ctxMgr.Summarize(ctx)
 	} else {
-		compacted, err = ctxMgr.AutoCompactIfNeeded()
+		compacted, err = ctxMgr.AutoCompactIfNeeded(ctx)
 	}
 	if err != nil {
 		return "", err
@@ -140,24 +140,51 @@ func formatContextReport(r ctxmgr.ContextReport) string {
 		{size: r.Memory + r.Archive + r.Messages, kind: "msgs"},
 		{size: free, kind: "free"},
 	}, 24)
-	summary := "none"
-	if r.HasArchive {
-		summary = "available"
-	}
-	messageCount := r.UserMessages + r.AssistantMsgs + r.ToolResults
-	out := fmt.Sprintf("Context Window\n  %s\n  Used %s / %s (%s) · Free %s (%s)\n\nBreakdown\n%s\n%s\n%s\n%s\n\nConversation\n  Tools      %s\n  Messages   %s · %s user · %s assistant · %s tool results\n  Summary    %s",
-		bar,
-		text.FormatTokens(used), text.FormatTokens(r.Budget), pct(used), text.FormatTokens(free), pct(free),
+	// Memory and the compaction archive contribute to Used and to the bar's
+	// msgs segment; list them so the rows add up to Used. Rows with nothing to
+	// report are omitted, keeping the common case (no memory, no archive) as
+	// short as before.
+	rows := []string{
 		item("sys", "System", r.SystemPrompt),
-		item("tools", "Tools", r.ToolDefTokens),
+		// Todo tokens ride with the tool segment in the bar, so the row mirrors
+		// its segment and the rows keep adding up to Used.
+		item("tools", "Tools", r.ToolDefTokens+r.TodoText),
 		item("msgs", "Messages", r.Messages),
 		item("skills", "Skills", r.SkillList),
+	}
+	if r.Memory > 0 {
+		rows = append(rows, item("msgs", "Memory", r.Memory))
+	}
+	if r.Archive > 0 {
+		rows = append(rows, item("msgs", "Archive", r.Archive))
+	}
+	archive := "none (no compaction yet)"
+	if r.HasArchive {
+		switch {
+		case r.ArchiveUnavailable:
+			// Not a summary: say so rather than dressing up the placeholder.
+			archive = "summary unavailable"
+		default:
+			archive = fmt.Sprintf("~%s tokens", text.FormatTokens(r.Archive))
+			// Sessions saved before the counter existed have an archive but no
+			// count; claiming "compacted 0×" would contradict the archive itself.
+		}
+		if r.CompactCount > 0 {
+			archive += fmt.Sprintf(" · compacted %d×", r.CompactCount)
+		}
+	}
+	messageCount := r.UserMessages + r.AssistantMsgs + r.ToolResults
+	out := fmt.Sprintf("Context Window\n  %s\n  Used %s / %s (%s) · Free %s (%s)\n\nBreakdown\n%s\n\nConversation\n  Tools      %s\n  Messages   %s · %s user · %s assistant · %s tool results\n  Archive    %s",
+		bar,
+		text.FormatTokens(used), text.FormatTokens(r.Budget), pct(used), text.FormatTokens(free), pct(free),
+		strings.Join(rows, "\n"),
 		formatCount(r.ToolDefCount), formatCount(messageCount), formatCount(r.UserMessages),
-		formatCount(r.AssistantMsgs), formatCount(r.ToolResults), summary,
+		formatCount(r.AssistantMsgs), formatCount(r.ToolResults), archive,
 	)
 	hasCacheUsage := r.CacheHitTokens > 0 || r.CacheMissTokens > 0
 	hasTurnCache := r.PrefixTurn.Requests > 0
-	if hasCacheUsage || hasTurnCache {
+	hasSavedTurn := !hasTurnCache && !r.SavedTurn.IsZero()
+	if hasCacheUsage || hasTurnCache || hasSavedTurn {
 		out += "\n\nCache"
 	}
 	if hasCacheUsage {
@@ -166,25 +193,13 @@ func formatContextReport(r ctxmgr.ContextReport) string {
 			"Session", r.CacheHitRatio*100,
 			text.FormatTokens(r.CacheHitTokens), text.FormatTokens(r.CacheMissTokens))
 	}
-	if hasTurnCache {
-		total := r.PrefixTurn.HitTokens + r.PrefixTurn.MissTokens
-		ratio := float64(0)
-		if total > 0 {
-			ratio = float64(r.PrefixTurn.HitTokens) / float64(total) * 100
-		}
-		out += fmt.Sprintf("\n  %s %-12s %3.0f%% hit · %s calls · Hit %s · Miss %s",
-			barChars["cache"], "Last turn", ratio, formatCount(r.PrefixTurn.Requests),
-			text.FormatTokens(r.PrefixTurn.HitTokens), text.FormatTokens(r.PrefixTurn.MissTokens))
-	}
-	if call := r.PrefixTurn.PeakMiss; call.MissTokens > 0 {
-		out += fmt.Sprintf("\n  %s %-12s %s miss · %s",
-			barChars["sub"], "Peak miss", text.FormatTokens(call.MissTokens),
-			formatPrefixMissParts(call.Parts))
-	}
-	if call := r.PrefixTurn.LowestHit; call.Request > 0 {
-		out += fmt.Sprintf("\n  %s %-12s %.0f%% hit · Hit %s · Miss %s",
-			barChars["sub"], "Lowest hit", cacheHitRatio(call)*100,
-			text.FormatTokens(call.HitTokens), text.FormatTokens(call.MissTokens))
+	// Until this process runs a turn of its own, report the turn recorded in the
+	// session file: it is still "the last turn", so the label stays the same.
+	switch {
+	case hasTurnCache:
+		out += formatTurnCache(r.PrefixTurn)
+	case hasSavedTurn:
+		out += formatTurnCache(r.SavedTurn)
 	}
 	if r.SubCount > 0 {
 		subRatio := ""
@@ -215,20 +230,56 @@ func formatCount(n int) string {
 	return s
 }
 
+// formatTurnCache renders one conversation's cache diagnostics: the summary
+// line, then the two requests worth looking at — the lowest hit rate first,
+// and the biggest single miss last, because that line carries the explanation.
+// Each line keeps its own gate so a partially populated turn renders only what
+// it has.
+func formatTurnCache(turn ctxmgr.PrefixTurnStats) string {
+	var out strings.Builder
+	if turn.Requests > 0 {
+		// Requests counts every observed request, while hit/miss only
+		// accumulates when the provider reports cache detail. Showing an
+		// unknown as "0% hit · Hit 0 · Miss 0" would misreport it as a miss.
+		if turn.HitTokens == 0 && turn.MissTokens == 0 {
+			out.WriteString(fmt.Sprintf("\n  %s %-12s %s calls · cache usage not reported",
+				barChars["cache"], "Last turn", formatCount(turn.Requests)))
+		} else {
+			ratio := float64(turn.HitTokens) / float64(turn.HitTokens+turn.MissTokens) * 100
+			out.WriteString(fmt.Sprintf("\n  %s %-12s %3.0f%% hit · %s calls · Hit %s · Miss %s",
+				barChars["cache"], "Last turn", ratio, formatCount(turn.Requests),
+				text.FormatTokens(turn.HitTokens), text.FormatTokens(turn.MissTokens)))
+		}
+	}
+	if call := turn.LowestHit; call.Request > 0 {
+		out.WriteString(fmt.Sprintf("\n  %s %-12s %.0f%% hit · Hit %s · Miss %s",
+			barChars["sub"], "Lowest hit", cacheHitRatio(call)*100,
+			text.FormatTokens(call.HitTokens), text.FormatTokens(call.MissTokens)))
+	}
+	if call := turn.PeakMiss; call.MissTokens > 0 {
+		out.WriteString(fmt.Sprintf("\n  %s %-12s %s · %s",
+			barChars["sub"], "Biggest miss", text.FormatTokens(call.MissTokens),
+			formatPrefixMissParts(call.Parts)))
+	}
+	return out.String()
+}
+
+// formatPrefixMissParts explains what changed on the request that missed the
+// most cached tokens, in terms a reader can act on.
 func formatPrefixMissParts(parts []string) string {
 	labels := make([]string, 0, len(parts))
 	for _, part := range parts {
 		switch part {
 		case "cold-start":
-			labels = append(labels, "first request; cache not established")
+			labels = append(labels, "first request, no baseline yet")
 		case "tail/provider":
-			labels = append(labels, "stable prefix unchanged; new content or provider cache")
+			labels = append(labels, "prefix unchanged (new tail or provider cache)")
 		case "system":
-			labels = append(labels, "system prompt changed")
+			labels = append(labels, "system prompt or skills changed")
 		case "tools":
 			labels = append(labels, "tool definitions changed")
 		case "history":
-			labels = append(labels, "previous history was rewritten")
+			labels = append(labels, "history rewritten (e.g. compaction)")
 		default:
 			labels = append(labels, part)
 		}

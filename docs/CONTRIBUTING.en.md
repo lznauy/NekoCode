@@ -1,9 +1,9 @@
 # Contributing
 
 NekoCode is a single-binary, embeddable AI coding assistant core with a strong
-focus on prompt-cache cost. Read [the architecture guide](docs/ARCHITECTURE.md)
-and [the roadmap](docs/ROADMAP.md) before starting a large change. Open an issue
-before implementing roadmap items marked as undecided.
+focus on prompt-cache cost. Read [the architecture guide](ARCHITECTURE.md)
+before starting a large change. Open an issue before implementing an
+undecided feature.
 
 ## Development environment
 
@@ -42,7 +42,7 @@ npm run build
 ## Commits and pull requests
 
 Keep commits independently reviewable and reversible. Reference an issue or
-roadmap task when one exists. Update `CHANGELOG.md` for user-visible changes,
+task when one exists. Update `docs/CHANGELOG.md` for user-visible changes,
 and do not rewrite entries for released versions.
 
 Use the pull request template and report the exact commands or manual paths you
@@ -55,7 +55,6 @@ Update the relevant document with behavior changes:
 
 - `docs/ARCHITECTURE.md` for module responsibilities and data flow
 - `docs/USER_GUIDE.md` for user-facing behavior
-- `docs/ROADMAP.md` for accepted roadmap work
 
 Most detailed developer documents are currently written in Chinese. English
 translations can be contributed independently as long as they retain the same

@@ -207,7 +207,7 @@ func profileAllowsCall(allowed map[string]struct{}, call core.ToolCallItem) bool
 	return ok
 }
 
-func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []string, workflow string, addTokens func(int, int), recordCall func(types.StreamUsage), phase func(string)) ([]core.ToolCallItem, string, error) {
+func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []string, workflow string, addTokens func(int, int), recordCall func(types.StreamUsage), sessionID string, phase func(string)) ([]core.ToolCallItem, string, error) {
 	toolDefs := e.filteredToolDefs(allowed)
 	messages := mgr.BuildRequest(ctxmgr.ModelRequest{Tools: toolDefs})
 	if workflow != "" {
@@ -236,6 +236,7 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 			},
 			CheckDone:   func() bool { return false },
 			Source:      "subagent",
+			SessionID:   sessionID,
 			Diagnostics: mgr.PrefixDiagnostics,
 		}
 	})

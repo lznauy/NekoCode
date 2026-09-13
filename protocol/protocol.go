@@ -26,6 +26,7 @@ const (
 )
 
 type StepEvent struct {
+	Compaction      *CompactionEvent
 	Action          StepAction
 	CallID          string
 	ToolName        string
@@ -38,6 +39,49 @@ type StepEvent struct {
 	SubAgentSkills  []string
 	SubAgentColor   int
 }
+
+// CompactionEvent is a display-only projection of one summary operation.
+// Terminal events include full content to recover any missed deltas.
+type CompactionEvent struct {
+	ID             string            `json:"id"`
+	Status         CompactionStatus  `json:"status"`
+	Trigger        CompactionTrigger `json:"trigger"`
+	Delta          string            `json:"delta,omitempty"`
+	Summary        string            `json:"summary,omitempty"`
+	Error          string            `json:"error,omitempty"`
+	Warning        string            `json:"warning,omitempty"`
+	BeforeTokens   int               `json:"beforeTokens"`
+	AfterTokens    int               `json:"afterTokens"`
+	BeforeMessages int               `json:"beforeMessages"`
+	AfterMessages  int               `json:"afterMessages"`
+	ElapsedMs      int64             `json:"elapsedMs"`
+}
+
+type CompactionStatus string
+
+const (
+	CompactionStarted   CompactionStatus = "started"
+	CompactionDelta     CompactionStatus = "delta"
+	CompactionCompleted CompactionStatus = "completed"
+	CompactionFailed    CompactionStatus = "failed"
+)
+
+func (s CompactionStatus) Valid() bool {
+	return s == CompactionStarted || s == CompactionDelta || s == CompactionCompleted || s == CompactionFailed
+}
+
+type CompactionTrigger string
+
+const (
+	CompactionAuto   CompactionTrigger = "auto"
+	CompactionManual CompactionTrigger = "manual"
+)
+
+func (t CompactionTrigger) Valid() bool {
+	return t == CompactionAuto || t == CompactionManual
+}
+
+const StepActionCompaction StepAction = "compaction"
 
 type CommandAction string
 

@@ -5,6 +5,7 @@ import { isUnifiedDiffContent } from '../lib/diffFormat'
 import { safeAbort, safeSendMessage } from '../lib/wails'
 import { useWailsEvents } from './useWailsEvents'
 import type {
+  CompactionEvent,
   AgentPhase,
   MetricsPayload,
   Msg,
@@ -286,6 +287,10 @@ export function useChat(): UseChatReturn {
   const onDone = useCallback((e: { output?: string; error: string }) => {
     if (abortedRef.current) return
     flushBuffers()
+    // A run error is unrelated to an in-flight compaction: settle with the
+    // fixed note so the card never shows a foreign error (the run's own
+    // failure is displayed separately below).
+    setMsgs((prev) => settleCompactions(prev, '压缩已结束，未收到完成详情'))
     const sid = sidRef.current
     if (e.error) {
       setError(e.error)
@@ -344,16 +349,38 @@ export function useChat(): UseChatReturn {
   }, [])
 
   // onSystem 处理命令输出（/devices、/config 等）：作为独立 system 消息展示。
+  // 手动 /compact 的统计已由 CompactionDetails 卡片渲染，命令的文本回显
+  // 会重复显示同一结果，此处沿用 TUI 的去重守卫跳过。
   const onSystem = useCallback((e: { content: string }) => {
     const content = (e.content ?? '').trim()
     if (!content) return
-    setMsgs((prev) => [
-      ...prev,
-      { id: genId(), role: 'system' as const, text: content, streaming: false },
-    ])
+    setMsgs((prev) => {
+      if (hasSettledManualCompaction(prev) && isCompactionEcho(content)) return prev
+      return [
+        ...prev,
+        { id: genId(), role: 'system' as const, text: content, streaming: false },
+      ]
+    })
   }, [])
 
   useWailsEvents({
+    onCompaction: (e: CompactionEvent) => {
+      if (abortedRef.current) return
+      const sid = sidRef.current
+      setMsgs((prev) => {
+        const index = prev.findIndex((m) => m.compaction?.id === e.id)
+        const old = index < 0 ? undefined : prev[index].compaction
+        if (old && (old.status === 'completed' || old.status === 'failed')) return prev
+        const compaction = { ...e, summary: e.status === 'delta' ? (old?.summary ?? '') + (e.delta ?? '') : (e.summary ?? old?.summary ?? '') }
+        const msg: Msg = { id: `compaction-${e.id}`, role: 'system', text: '', streaming: false, compaction }
+        if (index < 0) {
+          const runIndex = prev.findIndex((m) => m.id === sid)
+          if (runIndex >= 0) return [...prev.slice(0, runIndex), msg, ...prev.slice(runIndex)]
+          return [...prev, msg]
+        }
+        return prev.map((m, i) => i === index ? msg : m)
+      })
+    },
     onDelta,
     onReasoning,
     onPhase,
@@ -403,6 +430,7 @@ export function useChat(): UseChatReturn {
   const stop = useCallback(() => {
     abortedRef.current = true
     flushBuffers()
+    setMsgs((prev) => settleCompactions(prev, '已取消，未收到压缩完成确认'))
     safeAbort()
     const sid = sidRef.current
     const userSid = userSidRef.current
@@ -444,6 +472,21 @@ export function useChat(): UseChatReturn {
   }, [setText])
 
   return { msgs, text, setText, busy, error, send, stop, toggleStep, setMessages, clearMessages }
+}
+
+function settleCompactions(msgs: Msg[], error: string): Msg[] {
+  return msgs.map((m) => m.compaction && (m.compaction.status === 'started' || m.compaction.status === 'delta')
+    ? { ...m, compaction: { ...m.compaction, status: 'failed', error } } : m)
+}
+
+// A finished manual compaction already rendered its result card; the command
+// layer's plain-text echo of the same result would duplicate it.
+function hasSettledManualCompaction(msgs: Msg[]): boolean {
+  return msgs.some((m) => m.compaction?.trigger === 'manual' && m.compaction.status !== 'started' && m.compaction.status !== 'delta')
+}
+
+function isCompactionEcho(content: string): boolean {
+  return content.startsWith('Compacted:') || content.startsWith('Summary updated:') || content.startsWith('Compaction failed:')
 }
 
 function upsert(prev: Msg[], sid: string | null, mutate: (m: Msg) => Msg): Msg[] {

@@ -79,7 +79,9 @@ func extractXMLBlock(raw, tag string) string {
 	start += len(openTag)
 	end := strings.Index(raw[start:], closeTag)
 	if end < 0 {
-		return ""
+		// Unclosed block (e.g. truncated stream): keep the content after the
+		// opening tag rather than discarding it.
+		return strings.TrimSpace(raw[start:])
 	}
 	return strings.TrimSpace(raw[start : start+end])
 }

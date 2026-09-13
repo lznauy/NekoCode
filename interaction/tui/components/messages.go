@@ -52,7 +52,11 @@ func (m *Messages) SetProcessing(on bool) {
 		items := m.Items()
 		m.SetItems()
 		for _, item := range items {
-			if _, ok := item.(*processing.ProcessingItem); !ok {
+			if active, ok := item.(*processing.ProcessingItem); ok {
+				if history := active.CompactionHistory(); history != nil {
+					m.AppendItems(history)
+				}
+			} else {
 				m.AppendItems(item)
 			}
 		}

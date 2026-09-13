@@ -20,8 +20,8 @@ func (m *Model) startChat(value string) tea.Cmd {
 	m.transitionTo(stateProcessing)
 	m.Messages.SetSpinnerView(m.Spinner.View())
 	status := PhaseWaiting
-	if isSummarizeCommand(value) {
-		status = phaseSummarizing
+	if isCompactCommand(value) {
+		status = phaseCompacting
 	}
 	m.setPhase(status)
 	m.Messages.SetProcessingStatus(status)
@@ -39,8 +39,11 @@ func (m *Model) startChat(value string) tea.Cmd {
 	return spinnerTick()
 }
 
-func isSummarizeCommand(value string) bool {
-	return strings.TrimSpace(value) == "/summarize"
+func isCompactCommand(value string) bool {
+	// The command ignores arguments, so any argumented form ("/compact now")
+	// still routes to ForceCompact and still deserves the compacting phase.
+	fields := strings.Fields(value)
+	return len(fields) > 0 && fields[0] == "/compact"
 }
 
 // tryLocalCommand executes during-task-safe commands immediately, without a

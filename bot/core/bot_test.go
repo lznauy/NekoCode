@@ -40,7 +40,7 @@ func TestNewBuildsRunnableBot(t *testing.T) {
 		!effortMenu.Items[0].Current {
 		t.Fatalf("default effort menu item = %+v", effortMenu.Items[0])
 	}
-	for _, input := range []string{"/plan", "/export", "/new", "/context", "/summarize"} {
+	for _, input := range []string{"/plan", "/export", "/new", "/context", "/compact"} {
 		if _, ok := b.CommandMenu(context.Background(), input); ok {
 			t.Fatalf("free-form or immediate command %q unexpectedly exposed a menu", input)
 		}

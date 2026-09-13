@@ -52,6 +52,7 @@ const (
 	EventAssistantDelta    EventType = "assistant_delta"
 	EventReasoningDelta    EventType = "reasoning_delta"
 	EventPhaseChanged      EventType = "phase_changed"
+	EventCompaction        EventType = "compaction"
 	EventToolStarted       EventType = "tool_started"
 	EventToolBlocked       EventType = "tool_blocked"
 	EventToolPreview       EventType = "tool_preview"

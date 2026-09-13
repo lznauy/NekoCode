@@ -41,4 +41,4 @@ assignees: ''
 
 - [ ] I searched existing issues for the same problem.
 - [ ] I removed secrets and private data from the report.
-- [ ] This is not a security vulnerability. Security reports follow [SECURITY.md](../../SECURITY.md).
+- [ ] This is not a security vulnerability. Security reports follow [SECURITY.md](../../docs/SECURITY.md).

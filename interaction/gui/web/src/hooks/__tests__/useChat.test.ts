@@ -23,6 +23,31 @@ function emit(event: string, data: unknown): void {
 })
 
 describe('useChat', () => {
+  it('keeps streaming compaction separate and restores the final summary after missed deltas', () => {
+    const { result } = renderHook(() => useChat())
+    act(() => result.current.send('/compact'))
+    const event = { id: 'compact-1', status: 'started', trigger: 'manual', beforeTokens: 10000, afterTokens: 0, beforeMessages: 20, afterMessages: 0, elapsedMs: 0 }
+    act(() => emit('agent:compaction', event))
+    act(() => emit('agent:compaction', { ...event, status: 'delta', delta: 'partial' }))
+    expect(result.current.msgs[1].compaction?.summary).toBe('partial')
+    expect(result.current.msgs[2].streamText).toBe('')
+    act(() => emit('agent:compaction', { ...event, status: 'completed', summary: 'complete summary', afterMessages: 6, afterTokens: 2000 }))
+    act(() => emit('agent:done', { output: '', error: '' }))
+    expect(result.current.msgs.find((m) => m.compaction)?.compaction?.summary).toBe('complete summary')
+    expect(result.current.msgs.find((m) => m.compaction)?.compaction?.status).toBe('completed')
+  })
+
+  it('settles partial compaction when stopping and ignores late deltas', () => {
+    const { result } = renderHook(() => useChat())
+    act(() => result.current.send('hello'))
+    const event = { id: 'compact-1', status: 'delta', trigger: 'auto', delta: 'partial', beforeTokens: 1, afterTokens: 0, beforeMessages: 10, afterMessages: 0, elapsedMs: 0 }
+    act(() => emit('agent:compaction', event))
+    act(() => result.current.stop())
+    act(() => emit('agent:compaction', event))
+    expect(result.current.msgs).toHaveLength(1)
+    expect(result.current.msgs[0].compaction?.status).toBe('failed')
+    expect(result.current.msgs[0].compaction?.summary).toBe('partial')
+  })
   it('initializes with empty state', () => {
     const { result } = renderHook(() => useChat())
     expect(result.current.msgs).toHaveLength(0)

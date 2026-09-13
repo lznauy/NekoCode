@@ -3,6 +3,7 @@ package session
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 
@@ -10,12 +11,56 @@ import (
 	"nekocode/util/fs"
 )
 
+func writeAtomic(path string, data []byte, perm os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".session-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(path))
+}
+
+func syncDir(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	err = dir.Sync()
+	if closeErr := dir.Close(); err == nil {
+		err = closeErr
+	}
+	return err
+}
+
 // Manager owns only the current session identity and persistence lifecycle.
 // Cross-module state capture and restore belongs to the bot assembly layer.
 type Manager struct {
-	mu   sync.Mutex
-	cwd  string
-	sess *Snapshot
+	mu        sync.Mutex
+	persistMu sync.Mutex
+	cwd       string
+	sess      *Snapshot
 }
 
 // DefaultExportPath is the default context-export destination under ~/.nekocode/exports.
@@ -63,10 +108,12 @@ func (m *Manager) ClearCurrent() {
 // history is removed from disk instead of being written, so empty sessions
 // never show up as invalid records in session lists.
 func (m *Manager) Save(sess *Snapshot) error {
+	m.persistMu.Lock()
+	defer m.persistMu.Unlock()
 	if sess == nil {
 		return fmt.Errorf("session: cannot save nil snapshot")
 	}
-	if len(sess.Messages) == 0 {
+	if len(sess.Transcript) == 0 && len(sess.Messages) == 0 {
 		if err := deleteSnapshot(sess.ID); err != nil {
 			return err
 		}

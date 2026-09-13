@@ -252,10 +252,10 @@ func RegisterDefaults(p *Parser, deps Deps) {
 		return ContextReport(deps.CtxMgr, deps.ToolRegistry.Descriptors()), true
 	})
 
-	p.RegisterInfo("summarize", "Compress context now", func(_ context.Context, cmd *Command) (string, bool) {
-		result, err := ForceSummarize(deps.CtxMgr, true)
+	p.RegisterInfo("compact", "Compact context now", func(ctx context.Context, cmd *Command) (string, bool) {
+		result, err := ForceCompact(ctx, deps.CtxMgr, true)
 		if err != nil {
-			return "Summarize failed: " + err.Error(), true
+			return "Compaction failed: " + err.Error(), true
 		}
 		return result, true
 	})

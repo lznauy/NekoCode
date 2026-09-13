@@ -415,6 +415,10 @@ func (r *Runtime) endRun(runID RunID) {
 }
 
 func (r *Runtime) publishStep(runID RunID, step protocol.StepEvent) {
+	if step.Action == protocol.StepActionCompaction && step.Compaction != nil {
+		r.events.Publish(Event{RunID: runID, Type: EventCompaction, Source: SourceRef{Kind: "bot"}, Payload: *step.Compaction})
+		return
+	}
 	var eventType EventType
 	payload := ToolPayload{
 		ToolName: step.ToolName, CallID: step.CallID, Args: step.ToolArgs,

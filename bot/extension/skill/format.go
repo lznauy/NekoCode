@@ -19,7 +19,12 @@ const skillListHeader = "## Available Skills (authoritative)\n\n" +
 // buildSkillListText generates the available-skills text injected into context.
 // The first eligible entry is always written, even if it exceeds the budget;
 // once the budget is exhausted the remaining skills are only counted.
-func buildSkillListText(skills []*Skill, loaded map[string]bool, contextWindow int) string {
+//
+// The text is a pure function of the registry and the context window: it must
+// not depend on per-session state such as which skills are already loaded,
+// because the list is the first thing in the provider's cached prefix and any
+// byte change re-reads the entire history.
+func buildSkillListText(skills []*Skill, contextWindow int) string {
 	total := len(skills)
 	if total == 0 {
 		return ""
@@ -32,13 +37,9 @@ func buildSkillListText(skills []*Skill, loaded map[string]bool, contextWindow i
 	sb.WriteString(skillListHeader)
 	listed := 0
 	for _, sk := range skills {
-		status := ""
-		if loaded[sk.Name] {
-			status = " [loaded]"
-		}
 		name := html.EscapeString(compactSkillMetadata(sk.Name))
 		description := html.EscapeString(compactSkillMetadata(sk.Description))
-		entry := fmt.Sprintf("- **%s**%s: %s\n", name, status, description)
+		entry := fmt.Sprintf("- **%s**: %s\n", name, description)
 		if listed > 0 && remaining < len([]rune(entry)) {
 			break
 		}

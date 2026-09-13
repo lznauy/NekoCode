@@ -59,6 +59,7 @@ type LLMCallOptions struct {
 	// Source labels the call origin ("main", "synthesize", "subagent") in
 	// the evidence log; Diagnostics reports the request's prefix fingerprint.
 	Source      string
+	SessionID   string
 	Diagnostics func() calllog.PrefixDiag
 }
 
@@ -121,6 +122,7 @@ func writeCallRecord(opts LLMCallOptions, stream *StreamResult, start time.Time,
 		Source: opts.Source,
 		DurMs:  time.Since(start).Milliseconds(),
 	}
+	rec.SessionID = opts.SessionID
 	rec.SetUsage(stream.Usage)
 	if fp := stream.Usage.SystemFingerprint; fp != "" {
 		rec.SystemFingerprint = calllog.FingerprintID(fp)

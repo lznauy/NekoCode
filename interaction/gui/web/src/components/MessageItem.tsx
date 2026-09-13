@@ -2,6 +2,7 @@ import { memo } from 'react'
 import type { Msg } from '../types/events'
 import { MarkdownBody } from './MarkdownBody'
 import { ImageGrid, RunCard } from './run'
+import { CompactionDetails } from './run/CompactionDetails'
 
 interface MessageItemProps {
   msg: Msg
@@ -19,6 +20,7 @@ function isRunMsg(m: Msg): boolean {
 }
 
 export const MessageItem = memo(function MessageItem({ msg, toggleStep }: MessageItemProps) {
+  if (msg.compaction) return <CompactionDetails event={msg.compaction} />
   const isUser = msg.role === 'user'
 
   // 用户消息: 右对齐气泡。

@@ -36,6 +36,9 @@ func (p *ProcessingItem) Render(width int) string {
 	if s := p.renderThinkingSection(contentW); s != "" {
 		sections = append(sections, s)
 	}
+	if s := p.renderCompactions(contentW); s != "" {
+		sections = append(sections, s)
+	}
 	sections = append(sections, p.renderHeader(contentW))
 
 	body := strings.Join(sections, "\n")
@@ -56,6 +59,9 @@ func (p *ProcessingItem) renderHeader(width int) string {
 	l := p.statusText
 	if l == "" {
 		l = "Thinking"
+	}
+	if len(p.compactions) > 0 && p.compactions[len(p.compactions)-1].Running() {
+		l = "Compacting context..."
 	}
 
 	var meta []string

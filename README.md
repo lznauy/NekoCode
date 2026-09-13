@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <b>简体中文</b> · <a href="README.en.md">English</a>
+  <b>简体中文</b> · <a href="docs/README.en.md">English</a>
 </p>
 
 ---
@@ -123,15 +123,19 @@ NekoCode 仍处于测试阶段，尚未经过大规模生产验证。工具设�
 
 ## 给开发者
 
+- [ACP.md](docs/ACP.md)：ACP v1 协议、能力协商、方法清单和 NekoCode 实现状态
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md)：整体架构、Agent 循环、工具系统、技术细节
 - [CI_CD.md](docs/CI_CD.md)：持续集成、版本发布、产物校验与失败处理
 - [RUNTIME_APP_GUIDE.md](docs/RUNTIME_APP_GUIDE.md)：基于底座组装上层 AI 应用
 - [RUNTIME_HTTP_API.md](docs/RUNTIME_HTTP_API.md)：Runtime HTTP/SSE 协议
+- [CHANGELOG.md](docs/CHANGELOG.md)：版本变化记录
 
 ## 开源
 
-- [贡献指南](CONTRIBUTING.md)
-- [安全策略](SECURITY.md)
-- [支持范围](SUPPORT.md)
+- [贡献指南](docs/CONTRIBUTING.md)
+- [行为准则](docs/CODE_OF_CONDUCT.md)
+- [项目治理](docs/GOVERNANCE.md)
+- [安全策略](docs/SECURITY.md)
+- [支持范围](docs/SUPPORT.md)
 
 NekoCode 使用 [MIT License](LICENSE)，可以按许可证条款使用、修改和分发。

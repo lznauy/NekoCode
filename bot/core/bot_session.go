@@ -23,6 +23,21 @@ import (
 
 func (b *Bot) initSession() {
 	b.sess = session.New(b.cwd)
+	b.ctxMgr.SetSessionIDProvider(b.sess.CurrentID)
+	b.ctxMgr.SetBeforeCompaction(func(compactionID string) error {
+		if err := b.saveSession(); err != nil {
+			return err
+		}
+		_, err := b.sess.BackupCurrent(compactionID)
+		return err
+	})
+	// Compaction replaces the active history wholesale, so indexes captured
+	// against it (selected-skill message ranges) must not survive the swap.
+	b.ctxMgr.SetAfterCompaction(func() {
+		if b.cmd != nil {
+			b.cmd.ResetSkill()
+		}
+	})
 	b.checkpoints = checkpoint.New("")
 	b.checkpoints.Activate(b.sess.CurrentID(), nil, 0)
 }
@@ -41,13 +56,13 @@ func (b *Bot) registerSessionCommands(p *command.Parser) {
 			return fmt.Sprintf("Failed to resume session %s: %v", id, err), true
 		}
 		b.syncPolicySessionID()
-		return fmt.Sprintf("Resumed session %s (%d messages restored).", id, len(snapshot.Messages)), true
+		return fmt.Sprintf("Resumed session %s (%d messages restored).", id, len(snapshot.Transcript)), true
 	})
 	p.RegisterInfo("export", "Export conversation context", func(ctx context.Context, _ *command.Command) (string, bool) {
 		if err := ctx.Err(); err != nil {
 			return "Export cancelled: " + err.Error(), true
 		}
-		messages := b.ctxMgr.Build()
+		messages := b.ctxMgr.Snapshot().Transcript
 		path, err := session.ExportMessages(messages, session.DefaultExportPath)
 		if err != nil {
 			return fmt.Sprintf("Failed to %v", err), true
@@ -145,9 +160,9 @@ func (b *Bot) resumeSession(id string) (*session.Snapshot, error) {
 		for _, name := range snapshot.LoadedSkills {
 			b.ext.MarkSkillLoaded(name)
 		}
-		// MarkLoaded no longer refreshes the list (prefix stability), so
-		// re-render it once here — restore is a session boundary where a
-		// prefix change costs nothing.
+		// The list carries no per-session state, so re-rendering it here
+		// reproduces the same bytes as before the reload (and only differs if
+		// the registry itself changed) — the restored prefix stays cached.
 		b.ext.RefreshSkillList()
 	}
 	b.restoreLedger(snapshot.Ledger)
@@ -298,7 +313,7 @@ func (b *Bot) hasRewindEvent(rewindID string) bool {
 	if rewindID == "" {
 		return false
 	}
-	for _, message := range b.ctxMgr.Snapshot().Messages {
+	for _, message := range b.ctxMgr.Snapshot().Transcript {
 		if message.Source == types.MessageSourceRuntimeEvent && strings.Contains(message.Content, rewindID) {
 			return true
 		}

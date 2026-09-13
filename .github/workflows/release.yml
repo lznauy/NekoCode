@@ -40,7 +40,7 @@ jobs:
             exit 1
           }
           prefix="## ${RELEASE_TAG} - "
-          heading="$(grep -F -m1 -- "$prefix" CHANGELOG.md || true)"
+          heading="$(grep -F -m1 -- "$prefix" docs/CHANGELOG.md || true)"
           release_date="${heading#"$prefix"}"
           [[ "$heading" == "${prefix}${release_date}" ]] || {
             echo "Missing changelog heading for $RELEASE_TAG" >&2

@@ -104,6 +104,7 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
 	defer cleanupExecutor()
 
 	ctxMgr := e.newContextManager(cfg)
+	ctxMgr.SetSessionIDProvider(func() string { return cfg.SessionID })
 	ctxMgr.SetLLMUsageRecorder(func(usage providertypes.StreamUsage) {
 		state.addTokens(cfg)(usage.PromptTokens, usage.CompletionTokens)
 		if cfg.RecordLLMUsage != nil {
@@ -166,7 +167,7 @@ func (r *engineRun) stepOnce() bool {
 		return true
 	}
 
-	if _, err := r.ctxMgr.AutoCompactIfNeeded(); err != nil {
+	if _, err := r.ctxMgr.AutoCompactIfNeeded(r.ctx); err != nil {
 		r.log("compact error: %v", err)
 		if r.state.lastText != "" {
 			r.result = buildPartialResult(r.state.lastText, r.state.meta(r.ctxMgr))
@@ -177,7 +178,7 @@ func (r *engineRun) stepOnce() bool {
 		return true
 	}
 	profile := r.cfg.Profile
-	calls, text, err := r.engine.reason(r.ctx, r.ctxMgr, profile.Tools, buildSkillWorkflow(r.cfg), r.state.addTokens(r.cfg), r.cfg.RecordLLMUsage, r.phase)
+	calls, text, err := r.engine.reason(r.ctx, r.ctxMgr, profile.Tools, buildSkillWorkflow(r.cfg), r.state.addTokens(r.cfg), r.cfg.RecordLLMUsage, r.cfg.SessionID, r.phase)
 	r.ctxMgr.SetHints("")
 	if err != nil {
 		r.log("error: %v", err)

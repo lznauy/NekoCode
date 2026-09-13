@@ -2,12 +2,29 @@ package eventbus
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
+	"nekocode/protocol"
 	"nekocode/runtime/internal/core"
 	"nekocode/runtime/internal/runstore"
 )
+
+func TestCompactionBacklogDropsDeltasButKeepsFullSummary(t *testing.T) {
+	s := &subscriber{wake: make(chan struct{}, 1)}
+	for i := 0; i < defaultSubscriberQueueLimit*2; i++ {
+		s.enqueue(core.Event{Type: core.EventCompaction, Payload: protocol.CompactionEvent{ID: "compact", Status: "delta", Delta: "chunk"}})
+	}
+	if len(s.queue) != defaultSubscriberQueueLimit {
+		t.Fatalf("unbounded delta queue: %d", len(s.queue))
+	}
+	s.enqueue(core.Event{Type: core.EventCompaction, Payload: protocol.CompactionEvent{ID: "compact", Status: "completed", Summary: "full summary"}})
+	last := s.queue[len(s.queue)-1].Payload.(protocol.CompactionEvent)
+	if len(s.queue) != defaultSubscriberQueueLimit || last.Summary != "full summary" {
+		t.Fatalf("terminal summary was dropped: %+v", last)
+	}
+}
 
 func TestEventBusFiltersByRunAndType(t *testing.T) {
 	bus := NewEventBus()
@@ -65,6 +82,33 @@ func TestEventBusImportHistoryAdvancesEventID(t *testing.T) {
 	ev := bus.Publish(core.Event{RunID: "run_1", Type: core.EventRunDone})
 	if ev.ID != "evt_42" {
 		t.Fatalf("event id after import = %q, want evt_42", ev.ID)
+	}
+}
+
+func TestEventBusImportHistoryDropsCompactionDeltas(t *testing.T) {
+	bus := NewEventBus()
+	events := []core.Event{{ID: "evt_1", Type: core.EventRunStarted}}
+	for i := 0; i < defaultEventHistoryLimit+10; i++ {
+		events = append(events, core.Event{
+			ID:   fmt.Sprintf("evt_%d", i+2),
+			Type: core.EventCompaction,
+			Payload: protocol.CompactionEvent{
+				ID: "compact", Status: protocol.CompactionDelta, Delta: "chunk",
+			},
+		})
+	}
+	events = append(events, core.Event{
+		ID: "evt_2000", Type: core.EventCompaction,
+		Payload: protocol.CompactionEvent{ID: "compact", Status: protocol.CompactionCompleted, Summary: "full"},
+	})
+
+	bus.ImportHistory(events)
+	history := bus.History(core.EventFilter{})
+	if len(history) != 2 || history[0].Type != core.EventRunStarted {
+		t.Fatalf("imported history retained transient deltas or lost boundary events: %+v", history)
+	}
+	if payload, ok := history[1].Payload.(protocol.CompactionEvent); !ok || payload.Status != protocol.CompactionCompleted {
+		t.Fatalf("terminal compaction event missing: %#v", history[1])
 	}
 }
 

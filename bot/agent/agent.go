@@ -33,6 +33,7 @@ type Config struct {
 	Output      Output
 	Interaction Interaction
 	Checkpoints *checkpoint.Manager
+	SessionID   func() string
 }
 
 // Output contains optional streaming callbacks.
@@ -55,6 +56,7 @@ type agentDeps struct {
 	toolRegistry *tools.Registry
 	toolExecutor *runner.Executor
 	checkpoints  *checkpoint.Manager
+	sessionID    func() string
 	subSlotMgr   *slotManager
 	gov          *aggov.Policy
 }
@@ -97,6 +99,7 @@ func New(ctx context.Context, cfg Config) *Agent {
 			toolRegistry: cfg.Tools,
 			toolExecutor: runner.NewExecutor(cfg.Tools),
 			checkpoints:  cfg.Checkpoints,
+			sessionID:    cfg.SessionID,
 			subSlotMgr:   newSlotManager(),
 		},
 		gate: kernel.NewGate(defaultMaxRetries),
@@ -117,6 +120,13 @@ func New(ctx context.Context, cfg Config) *Agent {
 		})
 	}
 	return a
+}
+
+func (a *Agent) sessionID() string {
+	if a.deps.sessionID == nil {
+		return ""
+	}
+	return a.deps.sessionID()
 }
 
 func (a *Agent) Run(input string, callback RunCallback) *RunResult {

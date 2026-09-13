@@ -44,11 +44,11 @@ func (b *Bot) Run(ctx context.Context, input string, host RunHost) (string, erro
 		close(finished)
 		<-watchDone
 	}()
-	output, err := b.runAgent(input, host.Step)
+	output, err := b.runAgent(ctx, input, host.Step)
 	return output, err
 }
 
-func (b *Bot) runAgent(input string, onStep func(ev protocol.StepEvent)) (string, error) {
+func (b *Bot) runAgent(ctx context.Context, input string, onStep func(ev protocol.StepEvent)) (string, error) {
 	sessionID := b.sess.CurrentID()
 	ag := b.getAgent()
 	defer func() {
@@ -65,7 +65,13 @@ func (b *Bot) runAgent(input string, onStep func(ev protocol.StepEvent)) (string
 	if b.checkpoints != nil {
 		checkpointErr = b.checkpoints.Finish(sessionID)
 	}
-	_, compactionErr := b.ctxMgr.AutoCompactIfNeeded()
+	// The trailing compaction is housekeeping, not part of the run's outcome:
+	// after a caller-side cancellation it reports context.Canceled, which
+	// would surface as a run failure even though the turn itself was fine.
+	_, compactionErr := b.ctxMgr.AutoCompactIfNeeded(context.Background())
+	if compactionErr != nil && (errors.Is(compactionErr, context.Canceled) || errors.Is(compactionErr, context.DeadlineExceeded)) {
+		compactionErr = nil
+	}
 	result.Error = errors.Join(
 		result.Error,
 		checkpointErr,

@@ -17,16 +17,19 @@ import (
 )
 
 type Snapshot struct {
-	ID        string `json:"id"`
-	CWD       string `json:"cwd"`
-	CreatedAt int64  `json:"created_at"`
-	UpdatedAt int64  `json:"updated_at"`
+	FormatVersion int    `json:"format_version"`
+	ID            string `json:"id"`
+	CWD           string `json:"cwd"`
+	CreatedAt     int64  `json:"created_at"`
+	UpdatedAt     int64  `json:"updated_at"`
 
 	SystemPrompt    string          `json:"system_prompt"`
 	Skills          string          `json:"skills"`
 	Memory          string          `json:"memory"`
 	Archive         string          `json:"archive"`
 	Messages        []types.Message `json:"messages"`
+	Transcript      []types.Message `json:"-"`
+	TranscriptSeq   int             `json:"transcript_seq,omitempty"`
 	CompactBoundary int             `json:"compact_boundary"`
 
 	ContextWindow     int `json:"context_window"`
@@ -46,6 +49,21 @@ type Snapshot struct {
 	CheckpointTurns []string        `json:"checkpoint_turns,omitempty"`
 	CheckpointNext  int             `json:"checkpoint_next,omitempty"`
 	Ledger          ledger.Snapshot `json:"ledger"`
+
+	// Last request's cache-relevant head (Layer 0-1 and tools). Restoring it
+	// lets the next process attribute its first cache miss to a real prefix
+	// change instead of reporting cold-start.
+	PrefixSystemHash string `json:"prefix_system_hash,omitempty"`
+	PrefixToolsHash  string `json:"prefix_tools_hash,omitempty"`
+
+	// PrefixTurn is the last turn's cache summary (one slot, no history), kept
+	// so /context still shows the previous turn right after a reload.
+	PrefixTurn *ctxmgr.PrefixTurnStats `json:"prefix_turn,omitempty"`
+
+	// Archive bookkeeping: how many compactions produced the restored archive
+	// and how many messages they trimmed. Cumulative, like the cache counters.
+	CompactCount int `json:"compact_count,omitempty"`
+	TrimCount    int `json:"trim_count,omitempty"`
 }
 
 type Meta struct {
@@ -63,10 +81,11 @@ func dir() string {
 func newSnapshot(cwd string) *Snapshot {
 	now := time.Now()
 	return &Snapshot{
-		ID:        fmt.Sprintf("%s-%09d", now.UTC().Format("20060102T150405"), now.Nanosecond()),
-		CWD:       cwd,
-		CreatedAt: now.Unix(),
-		UpdatedAt: now.Unix(),
+		FormatVersion: 2,
+		ID:            fmt.Sprintf("%s-%09d", now.UTC().Format("20060102T150405"), now.Nanosecond()),
+		CWD:           cwd,
+		CreatedAt:     now.Unix(),
+		UpdatedAt:     now.Unix(),
 	}
 }
 
@@ -87,6 +106,28 @@ func load(id string) (*Snapshot, error) {
 		}
 		return nil, fmt.Errorf("session id mismatch: requested %q, file contains %q", id, found)
 	}
+	if snapshot.FormatVersion < 2 {
+		return nil, fmt.Errorf("legacy session format (v%d); run `go run ./util/session-migrate --session %s` to convert it", snapshot.FormatVersion, id)
+	}
+	persistedSeq := snapshot.TranscriptSeq
+	if persistedSeq < 0 {
+		return nil, fmt.Errorf("invalid negative transcript watermark %d", persistedSeq)
+	}
+	transcript, err := loadTranscript(filepath.Dir(path), persistedSeq)
+	if err != nil {
+		return nil, fmt.Errorf("load transcript: %w", err)
+	}
+	if transcript == nil && persistedSeq > 0 {
+		return nil, fmt.Errorf("transcript.jsonl is missing while the session records %d messages; restore it from a backup or re-run session-migrate", persistedSeq)
+	}
+	if persistedSeq > len(transcript) {
+		return nil, fmt.Errorf("transcript watermark %d exceeds %d records", persistedSeq, len(transcript))
+	}
+	if persistedSeq < len(transcript) {
+		snapshot.Messages = append(snapshot.Messages, transcript[persistedSeq:]...)
+	}
+	snapshot.Transcript = transcript
+	snapshot.TranscriptSeq = len(transcript)
 	return snapshot, nil
 }
 
@@ -115,21 +156,27 @@ func (s *Snapshot) save() error {
 	}
 	s.UpdatedAt = time.Now().Unix()
 	d := filepath.Join(dir(), s.ID)
+	watermark, err := appendTranscript(d, s.TranscriptSeq, s.Transcript)
+	s.TranscriptSeq = watermark
+	if err != nil {
+		return fmt.Errorf("persist transcript: %w", err)
+	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal session: %w", err)
 	}
-	return fs.WriteFileWithDir(filepath.Join(d, "session.json"), data, 0o600)
+	return writeAtomic(filepath.Join(d, "session.json"), data, 0o600)
 }
 
 // sessionMeta is a lightweight struct for deserializing only metadata from
 // session.json, avoiding the cost of unmarshaling the full Messages array.
 type sessionMeta struct {
-	ID        string     `json:"id"`
-	CWD       string     `json:"cwd"`
-	CreatedAt int64      `json:"created_at"`
-	UpdatedAt int64      `json:"updated_at"`
-	Messages  []struct{} `json:"messages"` // only need len, not content
+	ID            string     `json:"id"`
+	CWD           string     `json:"cwd"`
+	CreatedAt     int64      `json:"created_at"`
+	UpdatedAt     int64      `json:"updated_at"`
+	Messages      []struct{} `json:"messages"` // only need len, not content
+	TranscriptSeq int        `json:"transcript_seq,omitempty"`
 }
 
 func loadMeta(id string) (Meta, error) {
@@ -146,7 +193,7 @@ func loadMeta(id string) (Meta, error) {
 	return Meta{
 		ID: sm.ID, CWD: sm.CWD,
 		CreatedAt: sm.CreatedAt, UpdatedAt: sm.UpdatedAt,
-		MsgCount: len(sm.Messages),
+		MsgCount: max(len(sm.Messages), sm.TranscriptSeq),
 	}, nil
 }
 
@@ -196,6 +243,7 @@ func (s *Snapshot) CaptureContext(snap ctxmgr.ManagerSnapshot, promptTokens, com
 	s.Memory = snap.Memory
 	s.Archive = snap.Archive
 	s.Messages = snap.Messages
+	s.Transcript = snap.Transcript
 	s.CompactBoundary = 0
 	s.ContextWindow = snap.Budget
 	s.PromptTokens = promptTokens
@@ -211,6 +259,11 @@ func (s *Snapshot) CaptureContext(snap ctxmgr.ManagerSnapshot, promptTokens, com
 	s.SubTokens = snap.Tracker.Sub.TotalTokens
 	s.SubCacheHit = snap.Tracker.Sub.CacheHitTokens
 	s.SubCacheMiss = snap.Tracker.Sub.CacheMissTokens
+	s.PrefixSystemHash = snap.PrefixBaseline.System
+	s.PrefixToolsHash = snap.PrefixBaseline.Tools
+	s.PrefixTurn = snap.PrefixTurn
+	s.CompactCount = snap.CompactCount
+	s.TrimCount = snap.TrimCount
 	s.LoadedSkills = loadedSkillNames(loaded)
 }
 
@@ -229,6 +282,7 @@ func (s *Snapshot) ContextSnapshot() ctxmgr.ManagerSnapshot {
 		Archive:      s.Archive,
 		Memory:       s.Memory,
 		Messages:     append([]types.Message(nil), messages...),
+		Transcript:   append([]types.Message(nil), s.Transcript...),
 		Budget:       s.ContextWindow,
 		Tracker: token.State{
 			LastPromptTokens: s.TrackerPrompt,
@@ -242,6 +296,10 @@ func (s *Snapshot) ContextSnapshot() ctxmgr.ManagerSnapshot {
 				CacheMissTokens: s.SubCacheMiss,
 			},
 		},
+		PrefixBaseline: ctxmgr.PrefixBaseline{System: s.PrefixSystemHash, Tools: s.PrefixToolsHash},
+		PrefixTurn:     s.PrefixTurn,
+		CompactCount:   s.CompactCount,
+		TrimCount:      s.TrimCount,
 	}
 }
 

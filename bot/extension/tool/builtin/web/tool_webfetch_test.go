@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -54,5 +55,27 @@ func TestWebFetchIgnoresEnvironmentProxy(t *testing.T) {
 	}
 	if transport.Proxy != nil {
 		t.Fatal("web_fetch must connect directly so destination-IP SSRF checks cannot be bypassed by a proxy")
+	}
+}
+
+// web_fetch carries the user-supplied URL and stays third-party free: the
+// extraction service belongs to web_extract only.
+func TestWebFetchNeverCallsExtractor(t *testing.T) {
+	previous := defuddleBaseURL
+	defuddleBaseURL = "http://" + testExtractorHost + "/"
+	t.Cleanup(func() { defuddleBaseURL = previous })
+
+	stub := &stubTransport{origin: stubOK()}
+	tool := &WebFetchTool{client: &http.Client{Transport: stub}}
+
+	got, err := tool.Execute(context.Background(), map[string]any{"url": testTargetURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "origin body") {
+		t.Fatalf("result did not come from the direct fetch: %q", got)
+	}
+	if requests := stub.requested(); len(requests) != 1 || stub.hit(testExtractorHost) {
+		t.Fatalf("web_fetch must make exactly one direct request, got %v", requests)
 	}
 }

@@ -30,7 +30,7 @@ pull request that updates this document and `CODEOWNERS` together.
 The release manager selects a tested commit, updates the changelog, creates a
 semantic version tag, and verifies the generated artifacts. Released changelog
 entries are historical records and are not rewritten except to correct a clear
-factual error. See [docs/RELEASING.md](docs/RELEASING.md) for the release
+factual error. See [RELEASING.md](RELEASING.md) for the release
 checklist.
 
 ## Conduct and security

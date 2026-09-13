@@ -137,7 +137,7 @@ nekocode/
 │   ├── command/                    #   斜杠命令系统
 │   │   ├── command.go              #     Handler 入口
 │   │   ├── parser.go               #     命令解析与注册
-│   │   └── lifecycle.go            #     ForceSummarize / ContextReport
+│   │   └── lifecycle.go            #     ForceCompact / ContextReport
 │   ├── contextmgr/                 #   上下文管理
 │   │   ├── contextmgr.go           #     入口：Manager + Config + New
 │   │   ├── contextmgr_context.go   #     Build 管线、设置与 token 用量
@@ -206,7 +206,7 @@ nekocode/
 │   │       │   ├── catalog/        #         Toolbox 工具与生命周期
 │   │       │   ├── filesystem/     #         read/write/edit/list/tree/glob/grep
 │   │       │   ├── shell/          #         Bash 执行 + 危险分级
-│   │       │   ├── web/            #         web_search / web_fetch / html2md
+│   │       │   ├── web/            #         web_search / web_fetch / web_extract / html2md
 │   │       │   ├── media/          #         image_gen（即梦文生图）
 │   │       │   ├── task/           #         子 Agent 任务工具
 │   │       │   ├── todo/           #         todo_write 工具
@@ -385,18 +385,33 @@ tools 和 history（Layer 2-3）。动态变量不再以临时 system tail 重�
 会话和模型切换视为新的缓存 epoch；`rewind` 不删除对话历史，而是在文件恢复成功后追加隐藏的
 `<workspace_event type="checkpoint_rewind">`，列出每个文件的回滚动作和受影响父目录，因此仍保持
 append-only。压缩时 runtime 快照不进入 Archive，活动历史只保留
-最新一份完整快照。Provider 上报 cache miss 后，最近一次
+最新一份完整快照。**恢复会话不是缓存 epoch**：Layer 0-3 全部按会话文件重放，其中 Layer 0
+（system prompt + skills）必须是 registry 与 context window 的纯函数，不得携带"哪些 skill
+已加载"之类的会话状态，否则恢复会改写前缀开头、令供应商重读整段历史；已加载状态只用于
+skill 工具语义与会话持久化。恢复时同时写回上次请求的 head 摘要（system/tools），使重载后的
+首次 miss 归因为 `system`/`tools` 或 `tail/provider`，而不是 `cold-start`。累计缓存命中/
+未命中属会话级诊断，随会话恢复；provider 校准的 prompt token 不恢复，因为它依赖当前模型。
+上一轮的轮统计（调用数、命中/未命中、Biggest miss 及归因）也随会话保存，只保留一个槽位：本次
+进程跑完第一轮之前 `/context` 的 `Last turn` 呈现它，之后由本进程的轮取代，因此重载不会让
+Cache 块只剩累计一行。`Last turn` 下先给最低命中率的一次，最后给 `Biggest miss`（未缓存最多
+的一次，附原因）。调用数来自每次 `BuildRequest` 观察，而命中/未命中只在供应商上报缓存
+明细时累加，所以"有调用数、无 token"表示这批调用未上报缓存，报告显示 `cache usage not
+reported` 而不是把它记成 0% 命中。归档的累计计数（压缩次数、被裁剪消息数）同样随会话保存并
+恢复，否则重载后会出现"有归档却 0 次压缩"；`/context` 的 `Archive` 行据此显示归档规模与压缩
+次数，无归档时显示 `none (no compaction yet)`。Provider 上报 cache miss 后，最近一次
 system/tools/history 变化会记录到 ContextReport、逐调用 calllog，并由 `/context` 展示。
 
 `llm-calls.jsonl` 不保存 prompt、HTTP 请求正文或供应商错误正文，只记录每次调用的
-model/source、脱敏 endpoint、延迟、system fingerprint 短哈希、prefix 诊断和
-`total tok · in · cached · new · out` usage；`total = in + out`。供应商上报
+session/model/source、脱敏 endpoint、延迟、system fingerprint 短哈希、prefix 诊断和
+`total tok · in · cached · new · out` usage；`total = in + out`。`session` 取调用发生时
+的当前会话 id，主模型、subagent 与 compaction 记录由各 Bot 实例显式携带，可据此归组同一次会话的
+全部调用。供应商上报
 reasoning token 明细且值大于 0 时，尾部追加 `reasoning`；它属于 out 的子集，不重复计入
 total。供应商未上报缓存明细时，cached/new 显示为 `?`，
 不会误记为零命中。Agent 同时按当前 run 汇总同口径 usage；Runtime 在 `RunDone` 前发布
 最终 metrics，TUI 将其显示为 assistant 回合尾注：使用“输入 / 缓存 / 未缓存 / 输出 / 推理”
 等中文语义标签，并在末尾显示本次命中率；窄终端切换为仍可辨识的中文短标签。主模型、
-subagent 和非流式 compaction 请求都进入同一统计口径；command-only run 不产生 turn telemetry。
+subagent 和 compaction 请求都进入同一统计口径；command-only run 不产生 turn telemetry。
 
 Provider 层先用 `StreamUsage.Merge` 合并协议碎片，再通过单一 `OnUsage` 事件向上传递完整调用；
 context cache tracker、run meter 和 calllog 不直接消费 SSE 分片。TUI 直接渲染中立协议层的
@@ -424,8 +439,8 @@ ContextReport 与自动压缩门限使用同一 replay contract 估算实际输�
 | `Build()` | 组装完整消息列表（含孤儿过滤） |
 | `BuildRequest()` | 原子组装模型请求并记录 system/tools/history 稳定形状 |
 | `New(Config)` | 使用同一配置协议创建主 Agent 或子 Agent 上下文 |
-| `AutoCompactIfNeeded()` | 自动压缩看门狗 |
-| `Summarize()` | 手动触发完整压缩 + Archive 合并 |
+| `AutoCompactIfNeeded(ctx)` | 自动压缩看门狗 |
+| `Summarize(ctx)` | 手动触发完整压缩 + Archive 合并 |
 | `Snapshot() / Restore()` | 会话持久化 |
 | `Reset()` | 清空当前上下文，用于创建不继承旧内容的新会话 |
 
@@ -438,7 +453,10 @@ ag.Run()  →  ctxMgr.SetSystemPrompt()  →  ctxMgr.Summarize()（按需）  �
 ```
 
 - `bot.saveSession()` 显式收集 Context、token、Skill 和 ledger，再交给
-  `session.Manager.Save(snapshot)` 落盘到 `~/.nekocode/sessions/<id>/session.json`。
+  `session.Manager.Save(snapshot)`。`session.json` 只保存可继续推理的活动上下文；完整的用户、助手和
+  工具消息按序追加到 `transcript.jsonl`，压缩不会改写它。恢复后的 UI 和导出读取 transcript，LLM
+  只读取活动上下文。每次自动或手动压缩前都会先保存当前快照，并在 `backups/` 中创建不可覆盖的
+  `pre-compact-*.session.json`；备份失败时不调用摘要模型。
   Session 包不通过回调访问 Agent、Extension 或 Policy。
 - `Snapshot()`（`bot/contextmgr/contextmgr_snapshot.go`）**深拷贝** `Messages` 后再返回，避免后续 `append` 共享 backing array 导致已捕获内容被覆盖
 - 触发时机：每次 agent run 结束自动保存；`/sessions`、`/export`、`/new` 等命令也会触发
@@ -465,7 +483,7 @@ type Tool interface {
 
 ### 工具注册
 
-`bot/extension/tool/builtin/catalog/toolbox.go` 中的 `Toolbox` 注册内置工具（shell/process/read/write/list/tree/glob/edit/grep/web_search/web_fetch/question/todo_write/task/diff/index）。`image_gen` 按配置条件注册；Extension manager 统一注册 `skill` 和 constant-schema `capability` 工具。`bot/core/bot.go` 只负责 Extension、Agent 和 command parser 的顶层组装。
+`bot/extension/tool/builtin/catalog/toolbox.go` 中的 `Toolbox` 注册内置工具（shell/process/read/write/list/tree/glob/edit/grep/web_search/web_fetch/web_extract/question/todo_write/task/diff/index）。`image_gen` 按配置条件注册；Extension manager 统一注册 `skill` 和 constant-schema `capability` 工具。`bot/core/bot.go` 只负责 Extension、Agent 和 command parser 的顶层组装。
 
 `Registry` 除了保存 `Tool`，还集中保存 preview 与 delegated-call target 等执行元数据。模型侧名称仍是固定的 `capability`，但解析后的 canonical identity 会随 `ToolCallItem` 贯穿权限、Pre/Post Hook、Ledger、audit、结果和 UI 回调。canonical identity 会转义 server/tool 名称中的 `%` 和 `__`，避免不同 server.tool 组合碰撞到同一条权限规则。Runner 和 Policy 都不通过 optional interface 或硬编码 MCP 参数来推断行为。
 
@@ -483,6 +501,7 @@ type Tool interface {
 | grep | Parallel | Safe | `bot/extension/tool/builtin/filesystem/search/` |
 | web_search | Parallel | Safe | `bot/extension/tool/builtin/web/` |
 | web_fetch | Parallel | Safe | `bot/extension/tool/builtin/web/` |
+| web_extract | Parallel | Safe | `bot/extension/tool/builtin/web/` |
 | question | Sequential | Safe | `bot/extension/tool/builtin/question/` |
 | diff | Parallel | Safe | `bot/extension/tool/builtin/diff/` |
 | task | Parallel | Safe | `bot/extension/tool/builtin/task/` |
@@ -500,7 +519,7 @@ type Tool interface {
 | `builtin/catalog/` | Toolbox 工具组装与生命周期 |
 | `builtin/filesystem/{read,write,edit,list,tree,search}/` | 文件系统工具 |
 | `builtin/shell/` | Shell 执行、托管进程、事件式等待 + 危险分级 |
-| `builtin/web/` | Web 搜索/抓取/HTML2MD |
+| `builtin/web/` | Web 搜索/直抓/正文抽取/HTML2MD |
 | `builtin/media/` | 图片生成（即梦文生图） |
 | `builtin/task/` | 子 Agent 任务工具 |
 | `builtin/todo/` | Todo 管理工具 |
@@ -614,8 +633,8 @@ Skill frontmatter 中的 `context`、`agent`、`allowed-tools`、`max_steps` 和
 
 | Profile | 权限边界 | 工具 |
 |---------|----------|------|
-| coder | 工作区读写与命令执行 | read/write/edit/shell/process/grep/glob/list/web_search/web_fetch |
-| explore | 严格只读，无任意命令执行 | read/grep/glob/list/web_search/web_fetch |
+| coder | 工作区读写与命令执行 | read/write/edit/shell/process/grep/glob/list/web_search/web_fetch/web_extract |
+| explore | 严格只读，无任意命令执行 | read/grep/glob/list/web_search/web_fetch/web_extract |
 
 验证、调研、诊断和设计不是 Agent 类型，由 `check`、`learn`、`hunt`、`think` 等 skill 与具体 task prompt 组合表达。插件 AgentMD 继续作为自定义 profile 注册。
 
@@ -703,7 +722,17 @@ TUI 和 GUI 直接渲染菜单；Telegram 渲染 inline keyboard 并同步平台
 | 工具执行 | `bot/extension/tool/runtime/runner/` | 执行引擎（单工具/批量/预览/权限） |
 | 文件系统工具 | `bot/extension/tool/builtin/filesystem/` | read/write/edit/list/tree/glob/grep |
 | Shell/Process 工具 | `bot/extension/tool/builtin/shell/` | Shell 执行、托管进程与风险分级 |
-| Web 工具 | `bot/extension/tool/builtin/web/` | web_search/web_fetch/html2md |
+| Web 工具 | `bot/extension/tool/builtin/web/` | web_search/web_fetch/web_extract/html2md |
+
+`web_fetch` 只做直抓：本地校验目标 URL（拒绝私网/回环/非 http(s)）→ `fetchPageDirect` → `html2md`，
+**不接触任何第三方**。它的客户端刻意忽略代理环境变量，并用加固 DialContext 逐 IP 校验、固定目标地址。
+
+`web_extract` 才用托管抽取：对用户 URL 做同样的本地校验，再把包含 scheme 的完整 URL 追加到 `defuddleBaseURL`
+（默认 `defuddle.md`，12s 超时、1MB 上限）取回正文 Markdown；非 200、空正文、返回 HTML 或传输错误都
+回退到与 `web_fetch` 相同的自抓链路。抽取跳的目的地是常量 host（用户 URL 只作为已校验的 path），因此
+允许走环境代理（`HTTPS_PROXY`/`http_proxy` 等），加固 DialContext 仅对用户配置的那个代理地址放行；
+回退那一跳与 `web_fetch` 一致：忽略代理、拒绝私网。是否把 URL 交给第三方由 Agent 选择工具决定，
+不再有全局开关。
 | 媒体工具 | `bot/extension/tool/builtin/media/` | image_gen（即梦文生图） |
 | 任务工具 | `bot/extension/tool/builtin/task/`, `bot/extension/tool/builtin/todo/` | sub-agent task 与 todo_write |
 | 代码索引工具 | `bot/extension/tool/builtin/index/` | 代码索引（条件注册） |

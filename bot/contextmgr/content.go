@@ -20,13 +20,17 @@ import (
 //	Layer 3 — active message history (replaced when compacted)
 //	Dynamic runtime state — appended as tagged user messages when it changes
 //
-// External setters set fields directly:
+// Writers set these fields directly:
 //
-//	prompt.Builder → Manager.SetSystemPrompt()
-//	skill.Manager   → Manager.SetSkillList()
-//	summarizer      → Manager.SetArchive()
-//	todo system     → Manager.SetTodos()
-//	agent loop      → AddMessage(), AddToolResult()
+//	prompt.Builder → Manager.SetSystemPrompt()       (Layer 0)
+//	skill.Manager  → Manager.SetSkillList()           (Layer 0)
+//	compaction     → Manager.compact() rewrites Archive; Manager.Restore() reloads it
+//	todo system    → Manager.SetTodos()               (folded into runtime context)
+//	agent loop     → Manager.Add(), AddAssistant(), AddToolResultsBatch()  (Layer 3)
+//	hints/policy   → Manager.SetHints(), Manager.SetRuntimePolicy()
+//
+// Memory (Layer 1) has no setter: New(cfg.Memory) builds it once and Restore
+// brings back the session's copy.
 type contextContent struct {
 	// Layer 0 — IMMUTABLE prefix (NEVER changes within a session).
 	SystemPrompt string

@@ -54,7 +54,8 @@ func TestWriteCallRecordAssemblesEvidence(t *testing.T) {
 		},
 	}
 	opts := LLMCallOptions{
-		Source: "main",
+		Source:    "main",
+		SessionID: "session-a",
 		Diagnostics: func() calllog.PrefixDiag {
 			return calllog.PrefixDiag{
 				ChangedParts: []string{"tail/provider"},
@@ -64,7 +65,7 @@ func TestWriteCallRecordAssemblesEvidence(t *testing.T) {
 	}
 	writeCallRecord(opts, stream, start, nil)
 
-	if got.Source != "main" || got.Model != "m" || got.Protocol != "openai" {
+	if got.Source != "main" || got.SessionID != "session-a" || got.Model != "m" || got.Protocol != "openai" {
 		t.Errorf("request evidence = %+v", got)
 	}
 	if got.RequestedEffort != "high" || got.EffectiveEffort != "high" {

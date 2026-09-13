@@ -60,6 +60,7 @@ func (r *modelRunner) callLLMForTool() (*llmstream.LLMCallResult, error) {
 			Callbacks:   r.streamCallbacks(),
 			CheckDone:   a.life.Finished().Load,
 			Source:      "main",
+			SessionID:   a.sessionID(),
 			Diagnostics: a.deps.ctxMgr.PrefixDiagnostics,
 		}
 	})
@@ -106,6 +107,7 @@ func (r *modelRunner) streamSynthesize(ctx context.Context) (string, error) {
 		Messages:    messages,
 		Callbacks:   r.streamCallbacks(),
 		Source:      "synthesize",
+		SessionID:   a.sessionID(),
 		Diagnostics: a.deps.ctxMgr.PrefixDiagnostics,
 	})
 	if err != nil {

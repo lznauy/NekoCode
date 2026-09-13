@@ -427,17 +427,18 @@ func (MCPMatcher) Match(spec string, info map[string]any) (bool, error) {
 // DefaultMatchers returns the standard matcher set keyed by tool name.
 func DefaultMatchers() map[string]SpecifierMatcher {
 	return map[string]SpecifierMatcher{
-		"bash":      BashMatcher{},
-		"shell":     BashMatcher{},
-		"write":     FilePathMatcher{},
-		"edit":      FilePathMatcher{},
-		"read":      FilePathMatcher{},
-		"list":      FilePathMatcher{},
-		"tree":      FilePathMatcher{},
-		"glob":      FilePathMatcher{},
-		"grep":      FilePathMatcher{},
-		"web_fetch": DomainMatcher{},
-		"webfetch":  DomainMatcher{},
-		"mcp":       MCPMatcher{},
+		"bash":        BashMatcher{},
+		"shell":       BashMatcher{},
+		"write":       FilePathMatcher{},
+		"edit":        FilePathMatcher{},
+		"read":        FilePathMatcher{},
+		"list":        FilePathMatcher{},
+		"tree":        FilePathMatcher{},
+		"glob":        FilePathMatcher{},
+		"grep":        FilePathMatcher{},
+		"web_fetch":   DomainMatcher{},
+		"webfetch":    DomainMatcher{},
+		"web_extract": DomainMatcher{},
+		"mcp":         MCPMatcher{},
 	}
 }

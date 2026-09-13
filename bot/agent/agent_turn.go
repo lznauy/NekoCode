@@ -1,6 +1,9 @@
 package agent
 
 import (
+	"context"
+	"errors"
+
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/policy"
 	"nekocode/bot/provider/types"
@@ -28,7 +31,11 @@ func newTurnRunner(agent *Agent) *turnRunner {
 // lifecycle event.
 func (r *turnRunner) prepareTurn(_ string) error {
 	a := r.agent
-	if _, err := a.deps.ctxMgr.AutoCompactIfNeeded(); err != nil {
+	// A canceled context means the turn was steered or aborted while
+	// auto-compaction was streaming. Treat it as an interrupt so the normal
+	// lifecycle paths handle it (steer retry or StopInterrupted) instead of
+	// failing the whole run.
+	if _, err := a.deps.ctxMgr.AutoCompactIfNeeded(a.getCtx()); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
 	a.applyTurnHints(nil)

@@ -210,6 +210,10 @@ func (a *App) SendMessage(input string) {
 
 func (a *App) dispatchRuntimeEvent(ev controlruntime.Event) {
 	switch ev.Type {
+	case controlruntime.EventCompaction:
+		if p, ok := ev.Payload.(controlruntime.CompactionPayload); ok {
+			wailsruntime.EventsEmit(a.ctx, "agent:compaction", p)
+		}
 	case controlruntime.EventRunStarted:
 		wailsruntime.EventsEmit(a.ctx, "agent:status", map[string]string{"status": "running"})
 	case controlruntime.EventAssistantDelta:

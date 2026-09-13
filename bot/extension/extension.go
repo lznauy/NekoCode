@@ -195,9 +195,9 @@ func (m *Manager) ClearLoadedSkills() {
 }
 
 // RefreshSkillList re-renders the prompt's skill list from the registry.
-// Only call it at session boundaries (startup, /new, restore):
-// the list lives in the cache-stable prefix, so rebuilding it mid-session
-// would invalidate the provider's cached prefix.
+// The list is a pure function of the registry and the context window, so this
+// is safe to call at any time: it only changes the cached prefix when a skill
+// was actually added or removed.
 func (m *Manager) RefreshSkillList() {
 	m.mu.Lock()
 	defer m.mu.Unlock()

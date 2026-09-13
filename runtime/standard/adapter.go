@@ -167,7 +167,7 @@ func (a *adapter) ListSessions() []controlruntime.SessionMeta {
 
 func (a *adapter) SessionMessages() []controlruntime.DisplayMessage {
 	snapshot := a.bot.Conversation()
-	return viewmodel.DisplayMessages(snapshot.Messages)
+	return viewmodel.DisplayMessages(snapshot.Transcript)
 }
 
 func (a *adapter) ResumeSession(id string) error {

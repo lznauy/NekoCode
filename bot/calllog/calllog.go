@@ -1,6 +1,6 @@
 // Package calllog writes one privacy-safe structured JSONL record per LLM call.
-// Records contain usage, latency, provider routing, and prefix diagnostics but
-// never prompt text, request bodies, headers, or credentials.
+// Records contain session identity, usage, latency, provider routing, and prefix
+// diagnostics but never prompt text, request bodies, headers, or credentials.
 package calllog
 
 import (
@@ -53,6 +53,7 @@ type Record struct {
 	TS                 time.Time `json:"ts"`
 	Seq                uint64    `json:"seq"`
 	Source             string    `json:"source"`
+	SessionID          string    `json:"session,omitempty"`
 	Model              string    `json:"model,omitempty"`
 	Protocol           string    `json:"protocol,omitempty"`
 	BaseURL            string    `json:"base_url,omitempty"`

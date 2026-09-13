@@ -1,7 +1,9 @@
 package contextmgr
 
 import (
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"nekocode/bot/contextmgr/token"
 	"nekocode/bot/provider/types"
@@ -9,6 +11,26 @@ import (
 
 func newHistoryManager() *Manager {
 	return New(Config{SystemPrompt: "test prompt"})
+}
+
+// The 4 MiB cut must land on a rune boundary: a split multi-byte rune would be
+// re-serialized as U+FFFD and corrupt the transcript record.
+func TestCapTranscriptContentCutsOnRuneBoundary(t *testing.T) {
+	// Repeat a 3-byte rune so the limit cannot fall on a boundary by luck.
+	head := strings.Repeat("世", transcriptContentLimit/3)
+	// Pad to make the byte length straddle the limit inside a rune.
+	content := head + "世世"
+	if len(content) <= transcriptContentLimit {
+		t.Fatalf("test content must exceed the limit: %d", len(content))
+	}
+	capped := capTranscriptContent(content)
+	body := strings.TrimSuffix(capped, "\n... [transcript record capped at 4 MiB]")
+	if !utf8.ValidString(body) {
+		t.Fatalf("capped content is not valid UTF-8")
+	}
+	if len(body) >= len(content) {
+		t.Fatalf("capped content was not truncated: %d", len(body))
+	}
 }
 
 func TestAdd(t *testing.T) {

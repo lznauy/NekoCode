@@ -37,7 +37,7 @@ func ToolBrief(toolName, rawArgs string) string {
 			return strings.TrimSpace(args["pattern"] + " " + p)
 		}
 		return args["pattern"]
-	case "web_search", "web_fetch":
+	case "web_search", "web_fetch", "web_extract":
 		q := args["query"]
 		if q == "" {
 			q = args["url"]

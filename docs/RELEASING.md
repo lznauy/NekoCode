@@ -9,7 +9,7 @@ For the full pipeline, branch triggers, permissions, and failure handling, see
 1. Start from a clean `master` branch with all required checks passing.
 2. Move the `Unreleased` changelog entries into a versioned section. List
    breaking changes and required migrations explicitly.
-3. Run the local verification commands from `CONTRIBUTING.md` and test the TUI
+3. Run the local verification commands from `docs/CONTRIBUTING.md` and test the TUI
    on at least one supported platform.
 4. Confirm that installer changes work against a temporary installation
    directory.

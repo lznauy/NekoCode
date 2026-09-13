@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/lznauy/NekoCode/blob/master/SECURITY.md
+    url: https://github.com/lznauy/NekoCode/blob/master/docs/SECURITY.md
     about: Read the private reporting instructions before sharing vulnerability details.
   - name: Support policy
-    url: https://github.com/lznauy/NekoCode/blob/master/SUPPORT.md
+    url: https://github.com/lznauy/NekoCode/blob/master/docs/SUPPORT.md
     about: Check supported environments and the information needed for a useful report.

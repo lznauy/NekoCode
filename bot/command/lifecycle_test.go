@@ -37,20 +37,73 @@ func TestContextReportFormatting(t *testing.T) {
 	got := formatContextReport(report)
 	for _, want := range []string{
 		"Context Window", "Used 4.7k / 10.0k (47%) · Free 5.3k (53%)", "Breakdown", "System",
-		"Conversation", "Tools      15", "Messages   12 · 5 user · 4 assistant · 3 tool results", "Summary    none",
-		"⛂ Session", "⛂ Last turn", "3 calls", "⛃ Peak miss", "100 miss",
-		"⛃ Lowest hit", "20% hit",
-		"system prompt changed", "tool definitions changed",
+		"Conversation", "Tools      15", "Messages   12 · 5 user · 4 assistant · 3 tool results", "Archive    none (no compaction yet)",
+		"⛂ Session", "⛂ Last turn", "3 calls", "⛃ Lowest hit", "20% hit",
+		"⛃ Biggest miss", "Biggest miss 100 · system prompt or skills changed",
+		"tool definitions changed",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("report missing %q: %s", want, got)
 		}
+	}
+	// The biggest miss carries the explanation, so it reads last.
+	if strings.Index(got, "Lowest hit") > strings.Index(got, "Biggest miss") {
+		t.Fatalf("biggest miss should render after lowest hit: %s", got)
 	}
 	if strings.Contains(got, "#2") || strings.Contains(got, "#3") {
 		t.Fatalf("report leaked internal model-call sequence: %s", got)
 	}
 	if got := buildBar(0, nil, 10); got != "" {
 		t.Fatalf("zero-budget bar = %q", got)
+	}
+}
+
+// The Cache block must not go blank right after a reload: until this process
+// runs a turn of its own, the turn stored in the session is reported instead.
+// It keeps the "Last turn" label because that is still what it is.
+func TestContextReportShowsSavedTurnUntilLiveTurnExists(t *testing.T) {
+	report := ctxmgr.ContextReport{
+		Budget: 10_000,
+		SavedTurn: ctxmgr.PrefixTurnStats{
+			Requests: 3, HitTokens: 880, MissTokens: 120,
+			PeakMiss:  ctxmgr.PrefixCallStats{Request: 2, HitTokens: 100, MissTokens: 120, Parts: []string{"system"}},
+			LowestHit: ctxmgr.PrefixCallStats{Request: 3, HitTokens: 20, MissTokens: 80},
+		},
+	}
+	got := formatContextReport(report)
+	for _, want := range []string{"Cache", "Last turn", "3 calls", "Lowest hit", "Biggest miss", "system prompt or skills changed"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("saved-turn report missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Saved turn") {
+		t.Errorf("per-turn label must stay consistent:\n%s", got)
+	}
+
+	// A live turn replaces the saved one rather than printing both.
+	report.PrefixTurn = ctxmgr.PrefixTurnStats{Requests: 1, HitTokens: 10, MissTokens: 90}
+	got = formatContextReport(report)
+	if !strings.Contains(got, "1 calls") || strings.Contains(got, "3 calls") {
+		t.Errorf("live turn should replace the saved one:\n%s", got)
+	}
+}
+
+// Requests are counted from the prefix observation, hit/miss only when the
+// provider reports cache detail. A turn with calls but no cache numbers is
+// unknown, not a 0% hit, and must not be rendered as one.
+func TestContextReportMarksUnreportedTurnCache(t *testing.T) {
+	report := ctxmgr.ContextReport{
+		Budget:     10_000,
+		PrefixTurn: ctxmgr.PrefixTurnStats{Requests: 14},
+	}
+	got := formatContextReport(report)
+	if !strings.Contains(got, "14 calls · cache usage not reported") {
+		t.Errorf("unreported turn cache rendered as data:\n%s", got)
+	}
+	for _, unwanted := range []string{"0% hit", "Hit 0", "Miss 0", "Biggest miss", "Lowest hit"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("unknown cache rendered as %q:\n%s", unwanted, got)
+		}
 	}
 }
 
@@ -86,10 +139,84 @@ func TestBuildBarKeepsFixedWidthWithTinySegments(t *testing.T) {
 	}
 }
 
+// The archive row must state what the archive costs and that it came from a
+// real compaction, not print a bare "available". Memory and the archive also
+// appear in the breakdown so its rows add up to Used.
+func TestContextReportRendersArchiveState(t *testing.T) {
+	report := ctxmgr.ContextReport{
+		Budget:       100_000,
+		Memory:       4_000,
+		Archive:      12_345,
+		HasArchive:   true,
+		CompactCount: 2,
+		Archived:     40,
+	}
+	got := formatContextReport(report)
+	for _, want := range []string{
+		"Archive    ~", "tokens · compacted 2×",
+		"⛁ Memory", "⛁ Archive", // breakdown rows, not the Conversation line
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("archive report missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Summary") {
+		t.Fatalf("archive row kept its old name:\n%s", got)
+	}
+
+	// A session saved before the counter existed has an archive but no count:
+	// stating "compacted 0×" would contradict the archive it describes.
+	report.CompactCount = 0
+	got = formatContextReport(report)
+	if !strings.Contains(got, "Archive    ~") || strings.Contains(got, "compacted") {
+		t.Fatalf("archive without a recorded count rendered a claim:\n%s", got)
+	}
+
+	// A placeholder archive is not a summary and must say so.
+	report.ArchiveUnavailable = true
+	got = formatContextReport(report)
+	if !strings.Contains(got, "Archive    summary unavailable") {
+		t.Fatalf("placeholder archive rendered as a summary:\n%s", got)
+	}
+}
+
+// Todo tokens belong to the Tools segment of the bar, so the row must count
+// them or the breakdown stops adding up to Used.
+func TestContextReportCountsTodoTokensInToolsRow(t *testing.T) {
+	got := formatContextReport(ctxmgr.ContextReport{Budget: 100_000, ToolDefTokens: 0, TodoText: 5_000})
+	if !strings.Contains(got, "⛁ Tools") || !strings.Contains(got, "5.0k") {
+		t.Fatalf("todo tokens missing from the tools row:\n%s", got)
+	}
+}
+
+// With no memory and no archive the breakdown stays at four rows, as before.
+func TestContextReportOmitsEmptyBreakdownRows(t *testing.T) {
+	got := formatContextReport(ctxmgr.ContextReport{Budget: 10_000, SystemPrompt: 500, Messages: 100})
+	for _, unwanted := range []string{"⛁ Memory", "⛁ Archive"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("empty row %q rendered:\n%s", unwanted, got)
+		}
+	}
+	if !strings.Contains(got, "Archive    none (no compaction yet)") {
+		t.Fatalf("archive state line missing:\n%s", got)
+	}
+}
+
 func TestFormatPrefixMissPartsExplainsStableTail(t *testing.T) {
 	got := formatPrefixMissParts([]string{"tail/provider"})
-	if got != "stable prefix unchanged; new content or provider cache" {
+	if got != "prefix unchanged (new tail or provider cache)" {
 		t.Fatalf("tail/provider label = %q", got)
+	}
+	// Every classification must stay explainable in the same plain terms.
+	for part, want := range map[string]string{
+		"cold-start": "first request, no baseline yet",
+		"system":     "system prompt or skills changed",
+		"tools":      "tool definitions changed",
+		"history":    "history rewritten (e.g. compaction)",
+	} {
+		if got := formatPrefixMissParts([]string{part}); got != want {
+			t.Fatalf("%s label = %q, want %q", part, got, want)
+		}
 	}
 }
 

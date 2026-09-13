@@ -25,7 +25,7 @@ func TestSummarizeReplacesHistoryWithArchiveAndRecentMessages(t *testing.T) {
 		return "<summary>This is a compacted project summary with enough detail to pass the quality floor.</summary>", nil
 	}, 0)
 
-	archive, recent, trimmed, err := s.summarize(ctx.Messages, "", budget)
+	archive, recent, trimmed, err := s.summarize(ctx.Messages, "", budget, nil)
 	if err != nil {
 		t.Fatalf("Summarize() error: %v", err)
 	}

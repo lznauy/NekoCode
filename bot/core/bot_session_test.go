@@ -15,6 +15,7 @@ import (
 	"nekocode/bot/extension/tool/runtime/workspace"
 	"nekocode/bot/provider/types"
 	"nekocode/bot/session"
+	"nekocode/util/fs"
 )
 
 func TestRewindMenuShowsUserMessagesAndChangedFiles(t *testing.T) {
@@ -78,6 +79,34 @@ func TestRewindMenuShowsUserMessagesAndChangedFiles(t *testing.T) {
 	}
 	if pending := cp.Recovered(manager.CurrentID()); len(pending) != 0 {
 		t.Fatalf("persisted rewind journal was not acknowledged: %+v", pending)
+	}
+}
+
+func TestInitSessionBacksUpSnapshotBeforeCompaction(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	b := &Bot{cwd: t.TempDir(), ctxMgr: ctxmgr.New(ctxmgr.Config{
+		Summarizer: func([]types.Message, string) (string, error) {
+			return "<summary>durable summary of the earlier conversation messages</summary>", nil
+		},
+	})}
+	b.initSession()
+	for range 8 {
+		b.ctxMgr.Add("user", "old question")
+		b.ctxMgr.Add("assistant", "old answer")
+	}
+	if applied, err := b.ctxMgr.Summarize(context.Background()); err != nil || !applied {
+		t.Fatalf("compact = %v, %v", applied, err)
+	}
+	backups, err := filepath.Glob(filepath.Join(fs.NekocodeHome(), "sessions", b.sess.CurrentID(), "backups", "pre-compact-*.session.json"))
+	if err != nil || len(backups) != 1 {
+		t.Fatalf("backups = %v, %v", backups, err)
+	}
+	data, err := os.ReadFile(backups[0])
+	if err != nil || !strings.Contains(string(data), `"old question"`) {
+		t.Fatalf("pre-compaction backup missing history: %v", err)
+	}
+	if got := b.ctxMgr.Snapshot(); len(got.Transcript) != 16 || len(got.Messages) >= 16 {
+		t.Fatalf("transcript/context after compaction = %d/%d", len(got.Transcript), len(got.Messages))
 	}
 }
 

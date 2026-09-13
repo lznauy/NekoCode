@@ -174,10 +174,10 @@ func listenRuntimeEvent(ch <-chan controlruntime.Event) tea.Cmd {
 
 // Processing phases displayed in the status line during agent execution.
 const (
-	phaseSteer       = "Processing new input..."
-	phaseSummarizing = "Summarizing context..."
-	PhaseReady       = "Ready"
-	PhaseWaiting     = "Waiting"
+	phaseSteer      = "Processing new input..."
+	phaseCompacting = "Compacting context..."
+	PhaseReady      = "Ready"
+	PhaseWaiting    = "Waiting"
 )
 
 func (m *Model) setPhase(p string) {

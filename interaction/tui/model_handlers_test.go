@@ -7,11 +7,110 @@ import (
 	"testing"
 
 	"nekocode/interaction/tui/components/message"
+	"nekocode/interaction/tui/components/processing"
 	controlruntime "nekocode/runtime"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
+
+func TestCompactionStaysInsideStatusFrameWithoutDuplicateResponse(t *testing.T) {
+	m, err := NewModel(&statusFakeBot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunStarted})
+	e := controlruntime.CompactionPayload{ID: "compact", Status: "started", Trigger: "manual", BeforeMessages: 1415, BeforeTokens: 295525}
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventCompaction, Payload: e})
+	e.Status, e.Delta = "delta", "streamed summary content"
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventCompaction, Payload: e})
+	items := m.Messages.Items()
+	if len(items) != 1 {
+		t.Fatalf("compaction escaped status frame: %d items", len(items))
+	}
+	if _, ok := items[0].(*processing.ProcessingItem); !ok {
+		t.Fatalf("expected processing frame, got %T", items[0])
+	}
+	view := ansi.Strip(items[0].Render(100))
+	if !strings.Contains(view, "streamed summary content") || !strings.Contains(view, "│") {
+		t.Fatalf("missing framed stream: %s", view)
+	}
+	e.Status, e.Summary, e.Delta, e.AfterMessages, e.AfterTokens = "completed", "final summary content", "", 36, 17553
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventCompaction, Payload: e})
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventSystemMessage, Payload: controlruntime.MessagePayload{Content: "Compacted: 1415 messages, ~295525 → ~17553 tokens"}})
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunDone})
+	items = m.Messages.Items()
+	if len(items) != 1 {
+		t.Fatalf("duplicate completion output: %d items", len(items))
+	}
+	view = ansi.Strip(items[0].Render(100))
+	t.Logf("settled compaction entry:\n%s", view)
+	if !strings.Contains(view, "Compacted") || strings.Contains(view, "│") || strings.Contains(view, "final summary content") {
+		t.Fatalf("expected flat settled entry: %s", view)
+	}
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunStarted})
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunDone})
+	if len(m.Messages.Items()) != 1 {
+		t.Fatal("next run lost compaction history")
+	}
+}
+
+func TestCompactionNoopStillShowsCommandFeedback(t *testing.T) {
+	m, err := NewModel(&statusFakeBot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunStarted})
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventSystemMessage, Payload: controlruntime.MessagePayload{Content: "Conversation too short, nothing to compact."}})
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunDone})
+	items := m.Messages.Items()
+	if len(items) != 1 || !strings.Contains(ansi.Strip(items[0].Render(100)), "nothing to compact") {
+		t.Fatalf("lost no-op command feedback: %+v", items)
+	}
+}
+
+func TestQuestionCustomAnswerAcceptsPasteAndMultiRuneText(t *testing.T) {
+	m, err := NewModel(&statusFakeBot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reply controlruntime.QuestionReply
+	m.QuestionBar.SetRequest(&controlruntime.QuestionRequest{Questions: []controlruntime.QuestionItem{{
+		Question: "q", Options: []controlruntime.QuestionOption{{Label: "option"}}, Custom: true,
+	}}}, func(got controlruntime.QuestionReply) { reply = got })
+	m.QuestionBar.Move(1)
+	m.state = stateQuestioning
+
+	m.Update(tea.PasteMsg{Content: "粘贴\r\n内容"})
+	m.handleQuestionKey(tea.KeyPressMsg(tea.Key{Code: 'e', Text: "enter"}))
+	m.handleQuestionKey(tea.KeyPressMsg(tea.Key{Code: '补', Text: "补充"}))
+	m.QuestionBar.Submit()
+
+	if len(reply.Answers) != 1 || len(reply.Answers[0]) != 1 || reply.Answers[0][0] != "粘贴 内容enter补充" {
+		t.Fatalf("custom answer = %#v", reply.Answers)
+	}
+	if m.Input.HasContent() {
+		t.Fatalf("question paste leaked into main input: %q", m.Input.Value())
+	}
+}
+
+func TestAutoCompactionCancellationStaysInFrame(t *testing.T) {
+	m, err := NewModel(&statusFakeBot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunStarted})
+	e := controlruntime.CompactionPayload{ID: "auto", Status: "delta", Trigger: "auto", Delta: "partial summary"}
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventCompaction, Payload: e})
+	if !strings.Contains(ansi.Strip(m.Messages.Items()[0].Render(100)), "Compacting context...") {
+		t.Fatal("automatic compaction missing active status")
+	}
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunCancelled})
+	view := ansi.Strip(m.Messages.Items()[0].Render(100))
+	if !strings.Contains(view, "partial summary") || !strings.Contains(view, "Compaction interrupted") || strings.Contains(view, "│") {
+		t.Fatalf("cancelled summary lost: %s", view)
+	}
+}
 
 type commandFakeBot struct {
 	tickFakeBot

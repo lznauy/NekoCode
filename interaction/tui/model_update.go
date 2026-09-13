@@ -2,6 +2,8 @@
 package tui
 
 import (
+	"strings"
+
 	"nekocode/interaction/tui/components"
 	controlruntime "nekocode/runtime"
 	"nekocode/util/runtime"
@@ -66,6 +68,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.PasteMsg:
+		if m.state == stateQuestioning {
+			text := strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ").Replace(msg.Content)
+			m.QuestionBar.Type(text)
+			return m, nil
+		}
 		input, cmd := m.Input.Update(msg)
 		m.Input = input
 		m.refreshSuggestions()

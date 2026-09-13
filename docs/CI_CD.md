@@ -90,9 +90,9 @@ GUI 和官网使用各自的 lockfile 执行 `npm ci`，避免 CI 隐式更新�
 
 发布从干净且已通过 CI 的 `master` 开始。发布负责人需要：
 
-1. 将 `CHANGELOG.md` 中待发布的内容整理到版本章节，例如 `## v0.4.3 - 2026-08-09`；
+1. 将 `docs/CHANGELOG.md` 中待发布的内容整理到版本章节，例如 `## v0.4.3 - 2026-08-09`；
 2. 记录不兼容改动和迁移方法；
-3. 按 [CONTRIBUTING.md](../CONTRIBUTING.md) 运行本地验证；
+3. 按 [CONTRIBUTING.md](CONTRIBUTING.md) 运行本地验证；
 4. 在至少一个支持的平台启动 TUI；
 5. 用临时目录验证安装器；
 6. 创建并推送 annotated tag。
@@ -111,7 +111,7 @@ push `v*` tag 会触发 Release workflow。`validate-tag` 在构建前检查：
 - tag 符合完整 SemVer；
 - `origin` 同时存在 tag object 和 peeled `^{}` commit，证明它是 annotated tag；
 - tag 指向当前 workflow checkout 的提交；
-- `CHANGELOG.md` 有同名版本章节；
+- `docs/CHANGELOG.md` 有同名版本章节；
 - 章节日期采用 `YYYY-MM-DD` 格式。
 
 tag 校验通过后，Release workflow 会通过 `workflow_call` 再次调用 Go、GUI、官网、仓库质量和文档五套检查。该调用不受路径过滤影响；master 曾经通过不代表可以跳过这一步，tag 对应的提交必须独立通过全部检查。

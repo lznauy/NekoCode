@@ -2,6 +2,7 @@ package contextmgr
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 
 	"nekocode/bot/calllog"
@@ -19,21 +20,24 @@ type PrefixMiss struct {
 	Parts  []string
 }
 
+// PrefixCallStats describes one model request's cache outcome. The JSON tags
+// pin the shape used by session.json: renaming a Go field must not silently
+// invalidate previously saved sessions.
 type PrefixCallStats struct {
-	Request    int
-	HitTokens  int
-	MissTokens int
-	Parts      []string
+	Request    int      `json:"request"`
+	HitTokens  int      `json:"hit_tokens"`
+	MissTokens int      `json:"miss_tokens"`
+	Parts      []string `json:"parts,omitempty"`
 }
 
 // PrefixTurnStats summarizes cache behavior across one user conversation.
 // A conversation may contain multiple model requests while tools are running.
 type PrefixTurnStats struct {
-	Requests   int
-	HitTokens  int
-	MissTokens int
-	PeakMiss   PrefixCallStats
-	LowestHit  PrefixCallStats
+	Requests   int             `json:"requests"`
+	HitTokens  int             `json:"hit_tokens"`
+	MissTokens int             `json:"miss_tokens"`
+	PeakMiss   PrefixCallStats `json:"peak_miss"`
+	LowestHit  PrefixCallStats `json:"lowest_hit"`
 }
 
 type prefixTracker struct {
@@ -41,6 +45,53 @@ type prefixTracker struct {
 	pending  []string
 	calls    []PrefixCallStats
 	turn     PrefixTurnStats
+}
+
+// PrefixBaseline carries the last observed request's cache-relevant head
+// across a process boundary. Layer 2-3 (archive and history) are append-only
+// within an epoch, so only the stable head needs a baseline: a restored
+// tracker can then say whether the new process changed that head, or whether
+// the miss came from the provider's tail. Empty when no request was observed.
+type PrefixBaseline struct {
+	System string // full hex digest of the Layer 0-1 messages
+	Tools  string // full hex digest of the tool definitions
+}
+
+// Baseline reports the head digests of the last observed request.
+func (t *prefixTracker) Baseline() PrefixBaseline {
+	if t.previous == nil {
+		return PrefixBaseline{}
+	}
+	return PrefixBaseline{
+		System: hex.EncodeToString(t.previous.system[:]),
+		Tools:  hex.EncodeToString(t.previous.tools[:]),
+	}
+}
+
+// RestoreBaseline seeds previous from a persisted baseline. History stays
+// empty on purpose: it is append-only within an epoch, so the append-only
+// check passes and the first miss after a resume is attributed to
+// system/tools (we changed the head) rather than to cold-start.
+func (t *prefixTracker) RestoreBaseline(baseline PrefixBaseline) {
+	system, sysOK := decodePrefixDigest(baseline.System)
+	tools, toolsOK := decodePrefixDigest(baseline.Tools)
+	if !sysOK || !toolsOK {
+		return
+	}
+	t.previous = &prefixShape{system: system, tools: tools}
+}
+
+func decodePrefixDigest(value string) ([32]byte, bool) {
+	var digest [32]byte
+	if value == "" {
+		return digest, false
+	}
+	raw, err := hex.DecodeString(value)
+	if err != nil || len(raw) != len(digest) {
+		return digest, false
+	}
+	copy(digest[:], raw)
+	return digest, true
 }
 
 func buildPrefixShape(system, history []types.Message, tools []types.ToolDef) prefixShape {
@@ -119,11 +170,21 @@ func clonePrefixCall(call PrefixCallStats) PrefixCallStats {
 	return call
 }
 
-func (t *prefixTracker) TurnStats() PrefixTurnStats {
-	stats := t.turn
+func cloneTurnStats(stats PrefixTurnStats) PrefixTurnStats {
 	stats.PeakMiss = clonePrefixCall(stats.PeakMiss)
 	stats.LowestHit = clonePrefixCall(stats.LowestHit)
 	return stats
+}
+
+// IsZero reports whether the turn has anything /context can display. Hit and
+// miss tokens always accompany an accounted request (prefixTracker.Observe runs
+// before RecordCache), so these three fields fully decide it.
+func (s PrefixTurnStats) IsZero() bool {
+	return s.Requests == 0 && s.PeakMiss.MissTokens == 0 && s.LowestHit.Request == 0
+}
+
+func (t *prefixTracker) TurnStats() PrefixTurnStats {
+	return cloneTurnStats(t.turn)
 }
 
 // Diagnostics returns the pending change classification plus the fingerprint

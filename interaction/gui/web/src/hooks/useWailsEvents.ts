@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { safeEventsOn } from '../lib/wails'
 import type {
+  CompactionEvent,
   DeltaEvent,
   DoneEvent,
   StatusEvent,
@@ -19,6 +20,7 @@ import type {
 } from '../types/events'
 
 export interface AgentEventHandlers {
+  onCompaction?: (e: CompactionEvent) => void
   onDelta: (e: DeltaEvent) => void
   onReasoning?: (e: ReasoningEvent) => void
   onPhase?: (e: PhaseEvent) => void
@@ -44,6 +46,7 @@ export function useWailsEvents(handlers: AgentEventHandlers): void {
 
   useEffect(() => {
     const cleanups: (() => void)[] = []
+    cleanups.push(safeEventsOn('agent:compaction', (e: unknown) => ref.current.onCompaction?.(e as CompactionEvent)))
     cleanups.push(safeEventsOn('agent:delta', (e: unknown) => ref.current.onDelta(e as DeltaEvent)))
     cleanups.push(safeEventsOn('agent:reasoning', (e: unknown) => ref.current.onReasoning?.(e as ReasoningEvent)))
     cleanups.push(safeEventsOn('agent:phase', (e: unknown) => ref.current.onPhase?.(e as PhaseEvent)))

@@ -32,6 +32,7 @@ export interface UIImageRef {
 }
 
 export interface Msg {
+  compaction?: CompactionEvent
   id: string
   role: Role
   text: string
@@ -50,6 +51,21 @@ export interface Msg {
   compactCount?: number
   // —— 历史会话中携带的图片 ——
   images?: UIImageRef[]
+}
+
+export interface CompactionEvent {
+  id: string
+  status: 'started' | 'delta' | 'completed' | 'failed'
+  trigger: 'auto' | 'manual'
+  delta?: string
+  summary?: string
+  error?: string
+  warning?: string
+  beforeTokens: number
+  afterTokens: number
+  beforeMessages: number
+  afterMessages: number
+  elapsedMs: number
 }
 
 // —— 事件载荷类型 ——

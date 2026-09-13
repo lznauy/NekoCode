@@ -1,6 +1,6 @@
 # 贡献指南
 
-欢迎贡献！NekoCode 的定位是**单二进制、可嵌入、缓存成本敏感的 AI 编程助手核心**。提交前请先读本指南和 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，并对照 [docs/ROADMAP.md](docs/ROADMAP.md) 了解既定方向。不要在未讨论的情况下提前实现 T5 等“待定”项。
+欢迎贡献！NekoCode 的定位是**单二进制、可嵌入、缓存成本敏感的 AI 编程助手核心**。提交前请先读本指南和 [ARCHITECTURE.md](ARCHITECTURE.md)。不要在未讨论的情况下提前实现尚未确定的功能。
 
 ## 开发环境
 
@@ -35,13 +35,13 @@ govulncheck ./...                   # 检查 Go 代码可达的已知漏洞
 
 ## 提交与 PR
 
-- **一个任务一个提交、可独立回滚**（项目惯例，见 ROADMAP 引言）。
-- 提交信息简述改动与原因，引用相关 issue/ROADMAP 编号（如 `T4`）更好。
-- 用户可见行为变化必须更新 `CHANGELOG.md` 对应分节。
+- **一个任务一个提交、可独立回滚**。
+- 提交信息简述改动与原因，并引用相关 issue。
+- 用户可见行为变化必须更新 `docs/CHANGELOG.md` 对应分节。
 - PR 按 `.github/PULL_REQUEST_TEMPLATE.md` 填写 Summary 与 Test Plan，确保：
   - [ ] Build passes（`go build ./...`）
   - [ ] Tests pass（`go test ./...`）
-  - [ ] CHANGELOG.md updated（如有用户可见变化）
+  - [ ] `docs/CHANGELOG.md` updated（如有用户可见变化）
   - [ ] 手动验证关键路径
 - 安全敏感改动需要在 PR 中说明威胁模型、信任边界和失败模式。
 
@@ -64,7 +64,6 @@ govulncheck ./...                   # 检查 Go 代码可达的已知漏洞
 
 - `ARCHITECTURE.md`：核心模块职责与数据流
 - `USER_GUIDE.md`：用户可见功能
-- `ROADMAP.md`：任务进度（完成任务勾选，新增任务按 T 编号追加）
 
 ## 安全
 

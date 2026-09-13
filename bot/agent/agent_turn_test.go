@@ -212,3 +212,13 @@ func TestPostToolStopClearsStaleFinalText(t *testing.T) {
 		t.Fatal("finalPersisted = true, want false")
 	}
 }
+
+func TestPrepareTurnTreatsCanceledContextAsInterrupt(t *testing.T) {
+	a := newTestAgent()
+	// Simulates a steer/abort landing while auto-compaction would stream:
+	// the turn context is already canceled when prepareTurn runs.
+	a.life.Cancel()
+	if err := a.turnRunner.prepareTurn(""); err != nil {
+		t.Fatalf("canceled context should be treated as an interrupt, got run error: %v", err)
+	}
+}

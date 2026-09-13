@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"nekocode/interaction/tui/components/block"
+	"nekocode/interaction/tui/components/message"
 	"nekocode/interaction/tui/styles"
 )
 
@@ -15,6 +16,7 @@ const (
 )
 
 type ProcessingItem struct {
+	compactions  []*message.CompactionItem
 	sty          *styles.Styles
 	spinnerView  string
 	statusText   string

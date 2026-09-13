@@ -32,6 +32,12 @@ type ContextReport struct {
 	SubCacheHit         int
 	SubCacheMiss        int
 	PrefixTurn          PrefixTurnStats
+	// ArchiveUnavailable reports that the archive is the placeholder left when
+	// a summary could not be produced, so it must not be shown as a normal one.
+	ArchiveUnavailable bool
+	// SavedTurn carries the previous process's last turn, and is only populated
+	// while PrefixTurn is still empty (no request yet in this process).
+	SavedTurn PrefixTurnStats
 }
 
 func (m *Manager) Report() ContextReport {
@@ -64,6 +70,7 @@ func (m *Manager) Report() ContextReport {
 	}
 	r.Messages = token.EstimateModelTokens(m.state.ctx.Messages, m.state.reasoning)
 	r.HasArchive = m.state.ctx.Archive != ""
+	r.ArchiveUnavailable = m.state.ctx.Archive == archiveUnavailable
 	r.Archived = m.state.trimCount
 	r.CompactCount = m.state.compactCount
 	r.CompactionThreshold = m.state.compressor.compactionThreshold(m.state.contextWindow)
@@ -77,5 +84,8 @@ func (m *Manager) Report() ContextReport {
 	r.SubCacheHit = sub.CacheHitTokens
 	r.SubCacheMiss = sub.CacheMissTokens
 	r.PrefixTurn = m.state.prefix.TurnStats()
+	if r.PrefixTurn.Requests == 0 {
+		r.SavedTurn = cloneTurnStats(m.state.restoredTurn)
+	}
 	return r
 }

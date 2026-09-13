@@ -85,7 +85,7 @@ func (b *blockingMetricsBot) Metrics() controlruntime.MetricsSnapshot {
 	select {}
 }
 
-func TestSummarizeProcessingTickUpdatesView(t *testing.T) {
+func TestCompactProcessingTickUpdatesView(t *testing.T) {
 	bot := &tickFakeBot{}
 	m, err := NewModel(bot)
 	if err != nil {
@@ -94,17 +94,17 @@ func TestSummarizeProcessingTickUpdatesView(t *testing.T) {
 	model, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = model.(*Model)
 
-	cmd := m.startChat("/summarize")
+	cmd := m.startChat("/compact")
 	if cmd == nil {
-		t.Fatal("startChat should tick while summarizing")
+		t.Fatal("startChat should tick while compacting")
 	}
-	if got := bot.submittedInputs(); len(got) != 1 || got[0] != "/summarize" {
-		t.Fatalf("submitted inputs = %#v, want /summarize", got)
+	if got := bot.submittedInputs(); len(got) != 1 || got[0] != "/compact" {
+		t.Fatalf("submitted inputs = %#v, want /compact", got)
 	}
 
 	before := fmt.Sprint(m.View())
-	if !strings.Contains(before, "Summarizing context...") {
-		t.Fatalf("summarize view missing status: %q", before)
+	if !strings.Contains(before, "Compacting context...") {
+		t.Fatalf("compact view missing status: %q", before)
 	}
 
 	model, _ = m.Update(spinner.TickMsg{})
@@ -122,7 +122,7 @@ func TestSummarizeProcessingTickUpdatesView(t *testing.T) {
 	}
 }
 
-func TestSummarizeProcessingTickDoesNotReadMetrics(t *testing.T) {
+func TestCompactProcessingTickDoesNotReadMetrics(t *testing.T) {
 	bot := &blockingMetricsBot{metricsCalled: make(chan struct{})}
 	m, err := NewModel(bot)
 	if err != nil {
@@ -132,7 +132,7 @@ func TestSummarizeProcessingTickDoesNotReadMetrics(t *testing.T) {
 	m = model.(*Model)
 
 	m.transitionTo(stateProcessing)
-	m.setPhase(phaseSummarizing)
+	m.setPhase(phaseCompacting)
 
 	done := make(chan struct{})
 	go func() {
@@ -143,12 +143,12 @@ func TestSummarizeProcessingTickDoesNotReadMetrics(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(100 * time.Millisecond):
-		t.Fatal("summarize processing tick blocked")
+		t.Fatal("compact processing tick blocked")
 	}
 
 	select {
 	case <-bot.metricsCalled:
-		t.Fatal("summarize processing tick should not call runtime metrics")
+		t.Fatal("compact processing tick should not call runtime metrics")
 	default:
 	}
 }

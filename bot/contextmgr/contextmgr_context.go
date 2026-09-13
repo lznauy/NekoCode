@@ -254,6 +254,7 @@ func (m *Manager) ConfigureModel(cfg ModelContext) {
 			summarizer = m.makeSummarizer(context.Background(), cfg.CompactionModel)
 		}
 		m.state.compressor.summarizer = summarizer
+		m.state.compressor.model = cfg.CompactionModel
 	}
 }
 

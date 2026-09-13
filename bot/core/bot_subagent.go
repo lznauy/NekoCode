@@ -32,7 +32,7 @@ func (b *Bot) wireTaskTool(fm config.ModelConfig, compactionModel provider.LLM, 
 		if err != nil {
 			return nil, err
 		}
-		cfg, ok := buildSubagentRunConfig(ctx, spec, skillContents, contextWindow, autoCompactPercent, ag, b.environment)
+		cfg, ok := buildSubagentRunConfig(ctx, spec, skillContents, contextWindow, autoCompactPercent, ag, b.sess.CurrentID(), b.environment)
 		if !ok {
 			return nil, fmt.Errorf("unknown sub-agent profile: %s", spec.Profile)
 		}
@@ -50,6 +50,7 @@ func buildSubagentRunConfig(
 	skillContents []string,
 	contextWindow, autoCompactPercent int,
 	ag *agentcore.Agent,
+	sessionID string,
 	environment prompt.EnvironmentProvider,
 ) (subagent.RunConfig, bool) {
 	profile, ok := subagent.GetProfile(spec.Profile)
@@ -69,6 +70,7 @@ func buildSubagentRunConfig(
 			ag.AddCompletionTokens(completion)
 		},
 		RecordLLMUsage: ag.RecordLLMUsage,
+		SessionID:      sessionID,
 		Policy:         ag.Governance(),
 		Environment:    environment,
 	}

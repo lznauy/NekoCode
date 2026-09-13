@@ -46,6 +46,7 @@ type RunConfig struct {
 	OnPhase            func(phase string)
 	AddTokens          func(prompt, compl int)
 	RecordLLMUsage     func(usage providertypes.StreamUsage)
+	SessionID          string
 	ConfirmFn          protocol.ConfirmFunc
 	// FullAccess, when non-nil and returning true, puts the sub-agent's tool
 	// executor into full-takeover mode (no approval prompts), mirroring the
@@ -75,11 +76,11 @@ func register(a Profile) { builtins.Register(a) }
 func init() {
 	register(Profile{
 		Name: "coder", SystemPrompt: builtinPrompt,
-		Tools: []string{"read", "write", "edit", "shell", "process", "grep", "glob", "list", "web_search", "web_fetch"},
+		Tools: []string{"read", "write", "edit", "shell", "process", "grep", "glob", "list", "web_search", "web_fetch", "web_extract"},
 	})
 	register(Profile{
 		Name: "explore", SystemPrompt: builtinPrompt,
-		Tools: []string{"read", "grep", "glob", "list", "web_search", "web_fetch"},
+		Tools: []string{"read", "grep", "glob", "list", "web_search", "web_fetch", "web_extract"},
 	})
 }
 

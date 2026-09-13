@@ -124,6 +124,11 @@ func (b *Bot) initCtxMgr() error {
 		Memory:             memFile,
 		RuntimePrompt:      b.promptBuilder.BuildEnvironment,
 	})
+	b.ctxMgr.SetCompactionObserver(func(event protocol.CompactionEvent) {
+		if host := b.currentHost(); host != nil {
+			host.Step(protocol.StepEvent{Action: protocol.StepActionCompaction, Compaction: &event})
+		}
+	})
 	return nil
 }
 
@@ -203,6 +208,7 @@ func (b *Bot) initAgent() {
 		Tools:       b.toolbox.Registry,
 		Policy:      b.policy,
 		Checkpoints: b.checkpoints,
+		SessionID:   b.sess.CurrentID,
 		Output: agent.Output{
 			Text:   b.stream,
 			Reason: b.reasoning,

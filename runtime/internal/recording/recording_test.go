@@ -5,8 +5,29 @@ import (
 	"path/filepath"
 	"testing"
 
+	"nekocode/protocol"
 	"nekocode/runtime/internal/core"
 )
+
+func TestRecordedCompactionPreservesTypedSummary(t *testing.T) {
+	want := protocol.CompactionEvent{ID: "compact", Status: protocol.CompactionCompleted, Trigger: protocol.CompactionAuto, Summary: "final summary", BeforeTokens: 1000, AfterTokens: 100}
+	rec := recordedEventFrom(core.Event{Type: core.EventCompaction, Payload: want})
+	event, err := rec.Event()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := event.Payload.(protocol.CompactionEvent)
+	if !ok || got != want {
+		t.Fatalf("replay lost compaction: %#v", event.Payload)
+	}
+}
+
+func TestDecodeRecordedPayloadRejectsUnknownCompactionState(t *testing.T) {
+	_, err := decodeRecordedPayload(core.ProtocolVersion, core.EventCompaction, []byte(`{"id":"x","status":"typo","trigger":"auto"}`))
+	if err == nil {
+		t.Fatal("unknown compaction status was accepted")
+	}
+}
 
 func TestSafePathPart(t *testing.T) {
 	got := safePathPart("../run:1")

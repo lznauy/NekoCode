@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"nekocode/protocol"
 	"nekocode/runtime/internal/core"
 )
 
@@ -111,12 +112,12 @@ func (b *EventBus) subscribe(ctx context.Context, filter core.EventFilter, repla
 func (s *subscriber) enqueue(ev core.Event) {
 	s.mu.Lock()
 	if len(s.queue) >= defaultSubscriberQueueLimit {
-		if !mustDeliverEvent(ev.Type) {
+		if !mustDeliverEvent(ev) {
 			s.mu.Unlock()
 			return
 		}
 		for i, queued := range s.queue {
-			if mustDeliverEvent(queued.Type) {
+			if mustDeliverEvent(queued) {
 				continue
 			}
 			copy(s.queue[i:], s.queue[i+1:])
@@ -179,8 +180,13 @@ func (s *subscriber) wait() {
 	<-s.done
 }
 
-func mustDeliverEvent(typ core.EventType) bool {
-	switch typ {
+func mustDeliverEvent(ev core.Event) bool {
+	if ev.Type == core.EventCompaction {
+		// Unknown payload shapes are not deltas and remain must-deliver, so a
+		// future publisher change cannot silently drop terminal events.
+		return !isCompactionDelta(ev)
+	}
+	switch ev.Type {
 	case core.EventApprovalRequested,
 		core.EventApprovalResolved,
 		core.EventQuestionRequested,
@@ -193,6 +199,14 @@ func mustDeliverEvent(typ core.EventType) bool {
 	default:
 		return false
 	}
+}
+
+func isCompactionDelta(ev core.Event) bool {
+	if ev.Type != core.EventCompaction {
+		return false
+	}
+	p, ok := ev.Payload.(protocol.CompactionEvent)
+	return ok && p.Status == protocol.CompactionDelta
 }
 
 func (b *EventBus) Publish(ev core.Event) core.Event {
@@ -217,9 +231,15 @@ func (b *EventBus) Publish(ev core.Event) core.Event {
 		b.mu.Unlock()
 		return ev
 	}
-	b.history = append(b.history, ev)
-	if b.historyLimit > 0 && len(b.history) > b.historyLimit {
-		b.history = append([]core.Event(nil), b.history[len(b.history)-b.historyLimit:]...)
+	// Compaction deltas are excluded from history: a long compaction streams
+	// hundreds of them, which would evict the run/approval boundary events
+	// late subscribers replay. The terminal event carries the full summary, so
+	// replay does not depend on deltas.
+	if !isCompactionDelta(ev) {
+		b.history = append(b.history, ev)
+		if b.historyLimit > 0 && len(b.history) > b.historyLimit {
+			b.history = append([]core.Event(nil), b.history[len(b.history)-b.historyLimit:]...)
+		}
 	}
 	for _, sub := range b.subscribers {
 		if eventMatches(sub.filter, ev) {
@@ -284,6 +304,7 @@ func (b *EventBus) ImportHistory(events []core.Event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var maxID uint64
+	retained := make([]core.Event, 0, len(events))
 	for i := range events {
 		ev := &events[i]
 		if ev.Version == "" {
@@ -295,8 +316,11 @@ func (b *EventBus) ImportHistory(events []core.Event) {
 		if ev.Sequence > maxID {
 			maxID = ev.Sequence
 		}
+		if !isCompactionDelta(*ev) {
+			retained = append(retained, *ev)
+		}
 	}
-	b.history = append(b.history, events...)
+	b.history = append(b.history, retained...)
 	for _, ev := range b.history {
 		n := ev.Sequence
 		if n == 0 {

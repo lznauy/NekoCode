@@ -124,7 +124,7 @@ func TestFinishRunDoesNotPersistNonRecordableText(t *testing.T) {
 	}
 }
 
-func TestFinishRunInterruptedPreservesWholeCurrentRun(t *testing.T) {
+func TestInterruptedRunRestoresContextBeforeUserInput(t *testing.T) {
 	ctxMgr := ctxmgr.New(ctxmgr.Config{SystemPrompt: "test", ContextWindow: 128000})
 	a := New(context.Background(), Config{Context: ctxMgr, Tools: tools.New()})
 
@@ -143,6 +143,7 @@ func TestFinishRunInterruptedPreservesWholeCurrentRun(t *testing.T) {
 	compacted.Messages = compacted.Messages[2:]
 	ctxMgr.Restore(compacted)
 
+	before := ctxMgr.Snapshot()
 	a.loopRunner.startRun("long task")
 	for i := 0; i < 40; i++ {
 		id := "call-" + strconv.Itoa(i)
@@ -153,20 +154,19 @@ func TestFinishRunInterruptedPreservesWholeCurrentRun(t *testing.T) {
 			Message: types.Message{Content: "result", ToolCallID: id}, ToolName: "read",
 		}})
 	}
-	before := ctxMgr.Snapshot()
-
 	a.run.stopReason = policy.StopInterrupted
 	result := a.loopRunner.finishRun(nil)
+	a.loopRunner.restoreInterruptedRun(before, result)
 	after := ctxMgr.Snapshot()
 
 	if !result.Interrupted || result.FinalOutput != msgInterrupted {
 		t.Fatalf("result = %+v, want interrupted", result)
 	}
-	if !reflect.DeepEqual(after, before) {
-		t.Fatalf("interruption changed committed context: before=%+v after=%+v", before, after)
+	if !sameConversation(after, before) {
+		t.Fatalf("interruption retained current run: before=%+v after=%+v", before, after)
 	}
-	if !containsMessage(after.Messages, "long task") {
-		t.Fatalf("current user request was not preserved: %+v", after.Messages)
+	if containsMessage(after.Messages, "long task") || containsMessage(after.Transcript, "long task") {
+		t.Fatalf("interrupted request remained in context or transcript: %+v", after)
 	}
 }
 
@@ -179,20 +179,27 @@ func containsMessage(messages []types.Message, content string) bool {
 	return false
 }
 
-func TestFinishRunInterruptedBeforeFirstToolPreservesPriorHistoryAndInput(t *testing.T) {
+func TestInterruptedRunBeforeFirstToolDropsInputAndPreservesPriorHistory(t *testing.T) {
 	ctxMgr := ctxmgr.New(ctxmgr.Config{SystemPrompt: "test", ContextWindow: 128000})
 	a := New(context.Background(), Config{Context: ctxMgr, Tools: tools.New()})
 	ctxMgr.Add("user", "previous")
 	ctxMgr.AddAssistant(types.Message{Content: "previous answer"})
+	before := ctxMgr.Snapshot()
 	a.loopRunner.startRun("current request")
-	before := ctxMgr.Snapshot().Messages
 
 	a.run.stopReason = policy.StopInterrupted
-	a.loopRunner.finishRun(nil)
+	result := a.loopRunner.finishRun(nil)
+	a.loopRunner.restoreInterruptedRun(before, result)
 
-	if after := ctxMgr.Snapshot().Messages; !reflect.DeepEqual(after, before) {
+	if after := ctxMgr.Snapshot(); !sameConversation(after, before) {
 		t.Fatalf("interruption before first tool changed history: before=%+v after=%+v", before, after)
 	}
+}
+
+func sameConversation(a, b ctxmgr.ManagerSnapshot) bool {
+	return a.Archive == b.Archive &&
+		reflect.DeepEqual(a.Messages, b.Messages) &&
+		reflect.DeepEqual(a.Transcript, b.Transcript)
 }
 
 func lastAssistantContent(msgs []types.Message) string {

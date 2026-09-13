@@ -11,6 +11,54 @@ import (
 	"nekocode/runtime/internal/core"
 )
 
+func TestCompactionStepHasDedicatedRunEvent(t *testing.T) {
+	bot := &testBot{}
+	bot.run = func(_ string, host RunHost) (string, error) {
+		for _, status := range []protocol.CompactionStatus{protocol.CompactionStarted, protocol.CompactionDelta, protocol.CompactionCompleted} {
+			host.Step(protocol.StepEvent{Action: protocol.StepActionCompaction, Compaction: &protocol.CompactionEvent{ID: "compact", Status: status, Summary: "summary"}})
+		}
+		return "answer", nil
+	}
+	rt := newTestRuntime(bot)
+	// A live subscriber sees the full stream, deltas included.
+	live, err := rt.events.Subscribe(context.Background(), core.EventFilter{Types: []core.EventType{core.EventCompaction}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := rt.StartRun(context.Background(), Input{Text: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, rt, id)
+	var streamed []core.Event
+	for range 3 {
+		select {
+		case ev := <-live:
+			streamed = append(streamed, ev)
+		case <-time.After(time.Second):
+			t.Fatalf("subscriber missing compaction events: %+v", streamed)
+		}
+	}
+	// History keeps only the durable events: deltas are excluded so a long
+	// compaction cannot evict run boundary events from the replay window.
+	events := rt.events.History(EventFilter{RunID: id, Types: []EventType{EventCompaction}})
+	if len(events) != 2 {
+		t.Fatalf("history should hold started+completed only: %+v", events)
+	}
+	for _, e := range events {
+		p, ok := e.Payload.(CompactionPayload)
+		if !ok {
+			t.Fatalf("untyped payload: %+v", e)
+		}
+		if p.Status == protocol.CompactionDelta {
+			t.Fatalf("delta must not persist to history: %+v", e)
+		}
+	}
+	if text := rt.events.History(EventFilter{RunID: id, Types: []EventType{EventAssistantDelta}}); len(text) != 0 {
+		t.Fatalf("summary leaked into response: %+v", text)
+	}
+}
+
 func TestManagerCommandFinishesWithoutRunningAgent(t *testing.T) {
 	bot := &testBot{}
 	bot.command = func(string, RunHost) CommandResult {

@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"nekocode/bot/agent/internal/kernel"
+	"nekocode/bot/contextmgr"
 	"nekocode/bot/policy"
 	"nekocode/bot/provider/types"
 	"nekocode/logger"
@@ -45,6 +46,7 @@ func newLoopRunner(agent *Agent) *loopRunner {
 
 func (r *loopRunner) run(input string, callback RunCallback) *RunResult {
 	a := r.agent
+	beforeRun := a.deps.ctxMgr.Snapshot()
 	r.startRun(input)
 	defer r.logGovernanceSummary()
 	r.applyUserSubmitHooks()
@@ -59,7 +61,14 @@ func (r *loopRunner) run(input string, callback RunCallback) *RunResult {
 	// Flush any steering messages that arrived too late to be drained during
 	// the run, so they are still recorded in the context instead of being lost.
 	result.Error = errors.Join(result.Error, a.drainSteering())
+	r.restoreInterruptedRun(beforeRun, result)
 	return result
+}
+
+func (r *loopRunner) restoreInterruptedRun(before contextmgr.ManagerSnapshot, result *RunResult) {
+	if result != nil && result.Interrupted {
+		r.agent.deps.ctxMgr.Restore(before)
+	}
 }
 
 func (r *loopRunner) runTurn(input string, callback RunCallback) (finished bool) {
@@ -131,10 +140,6 @@ func (r *loopRunner) stepLimitReached() bool {
 func (r *loopRunner) finishRun(callback RunCallback) *RunResult {
 	a := r.agent
 	if a.getCtx().Err() != nil || a.run.stopReason == policy.StopInterrupted {
-		// The context manager only receives committed messages: a complete model
-		// response and complete tool-result batches. Streaming deltas are never
-		// appended. Therefore interruption needs no rollback; truncating here can
-		// only discard valid work from this or an earlier turn.
 		return &RunResult{FinalOutput: msgInterrupted, Steps: a.run.step, Interrupted: true}
 	}
 	if a.run.err != nil {

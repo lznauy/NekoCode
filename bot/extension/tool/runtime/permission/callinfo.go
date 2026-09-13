@@ -33,7 +33,7 @@ func BuildCallInfo(toolName string, args map[string]any, workspace, home string)
 			path, _ = args["pattern"].(string)
 		}
 		return withTool(CallInfoForPath(path, workspace, home))
-	case "web_fetch", "webfetch":
+	case "web_fetch", "webfetch", "web_extract":
 		if u, _ := args["url"].(string); u != "" {
 			return withTool(CallInfoForDomain(hostFromURL(u)))
 		}

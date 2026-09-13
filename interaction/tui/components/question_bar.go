@@ -7,6 +7,7 @@ import (
 	"nekocode/interaction/tui/styles"
 	controlruntime "nekocode/runtime"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -17,6 +18,7 @@ type QuestionBar struct {
 	activeOpt int
 	selected  map[int]map[int]bool
 	custom    []string
+	customPos []int
 	respond   func(controlruntime.QuestionReply)
 }
 
@@ -30,6 +32,7 @@ func (q *QuestionBar) SetRequest(req *controlruntime.QuestionRequest, respond fu
 	q.activeOpt = 0
 	q.selected = make(map[int]map[int]bool)
 	q.custom = make([]string, len(req.Questions))
+	q.customPos = make([]int, len(req.Questions))
 	q.respond = respond
 }
 
@@ -83,7 +86,11 @@ func (q *QuestionBar) Type(text string) {
 	if !item.Custom || q.activeOpt != len(item.Options) {
 		return
 	}
-	q.custom[q.activeQ] += text
+	rs := []rune(q.custom[q.activeQ])
+	pos := min(q.customPos[q.activeQ], len(rs))
+	insert := []rune(text)
+	q.custom[q.activeQ] = string(rs[:pos]) + string(insert) + string(rs[pos:])
+	q.customPos[q.activeQ] = pos + len(insert)
 }
 
 func (q *QuestionBar) Backspace() {
@@ -95,9 +102,54 @@ func (q *QuestionBar) Backspace() {
 		return
 	}
 	rs := []rune(q.custom[q.activeQ])
-	if len(rs) > 0 {
-		q.custom[q.activeQ] = string(rs[:len(rs)-1])
+	pos := min(q.customPos[q.activeQ], len(rs))
+	if pos == 0 {
+		return
 	}
+	q.custom[q.activeQ] = string(rs[:pos-1]) + string(rs[pos:])
+	q.customPos[q.activeQ] = pos - 1
+}
+
+func (q *QuestionBar) DeleteForward() {
+	if q.req == nil || len(q.req.Questions) == 0 {
+		return
+	}
+	item := q.req.Questions[q.activeQ]
+	if !item.Custom || q.activeOpt != len(item.Options) {
+		return
+	}
+	rs := []rune(q.custom[q.activeQ])
+	pos := min(q.customPos[q.activeQ], len(rs))
+	if pos >= len(rs) {
+		return
+	}
+	q.custom[q.activeQ] = string(rs[:pos]) + string(rs[pos+1:])
+	// The deleted rune occupied pos, so the next rune now sits there: the
+	// position is unchanged. Assign it like Type and Backspace do, so the
+	// three edit operations stay consistent if this ever deletes a range.
+	q.customPos[q.activeQ] = pos
+}
+
+func (q *QuestionBar) MoveCustomCursor(delta int) {
+	if !q.CustomActive() {
+		return
+	}
+	rs := []rune(q.custom[q.activeQ])
+	q.customPos[q.activeQ] = min(max(q.customPos[q.activeQ]+delta, 0), len(rs))
+}
+
+func (q *QuestionBar) CustomCursorHome() {
+	if !q.CustomActive() {
+		return
+	}
+	q.customPos[q.activeQ] = 0
+}
+
+func (q *QuestionBar) CustomCursorEnd() {
+	if !q.CustomActive() {
+		return
+	}
+	q.customPos[q.activeQ] = len([]rune(q.custom[q.activeQ]))
 }
 
 func (q *QuestionBar) CustomActive() bool {
@@ -157,7 +209,7 @@ func (q *QuestionBar) Height(width, termHeight int) int {
 		return 0
 	}
 	contentW := max(40, width-6)
-	lines := q.contentLines(contentW, confirmMaxLines(termHeight))
+	lines, _ := q.contentLines(contentW, confirmMaxLines(termHeight))
 	return len(lines) + 4
 }
 
@@ -176,7 +228,7 @@ func (q *QuestionBar) View(width, termHeight int) string {
 	sep := q.sty.Border.Render("├" + strings.Repeat(styles.Horizontal, barW-2) + "┤")
 	bottom := q.sty.Border.Render("└" + strings.Repeat(styles.Horizontal, barW-2) + "┘")
 
-	lines := q.contentLines(contentW, maxLines)
+	lines, _ := q.contentLines(contentW, maxLines)
 	help := "  " + q.sty.Muted.Render("[↑/↓] option  [space] select  [enter] answer  [esc] dismiss")
 
 	var b strings.Builder
@@ -190,13 +242,16 @@ func (q *QuestionBar) View(width, termHeight int) string {
 	return b.String()
 }
 
-func (q *QuestionBar) contentLines(contentW, maxLines int) []string {
+func (q *QuestionBar) contentLines(contentW, maxLines int) ([]string, int) {
 	item := q.req.Questions[q.activeQ]
 	header := strings.TrimSpace(item.Header)
 	if header == "" {
 		header = fmt.Sprintf("Question %d/%d", q.activeQ+1, len(q.req.Questions))
 	}
-	lines := []string{q.sty.Primary.Render("  " + header)}
+	lines := []string{}
+	for _, line := range wrapText("  "+header, contentW) {
+		lines = append(lines, q.sty.Primary.Render(line))
+	}
 	for _, line := range wrapText("  "+item.Question, contentW) {
 		lines = append(lines, q.sty.Base.Render(line))
 	}
@@ -213,22 +268,108 @@ func (q *QuestionBar) contentLines(contentW, maxLines int) []string {
 		if opt.Description != "" {
 			label += " - " + opt.Description
 		}
-		lines = append(lines, q.sty.Base.Render(fmt.Sprintf("  %s %s %s", cursor, mark, label)))
+		prefix := fmt.Sprintf("  %s %s ", cursor, mark)
+		maxW := max(10, contentW-lipgloss.Width(prefix))
+		indent := strings.Repeat(" ", lipgloss.Width(prefix))
+		for j, line := range wrapText(label, maxW) {
+			if j == 0 {
+				lines = append(lines, q.sty.Base.Render(prefix+line))
+			} else {
+				lines = append(lines, q.sty.Base.Render(indent+line))
+			}
+		}
 	}
+	customIdx := -1
 	if item.Custom {
-		idx := len(item.Options)
-		cursor := " "
-		if idx == q.activeOpt {
-			cursor = "›"
-		}
+		prefix := customRowPrefix(q.activeOpt == len(item.Options))
 		value := q.custom[q.activeQ]
+		customIdx = len(lines)
 		if value == "" {
-			value = "type custom answer"
+			lines = append(lines, q.sty.Muted.Render(prefix+"type custom answer"))
+		} else {
+			maxW := max(10, contentW-lipgloss.Width(prefix))
+			indent := strings.Repeat(" ", lipgloss.Width(prefix))
+			for j, seg := range customSegments([]rune(value), maxW) {
+				if j == 0 {
+					lines = append(lines, q.sty.Muted.Render(prefix+string(seg)))
+				} else {
+					lines = append(lines, q.sty.Muted.Render(indent+string(seg)))
+				}
+			}
 		}
-		lines = append(lines, q.sty.Muted.Render(fmt.Sprintf("  %s (custom) %s", cursor, value)))
 	}
 	if len(lines) > maxLines {
 		lines = append(lines[:maxLines], q.sty.Muted.Render("  ... (truncated)"))
+		if customIdx >= maxLines {
+			customIdx = -1
+		}
 	}
-	return lines
+	return lines, customIdx
+}
+
+// customSegments splits text into display segments that fit within maxW
+// columns, breaking at rune boundaries without consuming any rune so cursor
+// offsets remain exact.
+func customSegments(rs []rune, maxW int) [][]rune {
+	if len(rs) == 0 || maxW <= 0 {
+		return nil
+	}
+	var segs [][]rune
+	start, w := 0, 0
+	for i, r := range rs {
+		rw := lipgloss.Width(string(r))
+		if w+rw > maxW {
+			segs = append(segs, rs[start:i])
+			start, w = i, 0
+		}
+		w += rw
+	}
+	return append(segs, rs[start:])
+}
+
+func customRowPrefix(active bool) string {
+	cursor := " "
+	if active {
+		cursor = "›"
+	}
+	return fmt.Sprintf("  %s (custom) ", cursor)
+}
+
+// Cursor returns the terminal cursor position within the bar's View when the
+// custom input row is active, or nil otherwise. The cursor sits at the custom
+// input's editing position so typed text is inserted where the user sees it.
+func (q *QuestionBar) Cursor(width, termHeight int) *tea.Cursor {
+	if !q.CustomActive() {
+		return nil
+	}
+	contentW := max(40, width-6)
+	lines, customIdx := q.contentLines(contentW, confirmMaxLines(termHeight))
+	if customIdx < 0 {
+		return nil
+	}
+	prefix := customRowPrefix(true)
+	prefixW := lipgloss.Width(prefix)
+	rs := []rune(q.custom[q.activeQ])
+	pos := min(q.customPos[q.activeQ], len(rs))
+	segs := customSegments(rs, max(10, contentW-prefixW))
+	consumed := 0
+	for j, seg := range segs {
+		// A position exactly on a wrap boundary belongs to the following row:
+		// that is where the rune it precedes is rendered, so the caret sits
+		// where the next typed rune will appear. The final segment also takes
+		// the end-of-text position.
+		if pos < consumed+len(seg) || j == len(segs)-1 {
+			y := 1 + customIdx + j // title bar occupies row 0
+			if y > len(lines) {
+				return nil // cursor row got truncated
+			}
+			return tea.NewCursor(prefixW+lipgloss.Width(string(rs[consumed:pos])), y)
+		}
+		consumed += len(seg)
+	}
+	// Empty input: the caret sits at the start of the placeholder row.
+	if customIdx >= len(lines) {
+		return nil
+	}
+	return tea.NewCursor(prefixW, 1+customIdx)
 }

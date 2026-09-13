@@ -49,6 +49,7 @@ var (
 var knownModelProfiles = []modelProfile{
 	// DeepSeek: V4 generation (Pro/Flash) is 1M; the retired deepseek-chat /
 	// deepseek-reasoner endpoints were aliases of V4-Flash.
+	{match: "deepseek-flash", contextWindow: 1048576, reasoning: deepSeekReasoning},
 	{match: "deepseek-v4-flash", contextWindow: 1048576, reasoning: deepSeekReasoning},
 	{match: "deepseek-v4-pro", contextWindow: 1048576, reasoning: deepSeekReasoning},
 	{match: "deepseek-v4", contextWindow: 1048576, reasoning: deepSeekReasoning},

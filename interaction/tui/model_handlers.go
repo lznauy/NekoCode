@@ -25,6 +25,7 @@ const (
 // --- done ---
 
 func (m *Model) handleDone(msg doneMsg) tea.Cmd {
+	m.Messages.SettleCompactions()
 	finalBlocks := block.FilterFinalBlocks(m.Messages.ProcessingBlocks())
 
 	// Use msg.content (the final chat output) as primary rendered content.
@@ -117,6 +118,11 @@ func (m *Model) handleConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key := tea.Key(msg)
+	if key.Text != "" && key.Text != " " {
+		m.QuestionBar.Type(key.Text)
+		return m, nil
+	}
 	switch msg.String() {
 	case "up":
 		m.QuestionBar.Move(-1)
@@ -126,6 +132,21 @@ func (m *Model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "backspace":
 		m.QuestionBar.Backspace()
+		return m, nil
+	case "delete":
+		m.QuestionBar.DeleteForward()
+		return m, nil
+	case "left":
+		m.QuestionBar.MoveCustomCursor(-1)
+		return m, nil
+	case "right":
+		m.QuestionBar.MoveCustomCursor(1)
+		return m, nil
+	case "home", "ctrl+a":
+		m.QuestionBar.CustomCursorHome()
+		return m, nil
+	case "end", "ctrl+e":
+		m.QuestionBar.CustomCursorEnd()
 		return m, nil
 	case "space":
 		if m.QuestionBar.CustomActive() {
@@ -139,9 +160,6 @@ func (m *Model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "esc", "ctrl+c":
 		m.QuestionBar.Reject()
 	default:
-		if len([]rune(msg.String())) == 1 {
-			m.QuestionBar.Type(msg.String())
-		}
 		return m, nil
 	}
 	m.state = m.preConfirmState
@@ -219,18 +237,44 @@ func (m *Model) handleProcessingKey(msg tea.KeyPressMsg) tea.Cmd {
 		// Accept a highlighted suggestion first, mirroring the idle path:
 		// without this the popup would be visible but not selectable.
 		if m.Suggestions.Visible() {
-			if selected, ok := m.Suggestions.Accept(); ok {
-				if !selected.Submit {
-					m.Input.SetValue(selected.Value + " ")
-					m.Input.SetCursorEnd()
-					m.Suggestions.Hide()
-					m.resizeMessages()
+			parent := m.Input.Value()
+			wasMenu := m.Suggestions.IsMenu()
+			selected, ok := m.Suggestions.Accept()
+			if !ok {
+				// Current item: keep the picker open with its hint.
+				return nil
+			}
+			if !selected.Submit {
+				m.Input.SetValue(selected.Value + " ")
+				m.Input.SetCursorEnd()
+				// Mirror the idle path: a command with a nested menu
+				// (e.g. /permission → manual/full) expands it instead of
+				// merely completing into the input.
+				if m.openCommandMenu(selected.Value) {
+					if wasMenu {
+						m.commandMenuBack = append(m.commandMenuBack, parent)
+					}
 					return nil
 				}
-				value = selected.Value
+				m.Suggestions.Hide()
+				m.resizeMessages()
+				return nil
 			}
+			value = selected.Value
 		}
 		if value != "" {
+			// A fully typed command with a menu (e.g. /permission) opens it
+			// instead of executing, mirroring the idle path. Record the typed
+			// command as the menu's parent so esc walks back to it, exactly
+			// like the suggestion-accept path above.
+			if m.openCommandMenu(value) {
+				if m.Suggestions.IsMenu() {
+					m.commandMenuBack = append(m.commandMenuBack, value)
+				} else {
+					m.commandMenuBack = nil
+				}
+				return nil
+			}
 			m.Suggestions.Hide()
 			m.resizeMessages()
 			m.rememberInput(value)
@@ -252,7 +296,17 @@ func (m *Model) handleProcessingKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	case "esc":
 		if m.Suggestions.Visible() {
+			if m.Suggestions.IsMenu() && len(m.commandMenuBack) > 0 {
+				last := len(m.commandMenuBack) - 1
+				parent := m.commandMenuBack[last]
+				m.commandMenuBack = m.commandMenuBack[:last]
+				m.Input.SetValue(parent)
+				m.Input.SetCursorEnd()
+				m.openCommandMenu(parent)
+				return nil
+			}
 			m.Suggestions.Hide()
+			m.commandMenuBack = nil
 			m.resizeMessages()
 			return nil
 		}
@@ -462,7 +516,7 @@ func (m *Model) handleSpinnerTick(msg spinner.TickMsg) tea.Cmd {
 			p.SetSpinnerView(spinnerView)
 			p.SetStatusText(statusText)
 		})
-		if m.processingPhase != phaseSummarizing {
+		if m.processingPhase != phaseCompacting {
 			st := m.metrics
 			m.Messages.UpdateProcessing(func(p *processing.ProcessingItem) {
 				p.SetTokens(st.TurnPrompt, st.TurnCompletion)
@@ -484,6 +538,10 @@ func spinnerTick() tea.Cmd {
 
 func (m *Model) handleRuntimeEvent(ev controlruntime.Event) tea.Cmd {
 	switch ev.Type {
+	case controlruntime.EventCompaction:
+		if p, ok := ev.Payload.(controlruntime.CompactionPayload); ok {
+			m.Messages.UpdateCompaction(p)
+		}
 	case controlruntime.EventInputAccepted:
 		if p, ok := ev.Payload.(controlruntime.MessagePayload); ok {
 			title := ""
@@ -502,7 +560,7 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) tea.Cmd {
 			m.Input.SetFollow(true)
 		}
 	case controlruntime.EventSystemMessage:
-		if p, ok := ev.Payload.(controlruntime.MessagePayload); ok && strings.TrimSpace(p.Content) != "" {
+		if p, ok := ev.Payload.(controlruntime.MessagePayload); ok && strings.TrimSpace(p.Content) != "" && !m.Messages.IsDuplicateCompactionResponse(p.Content) {
 			m.Messages.AddMessage(message.ChatMessage{
 				Role:            "system",
 				Content:         p.Content,

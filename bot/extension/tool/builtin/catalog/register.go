@@ -38,6 +38,7 @@ func registerAll(r *tools.Registry, imageGenModels []config.ImageGenConfig, shel
 	r.RegisterWithOptions(&search.GrepTool{}, plan)
 	r.RegisterWithOptions(web.NewWebSearchTool(), plan)
 	r.RegisterWithOptions(web.NewWebFetchTool(), plan)
+	r.RegisterWithOptions(web.NewWebExtractTool(), plan)
 	r.Register(questionTool)
 	r.Register(todoTool)
 	r.Register(taskTool)
