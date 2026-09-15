@@ -23,7 +23,9 @@ func TestExtensionCombinesSourcesAndHealth(t *testing.T) {
 		Enabled: true,
 	}}
 	got := Extension(extensionmgr.Snapshot{
-		Plugins: plugins,
+		Plugins:     plugins,
+		Agents:      []extensionmgr.AgentInfo{{ID: "demo/reviewer", Name: "reviewer", Plugin: "demo"}},
+		AgentErrors: map[string]string{"demo": "invalid agent"},
 		MCPHealth: map[string]mcp.Health{
 			"plugin-server": {Status: mcp.StatusReady, ToolCount: 2},
 		},
@@ -33,6 +35,9 @@ func TestExtensionCombinesSourcesAndHealth(t *testing.T) {
 
 	if len(got.Plugins) != 1 || len(got.MCP) != 2 {
 		t.Fatalf("extension view = %+v", got)
+	}
+	if got.Plugins[0].AgentError != "invalid agent" || !reflect.DeepEqual(got.Plugins[0].ActiveAgents, []string{"demo/reviewer"}) {
+		t.Fatalf("agent state missing: %+v", got.Plugins[0])
 	}
 	servers := make(map[string]controlruntime.MCPServerView, len(got.MCP))
 	for _, server := range got.MCP {

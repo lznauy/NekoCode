@@ -46,11 +46,16 @@ type Manager struct {
 
 // New creates a skill manager with the concrete services it owns.
 func New(ctx *ctxmgr.Manager, toolRegistry *tools.Registry, contextWindow int) *Manager {
-	return &Manager{
+	m := &Manager{
+		reg:           newRegistry(),
 		ctx:           ctx,
 		tools:         toolRegistry,
 		contextWindow: contextWindow,
 	}
+	// Register the capability before extensions validate Agent tools. Its
+	// catalog remains empty until Load publishes successfully activated skills.
+	m.RegisterTool()
+	return m
 }
 
 // Load discovers built-in, local, and plugin skills.

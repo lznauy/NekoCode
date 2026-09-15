@@ -8,6 +8,7 @@ import (
 
 	"nekocode/bot/agent/internal/kernel"
 	ctxmgr "nekocode/bot/contextmgr"
+	"nekocode/bot/extension/agentprofile"
 	"nekocode/bot/extension/tool"
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/runner"
@@ -21,7 +22,7 @@ import (
 const (
 	taskToolName                 = "task"
 	submitResultToolName         = "nekocode_submit_result"
-	maxSubAgentSteps             = 50
+	maxSubAgentSteps             = agentprofile.MaxSteps
 	maxCompletionProtocolRetries = 2
 )
 
@@ -88,6 +89,10 @@ func (s *runState) recordCalls(calls []core.ToolCallItem) {
 }
 
 func (e *Engine) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
+	if cfg.Profile.MaxSteps < 0 || cfg.Profile.MaxSteps > maxSubAgentSteps {
+		return nil, fmt.Errorf("max_steps must be between 0 and %d", maxSubAgentSteps)
+	}
+	cfg.Profile = agentprofile.Clone(cfg.Profile)
 	if e.toolRegistry.Has(submitResultToolName) {
 		return nil, fmt.Errorf("sub-agent tool registry contains reserved lifecycle tool name %q", submitResultToolName)
 	}
@@ -151,7 +156,11 @@ type engineRun struct {
 }
 
 func (r *engineRun) stepLimitReached() bool {
-	if r.step < maxSubAgentSteps {
+	limit := r.cfg.Profile.MaxSteps
+	if limit == 0 {
+		limit = maxSubAgentSteps
+	}
+	if r.step < limit {
 		return false
 	}
 	r.log("max steps reached: step=%d", r.step)

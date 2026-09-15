@@ -9,9 +9,9 @@ import (
 	"strings"
 	"sync"
 
-	"nekocode/bot/agent/subagent"
 	"nekocode/bot/command"
 	ctxmgr "nekocode/bot/contextmgr"
+	"nekocode/bot/extension/agentprofile"
 	"nekocode/bot/extension/mcp"
 	"nekocode/bot/extension/plugin"
 	"nekocode/bot/extension/skill"
@@ -24,15 +24,17 @@ import (
 // Manager is the public extension entry point. Child managers remain private
 // so extension activation always follows one lifecycle.
 type Manager struct {
-	mu         sync.Mutex
-	ops        sync.Mutex
-	skills     *skill.Manager
-	plugins    *plugin.Manager
-	mcp        *mcp.Manager
-	policy     *policy.Policy
-	active     map[string]activePlugin
-	commands   *command.Handler
-	sessionMCP map[string][]string
+	mu          sync.Mutex
+	ops         sync.Mutex
+	skills      *skill.Manager
+	plugins     *plugin.Manager
+	mcp         *mcp.Manager
+	policy      *policy.Policy
+	active      map[string]activePlugin
+	commands    *command.Handler
+	sessionMCP  map[string][]string
+	tools       *tools.Registry
+	agentErrors map[string]string
 }
 
 // Snapshot is the read-only state used by management views.
@@ -41,6 +43,8 @@ type Snapshot struct {
 	LoadedSkills map[string]bool
 	Plugins      []*plugin.Plugin
 	MCPHealth    map[string]mcp.Health
+	AgentErrors  map[string]string
+	Agents       []AgentInfo
 }
 
 // Config contains the shared dependencies used by extension modules.
@@ -52,25 +56,28 @@ type Config struct {
 }
 
 type activePlugin struct {
-	plugin     *plugin.Plugin
-	agentNames []string
-	mcpIDs     []string
+	plugin *plugin.Plugin
+	agents []agentprofile.Profile
+	mcpIDs []string
 }
 
 // New creates the unified extension manager.
 func New(config Config) *Manager {
 	m := &Manager{
-		skills:     skill.New(config.Context, config.Tools, config.ContextWindow),
-		plugins:    plugin.New(),
-		mcp:        mcp.New(),
-		policy:     config.Policy,
-		active:     make(map[string]activePlugin),
-		sessionMCP: make(map[string][]string),
+		skills:      skill.New(config.Context, config.Tools, config.ContextWindow),
+		plugins:     plugin.New(),
+		mcp:         mcp.New(),
+		policy:      config.Policy,
+		active:      make(map[string]activePlugin),
+		sessionMCP:  make(map[string][]string),
+		tools:       config.Tools,
+		agentErrors: make(map[string]string),
 	}
 	// MCP tools reach the model through one constant-schema proxy registered
 	// once here — adding/removing servers never changes the tool list, which
 	// keeps the provider's cached prompt prefix stable.
 	if config.Tools != nil {
+		config.Tools.Register(&agentCatalogTool{manager: m})
 		config.Tools.RegisterWithOptions(capability.New(m.mcp), tools.RegistrationOptions{
 			ResolveTarget: capability.ResolveTarget,
 		})
@@ -92,7 +99,7 @@ func (m *Manager) Load() {
 			_ = m.activateLocked(context.Background(), p)
 		}
 	}
-	m.skills.Load(m.plugins.SkillDirs())
+	m.skills.Load(m.activeSkillDirsLocked())
 	m.syncSkillCommandsLocked()
 }
 
@@ -110,7 +117,7 @@ func (m *Manager) Reload() {
 			_ = m.activateLocked(context.Background(), p)
 		}
 	}
-	m.skills.Reload(m.plugins.SkillDirs())
+	m.skills.Reload(m.activeSkillDirsLocked())
 	m.syncSkillCommandsLocked()
 }
 
@@ -136,6 +143,8 @@ func (m *Manager) Snapshot() Snapshot {
 		LoadedSkills: m.skills.LoadedSet(),
 		Plugins:      m.plugins.ListPlugins(),
 		MCPHealth:    m.mcp.Health(),
+		AgentErrors:  m.agentErrorsLocked(),
+		Agents:       m.agentInfosLocked(),
 	}
 }
 
@@ -223,7 +232,7 @@ func (m *Manager) setPluginEnabled(ctx context.Context, name string, enabled boo
 	if !ok {
 		return false, fmt.Errorf("plugin not found: %s", name)
 	}
-	if current.Enabled == enabled {
+	if current.Enabled == enabled && (!enabled || m.agentErrors[name] == "") {
 		return false, nil
 	}
 	next, err := m.plugins.SetEnabled(name, enabled)
@@ -238,7 +247,7 @@ func (m *Manager) setPluginEnabled(ctx context.Context, name string, enabled boo
 	} else {
 		m.deactivateLocked(name)
 	}
-	m.skills.Reload(m.plugins.SkillDirs())
+	m.skills.Reload(m.activeSkillDirsLocked())
 	m.syncSkillCommandsLocked()
 	return true, nil
 }
@@ -299,21 +308,30 @@ func (m *Manager) ReplaceSessionMCPServers(ctx context.Context, source string, c
 
 func (m *Manager) activateLocked(ctx context.Context, p *plugin.Plugin) error {
 	state := activePlugin{plugin: p}
-	m.active[p.Name] = state
+	seen := make(map[string]bool)
 	for _, path := range p.AgentPaths() {
 		if err := ctx.Err(); err != nil {
-			m.deactivateLocked(p.Name)
 			return err
 		}
-		def, err := subagent.ParseAgentMD(path)
-		if err != nil {
-			logger.Log("plugin: agent %s: %v", path, err)
-			continue
+		var hasTool func(string) bool
+		if m.tools != nil {
+			hasTool = m.tools.Has
 		}
-		subagent.RegisterPlugin(def.ToProfile())
-		state.agentNames = append(state.agentNames, def.Name)
-		m.active[p.Name] = state
+		profile, err := agentprofile.Load(p.Dir, path, hasTool)
+		if err == nil && seen[profile.Name] {
+			err = fmt.Errorf("duplicate agent name %q", profile.Name)
+		}
+		if err != nil {
+			err = fmt.Errorf("agent %s: %w", path, err)
+			m.agentErrors[p.Name] = err.Error()
+			logger.Log("plugin: %s: %v", p.Name, err)
+			return err
+		}
+		seen[profile.Name] = true
+		state.agents = append(state.agents, profile)
 	}
+	delete(m.agentErrors, p.Name)
+	m.active[p.Name] = state
 
 	if err := ctx.Err(); err != nil {
 		m.deactivateLocked(p.Name)
@@ -351,12 +369,10 @@ func (m *Manager) activateLocked(ctx context.Context, p *plugin.Plugin) error {
 }
 
 func (m *Manager) deactivateLocked(name string) {
+	delete(m.agentErrors, name)
 	state, ok := m.active[name]
 	if !ok {
 		return
-	}
-	for _, agentName := range state.agentNames {
-		subagent.UnregisterPlugin(agentName)
 	}
 	for _, id := range state.mcpIDs {
 		m.mcp.Remove(id)
@@ -368,6 +384,7 @@ func (m *Manager) deactivateLocked(name string) {
 }
 
 func (m *Manager) deactivateAllLocked() {
+	clear(m.agentErrors)
 	for name := range m.active {
 		m.deactivateLocked(name)
 	}

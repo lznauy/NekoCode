@@ -290,18 +290,20 @@ type SkillView struct {
 }
 
 type PluginView struct {
-	Name        string   `json:"name"`
-	Version     string   `json:"version,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Source      string   `json:"source,omitempty"`
-	Dir         string   `json:"dir,omitempty"`
-	Enabled     bool     `json:"enabled"`
-	Skills      []string `json:"skills,omitempty"`
-	SkillNames  []string `json:"skillNames,omitempty"`
-	Agents      []string `json:"agents,omitempty"`
-	Commands    []string `json:"commands,omitempty"`
-	MCPServers  []string `json:"mcpServers,omitempty"`
-	HasHooks    bool     `json:"hasHooks,omitempty"`
+	Name         string   `json:"name"`
+	Version      string   `json:"version,omitempty"`
+	Description  string   `json:"description,omitempty"`
+	Source       string   `json:"source,omitempty"`
+	Dir          string   `json:"dir,omitempty"`
+	Enabled      bool     `json:"enabled"`
+	Skills       []string `json:"skills,omitempty"`
+	SkillNames   []string `json:"skillNames,omitempty"`
+	Agents       []string `json:"agents,omitempty"`
+	Commands     []string `json:"commands,omitempty"`
+	MCPServers   []string `json:"mcpServers,omitempty"`
+	HasHooks     bool     `json:"hasHooks,omitempty"`
+	ActiveAgents []string `json:"activeAgents,omitempty"`
+	AgentError   string   `json:"agentError,omitempty"`
 }
 
 type MCPServerView struct {

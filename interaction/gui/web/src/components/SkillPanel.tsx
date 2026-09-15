@@ -498,6 +498,7 @@ function PluginRow(props: { plugin: PluginView; mutating: string; onToggle: (plu
             {!p.enabled && <span className="rounded-sm bg-surface-3 px-1.5 py-0.5 text-[10px] text-text-3">已停用</span>}
           </div>
           <p className="mt-1 truncate font-mono text-[10.5px] text-text-3">{p.dir || p.description || '无路径信息'}</p>
+          {p.agentError && <p className="mt-1 break-words text-[11px] text-danger">Agent 加载失败：{p.agentError}</p>}
           {hasBundle && (
             <div className="mt-1.5 flex flex-wrap gap-1">
               {badges.map((b) => (
@@ -517,6 +518,7 @@ function PluginRow(props: { plugin: PluginView; mutating: string; onToggle: (plu
           <BundleList title="技能" items={p.skillNames} empty="无" />
           <BundleList title="MCP 服务器" items={p.mcpServers} empty="无" />
           <BundleList title="Agents" items={p.agents} empty="无" />
+          <BundleList title="可调用 Agents" items={p.activeAgents} empty="无" />
           <BundleList title="命令" items={p.commands} empty="无" />
           <div className="md:col-span-2">
             <span className="font-medium text-text-3">Hooks：</span>

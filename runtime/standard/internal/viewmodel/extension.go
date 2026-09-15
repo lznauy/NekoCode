@@ -15,6 +15,14 @@ import (
 
 func Extension(snapshot extensionmgr.Snapshot, configuredMCP map[string]config.MCPServerConfig) controlruntime.SkillManagementView {
 	plugins := pluginViews(snapshot.Plugins)
+	for i := range plugins {
+		plugins[i].AgentError = snapshot.AgentErrors[plugins[i].Name]
+		for _, agent := range snapshot.Agents {
+			if agent.Plugin == plugins[i].Name {
+				plugins[i].ActiveAgents = append(plugins[i].ActiveAgents, agent.ID)
+			}
+		}
+	}
 	servers := pluginMCPViews(snapshot.Plugins)
 	servers = append(servers, configMCPViews(configuredMCP)...)
 	applyMCPHealth(servers, snapshot.MCPHealth)

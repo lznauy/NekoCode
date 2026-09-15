@@ -70,12 +70,16 @@ func (m *Manager) pluginMenu(_ context.Context, cmd *command.Command) (protocol.
 	plugins := m.plugins.ListPlugins()
 	items := make([]protocol.CommandMenuItem, 0, len(plugins))
 	for _, item := range plugins {
-		if action == "enable" && item.Enabled || action == "disable" && !item.Enabled {
+		failed := m.agentErrors[item.Name] != ""
+		if action == "enable" && item.Enabled && !failed || action == "disable" && !item.Enabled {
 			continue
 		}
 		state := "disabled"
 		if item.Enabled {
 			state = "enabled"
+		}
+		if failed {
+			state = "activation failed; retry available"
 		}
 		items = append(items, protocol.CommandMenuItem{
 			Value: "/plugin " + action + " " + item.Name,
@@ -148,7 +152,8 @@ func (m *Manager) uninstallPlugin(ctx context.Context, args []string) string {
 		}
 		return fmt.Sprintf("Uninstall failed: %v", err)
 	}
-	m.skills.Reload(m.plugins.SkillDirs())
+	delete(m.agentErrors, name)
+	m.skills.Reload(m.activeSkillDirsLocked())
 	m.syncSkillCommandsLocked()
 	return fmt.Sprintf("Uninstalled plugin %q.", name)
 }
@@ -168,15 +173,22 @@ func (m *Manager) install(ctx context.Context, source string) string {
 
 	m.mu.Lock()
 	previous, wasActive := m.active[p.Name]
+	previousError := m.agentErrors[p.Name]
+	restore := func() {
+		delete(m.agentErrors, p.Name)
+		if wasActive {
+			_ = m.activateLocked(context.Background(), previous.plugin)
+		} else if previousError != "" {
+			m.agentErrors[p.Name] = previousError
+		}
+	}
 	if wasActive {
 		m.deactivateLocked(p.Name)
 	}
 	if p.Enabled {
 		if err := m.activateLocked(ctx, p); err != nil {
 			rollbackErr := installation.Rollback()
-			if wasActive {
-				_ = m.activateLocked(context.Background(), previous.plugin)
-			}
+			restore()
 			m.mu.Unlock()
 			if rollbackErr != nil {
 				return fmt.Sprintf("Install cancelled: %v (rollback failed: %v)", err, rollbackErr)
@@ -186,13 +198,11 @@ func (m *Manager) install(ctx context.Context, source string) string {
 	}
 	if err := installation.Commit(); err != nil {
 		m.deactivateLocked(p.Name)
-		if wasActive {
-			_ = m.activateLocked(context.Background(), previous.plugin)
-		}
+		restore()
 		m.mu.Unlock()
 		return "Install failed: " + err.Error()
 	}
-	m.skills.Reload(m.plugins.SkillDirs())
+	m.skills.Reload(m.activeSkillDirsLocked())
 	m.syncSkillCommandsLocked()
 	m.mu.Unlock()
 
@@ -202,7 +212,13 @@ func (m *Manager) install(ctx context.Context, source string) string {
 func (m *Manager) listPlugins() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.plugins.ListText()
+	text := m.plugins.ListText()
+	for _, p := range m.plugins.ListPlugins() {
+		if err := m.agentErrors[p.Name]; err != "" {
+			text += "\n" + p.Name + ": " + err
+		}
+	}
+	return text
 }
 
 func (m *Manager) pluginInfo(args []string) string {
@@ -215,6 +231,14 @@ func (m *Manager) pluginInfo(args []string) string {
 	info, ok := m.plugins.InfoText(name)
 	if !ok {
 		return fmt.Sprintf("Plugin %q not found.", name)
+	}
+	if err := m.agentErrors[name]; err != "" {
+		info += "\nAgent load error: " + err
+	}
+	for _, agent := range m.agentInfosLocked() {
+		if agent.Plugin == name {
+			info += fmt.Sprintf("\nAgent: %s — %s (tools: %s)", agent.ID, agent.Description, strings.Join(agent.Tools, ", "))
+		}
 	}
 	return info
 }

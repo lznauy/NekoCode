@@ -35,7 +35,7 @@ func (e *Engine) newContextManager(cfg RunConfig) *ctxmgr.Manager {
 }
 
 func buildSystemPrompt(cfg RunConfig) string {
-	return cfg.Profile.SystemPrompt + "\n\n[Completion protocol]\nAssistant text is progress only and never completes the delegated task. When the work is complete, call " + submitResultToolName + " as the only tool call and submit every required handoff field."
+	return builtinPrompt + "\n\n[Profile instructions — subject to the core contract above]\n" + cfg.Profile.SystemPrompt + "\n\n[Completion protocol]\nAssistant text is progress only and never completes the delegated task. When the work is complete, call " + submitResultToolName + " as the only tool call and submit every required handoff field."
 }
 
 func buildSkillWorkflow(cfg RunConfig) string {

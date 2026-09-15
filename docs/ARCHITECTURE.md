@@ -42,7 +42,7 @@ bot/
   的投影集中在其 `internal/viewmodel`。
 - `agent` 只依赖 LLM、context、tools、policy 等运行时接口，不关心 plugin/skill/mcp 的安装和发现。
 - `tools` 只定义和执行工具，不反向依赖 agent 主循环或 `agent/subagent`；需要委托子 Agent 时通过既有 task runtime 接线，具体适配器放在 `bot/core`。
-- `agent/subagent` 不依赖 `agent` 主循环；经 `RunConfig.Policy` 注入主 agent 的 Policy，共享治理账本与探索预算。
+- `agent/subagent` 不依赖 `agent` 主循环；接收已解析的 `agentprofile.Profile`，不负责插件发现或注册。`RunConfig.Policy` 只接收审计事件，写授权使用每次运行独立创建的 guard。
 - `extension.Manager` 是扩展系统唯一的高层入口；`bot/core` 不直接持有 plugin/skill/mcp 子 Manager。
 - `plugin` 只管理插件清单、安装和启停状态；扩展激活由 `extension.Manager` 统一编排。
 - `mcp.Manager` 同时拥有 server 和对应工具的生命周期，外层不手工同步工具切片。
@@ -125,8 +125,7 @@ nekocode/
 │   │   ├── subagent/               #     子 Agent 系统
 │   │   │   ├── subagent.go         #       入口、运行循环与结果
 │   │   │   ├── subagent_engine.go  #       上下文、推理与工具执行
-│   │   │   ├── registry.go         #       内置/插件 Agent 与 AgentMD
-│   │   │   ├── safety.go           #       结果安全审核
+│   │   │   ├── config.go           #       已解析 Profile、运行依赖与通用契约
 │   │   │   └── prompts/            #       子 Agent prompt 模板
 │   │   │       └── subagent.md     #         通用子 Agent prompt
 │   ├── checkpoint/                 #   回合级文件快照与 rewind
@@ -351,7 +350,7 @@ Agent 循环硬限制：
 | `bot/agent/agent.go` | Agent 入口、配置与生命周期 |
 | `bot/agent/internal/kernel/` | Agent 循环核心控制流（Loop/RunLoop、Lifecycle、Gate），零业务依赖 |
 | `bot/agent/internal/llmstream/` | LLM 流式调用 + 工具调用解析 + 重试 |
-| `bot/agent/subagent/` | 子 Agent 引擎 + 注册表 + 安全审核 |
+| `bot/agent/subagent/` | 子 Agent 引擎 + 运行契约 + 工具权限检查 |
 | [`bot/policy/`](../bot/policy/README.md) | Policy：组合确定性 hook 与 ledger 的唯一入口；治理原则与非目标见目录 README |
 | `bot/policy/ledger/` | 工具执行账本：readFiles / modifiedFiles / blockedTools / toolErrors |
 
@@ -636,16 +635,16 @@ Skill frontmatter 中的 `context`、`agent`、`allowed-tools`、`max_steps` 和
 | coder | 工作区读写与命令执行 | read/write/edit/shell/process/grep/glob/list/web_search/web_fetch/web_extract |
 | explore | 严格只读，无任意命令执行 | read/grep/glob/list/web_search/web_fetch/web_extract |
 
-验证、调研、诊断和设计不是 Agent 类型，由 `check`、`learn`、`hunt`、`think` 等 skill 与具体 task prompt 组合表达。插件 AgentMD 继续作为自定义 profile 注册。
+验证、调研、诊断和设计不是 Agent 类型，由 `check`、`learn`、`hunt`、`think` 等 skill 与具体 task prompt 组合表达。插件 AgentMD 由 `extension/agentprofile` 解析；Profile 集合由每个 `extension.Manager` 的 activePlugin 持有，没有进程级可变注册表。
 
 ### Engine 特性
 
 - 独立 ctxmgr（`New(Config)`），配置 merge model 时自动接入 Compactor
 - FileCache 从主 Agent 种子预热（Seed/Merge）
-- 上下文窗口、Thinking 开关等参数从主 Agent 配置继承
+- 模型和上下文窗口从主 Agent 配置继承；子 Agent 显式关闭 thinking
 - profile 工具白名单同时用于模型工具过滤与执行前复核；代理工具需要同时列出代理名与允许的 effective target，不能借代理扩大权限
 - 选定 skill 内容在每次模型请求时以 user 级 task-scoped workflow 重投影，不进入可压缩历史，也不授予额外工具
-- 安全审核（关键词匹配 + 敏感路径检测）
+- 每次运行独立的确定性 Policy guard；不以关键词匹配代替权限检查
 - Handoff 作为未验证证据留在 user task；选定的 skill workflow 保持 user 权限层级，并在自动压缩后继续逐轮重投影
 - ConfirmFn 覆盖（edit 操作需用户确认）
 - Partial result 恢复（中断/错误时返回部分结果）
@@ -655,7 +654,13 @@ Skill frontmatter 中的 `context`、`agent`、`allowed-tools`、`max_steps` 和
 
 ### AgentMD 解析
 
-`bot/agent/subagent/registry.go`：注册内置/插件 Agent，并解析 Claude Code 格式的 `agents/*.md`（YAML frontmatter）。
+`bot/extension/agentprofile/` 解析 AgentMD 的 `name/description/base/tools/skills/max_steps`，归一化工具别名并验证工具、基线和上限。未知字段明确报错。读取通过 `os.Root` 限定在插件内，文件上限 1 MiB。
+
+`extension.Manager` 在锁内先解析整个插件的 Agent 集合，再发布；失败会记录诊断并阻止本次插件运行时激活，Skills 也只从成功激活的插件加载。加载、禁用、重载、安装回滚均由现有插件生命周期管理，无额外注册表服务。对外使用 `plugin/name`，唯一短名称可作别名，内置名称优先。传给 Engine 的 Profile 拷贝包含独立切片，插件关闭不会改变已开始任务的 Profile。
+
+`agent_profiles` 是扩展层提供的固定 schema 只读工具，返回名称、用途、工具上限、默认 Skills、步数及加载错误，不发布系统提示词。`task` 保持固定 schema；插件变化无需改写工具枚举。管理快照经 viewmodel 投影为 GUI 可调用 Agent ID 和错误；CLI `/plugin info` 展示相同状态。
+
+Engine 始终注入通用契约，再追加自定义 Profile 指令；默认 Skills 与 task Skills 在 `bot/core` 合并去重并按 user 权限逐轮投影。Profile 的 `max_steps` 只可收紧默认 50 步，完成协议与禁止嵌套 task 的执行门禁保持独立。
 
 ## 治理系统
 

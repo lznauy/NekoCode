@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sync"
 
 	"github.com/google/uuid"
 
@@ -209,8 +210,8 @@ func (r *toolRunner) addToolResultsAndHints(calls []core.ToolCallItem, msgs []ty
 }
 
 type subSlotInfo struct {
-	subID    string
-	colorIdx int
+	subID string
+	start func(protocol.StepEvent)
 }
 
 var subSlotFullReason = fmt.Sprintf("task not started: subagent slot pool is full (%d/%d); retry after the current batch finishes", maxSubSlots, maxSubSlots)
@@ -240,18 +241,33 @@ func (r *toolRunner) prepareSubagentCallbacks(allowed []core.ToolCallItem, allow
 			denied[allowedIdx[i]] = subSlotFullReason
 			continue
 		}
-		if callback != nil {
-			skills := stringSliceValue(c.Args["skills"])
-			callback(protocol.StepEvent{
-				Action: protocol.StepActionSubAgentStart, SubAgentID: subID,
-				SubAgentType: subProfile, SubAgentProfile: subProfile,
-				SubAgentSkills: skills, SubAgentColor: colorIdx,
-			})
-		}
 		sid := subID
 		cid := colorIdx
-		taskInfos = append(taskInfos, subSlotInfo{sid, cid})
+		fallback := protocol.StepEvent{
+			Action:       protocol.StepActionSubAgentStart,
+			SubAgentType: subProfile, SubAgentProfile: subProfile,
+			SubAgentSkills: stringSliceValue(c.Args["skills"]),
+		}
+		var started sync.Once
+		// Prefer resolved runner metadata. Retain a paired lifecycle for tasks
+		// that fail validation or runners that only forward tool events.
+		start := func(ev protocol.StepEvent) {
+			started.Do(func() {
+				if ev.Action != protocol.StepActionSubAgentStart {
+					ev = fallback
+				}
+				ev.SubAgentID, ev.SubAgentColor = sid, cid
+				if callback != nil {
+					callback(ev)
+				}
+			})
+		}
+		taskInfos = append(taskInfos, subSlotInfo{sid, start})
 		c.Args["_sub_callback"] = taskbridge.TaskCallbackFn(func(ev protocol.StepEvent) {
+			start(ev)
+			if ev.Action == protocol.StepActionSubAgentStart {
+				return
+			}
 			if callback == nil {
 				return
 			}
@@ -264,6 +280,7 @@ func (r *toolRunner) prepareSubagentCallbacks(allowed []core.ToolCallItem, allow
 
 	return func() {
 		for _, ti := range taskInfos {
+			ti.start(protocol.StepEvent{})
 			r.agent.deps.subSlotMgr.Release(ti.subID)
 			if callback != nil {
 				callback(protocol.StepEvent{

@@ -1,0 +1,6 @@
+{
+  "name": "subagent-demo",
+  "version": "1.0.0",
+  "description": "A read-only code review sub-agent demonstrating manifest integration",
+  "agents": ["agents/reviewer.md"]
+}

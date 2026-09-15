@@ -20,6 +20,10 @@ func (b *Bot) wireTaskTool(fm config.ModelConfig, compactionModel provider.LLM, 
 	autoCompactPercent := b.cfg.EffectiveAutoCompactPercent()
 
 	b.toolbox.WireTaskRunner(func(ctx context.Context, spec taskbridge.TaskSpec) (*taskbridge.TaskResult, error) {
+		profile, err := b.ext.AgentProfile(spec.Profile)
+		if err != nil {
+			return nil, err
+		}
 		subLLM := provider.New(provider.Config{
 			APIKey: fm.APIKey, BaseURL: fm.BaseURL, Model: fm.Model, Protocol: fm.Protocol,
 			Reasoning: resolvedReasoning(fm),
@@ -28,14 +32,18 @@ func (b *Bot) wireTaskTool(fm config.ModelConfig, compactionModel provider.LLM, 
 		engine := subagent.New(subagent.Config{
 			LLM: subLLM, Tools: registry, CompactionModel: compactionModel,
 		})
-		skillContents, err := b.delegatedSkillContents(spec.Skills)
+		skillNames, skillContents, err := b.delegatedSkills(append(profile.Skills, spec.Skills...))
 		if err != nil {
 			return nil, err
 		}
-		cfg, ok := buildSubagentRunConfig(ctx, spec, skillContents, contextWindow, autoCompactPercent, ag, b.sess.CurrentID(), b.environment)
-		if !ok {
-			return nil, fmt.Errorf("unknown sub-agent profile: %s", spec.Profile)
+		if cb, ok := taskbridge.TaskCallbackFromCtx(ctx); ok {
+			cb(protocol.StepEvent{
+				Action:       protocol.StepActionSubAgentStart,
+				SubAgentType: profile.Name, SubAgentProfile: profile.Name,
+				SubAgentSkills: skillNames,
+			})
 		}
+		cfg := buildSubagentRunConfig(ctx, spec, profile, skillContents, contextWindow, autoCompactPercent, ag, b.sess.CurrentID(), b.environment)
 		result, err := engine.Run(ctx, cfg)
 		if result != nil && (result.CacheHitTokens > 0 || result.CacheMissTokens > 0) {
 			ctxMgr.RecordSubagent(result.TotalTokens, result.CacheHitTokens, result.CacheMissTokens)
@@ -47,16 +55,13 @@ func (b *Bot) wireTaskTool(fm config.ModelConfig, compactionModel provider.LLM, 
 func buildSubagentRunConfig(
 	ctx context.Context,
 	spec taskbridge.TaskSpec,
+	profile subagent.Profile,
 	skillContents []string,
 	contextWindow, autoCompactPercent int,
 	ag *agentcore.Agent,
 	sessionID string,
 	environment prompt.EnvironmentProvider,
-) (subagent.RunConfig, bool) {
-	profile, ok := subagent.GetProfile(spec.Profile)
-	if !ok {
-		return subagent.RunConfig{}, false
-	}
+) subagent.RunConfig {
 	cfg := subagent.RunConfig{
 		Prompt:             spec.Prompt,
 		Profile:            profile,
@@ -89,27 +94,29 @@ func buildSubagentRunConfig(
 	if phaseFn := ag.PhaseFn(); phaseFn != nil {
 		cfg.OnPhase = func(p string) { phaseFn(profile.Name + " · " + p) }
 	}
-	return cfg, true
+	return cfg
 }
 
-func (b *Bot) delegatedSkillContents(names []string) ([]string, error) {
+func (b *Bot) delegatedSkills(names []string) ([]string, []string, error) {
 	seen := make(map[string]struct{}, len(names))
+	var resolved []string
 	contents := make([]string, 0, len(names))
 	for _, name := range names {
 		if name == "" {
-			return nil, fmt.Errorf("delegated skill name cannot be empty")
+			return nil, nil, fmt.Errorf("delegated skill name cannot be empty")
 		}
 		if _, duplicate := seen[name]; duplicate {
 			continue
 		}
 		command, ok := b.ext.Skill(name)
 		if !ok {
-			return nil, fmt.Errorf("unknown delegated skill: %s", name)
+			return nil, nil, fmt.Errorf("unknown delegated skill: %s", name)
 		}
 		seen[name] = struct{}{}
+		resolved = append(resolved, name)
 		contents = append(contents, command.Context)
 	}
-	return contents, nil
+	return resolved, contents, nil
 }
 
 func subagentTaskResult(result *subagent.Result) *taskbridge.TaskResult {

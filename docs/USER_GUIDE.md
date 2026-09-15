@@ -279,6 +279,60 @@ description: 按团队规范生成提交信息。当用户要求提交代码、�
 
 远程安装前会显示插件内容预览，确认后才安装（加 `--yes` 跳过确认）。插件安装到 `~/.nekocode/plugins/`，其中的技能会自动可用。
 
+### 自定义子 Agent
+
+插件通过 manifest 引用 AgentMD 文件。例如本地目录 `my-reviewer/`：
+
+```text
+my-reviewer/
+├── .claude-plugin/plugin.json
+└── agents/reviewer.md
+```
+
+`.claude-plugin/plugin.json`：
+
+```json
+{
+  "name": "my-reviewer",
+  "agents": ["agents/reviewer.md"]
+}
+```
+
+`agents/reviewer.md`：
+
+```markdown
+---
+name: reviewer
+description: 对改动做只读审查，报告有证据支持的问题
+base: explore
+tools: [Read, Grep, Glob]
+skills: [check]
+max_steps: 20
+---
+阅读委托指定的代码，给出问题位置、影响和证据。
+只能使用当前工具；无法执行测试时如实说明，不修改文件。
+```
+
+运行 `/plugin install ./my-reviewer` 后，模型可以通过 `agent_profiles` 查询目录，再以 `task(profile="my-reviewer/reviewer", prompt="…")` 委托任务。同名 Agent 可来自不同插件；短名称只在唯一时解析，`coder`、`explore` 始终指向内置 Profile。`/plugin info my-reviewer` 及 GUI 插件详情显示可调用 ID 和加载错误。修改已安装文件后刷新扩展，或禁用后重新启用插件。
+
+支持字段与规则：
+
+| 字段 | 含义 |
+|------|------|
+| `name` | 必填；字母/数字开头，只包含字母、数字、`-`、`_` |
+| `description` | 目录中展示的用途，建议填写 |
+| `base` | 可选 `coder` 或 `explore`；声明后工具只能收窄到该基线的子集 |
+| `tools` | 工具白名单，支持 YAML 数组或逗号分隔字符串；`Read/Write/Edit/Bash/Grep/Glob/LS/WebSearch/WebFetch` 会映射为内部工具名 |
+| `skills` | 默认工作流；与本次 task 的 skills 合并、去重，在运行前解析，不授予额外权限 |
+| `max_steps` | 1–50 个工具执行轮次；省略或 0 使用默认 50，达到上限返回 partial 结果 |
+| Markdown 正文 | 必填的自定义指令；执行器始终保留通用子 Agent 约束和结构化完成协议 |
+
+不写 `tools` 时，声明了 `base` 就继承基线工具，否则为无外部工具的文本任务；`tools: []` 明确禁用外部工具。无 `base` 的 Profile 可声明宿主已有工具，但不能声明 `task`、`agent_profiles` 或内部完成工具。MCP 需同时列出 `capability` 和精确目标，例如 `mcp__demo__lookup`；不支持通配授权，目标可用性在调用时检查。
+
+Agent 文件只允许从插件目录内部读取（包含符号链接检查），最大 1 MiB。同一插件内重名、未知工具、非法字段或任何 Agent 文件加载失败都会阻止该插件本次运行时激活；不会发布其中的 Skills、Agents、Hooks 和 MCP。修复后可重新启用或刷新。模型仍继承主 Agent 配置，thinking 关闭；`model`、`permissionMode` 等未支持字段会明确报错，不会静默忽略。Skill 的 `context/agent/max_steps/context_window` 元数据本身不启动子 Agent，委托仍通过 `task`。
+
+为兼容已有插件，manifest 省略 `agents` 或设置空数组时仍会自动发现插件中的 `agents/*.md`。需要控制加载范围时，请显式列出文件。
+
 ## 七、MCP 服务
 
 MCP(Model Context Protocol）可以为 AI 接入外部工具和数据源（数据库、内部系统等）。在 `~/.nekocode/config.json` 中添加 `mcp_servers` 字段：

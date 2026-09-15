@@ -28,7 +28,7 @@ func (t *TaskTool) Description() string {
 func (t *TaskTool) Parameters() []core.Parameter {
 	return []core.Parameter{
 		{Name: "profile", Type: "string", Required: true,
-			Description: "Capability profile. Built-ins: coder (workspace write) and explore (strict read-only)."},
+			Description: "Capability profile. Built-ins: coder (workspace write) and explore (strict read-only). Use agent_profiles to discover custom profiles; prefer their fully qualified plugin/name IDs."},
 		{Name: "skills", Type: "array", Required: false,
 			Description: "Task-scoped skill names. Skills cannot grant tools outside the selected profile.",
 			Items:       &core.Schema{Type: "string"}},
