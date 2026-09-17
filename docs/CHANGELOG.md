@@ -2,10 +2,14 @@
 
 ## Unreleased
 
+## v0.4.4 - 2026-09-17
+
+- 新增 ACP v1 stdio 接入，可由支持 ACP 的编辑器启动；能力与限制见 [ACP.md](ACP.md)。
+- 新增企业微信机器人连接器，支持长连接接入与配对。
+- 优化启动、上下文压缩、会话存储与缓存处理；改进 checkpoint，并支持在 TUI 会话菜单删除历史会话。
 - 新增 `nekocode-headless/2` 双向 NDJSON 接入层：支持单次 prompt、多轮 FIFO 输入、工具审批、提问、中断、运行中引导与显式关闭；入口为 `--headless` 或 `-p ... --output-format stream-json`。
 - Headless 提供模型、权限、会话、扩展查询和检查点回滚控制，按后端实际能力声明；输出子 Agent 消息、真实步数、终止原因和审批拒绝摘要。接入契约见 [STREAM_JSON.md](STREAM_JSON.md)。
 - Runtime 新增完整 assistant 消息、子 Agent 输出和运行摘要事件；工具事件携带结构化 JSON 输入，保留数字精度并排除展示元数据与回调。新增 `EventFilter.Reliable`，积压超限时关闭订阅，供传输层明确报告连接失败。
-
 - 子 Agent 改为 `profile + skills + prompt` 组合：内置仅保留可写 `coder` 与严格只读 `explore`，验证、调研和诊断由 task-scoped skill 表达；profile 白名单在工具暴露和执行前双重检查，子 Agent 的写前读授权按执行上下文隔离。
 - `index` 新增 `callers:<symbol>` 和 `callees:<symbol>` 调用图查询。
 - Runtime 的工具与子 Agent 回调统一为 `RunHost.Step(protocol.StepEvent)`，删除重复的 `ToolEvent`、`SubAgentEvent` 和中间转换层；自定义 Runner 需要改用 `StepEvent` 上报对应动作。
