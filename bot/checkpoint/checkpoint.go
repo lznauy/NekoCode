@@ -1187,52 +1187,91 @@ func (m *Manager) authKey() ([]byte, error) {
 	if m.macKey != nil {
 		return m.macKey, nil
 	}
-	if err := secureDir(m.root); err != nil {
-		return nil, fmt.Errorf("checkpoint: secure authentication root: %w", err)
-	}
-	finalPath := filepath.Join(m.root, macKeyName)
-	key, err := readAuthKey(finalPath)
-	if errors.Is(err, os.ErrNotExist) {
-		pendingPath := filepath.Join(m.root, macPendingKeyName)
-		key, err = readAuthKey(pendingPath)
-		if errors.Is(err, os.ErrNotExist) {
-			key = make([]byte, sha256.Size)
-			if _, err = rand.Read(key); err == nil {
-				err = publishAuthKey(m.root, pendingPath, key)
-			}
-			if errors.Is(err, os.ErrExist) {
-				key, err = readAuthKey(pendingPath)
-			}
-		}
-		if err == nil {
-			err = migrateAllLegacyManifests(m.root, key)
-		}
-		if err == nil {
-			err = os.Link(pendingPath, finalPath)
-			if err != nil {
-				published, readErr := readAuthKey(finalPath)
-				if readErr == nil {
-					if hmac.Equal(published, key) {
-						err = nil
-					} else {
-						err = fmt.Errorf("concurrent authentication key mismatch")
-					}
-				}
-			}
-		}
-		if err == nil {
-			err = syncPath(m.root)
-		}
-		if err == nil {
-			_ = os.Remove(pendingPath)
-			err = syncPath(m.root)
-		}
-	}
+	key, err := m.acquireAuthKey()
 	if err != nil {
 		return nil, fmt.Errorf("checkpoint: load authentication key: %w", err)
 	}
 	m.macKey = key
 	return m.macKey, nil
+}
+
+// acquireAuthKey loads or publishes the root authentication key. Concurrent
+// managers race to publish the pending key and link it into place, and a
+// loser can observe the pending file vanish once the winner finishes, so the
+// whole acquisition is retried before giving up.
+func (m *Manager) acquireAuthKey() ([]byte, error) {
+	if err := secureDir(m.root); err != nil {
+		return nil, fmt.Errorf("checkpoint: secure authentication root: %w", err)
+	}
+	finalPath := filepath.Join(m.root, macKeyName)
+	pendingPath := filepath.Join(m.root, macPendingKeyName)
+	for attempt := 0; attempt < 5; attempt++ {
+		key, err := readAuthKey(finalPath)
+		if err == nil {
+			return key, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		key, err = readAuthKey(pendingPath)
+		if err == nil {
+			return m.adoptPendingKey(key)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		key = make([]byte, sha256.Size)
+		if _, err = rand.Read(key); err != nil {
+			return nil, err
+		}
+		if err := publishAuthKey(m.root, pendingPath, key); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				// Another manager published its pending key first; retry from
+				// the published files instead of failing on the vanished
+				// pending path.
+				continue
+			}
+			return nil, err
+		}
+		return m.adoptPendingKey(key)
+	}
+	return nil, fmt.Errorf("authentication key publication kept racing with concurrent managers")
+}
+
+// adoptPendingKey migrates legacy manifests with the pending key and links the
+// pending file into its final location. It returns the key that ended up
+// published, which may differ from the input when another manager won the race.
+func (m *Manager) adoptPendingKey(key []byte) ([]byte, error) {
+	finalPath := filepath.Join(m.root, macKeyName)
+	pendingPath := filepath.Join(m.root, macPendingKeyName)
+	// The final key may have been published between our checks; prefer it so
+	// legacy manifests are never migrated with a stale key.
+	published, err := readAuthKey(finalPath)
+	if err == nil {
+		_ = os.Remove(pendingPath)
+		return published, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	if err := migrateAllLegacyManifests(m.root, key); err != nil {
+		return nil, err
+	}
+	if err := os.Link(pendingPath, finalPath); err != nil {
+		published, readErr := readAuthKey(finalPath)
+		if readErr != nil {
+			return nil, errors.Join(fmt.Errorf("link authentication key: %w", err), readErr)
+		}
+		if !hmac.Equal(published, key) {
+			return nil, errors.Join(fmt.Errorf("concurrent authentication key mismatch"), err)
+		}
+		key = published
+	}
+	if err := syncPath(m.root); err != nil {
+		return nil, err
+	}
+	_ = os.Remove(pendingPath)
+	return key, syncPath(m.root)
 }
 
 func readAuthKey(path string) ([]byte, error) {
