@@ -58,10 +58,15 @@ func (t *TaskTool) Execute(ctx context.Context, args map[string]any) (string, er
 
 	// Read sub-callback from args (injected by agent for TUI forwarding).
 	subCtx := ctx
-	if cb, ok := args["_sub_callback"].(taskbridge.TaskCallbackFn); ok {
+	switch cb := args["_sub_callback"].(type) {
+	case taskbridge.TaskCallback:
+		subCtx = taskbridge.WithTaskID(taskbridge.WithTaskCallback(ctx, cb.Callback), cb.ID)
+		delete(args, "_sub_callback")
+	case taskbridge.TaskCallbackFn:
 		subCtx = taskbridge.WithTaskCallback(ctx, cb)
-		delete(args, "_sub_callback") // clean up
+		delete(args, "_sub_callback")
 	}
+
 	result, err := t.run(subCtx, taskbridge.TaskSpec{
 		Prompt: prompt, Profile: profile, Skills: skills,
 	})

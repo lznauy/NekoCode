@@ -287,6 +287,13 @@ func decodeRecordedPayload(version string, typ core.EventType, data json.RawMess
 		return nil, nil
 	}
 	switch typ {
+	case core.EventRunSummary:
+		var p protocol.RunSummary
+		return p, json.Unmarshal(data, &p)
+	case core.EventSubAgentOutput:
+		var p protocol.SubAgentOutput
+		return p, json.Unmarshal(data, &p)
+
 	case core.EventCompaction:
 		var p protocol.CompactionEvent
 		if err := json.Unmarshal(data, &p); err != nil {
@@ -296,7 +303,7 @@ func decodeRecordedPayload(version string, typ core.EventType, data json.RawMess
 			return nil, fmt.Errorf("invalid compaction event status %q or trigger %q", p.Status, p.Trigger)
 		}
 		return p, nil
-	case core.EventInputAccepted, core.EventSystemMessage:
+	case core.EventInputAccepted, core.EventSystemMessage, core.EventAssistantMessage:
 		var p core.MessagePayload
 		return p, json.Unmarshal(data, &p)
 	case core.EventAssistantDelta, core.EventReasoningDelta:

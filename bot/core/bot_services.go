@@ -203,3 +203,18 @@ func (b *Bot) Memory() Memory {
 	defer b.mu.Unlock()
 	return Memory{Path: memory.DefaultPath(), Content: b.ctxMgr.Snapshot().Memory}
 }
+
+// ToolNames is the configured public tool catalog, including extensions.
+func (b *Bot) ToolNames() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	descriptors := b.toolbox.Registry.Descriptors()
+	names := make([]string, 0, len(descriptors))
+	for _, d := range descriptors {
+		names = append(names, d.Name)
+	}
+	return names
+}
+
+// Rewind restores the current session's checkpoint and persists the workspace event.
+func (b *Bot) Rewind(id string) (string, error) { return b.rewindCheckpoint(id) }

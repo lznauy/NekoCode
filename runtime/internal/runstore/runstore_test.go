@@ -240,3 +240,42 @@ func TestRunStoreDeepCopiesInteractionViews(t *testing.T) {
 		t.Fatalf("snapshot internals were mutated: %#v", second)
 	}
 }
+
+func TestCanonicalAssistantMessagesPreserveSnapshot(t *testing.T) {
+	message := func(text string) core.Event {
+		return core.Event{Type: core.EventAssistantMessage, Payload: core.MessagePayload{Content: text}}
+	}
+	delta := func(text string) core.Event {
+		return core.Event{Type: core.EventAssistantDelta, Payload: core.DeltaPayload{Delta: text}}
+	}
+	system := func(text string) core.Event {
+		return core.Event{Type: core.EventSystemMessage, Payload: core.MessagePayload{Content: text}}
+	}
+	for _, tc := range []struct {
+		name   string
+		events []core.Event
+		want   string
+	}{
+		{"complete_only", []core.Event{message("answer")}, "answer"},
+		{"correct_preview", []core.Event{delta("wrong"), message("right")}, "right"},
+		{"stream_no_duplicate", []core.Event{delta("hello"), delta(" world"), message("hello world")}, "hello world"},
+		{"multiple_messages", []core.Event{message("first"), delta("draft"), message("second")}, "firstsecond"},
+		{"tool_boundary", []core.Event{delta("progress"), {Type: core.EventToolStarted, Payload: core.ToolPayload{CallID: "tool", ToolName: "read"}}, delta("draft"), message("answer")}, "progressanswer"},
+		{"subagent_not_boundary", []core.Event{delta("pre"), {Type: core.EventToolStarted, Payload: core.ToolPayload{CallID: "tool", SubAgentID: "child"}}, delta("view"), message("answer")}, "answer"},
+		{"empty_canonical", []core.Event{delta("draft"), message("")}, ""},
+		{"system_interleaving", []core.Event{delta("pre"), system("notice"), delta("view"), message("answer")}, "answer\nnotice"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewRunStore(1)
+			for _, event := range tc.events {
+				event.RunID = "run"
+				s.Record(event)
+			}
+			s.Record(core.Event{RunID: "run", Type: core.EventRunCancelled, Payload: core.RunResult{Error: "cancelled"}})
+			got, _ := s.Lookup("run")
+			if got.Output != tc.want {
+				t.Fatalf("output=%q want=%q", got.Output, tc.want)
+			}
+		})
+	}
+}

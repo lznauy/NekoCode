@@ -204,6 +204,7 @@ func (a *adapter) Close() error {
 
 func (a *adapter) services() controlruntime.Services {
 	return controlruntime.Services{
+		ToolNames: a.bot.ToolNames, Rewind: a.bot.Rewind, Checkpoints: a.bot.Checkpoints,
 		ExecuteCommand:         a.ExecuteCommand,
 		ExecuteLocalCommand:    a.ExecuteLocalCommand,
 		CommandMenu:            a.CommandMenu,

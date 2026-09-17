@@ -33,6 +33,7 @@ const (
 	EventInputAccepted     = core.EventInputAccepted
 	EventSystemMessage     = core.EventSystemMessage
 	EventAssistantDelta    = core.EventAssistantDelta
+	EventAssistantMessage  = core.EventAssistantMessage
 	EventReasoningDelta    = core.EventReasoningDelta
 	EventPhaseChanged      = core.EventPhaseChanged
 	EventCompaction        = core.EventCompaction
@@ -48,6 +49,8 @@ const (
 	EventQuestionRequested = core.EventQuestionRequested
 	EventQuestionResolved  = core.EventQuestionResolved
 	EventRunStarted        = core.EventRunStarted
+	EventRunSummary        = core.EventRunSummary
+	EventSubAgentOutput    = core.EventSubAgentOutput
 	EventRunDone           = core.EventRunDone
 	EventRunFailed         = core.EventRunFailed
 	EventRunCancelled      = core.EventRunCancelled
@@ -76,6 +79,7 @@ const (
 // MetricsSnapshot is independent from run lifecycle status.
 type MetricsSnapshot = protocol.Metrics
 type WorkspaceChanges = protocol.WorkspaceChanges
+type CheckpointInfo = protocol.CheckpointInfo
 type ToolPayload = core.ToolPayload
 type SubAgentPayload = core.SubAgentPayload
 type SessionPayload = core.SessionPayload
@@ -402,3 +406,6 @@ func (e *ProtocolError) Error() string {
 func protocolError(code ErrorCode, operation, message string) error {
 	return &ProtocolError{Code: code, Operation: operation, Message: message}
 }
+
+type RunSummary = protocol.RunSummary
+type SubAgentOutput = protocol.SubAgentOutput

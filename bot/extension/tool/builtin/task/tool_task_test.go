@@ -12,12 +12,15 @@ import (
 func TestTaskToolPassesComposedSpec(t *testing.T) {
 	tk := &TaskTool{}
 	var got taskbridge.TaskSpec
-	tk.Wire(func(_ context.Context, spec taskbridge.TaskSpec) (*taskbridge.TaskResult, error) {
+	tk.Wire(func(ctx context.Context, spec taskbridge.TaskSpec) (*taskbridge.TaskResult, error) {
 		got = spec
+		if taskbridge.TaskIDFromCtx(ctx) != "sub-test" {
+			t.Fatal("subagent identity not forwarded")
+		}
 		return &taskbridge.TaskResult{Content: "done"}, nil
 	})
 	out, err := tk.Execute(context.Background(), map[string]any{
-		"profile": "explore", "skills": []any{"check", "hunt"}, "prompt": "review",
+		"_sub_callback": taskbridge.TaskCallback{ID: "sub-test"}, "profile": "explore", "skills": []any{"check", "hunt"}, "prompt": "review",
 	})
 	if err != nil || out != "done" {
 		t.Fatalf("Execute() = %q, %v", out, err)

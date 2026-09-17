@@ -19,6 +19,7 @@
 | 接入其他推理引擎 | `runtime.New(runner, services)` | `Runner.Run` 和 Services |
 | 新增进程内 UI | 接收同一个 `*runtime.Runtime` | 事件投影 |
 | 新增远程 UI | `httpapi.New(manager)` | HTTP/SSE 客户端 |
+| 通过子进程接入 | `nekocode-tui --headless` | [NDJSON 客户端](../headless/README.md) |
 | 新增消息渠道 | `Runtime.RegisterConnector` | `Connector` |
 
 不需要完整 NekoCode 能力时，不要先创建 `bot.Bot` 再关闭功能。应从模型、提示词和
@@ -208,7 +209,10 @@ type RunHost interface {
 
 - `Text` 和 `Reason` 接收增量，不是完整历史。
 - `StepEvent` 使用稳定的 `CallID` 配对工具的 start、preview、blocked、execute 动作。
-- 子 Agent 动作使用 `SubAgentID` 关联，不把身份编码进字符串。
+- 工具动作通过 `ToolInput` 提供结构化 JSON 参数；`ToolArgs` 是展示文本，不应作为机器输入解析。
+- `StepActionChat` 上报完整文本，投影为 `assistant_message`；`Text` 仍用于增量预览。
+- `StepActionRunSummary` 通过 `Summary` 上报真实步数和终止原因，投影为 `run_summary`。
+- 子 Agent 动作使用 `SubAgentID` 关联，不把身份编码进字符串；`StepActionSubAgentText`、`StepActionSubAgentReason`、`StepActionSubAgentMessage` 分别上报文本增量、思考增量和非空完整文本，投影为 `subagent_output`。
 - `Confirm`、`Ask` 会阻塞 Runner，直到 UI 回复、run 取消或 Runtime 关闭。
 - `Run` 返回后不得保存或继续调用 `RunHost`。
 
@@ -262,7 +266,10 @@ Runtime 的可选只读方法：
 
 | 能力 | 查询方法 |
 | --- | --- |
-| Model | `CurrentModel` |
+| Models | `CurrentModel` |
+| ModelCatalog | `ModelOptions` |
+| ToolCatalog | `ToolNames` |
+| Checkpoints | `Checkpoints`（返回结构化恢复点及查询错误） |
 | Context | `ContextSnapshot`、`MemoryView` |
 | Extension | `SkillManagementView` |
 | Configuration | `ConfigView` |
@@ -271,7 +278,12 @@ Runtime 的可选只读方法：
 | Commands | `CommandMenu`（`/` 查询根命令，完整命令查询下一级候选） |
 
 先用 `Capabilities()` 决定页面和控件是否存在。能力不存在或 Runtime 已关闭时，
-只读方法返回对应零值。
+多数只读方法返回对应零值；`Checkpoints()` 返回 `unsupported` 或 `closed` 协议错误。
+
+`Models` 仅表示当前模型查询，模型列表和切换分别检查 `ModelCatalog`、`ModelSelection`。
+`Sessions` 表示会话查询，创建、恢复、删除分别检查 `SessionCreate`、`SessionResume`、
+`SessionDelete`。权限修改检查 `PermissionControl`，检查点查询和回滚分别检查
+`Checkpoints`、`Rewind`。不要从只读能力推断写操作可用。
 
 写能力同样通过 `Services` 中的函数显式提供：
 
@@ -383,15 +395,15 @@ type Event struct {
 }
 ```
 
-事件分为五组：
+事件分组如下：
 
 | 分组 | EventType | Payload |
 | --- | --- | --- |
-| 输入与输出 | `input_accepted`、`system_message`、`assistant_delta`、`reasoning_delta` | `MessagePayload` / `DeltaPayload` |
+| 输入与输出 | `input_accepted`、`system_message`、`assistant_delta`、`assistant_message`、`reasoning_delta` | `MessagePayload` / `DeltaPayload` |
 | 执行过程 | `phase_changed`、`todos_updated` | `PhasePayload` / `[]TodoItem` |
-| 工具与子 Agent | `tool_started`、`tool_blocked`、`tool_preview`、`tool_completed`、`subagent_started`、`subagent_ended` | `ToolPayload` / `SubAgentPayload` |
+| 工具与子 Agent | `tool_started`、`tool_blocked`、`tool_preview`、`tool_completed`、`subagent_started`、`subagent_ended`、`subagent_output` | `ToolPayload` / `SubAgentPayload` / `SubAgentOutput` |
 | 人机交互 | `approval_requested`、`approval_resolved`、`question_requested`、`question_resolved` | `ApprovalView` / `QuestionView` |
-| 生命周期 | `run_started`、`run_done`、`run_failed`、`run_aborted` | 无 / `RunResult` |
+| 生命周期 | `run_started`、`run_summary`、`run_done`、`run_failed`、`run_aborted` | 无 / `RunSummary` / `RunResult` |
 | 其他状态 | `session_changed`、`connector_status`、`metrics_updated` | `SessionPayload` / `ConnectorStatusPayload` / `MetricsSnapshot` |
 
 Go 符号 `EventRunCancelled` 的 wire value 是 `run_aborted`；
@@ -410,7 +422,8 @@ events, err := rt.ReplayEvents(ctx, runtime.EventFilter{
 
 - `Events`：只接收订阅后的实时事件。
 - `ReplayEvents`：先回放保留事件，再继续接收实时事件。
-- `EventFilter`：支持 `RunID`、`After`、`Types`、`Sources`。
+- `EventFilter`：支持 `RunID`、`After`、`Types`、`Sources` 和 `Reliable`。
+- 默认订阅在积压时可能丢弃部分事件。传输层可设置 `Reliable: true`：积压超限直接关闭订阅，调用方必须把异常关闭视为流失败，并取消对应运行或重建连接；这不提供持久化或自动重传保证。
 
 事件是实时投影，不是可靠消息队列。重连时以 `RunSnapshot` 为恢复基线，以
 `Sequence` 为增量游标。消费循环应快速投递到 UI 队列，避免被长操作阻塞。

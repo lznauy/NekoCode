@@ -58,7 +58,7 @@ func (b *ApprovalBroker) Request(req protocol.ConfirmRequest) protocol.ConfirmRe
 func (b *ApprovalBroker) Register(req protocol.ConfirmRequest) func() protocol.ConfirmReply {
 	id := fmt.Sprintf("apr_%d", atomic.AddUint64(&b.nextID, 1))
 	now := time.Now()
-	argsHash := stableHash(req.Args)
+	argsHash := stableHash(protocol.ToolInputArgs(req.Args))
 	rec := &approvalRecord{
 		reply: make(chan protocol.ConfirmReply, 1),
 		runID: b.currentRunID(),
@@ -66,7 +66,8 @@ func (b *ApprovalBroker) Register(req protocol.ConfirmRequest) func() protocol.C
 			ID:           id,
 			ToolName:     req.ToolName,
 			CallID:       req.CallID,
-			Args:         cloneMap(req.Args),
+			SubAgentID:   req.SubAgentID,
+			Args:         cloneMap(protocol.ApprovalArgs(req.Args)),
 			ArgsHash:     argsHash,
 			ToolCallHash: stableHash(approvalHashInput{ToolName: req.ToolName, Kind: req.Kind, ArgsHash: argsHash, Approval: req.Approval}),
 			Kind:         string(req.Kind),

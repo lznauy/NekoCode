@@ -434,3 +434,39 @@ func (b *Bot) restoreLedger(snapshot ledger.Snapshot) {
 		ag.Governance().Restore(snapshot)
 	}
 }
+
+// Checkpoints exposes rewind points independently of command-menu formatting.
+func (b *Bot) Checkpoints() ([]protocol.CheckpointInfo, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.checkpointInfos()
+}
+
+// checkpointInfos is shared with command menus, whose caller holds b.mu.
+func (b *Bot) checkpointInfos() ([]protocol.CheckpointInfo, error) {
+	if b.checkpoints == nil || b.sess == nil {
+		return nil, errors.New("checkpoints unavailable")
+	}
+	history, err := b.checkpoints.History(b.sess.CurrentID())
+	if err != nil {
+		return nil, err
+	}
+	points := make([]protocol.CheckpointInfo, 0, len(history))
+	for i, turn := range history {
+		created, modified, deleted := checkpointChangeCounts(turn)
+		label := turn.UserMessage
+		position := "Latest message"
+		if label == "" {
+			label = "Legacy checkpoint " + turn.Turn
+			position = "Legacy checkpoint"
+		} else if i > 0 {
+			position = fmt.Sprintf("%d messages ago", i)
+		}
+		points = append(points, protocol.CheckpointInfo{
+			ID: turn.Turn, Label: label,
+			Description: fmt.Sprintf("%s · %s · %d files · +%d ~%d -%d",
+				position, turn.CreatedAt.Local().Format("01-02 15:04"), len(turn.Changes), created, modified, deleted),
+		})
+	}
+	return points, nil
+}

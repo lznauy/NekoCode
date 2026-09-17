@@ -81,7 +81,7 @@ func (e *Executor) tryPermissionEscalation(ctx context.Context, privileged tools
 	}
 	confirmReq := protocol.NewApprovalRequest(
 		canonicalPermissionTool(tc.Name),
-		cloneToolArgs(tc.Args),
+		protocol.ApprovalArgs(tc.Args),
 		protocol.ConfirmKindPermission,
 		approvalContextFromPermission(req),
 	)

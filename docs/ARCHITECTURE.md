@@ -80,6 +80,7 @@ nekocode/
 │           └── build_icns.js        #     任意平台生成 ICNS 的脚本
 ├── protocol/                       # Bot/runtime 共用的中立运行契约
 ├── acp/                            # ACP v1 stdio/JSON-RPC 适配与 runtime 事件投影
+├── headless/                       # NekoCode 双向 NDJSON 基础协议，独立适配 runtime
 ├── logger/                         # 项目诊断日志
 ├── util/                           # 通用工具包（duration / fs / http / registry / sse / text / url / yaml / version / tui_snapshot）
 ├── runtime/                        # 交互控制层（TUI/GUI/HTTP/connector 的统一入口）

@@ -1,6 +1,7 @@
 package runstore
 
 import (
+	"strings"
 	"sync"
 	"time"
 
@@ -20,9 +21,14 @@ type RunStore struct {
 }
 
 type runRecord struct {
-	snapshot  core.RunSnapshot
-	toolStack []int
+	snapshot     core.RunSnapshot
+	toolStack    []int
+	previewSpans []outputSpan
 }
+
+// Spans identify only the current model response's deltas in Output.
+// System messages between deltas must survive canonical text replacement.
+type outputSpan struct{ start, end int }
 
 func NewRunStore(limit int) *RunStore {
 	if limit <= 0 {
@@ -70,7 +76,11 @@ func (s *RunStore) Record(ev core.Event) {
 		}
 	case core.EventAssistantDelta:
 		if p, ok := ev.Payload.(core.DeltaPayload); ok {
-			rec.snapshot.Output += p.Delta
+			rec.appendPreview(p.Delta)
+		}
+	case core.EventAssistantMessage:
+		if p, ok := ev.Payload.(core.MessagePayload); ok {
+			rec.completeMessage(p.Content)
 		}
 	case core.EventReasoningDelta:
 		if p, ok := ev.Payload.(core.DeltaPayload); ok {
@@ -90,6 +100,9 @@ func (s *RunStore) Record(ev core.Event) {
 		}
 	case core.EventToolStarted:
 		if p, ok := ev.Payload.(core.ToolPayload); ok {
+			if p.SubAgentID == "" {
+				rec.previewSpans = nil
+			}
 			rec.startTool(p, ev.Time)
 		}
 	case core.EventToolPreview:
@@ -98,6 +111,9 @@ func (s *RunStore) Record(ev core.Event) {
 		}
 	case core.EventToolCompleted, core.EventToolBlocked:
 		if p, ok := ev.Payload.(core.ToolPayload); ok {
+			if p.SubAgentID == "" {
+				rec.previewSpans = nil
+			}
 			status := core.ToolDone
 			if ev.Type == core.EventToolBlocked || p.IsError {
 				status = core.ToolBlocked
@@ -149,6 +165,39 @@ func (s *RunStore) Record(ev core.Event) {
 		}
 		rec.finish(core.RunCancelled, ev.Time)
 	}
+}
+
+func (r *runRecord) appendPreview(delta string) {
+	if delta == "" {
+		return
+	}
+	start := len(r.snapshot.Output)
+	r.snapshot.Output += delta
+	n := len(r.previewSpans)
+	if n > 0 && r.previewSpans[n-1].end == start {
+		r.previewSpans[n-1].end = len(r.snapshot.Output)
+	} else {
+		r.previewSpans = append(r.previewSpans, outputSpan{start, len(r.snapshot.Output)})
+	}
+}
+
+func (r *runRecord) completeMessage(content string) {
+	if len(r.previewSpans) == 0 {
+		r.snapshot.Output += content
+		return
+	}
+	var output strings.Builder
+	cursor := 0
+	for i, span := range r.previewSpans {
+		output.WriteString(r.snapshot.Output[cursor:span.start])
+		if i == 0 {
+			output.WriteString(content)
+		}
+		cursor = span.end
+	}
+	output.WriteString(r.snapshot.Output[cursor:])
+	r.snapshot.Output = output.String()
+	r.previewSpans = nil
 }
 
 func (s *RunStore) Current() (core.RunSnapshot, bool) {
@@ -333,6 +382,7 @@ func (r *runRecord) upsertQuestion(view core.QuestionView) {
 }
 
 func (r *runRecord) finish(status core.RunStatus, at time.Time) {
+	r.previewSpans = nil
 	r.snapshot.Status = status
 	r.snapshot.FinishedAt = &at
 }

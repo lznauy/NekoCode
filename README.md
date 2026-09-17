@@ -104,6 +104,17 @@ nekocode-tui --acp
 
 ACP 使用 stdio 通信，因此该模式不会启动 TUI。会话配置仅在当前 ACP 连接内生效，不会覆盖用户的全局配置。出于安全考虑，客户端提供的 stdio MCP 进程默认禁用；仅在完全信任客户端及其工作区配置时使用 `nekocode-tui --acp --allow-client-mcp`。能力清单与限制见 [docs/ACP.md](docs/ACP.md)。
 
+### 作为 Stream JSON 子进程使用
+
+```bash
+nekocode-tui -p "解释这个项目" --output-format stream-json
+nekocode-tui --headless
+```
+
+使用自有 `nekocode-headless/2` 协议，支持 NDJSON 多轮输入、工具与子代理事件、审批、
+会话管理、模型选择、检查点回滚和运行控制。接入开发指南见 [headless/README.md](headless/README.md)，
+完整消息契约见 [STREAM_JSON.md](docs/STREAM_JSON.md)。
+
 ## Star 趋势
 
 <a href="https://www.star-history.com/?repos=lznauy%2FNekoCode&type=date&legend=top-left">

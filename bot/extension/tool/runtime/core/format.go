@@ -1,11 +1,13 @@
 package core
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 
 	"nekocode/bot/provider/types"
+	"nekocode/protocol"
 )
 
 func ToToolDefs(descs []Descriptor) []types.ToolDef {
@@ -56,14 +58,12 @@ func toProperties(schemas map[string]Schema) map[string]types.Property {
 
 // FormatArgs serializes a tool args map into "key=value,key2=value2" form.
 func FormatArgs(args map[string]any) string {
+	args = PublicArgs(args)
 	if len(args) == 0 {
 		return ""
 	}
 	keys := make([]string, 0, len(args))
 	for k := range args {
-		if k == "_preview" || k == "_sub_callback" {
-			continue
-		}
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
@@ -76,4 +76,20 @@ func FormatArgs(args map[string]any) string {
 		pairs = append(pairs, k+"="+val)
 	}
 	return strings.Join(pairs, ",")
+}
+
+// JSONArgs preserves structured tool input for machine protocols. Runtime-only
+// arguments are not part of the model's tool call and must not cross the wire.
+func JSONArgs(args map[string]any) json.RawMessage {
+	data, err := json.Marshal(PublicArgs(args))
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+// PublicArgs copies the model-visible arguments, excluding only known runtime
+// hooks. Other underscore-prefixed fields are legitimate tool input.
+func PublicArgs(args map[string]any) map[string]any {
+	return protocol.ToolInputArgs(args)
 }

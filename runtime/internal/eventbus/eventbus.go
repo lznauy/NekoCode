@@ -38,6 +38,7 @@ type subscriber struct {
 	once   sync.Once
 	mu     sync.Mutex
 	queue  []core.Event
+	failed bool
 }
 
 func NewEventBus() *EventBus {
@@ -111,7 +112,18 @@ func (b *EventBus) subscribe(ctx context.Context, filter core.EventFilter, repla
 
 func (s *subscriber) enqueue(ev core.Event) {
 	s.mu.Lock()
+	if s.failed {
+		s.mu.Unlock()
+		return
+	}
 	if len(s.queue) >= defaultSubscriberQueueLimit {
+		if s.filter.Reliable {
+			s.failed = true
+			s.queue = nil
+			s.close()
+			s.mu.Unlock()
+			return
+		}
 		if !mustDeliverEvent(ev) {
 			s.mu.Unlock()
 			return
@@ -191,6 +203,7 @@ func mustDeliverEvent(ev core.Event) bool {
 		core.EventApprovalResolved,
 		core.EventQuestionRequested,
 		core.EventQuestionResolved,
+		core.EventRunSummary,
 		core.EventRunDone,
 		core.EventRunFailed,
 		core.EventRunCancelled,

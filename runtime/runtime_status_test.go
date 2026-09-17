@@ -338,3 +338,19 @@ func TestMetricsPrefersLiveServiceOverCache(t *testing.T) {
 		t.Fatalf("Metrics() = %+v, want live snapshot", got)
 	}
 }
+
+func TestToolNamesDoesNotCallServiceAfterClose(t *testing.T) {
+	calls := 0
+	r := New(RunnerFunc(func(context.Context, string, RunHost) (string, error) { return "", nil }), Services{
+		ToolNames: func() []string { calls++; return []string{"read"} },
+	})
+	if names := r.ToolNames(); len(names) != 1 {
+		t.Fatal(names)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if names := r.ToolNames(); names != nil || calls != 1 {
+		t.Fatalf("closed runtime called tool service: names=%v calls=%d", names, calls)
+	}
+}

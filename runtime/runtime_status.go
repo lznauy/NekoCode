@@ -12,16 +12,25 @@ const metricsPublishInterval = 100 * time.Millisecond
 // CapabilityManifest lets an interaction surface discover optional features
 // without probing methods or depending on a concrete bot.
 type CapabilityManifest struct {
-	Protocol      string `json:"protocol"`
-	Steering      bool   `json:"steering"`
-	Commands      bool   `json:"commands"`
-	Metrics       bool   `json:"metrics"`
-	Models        bool   `json:"models"`
-	Context       bool   `json:"context"`
-	Extensions    bool   `json:"extensions"`
-	Configuration bool   `json:"configuration"`
-	Sessions      bool   `json:"sessions"`
-	Connectors    bool   `json:"connectors"`
+	Checkpoints       bool   `json:"checkpoints"`
+	ModelCatalog      bool   `json:"model_catalog"`
+	SessionCreate     bool   `json:"session_create"`
+	SessionResume     bool   `json:"session_resume"`
+	SessionDelete     bool   `json:"session_delete"`
+	Protocol          string `json:"protocol"`
+	ToolCatalog       bool   `json:"tool_catalog"`
+	Rewind            bool   `json:"rewind"`
+	ModelSelection    bool   `json:"model_selection"`
+	PermissionControl bool   `json:"permission_control"`
+	Steering          bool   `json:"steering"`
+	Commands          bool   `json:"commands"`
+	Metrics           bool   `json:"metrics"`
+	Models            bool   `json:"models"`
+	Context           bool   `json:"context"`
+	Extensions        bool   `json:"extensions"`
+	Configuration     bool   `json:"configuration"`
+	Sessions          bool   `json:"sessions"`
+	Connectors        bool   `json:"connectors"`
 }
 
 type RuntimeState string
@@ -45,6 +54,12 @@ func (r *Runtime) Capabilities() CapabilityManifest {
 	hasCommands := r.services.ExecuteCommand != nil || len(r.runtimeCommands) > 0
 	r.mu.Unlock()
 	return CapabilityManifest{
+		Checkpoints:   r.services.Checkpoints != nil,
+		ModelCatalog:  r.services.ModelOptions != nil,
+		SessionCreate: r.services.NewSession != nil,
+		SessionResume: r.services.ResumeSession != nil,
+		SessionDelete: r.services.DeleteSession != nil,
+		ToolCatalog:   r.services.ToolNames != nil, Rewind: r.services.Rewind != nil, ModelSelection: r.services.SwitchSessionModel != nil, PermissionControl: r.services.SetFullAccess != nil,
 		Protocol: ProtocolVersion, Steering: r.services.Steer != nil,
 		Commands: hasCommands,
 		Metrics:  r.services.Metrics != nil, Models: r.services.CurrentModel != nil,
@@ -83,6 +98,17 @@ func (r *Runtime) CurrentModel() ModelSelection {
 	r.mu.Unlock()
 	if closed || service == nil {
 		return ModelSelection{}
+	}
+	return service()
+}
+
+// ToolNames reports the configured tool catalog without configuration secrets.
+func (r *Runtime) ToolNames() []string {
+	r.mu.Lock()
+	service, closed := r.services.ToolNames, r.closed
+	r.mu.Unlock()
+	if closed || service == nil {
+		return nil
 	}
 	return service()
 }
@@ -382,4 +408,18 @@ func mergeCommandMenus(menus ...CommandMenu) CommandMenu {
 	}
 	sort.Slice(merged.Items, func(i, j int) bool { return merged.Items[i].Value < merged.Items[j].Value })
 	return merged
+}
+
+// Checkpoints returns structured rewind points and preserves lookup failures.
+func (r *Runtime) Checkpoints() ([]CheckpointInfo, error) {
+	r.mu.Lock()
+	service, closed := r.services.Checkpoints, r.closed
+	r.mu.Unlock()
+	if closed {
+		return nil, protocolError(ErrorClosed, "checkpoints", "closed")
+	}
+	if service == nil {
+		return nil, protocolError(ErrorUnsupported, "checkpoints", "capability unavailable")
+	}
+	return service()
 }

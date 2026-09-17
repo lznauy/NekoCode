@@ -136,8 +136,8 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 				Action:   action,
 				CallID:   c.ID,
 				ToolName: name,
-				ToolArgs: core.FormatArgs(args),
-				Output:   output,
+				ToolArgs: core.FormatArgs(args), ToolInput: core.JSONArgs(args),
+				Output: output,
 			})
 		}
 	}
@@ -168,7 +168,7 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 			}
 			cfg.OnToolCall(ToolCallEvent{
 				Action: protocol.StepActionExecuteTool, CallID: r.ID, ToolName: name,
-				ToolArgs: core.FormatArgs(args), Output: content, IsError: r.Error != "",
+				ToolArgs: core.FormatArgs(args), ToolInput: core.JSONArgs(args), Output: content, IsError: r.Error != "",
 			})
 		}
 	}
@@ -207,7 +207,7 @@ func profileAllowsCall(allowed map[string]struct{}, call core.ToolCallItem) bool
 	return ok
 }
 
-func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []string, workflow string, addTokens func(int, int), recordCall func(types.StreamUsage), sessionID string, phase func(string)) ([]core.ToolCallItem, string, error) {
+func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []string, workflow string, addTokens func(int, int), recordCall func(types.StreamUsage), sessionID string, phase func(string), output RunConfig) ([]core.ToolCallItem, string, error) {
 	toolDefs := e.filteredToolDefs(allowed)
 	messages := mgr.BuildRequest(ctxmgr.ModelRequest{Tools: toolDefs})
 	if workflow != "" {
@@ -221,7 +221,7 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 			Messages: messages,
 			ToolDefs: toolDefs,
 			Callbacks: llmstream.StreamCallbacks{
-				OnPhase: phase,
+				OnPhase: phase, OnText: output.OnText, OnReasoning: output.OnReasoning,
 				AddTokens: func(p, c int) {
 					if addTokens != nil {
 						addTokens(p, c)
@@ -244,6 +244,9 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 		return nil, "", err
 	}
 
+	if result.Text != "" && output.OnMessage != nil {
+		output.OnMessage(result.Text)
+	}
 	if result.Text != "" || len(result.ToolCalls) > 0 {
 		mgr.AddAssistant(types.Message{Role: "assistant", Content: result.Text,
 			ReasoningContent: result.Reasoning, ReasoningSignature: result.ReasoningSignature,

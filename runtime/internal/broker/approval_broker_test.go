@@ -115,3 +115,29 @@ func TestApprovalBrokerRequestAfterCloseIsRejected(t *testing.T) {
 		t.Fatalf("pending approvals = %d, want 0", len(pending))
 	}
 }
+
+func TestApprovalHashesIgnoreDisplayPreview(t *testing.T) {
+	bus := eventbus.NewEventBus()
+	b := NewApprovalBroker(bus, core.SourceRef{}, func() core.RunID { return "run" })
+	defer b.RejectAll()
+	register := func(preview, command string) core.ApprovalView {
+		t.Helper()
+		b.Register(protocol.ConfirmRequest{ToolName: "shell", Args: map[string]any{"command": command, "_preview": preview}})
+		for _, v := range b.Pending() {
+			if v.Args["_preview"] == preview {
+				return v
+			}
+		}
+		t.Fatal("missing preview in approval view")
+		return core.ApprovalView{}
+	}
+	a := register("display one", "echo ok")
+	second := register("display two", "echo ok")
+	changed := register("display three", "echo changed")
+	if a.ArgsHash == "" || a.ArgsHash != second.ArgsHash || a.ToolCallHash != second.ToolCallHash {
+		t.Fatal("display-only change affected call identity")
+	}
+	if a.ArgsHash == changed.ArgsHash || a.ToolCallHash == changed.ToolCallHash {
+		t.Fatal("real argument change did not affect identity")
+	}
+}

@@ -422,9 +422,32 @@ func (r *Runtime) publishStep(runID RunID, step protocol.StepEvent) {
 	var eventType EventType
 	payload := ToolPayload{
 		ToolName: step.ToolName, CallID: step.CallID, Args: step.ToolArgs,
+		Input:   append([]byte(nil), step.ToolInput...),
 		IsError: step.IsError, SubAgentID: step.SubAgentID, SubAgentColor: step.SubAgentColor,
 	}
 	switch step.Action {
+	case protocol.StepActionRunSummary:
+		if step.Summary != nil {
+			r.events.Publish(Event{RunID: runID, Type: EventRunSummary, Source: SourceRef{Kind: "bot"}, Payload: *step.Summary})
+		}
+		return
+	case protocol.StepActionSubAgentText, protocol.StepActionSubAgentReason, protocol.StepActionSubAgentMessage:
+		kind := "text_delta"
+		if step.Action == protocol.StepActionSubAgentReason {
+			kind = "reasoning_delta"
+		}
+		if step.Action == protocol.StepActionSubAgentMessage {
+			kind = "message"
+		}
+		r.events.Publish(Event{RunID: runID, Type: EventSubAgentOutput, Source: SourceRef{Kind: "bot"}, Payload: SubAgentOutput{ID: step.SubAgentID, Kind: kind, Text: step.Output}})
+		return
+
+	case protocol.StepActionChat, protocol.StepActionThink:
+		r.events.Publish(Event{
+			RunID: runID, Type: EventAssistantMessage, Source: SourceRef{Kind: "bot"},
+			Payload: MessagePayload{Role: "assistant", Content: step.Output},
+		})
+		return
 	case protocol.StepActionToolStart:
 		eventType = EventToolStarted
 		payload.Preview = textutil.NormalizeTerminalOutput(step.Output)

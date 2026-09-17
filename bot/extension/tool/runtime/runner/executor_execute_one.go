@@ -299,7 +299,7 @@ func (e *Executor) promptConfirm(tc core.ToolCallItem, confirmFn protocol.Confir
 		}
 		approval.Combined = true
 	}
-	req := protocol.NewApprovalRequest(toolName, args, protocol.ConfirmKindPermission, approval)
+	req := protocol.NewApprovalRequest(toolName, protocol.ApprovalArgs(args), protocol.ConfirmKindPermission, approval)
 	req.CallID = tc.ID
 	reply := confirmFn(req)
 	if !reply.Allowed {
@@ -341,14 +341,6 @@ func (e *Executor) rememberAllowRule(toolName string, args map[string]any, match
 		_ = store.RememberRule(ws, rule)
 	}
 	e.rebuildEngine(decl, store, ws)
-}
-
-func cloneToolArgs(args map[string]any) map[string]any {
-	out := make(map[string]any, len(args)+3)
-	for key, value := range args {
-		out[key] = value
-	}
-	return out
 }
 
 func (e *Executor) callbacks() (protocol.PhaseFunc, protocol.ConfirmFunc, bool) {

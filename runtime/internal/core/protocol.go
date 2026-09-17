@@ -4,6 +4,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"nekocode/protocol"
@@ -50,6 +51,7 @@ const (
 	EventInputAccepted     EventType = "input_accepted"
 	EventSystemMessage     EventType = "system_message"
 	EventAssistantDelta    EventType = "assistant_delta"
+	EventAssistantMessage  EventType = "assistant_message"
 	EventReasoningDelta    EventType = "reasoning_delta"
 	EventPhaseChanged      EventType = "phase_changed"
 	EventCompaction        EventType = "compaction"
@@ -65,6 +67,8 @@ const (
 	EventQuestionRequested EventType = "question_requested"
 	EventQuestionResolved  EventType = "question_resolved"
 	EventRunStarted        EventType = "run_started"
+	EventRunSummary        EventType = "run_summary"
+	EventSubAgentOutput    EventType = "subagent_output"
 	EventRunDone           EventType = "run_done"
 	EventRunFailed         EventType = "run_failed"
 	EventRunCancelled      EventType = "run_aborted"
@@ -85,10 +89,13 @@ type Event struct {
 }
 
 type EventFilter struct {
-	RunID   RunID
-	After   uint64
-	Types   []EventType
-	Sources []string
+	// Reliable closes the subscription on overflow instead of silently dropping
+	// events. A transport must treat unexpected closure as a failed stream.
+	Reliable bool
+	RunID    RunID
+	After    uint64
+	Types    []EventType
+	Sources  []string
 }
 
 type MessagePayload struct {
@@ -108,14 +115,15 @@ type PhasePayload struct {
 }
 
 type ToolPayload struct {
-	ToolName      string `json:"tool_name"`
-	CallID        string `json:"call_id,omitempty"`
-	Args          string `json:"args,omitempty"`
-	Output        string `json:"output,omitempty"`
-	Preview       string `json:"preview,omitempty"`
-	IsError       bool   `json:"is_error,omitempty"`
-	SubAgentID    string `json:"subagent_id,omitempty"`
-	SubAgentColor int    `json:"subagent_color,omitempty"`
+	ToolName      string          `json:"tool_name"`
+	CallID        string          `json:"call_id,omitempty"`
+	Args          string          `json:"args,omitempty"`
+	Input         json.RawMessage `json:"input,omitempty"`
+	Output        string          `json:"output,omitempty"`
+	Preview       string          `json:"preview,omitempty"`
+	IsError       bool            `json:"is_error,omitempty"`
+	SubAgentID    string          `json:"subagent_id,omitempty"`
+	SubAgentColor int             `json:"subagent_color,omitempty"`
 }
 
 type SubAgentPayload struct {

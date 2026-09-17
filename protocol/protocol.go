@@ -2,6 +2,8 @@
 // the bot foundation and runtime adapters.
 package protocol
 
+import "encoding/json"
+
 type PhaseFunc func(string)
 
 const (
@@ -15,22 +17,39 @@ const (
 type StepAction string
 
 const (
-	StepActionChat          StepAction = "chat"
-	StepActionThink         StepAction = "think"
-	StepActionToolStart     StepAction = "tool_start"
-	StepActionToolBlocked   StepAction = "tool_blocked"
-	StepActionToolPreview   StepAction = "tool_preview"
-	StepActionExecuteTool   StepAction = "execute_tool"
-	StepActionSubAgentStart StepAction = "sub_agent_start"
-	StepActionSubAgentEnd   StepAction = "sub_agent_end"
+	StepActionChat            StepAction = "chat"
+	StepActionRunSummary      StepAction = "run_summary"
+	StepActionSubAgentText    StepAction = "subagent_text"
+	StepActionSubAgentReason  StepAction = "subagent_reasoning"
+	StepActionSubAgentMessage StepAction = "subagent_message"
+	StepActionThink           StepAction = "think"
+	StepActionToolStart       StepAction = "tool_start"
+	StepActionToolBlocked     StepAction = "tool_blocked"
+	StepActionToolPreview     StepAction = "tool_preview"
+	StepActionExecuteTool     StepAction = "execute_tool"
+	StepActionSubAgentStart   StepAction = "sub_agent_start"
+	StepActionSubAgentEnd     StepAction = "sub_agent_end"
 )
 
+type RunSummary struct {
+	StepCount  int    `json:"step_count"`
+	StopReason string `json:"stop_reason"`
+}
+
+type SubAgentOutput struct {
+	ID   string `json:"subagent_id"`
+	Kind string `json:"kind"`
+	Text string `json:"text"`
+}
+
 type StepEvent struct {
+	Summary         *RunSummary
 	Compaction      *CompactionEvent
 	Action          StepAction
 	CallID          string
 	ToolName        string
 	ToolArgs        string
+	ToolInput       json.RawMessage
 	Output          string
 	IsError         bool
 	SubAgentID      string
@@ -199,7 +218,8 @@ type ConfirmRequest struct {
 	Approval *ApprovalContext
 	// CallID identifies the tool call this request belongs to, when known.
 	// It lets interaction surfaces attach the approval to the right tool.
-	CallID string
+	CallID     string
+	SubAgentID string
 	// Deprecated: capabilities live in Approval and are approved atomically.
 	CanEscalatePermission bool
 }
@@ -291,4 +311,11 @@ type WorkspaceChanges struct {
 	Deleted   int  `json:"deleted"`
 	Untracked int  `json:"untracked"`
 	Available bool `json:"available"`
+}
+
+// CheckpointInfo is a transport-neutral summary of a rewind point.
+type CheckpointInfo struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
 }

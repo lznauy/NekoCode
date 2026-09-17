@@ -9,6 +9,9 @@ import (
 // to a Runner. The composition root supplies this value once; Runtime and
 // transports do not discover capabilities through type assertions.
 type Services struct {
+	Checkpoints            func() ([]CheckpointInfo, error)
+	ToolNames              func() []string
+	Rewind                 func(string) (string, error)
 	ExecuteCommand         func(ctx context.Context, input string, host RunHost) (CommandResult, error)
 	ExecuteLocalCommand    func(context.Context, string) (string, LocalCommandResult)
 	CommandMenu            func(context.Context, string) (CommandMenu, bool)
@@ -209,4 +212,10 @@ func (r *Runtime) publishSessionChanged() {
 		Type: EventSessionChanged, Source: SourceRef{Kind: "runtime"},
 		Payload: SessionPayload{ID: sessionID},
 	})
+}
+
+// Rewind restores checkpointed workspace files while the runtime is idle.
+func (r *Runtime) Rewind(id string) (message string, err error) {
+	err = r.mutation("rewind", r.services.Rewind != nil, func() error { message, err = r.services.Rewind(id); return err })
+	return
 }

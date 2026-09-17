@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"fmt"
 
 	"nekocode/bot/command"
 	"nekocode/bot/config"
@@ -72,26 +71,15 @@ func (b *Bot) registerCommandMenus(p *command.Parser) {
 		if len(cmd.Args) != 0 || b.checkpoints == nil || b.sess == nil {
 			return protocol.CommandMenu{}, false
 		}
-		history, err := b.checkpoints.History(b.sess.CurrentID())
+		points, err := b.checkpointInfos()
 		if err != nil {
 			return protocol.CommandMenu{Title: "Rewind to message", Empty: err.Error()}, true
 		}
-		items := make([]protocol.CommandMenuItem, 0, len(history))
-		for i, turn := range history {
-			created, modified, deleted := checkpointChangeCounts(turn)
-			label := turn.UserMessage
-			position := "Latest message"
-			if label == "" {
-				label = "Legacy checkpoint " + turn.Turn
-				position = "Legacy checkpoint"
-			} else if i > 0 {
-				position = fmt.Sprintf("%d messages ago", i)
-			}
+		items := make([]protocol.CommandMenuItem, 0, len(points))
+		for _, point := range points {
 			items = append(items, protocol.CommandMenuItem{
-				Value: "/rewind " + turn.Turn, Label: label,
-				Description: fmt.Sprintf("%s · %s · %d files · +%d ~%d -%d",
-					position, turn.CreatedAt.Local().Format("01-02 15:04"), len(turn.Changes), created, modified, deleted),
-				Submit: true,
+				Value: "/rewind " + point.ID, Label: point.Label,
+				Description: point.Description, Submit: true,
 			})
 		}
 		return protocol.CommandMenu{Title: "Rewind to message", Empty: "No rewind points available", Items: items}, true

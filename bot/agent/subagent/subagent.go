@@ -187,7 +187,7 @@ func (r *engineRun) stepOnce() bool {
 		return true
 	}
 	profile := r.cfg.Profile
-	calls, text, err := r.engine.reason(r.ctx, r.ctxMgr, profile.Tools, buildSkillWorkflow(r.cfg), r.state.addTokens(r.cfg), r.cfg.RecordLLMUsage, r.cfg.SessionID, r.phase)
+	calls, text, err := r.engine.reason(r.ctx, r.ctxMgr, profile.Tools, buildSkillWorkflow(r.cfg), r.state.addTokens(r.cfg), r.cfg.RecordLLMUsage, r.cfg.SessionID, r.phase, r.cfg)
 	r.ctxMgr.SetHints("")
 	if err != nil {
 		r.log("error: %v", err)

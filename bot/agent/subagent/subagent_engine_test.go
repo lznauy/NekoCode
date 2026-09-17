@@ -461,3 +461,42 @@ func TestSubagentPolicyBlockRequiresReadBeforeEdit(t *testing.T) {
 		t.Fatalf("reason after dedicated read = %q, want allow", reason)
 	}
 }
+
+func TestReasonEmitsOnlyNonEmptyMessages(t *testing.T) {
+	for _, tc := range []struct {
+		name, text, reasoning string
+	}{
+		{name: "tool_only"},
+		{name: "reasoning_and_tool", reasoning: "thinking"},
+		{name: "text_and_tool", text: "progress"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			llm := &scriptedLLM{scripts: [][]types.StreamToken{{
+				{Content: tc.text, ReasoningContent: tc.reasoning},
+				{ToolCallDelta: &types.ToolCallDelta{Index: 0, ID: "tool", Name: submitResultToolName, Arguments: "{}"}},
+			}}}
+			engine := New(Config{LLM: llm, Tools: tools.New()})
+			var messages []string
+			var reasoning string
+			cfg := RunConfig{
+				Profile:     Profile{Name: "test", SystemPrompt: "test"},
+				OnMessage:   func(text string) { messages = append(messages, text) },
+				OnReasoning: func(text string) { reasoning += text },
+			}
+			calls, text, err := engine.reason(context.Background(), engine.newContextManager(cfg), nil, "", nil, nil, "", nil, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(calls) != 1 || text != tc.text || reasoning != tc.reasoning {
+				t.Fatalf("calls=%v text=%q reasoning=%q", calls, text, reasoning)
+			}
+			if tc.text == "" {
+				if len(messages) != 0 {
+					t.Fatalf("empty response emitted messages: %#v", messages)
+				}
+			} else if len(messages) != 1 || messages[0] != tc.text {
+				t.Fatalf("messages=%#v", messages)
+			}
+		})
+	}
+}

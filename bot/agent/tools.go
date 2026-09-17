@@ -119,7 +119,7 @@ func emitStartCallbacks(calls []core.ToolCallItem, blocked map[int]string, callb
 			action = protocol.StepActionToolBlocked
 			preview = reason
 		}
-		callback(protocol.StepEvent{Action: action, CallID: c.ID, ToolName: c.Name, ToolArgs: core.FormatArgs(c.Args), Output: preview})
+		callback(protocol.StepEvent{Action: action, CallID: c.ID, ToolName: c.Name, ToolArgs: core.FormatArgs(c.Args), ToolInput: core.JSONArgs(c.Args), Output: preview})
 	}
 }
 
@@ -148,7 +148,7 @@ func emitResultCallbacks(calls []core.ToolCallItem, blocked map[int]string, resu
 			if _, isBlocked := blocked[i]; isBlocked {
 				continue
 			}
-			callback(protocol.StepEvent{Action: protocol.StepActionExecuteTool, CallID: r.ID, ToolName: r.Name, ToolArgs: core.FormatArgs(call.Args), Output: content, IsError: r.Error != ""})
+			callback(protocol.StepEvent{Action: protocol.StepActionExecuteTool, CallID: r.ID, ToolName: r.Name, ToolArgs: core.FormatArgs(call.Args), ToolInput: core.JSONArgs(call.Args), Output: content, IsError: r.Error != ""})
 		}
 	}
 	return msgs
@@ -263,7 +263,7 @@ func (r *toolRunner) prepareSubagentCallbacks(allowed []core.ToolCallItem, allow
 			})
 		}
 		taskInfos = append(taskInfos, subSlotInfo{sid, start})
-		c.Args["_sub_callback"] = taskbridge.TaskCallbackFn(func(ev protocol.StepEvent) {
+		c.Args["_sub_callback"] = taskbridge.TaskCallback{ID: sid, Callback: func(ev protocol.StepEvent) {
 			start(ev)
 			if ev.Action == protocol.StepActionSubAgentStart {
 				return
@@ -274,7 +274,7 @@ func (r *toolRunner) prepareSubagentCallbacks(allowed []core.ToolCallItem, allow
 			ev.SubAgentID = sid
 			ev.SubAgentColor = cid
 			callback(ev)
-		})
+		}}
 		kept = append(kept, c)
 	}
 

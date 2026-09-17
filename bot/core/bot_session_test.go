@@ -64,6 +64,16 @@ func TestRewindMenuShowsUserMessagesAndChangedFiles(t *testing.T) {
 		!strings.Contains(menu.Items[1].Description, "1 files · +0 ~1 -0") {
 		t.Fatalf("rewind menu = %+v, %v", menu, ok)
 	}
+	points, err := b.Checkpoints()
+	if err != nil || len(points) != len(menu.Items) {
+		t.Fatalf("checkpoints=%+v err=%v", points, err)
+	}
+	for i, point := range points {
+		if point.ID != strings.TrimPrefix(menu.Items[i].Value, "/rewind ") || point.Label != menu.Items[i].Label || point.Description != menu.Items[i].Description {
+			t.Fatalf("checkpoint and menu disagree: %+v %+v", point, menu.Items[i])
+		}
+	}
+
 	message, err := b.rewindCheckpoint(turn)
 	if err != nil || !strings.Contains(message, `Rewound to "Update the main entrypoint"`) || !strings.Contains(message, "1 files across 1 directories") {
 		t.Fatalf("rewind = %q, %v", message, err)

@@ -32,12 +32,14 @@ type RunResult struct {
 	Error       error
 	Steps       int
 	Interrupted bool
+	StopReason  string
 }
 
 type RunCallback func(ev protocol.StepEvent)
 
 type loopRunner struct {
-	agent *Agent
+	agent        *Agent
+	stepLimitHit bool
 }
 
 func newLoopRunner(agent *Agent) *loopRunner {
@@ -46,6 +48,7 @@ func newLoopRunner(agent *Agent) *loopRunner {
 
 func (r *loopRunner) run(input string, callback RunCallback) *RunResult {
 	a := r.agent
+	r.stepLimitHit = false
 	beforeRun := a.deps.ctxMgr.Snapshot()
 	r.startRun(input)
 	defer r.logGovernanceSummary()
@@ -62,6 +65,7 @@ func (r *loopRunner) run(input string, callback RunCallback) *RunResult {
 	// the run, so they are still recorded in the context instead of being lost.
 	result.Error = errors.Join(result.Error, a.drainSteering())
 	r.restoreInterruptedRun(beforeRun, result)
+	r.publishSummary(result, callback)
 	return result
 }
 
@@ -132,9 +136,30 @@ func (r *loopRunner) stepLimitReached() bool {
 	if a.run.step < maxAgentSteps {
 		return false
 	}
+	r.stepLimitHit = true
 	a.run.stopReason = policy.StopCompleted
 	a.clearFinalState()
 	return true
+}
+
+func (r *loopRunner) publishSummary(result *RunResult, callback RunCallback) {
+	if result == nil {
+		return
+	}
+	reason := "completed"
+	if r.stepLimitHit {
+		reason = "step_limit"
+	}
+	if result.Error != nil {
+		reason = "execution_error"
+	}
+	if result.Interrupted {
+		reason = "cancelled"
+	}
+	result.StopReason = reason
+	if callback != nil {
+		callback(protocol.StepEvent{Action: protocol.StepActionRunSummary, Summary: &protocol.RunSummary{StepCount: result.Steps, StopReason: reason}})
+	}
 }
 
 func (r *loopRunner) finishRun(callback RunCallback) *RunResult {

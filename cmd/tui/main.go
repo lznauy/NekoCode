@@ -4,8 +4,11 @@ import (
 	"context"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"nekocode/acp"
+	"nekocode/headless"
 	"nekocode/interaction/tui"
 )
 
@@ -21,6 +24,18 @@ func main() {
 			}
 		}
 		if err := acp.RunStdioWithOptions(context.Background(), options); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	options, selected, err := headless.ParseArgs(os.Args[1:])
+	if err != nil {
+		log.Fatal(err)
+	}
+	if selected {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		if err := headless.RunStdio(ctx, options); err != nil {
 			log.Fatal(err)
 		}
 		return

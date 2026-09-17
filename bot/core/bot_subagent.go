@@ -79,15 +79,25 @@ func buildSubagentRunConfig(
 		Policy:         ag.Governance(),
 		Environment:    environment,
 	}
+	if confirm := cfg.ConfirmFn; confirm != nil {
+		cfg.ConfirmFn = func(request protocol.ConfirmRequest) protocol.ConfirmReply {
+			request.SubAgentID = taskbridge.TaskIDFromCtx(ctx)
+			return confirm(request)
+		}
+	}
 	if subCB, ok := taskbridge.TaskCallbackFromCtx(ctx); ok {
+		cfg.OnText = func(text string) { subCB(protocol.StepEvent{Action: protocol.StepActionSubAgentText, Output: text}) }
+		cfg.OnReasoning = func(text string) { subCB(protocol.StepEvent{Action: protocol.StepActionSubAgentReason, Output: text}) }
+		cfg.OnMessage = func(text string) { subCB(protocol.StepEvent{Action: protocol.StepActionSubAgentMessage, Output: text}) }
+
 		cfg.OnToolCall = func(ev subagent.ToolCallEvent) {
 			subCB(protocol.StepEvent{
 				Action:   ev.Action,
 				CallID:   ev.CallID,
 				ToolName: ev.ToolName,
-				ToolArgs: ev.ToolArgs,
-				Output:   ev.Output,
-				IsError:  ev.IsError,
+				ToolArgs: ev.ToolArgs, ToolInput: ev.ToolInput,
+				Output:  ev.Output,
+				IsError: ev.IsError,
 			})
 		}
 	}

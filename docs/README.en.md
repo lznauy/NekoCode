@@ -103,6 +103,18 @@ nekocode-tui --acp
 
 ACP mode communicates over stdio and does not start the TUI. Session configuration is scoped to the current ACP connection and never overwrites global user configuration. Client-supplied stdio MCP processes are disabled by default; use `nekocode-tui --acp --allow-client-mcp` only when the client and its workspace configuration are fully trusted. See [ACP.md](ACP.md) for capabilities and limits.
 
+### Use as a Stream JSON subprocess
+
+```bash
+nekocode-tui -p "Explain this project" --output-format stream-json
+nekocode-tui --headless
+```
+
+Supports NDJSON turns, tool events, approvals, questions, and cancellation. This is the
+NekoCode-owned `nekocode-headless/2` protocol with session management, model selection,
+checkpoint rewind, subagent output, steering, and graceful shutdown.
+See [STREAM_JSON.md](STREAM_JSON.md) for the supported contract (Chinese).
+
 ## Star History
 
 <a href="https://www.star-history.com/?repos=lznauy%2FNekoCode&type=date&legend=top-left">

@@ -55,6 +55,26 @@ NekoCode 需要一个模型服务商的 API Key 才能工作。首次使用前�
 
 配置好后运行 `nekocode-tui`，在输入框打字、回车，就开始对话了。
 
+### 脚本与编辑器接入
+
+配置完成后，可以在项目目录中使用无界面入口：
+
+```bash
+# 单次任务，输出 NDJSON，完成后退出
+nekocode-tui -p "解释这个项目" --output-format stream-json
+
+# 宿主通过 stdin/stdout 进行多轮交互
+nekocode-tui --headless
+
+# 支持 ACP 的编辑器
+nekocode-tui --acp
+```
+
+Headless 使用自有 `nekocode-headless/2` 协议，支持工具审批、提问、会话管理和运行控制。
+需要审批或回答问题时，宿主必须保持 stdin 打开并回复控制请求；stdin 关闭后交互自动拒绝。
+接入示例见 [Headless 开发指南](../headless/README.md)，消息格式见
+[Stream JSON 协议](STREAM_JSON.md)；编辑器能力与限制见 [ACP 文档](ACP.md)。
+
 ## 三、日常使用
 
 ### 基本操作

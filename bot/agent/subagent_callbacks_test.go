@@ -19,7 +19,8 @@ func TestSubagentCallbackLifecycle(t *testing.T) {
 			if len(denied) != 0 || len(calls) != 1 || len(events) != 0 {
 				t.Fatal("expected a reserved slot without premature start", denied, events)
 			}
-			cb := calls[0].Args["_sub_callback"].(taskbridge.TaskCallbackFn)
+			delegated := calls[0].Args["_sub_callback"].(taskbridge.TaskCallback)
+			cb := delegated.Callback
 			wantProfile := "reviewer"
 			if mode == "resolved" {
 				wantProfile = "demo/reviewer"
@@ -40,6 +41,9 @@ func TestSubagentCallbackLifecycle(t *testing.T) {
 			}
 			if events[0].SubAgentProfile != wantProfile || events[0].SubAgentID == "" {
 				t.Fatalf("incorrect start metadata: %+v", events[0])
+			}
+			if delegated.ID != events[0].SubAgentID {
+				t.Fatal("delegated interaction identity differs from event identity")
 			}
 			for _, ev := range events {
 				if ev.SubAgentID != events[0].SubAgentID {
