@@ -4,7 +4,6 @@ import (
 	"reflect"
 	"testing"
 
-	"nekocode/bot/config"
 	extensionmgr "nekocode/bot/extension"
 	"nekocode/bot/extension/mcp"
 	"nekocode/bot/extension/plugin"
@@ -29,8 +28,7 @@ func TestExtensionCombinesSourcesAndHealth(t *testing.T) {
 		MCPHealth: map[string]mcp.Health{
 			"plugin-server": {Status: mcp.StatusReady, ToolCount: 2},
 		},
-	}, map[string]config.MCPServerConfig{
-		"configured-server": {Command: "configured-mcp", Enabled: true},
+		ConfiguredMCP: []extensionmgr.ConfiguredMCP{{Name: "configured-server", Source: "配置", Command: "configured-mcp", Enabled: true}},
 	})
 
 	if len(got.Plugins) != 1 || len(got.MCP) != 2 {
@@ -132,6 +130,32 @@ func TestBuildPluginMCPViews(t *testing.T) {
 	}
 	if s3 := byName["srv3"]; !reflect.DeepEqual(s3.Args, []string{"/plugins/demo"}) {
 		t.Fatalf("srv3 args mismatch: %+v", s3.Args)
+	}
+}
+
+func TestEffectiveProjectMCPView(t *testing.T) {
+	snapshot := extensionmgr.Snapshot{
+		ConfiguredMCP: []extensionmgr.ConfiguredMCP{
+			{Name: "same", Source: "/project/.nekocode/.mcp.json", Command: "project", Enabled: false},
+			{Name: "local", Source: "/project/.nekocode/.mcp.json", Command: "local", Enabled: true},
+		},
+		MCPHealth: map[string]mcp.Health{"local": {Status: mcp.StatusReady, ToolCount: 1}},
+	}
+	got := Extension(snapshot)
+	if len(got.MCP) != 2 || got.MCP[0].Command != "project" || got.MCP[0].Status != "disabled" || got.MCP[1].Status != mcp.StatusReady {
+		t.Fatalf("project definitions not reflected: %+v", got.MCP)
+	}
+}
+
+func TestShadowedPluginDoesNotInheritHostHealth(t *testing.T) {
+	snapshot := extensionmgr.Snapshot{
+		Plugins:       []*plugin.Plugin{{Manifest: plugin.Manifest{Name: "demo", MCPServers: map[string]plugin.MCPServerConfig{"same": {Command: "plugin-command"}}}, Enabled: true}},
+		ConfiguredMCP: []extensionmgr.ConfiguredMCP{{Name: "same", Source: "/project/.nekocode/.mcp.json", Command: "project-command", Enabled: true}},
+		MCPHealth:     map[string]mcp.Health{"same": {Owner: "config:same", Status: mcp.StatusReady, ToolCount: 3}},
+	}
+	got := Extension(snapshot)
+	if len(got.MCP) != 2 || got.MCP[0].Status != "shadowed" || got.MCP[0].ToolCount != 0 || got.MCP[1].Status != mcp.StatusReady {
+		t.Fatalf("shadowed plugin inherited host state: %+v", got.MCP)
 	}
 }
 

@@ -42,15 +42,22 @@ type Manager struct {
 	ctx           *ctxmgr.Manager
 	tools         *tools.Registry
 	contextWindow int
+	dirs          []string
 }
 
 // New creates a skill manager with the concrete services it owns.
 func New(ctx *ctxmgr.Manager, toolRegistry *tools.Registry, contextWindow int) *Manager {
+	return NewWithDirs(ctx, toolRegistry, contextWindow, defaultDirs())
+}
+
+// NewWithDirs fixes discovery paths for the lifetime of the manager.
+func NewWithDirs(ctx *ctxmgr.Manager, toolRegistry *tools.Registry, contextWindow int, dirs []string) *Manager {
 	m := &Manager{
 		reg:           newRegistry(),
 		ctx:           ctx,
 		tools:         toolRegistry,
 		contextWindow: contextWindow,
+		dirs:          append([]string(nil), dirs...),
 	}
 	// Register the capability before extensions validate Agent tools. Its
 	// catalog remains empty until Load publishes successfully activated skills.
@@ -70,9 +77,13 @@ func (m *Manager) Reload(pluginDirs []string) {
 
 func (m *Manager) reload(pluginDirs []string, loaded map[string]bool) {
 	m.reg = newRegistry()
-	m.reg.RegisterAll(bundledSkills())
-	dirs := append(defaultDirs(), pluginDirs...)
+	dirs := append(append([]string(nil), m.dirs...), pluginDirs...)
 	m.reg.Load(dirs)
+	for _, sk := range bundledSkills() {
+		if !m.reg.Has(sk.Name) {
+			m.reg.Register(sk)
+		}
+	}
 	for name := range loaded {
 		if m.reg.Has(name) {
 			m.reg.MarkLoaded(name)

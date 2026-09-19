@@ -20,6 +20,7 @@ import (
 	"nekocode/bot/extension/tool/runtime/workspace"
 	"nekocode/bot/policy"
 	"nekocode/bot/policy/builtin"
+	"nekocode/bot/project"
 	"nekocode/bot/prompt"
 	"nekocode/bot/provider"
 	"nekocode/bot/session"
@@ -41,21 +42,24 @@ type RunHost interface {
 }
 
 type Bot struct {
-	cwd           string
-	home          string
-	cfg           *config.Config
-	promptBuilder *prompt.Builder
-	ctxMgr        *ctxmgr.Manager
-	policy        *policy.Policy
-	ag            *agent.Agent
-	toolbox       *catalog.Toolbox
-	cmd           *command.Handler
-	ext           *extension.Manager
-	sess          *session.Manager
-	checkpoints   *checkpoint.Manager
-	mu            sync.Mutex
-	hostMu        sync.RWMutex
-	runHost       RunHost
+	cwd             string
+	home            string
+	cfg             *config.Config
+	promptBuilder   *prompt.Builder
+	project         *project.Project
+	ctxMgr          *ctxmgr.Manager
+	policy          *policy.Policy
+	ag              *agent.Agent
+	toolbox         *catalog.Toolbox
+	cmd             *command.Handler
+	ext             *extension.Manager
+	sess            *session.Manager
+	checkpoints     *checkpoint.Manager
+	mu              sync.Mutex
+	projectReloadMu sync.Mutex
+	reloadView      *extension.Snapshot // Previous complete view while extensions reload.
+	hostMu          sync.RWMutex
+	runHost         RunHost
 	// fullAccess mirrors the executor's full-takeover permission mode as a
 	// lock-free value: command menus are resolved with b.mu held, so reading
 	// the mode through getAgent (which takes b.mu) would self-deadlock.
@@ -106,8 +110,13 @@ func (b *Bot) initConfig() error {
 		return fmt.Errorf("bot: load config: %w", err)
 	}
 	b.cfg = cfg
+	b.project, err = project.New(b.cwd)
+	if err != nil {
+		return fmt.Errorf("bot: resolve project: %w", err)
+	}
 	b.promptBuilder = prompt.New(b.cwd)
 	b.promptBuilder.SetEnvironmentProvider(b.environment)
+	b.reloadProject()
 	return nil
 }
 
@@ -267,5 +276,6 @@ func (b *Bot) initCommands() {
 	}
 	b.ext.RegisterCommands(b.cmd, b.confirmInstall)
 	b.registerSessionCommands(b.cmd.Parser())
+	b.registerWorkspaceCommands(b.cmd.Parser())
 	b.registerCommandMenus(b.cmd.Parser())
 }

@@ -260,6 +260,8 @@ NekoCode 内置以下工程工作流，平时可自动触发，也可以手动�
 - 项目级：`<项目目录>/.nekocode/skills/<技能名>/SKILL.md`（只在这个项目生效）
 - 用户级：`~/.nekocode/skills/<技能名>/SKILL.md`（所有项目生效）
 
+同名技能按「项目 → 用户 → 插件 → 内置」的顺序选择，优先级最高的完整定义生效。技能列表在启动时加载，正文按需注入对话。修改后执行 `/workspace reload` 刷新。
+
 `SKILL.md` 的写法：
 
 ```markdown
@@ -378,10 +380,66 @@ MCP(Model Context Protocol）可以为 AI 接入外部工具和数据源（数�
 
 ## 八、配置文件一览
 
+### 项目工作空间
+
+从某个目录启动 NekoCode，该目录就是本实例的项目根目录。启动时自动读取：
+
+```text
+my-project/
+├── NEKOCODE.md                     # 项目规范
+└── .nekocode/
+    ├── .mcp.json                   # 项目 MCP
+    ├── skills/
+    │   └── <name>/SKILL.md         # 项目技能
+    ├── plugins/                   # 可选：项目插件
+    ├── permissions.json           # 自动保存的本机授权
+    └── index.db                   # 自动生成的索引
+```
+
+各项独立可选，只有 `NEKOCODE.md` 也能生效；缺少 `.nekocode` 时继续使用用户级配置，不会为了加载配置而创建该目录。当前不向父目录查找项目，也不递归加载子目录的 `NEKOCODE.md`。Shell 中的 `cd` 不改变项目配置来源。
+
+`NEKOCODE.md` 使用 UTF-8，最多 128 KiB。其内容持续作为项目指令提供给主 Agent 和受委托的子 Agent，压缩对话不会删除它；新建或恢复会话时重新读取当前版本。规范文件不授予文件访问权限。旧会话仍按保存的 `cwd` 识别项目，跨项目恢复会被拒绝，需要从原目录打开。
+
+如果会话缺失 `cwd` 元数据，会明确提示元数据不完整；需要在该会话的 `session.json` 中恢复原项目的绝对路径后再继续，不会自动将未知来源的会话绑定到当前项目。
+
+项目 MCP 文件使用 `mcpServers` 字段，例如：
+
+```json
+{
+  "mcpServers": {
+    "project-tools": {
+      "command": "node",
+      "args": ["tools/mcp-server.js"],
+      "env": { "MODE": "development" }
+    },
+    "global-server-to-disable": {
+      "enabled": false
+    }
+  }
+}
+```
+
+项目 MCP 与 `~/.nekocode/config.json` 中的全局 MCP 按名称合并；同名时项目定义完整替换全局定义，不拼接参数或环境变量。项目文件中省略 `enabled` 表示启用，`enabled: false` 会屏蔽同名全局服务；全局配置的既有 `enabled` 语义不变。项目配置不会写回用户级配置文件。
+
+MCP 子进程默认以项目根目录为工作目录；可用 `cwd` 指定绝对路径或相对项目根目录的路径。带路径的相对 `command` 基于该子进程工作目录解析，裸命令名使用 `PATH`，`args` 原样传递。当前仅支持 stdio；项目文件最大 1 MiB，空列表写作 `{"mcpServers": {}}`。
+
+使用 `/workspace` 查看根目录、项目配置路径和读取错误，使用 `/workspace reload` 刷新；管理界面的技能刷新也会更新这些配置。刷新在任务之间执行，不监听磁盘变化。格式错误时保留该文件上一份有效配置，其他文件继续加载；删除文件后刷新会撤销其配置。MCP 连接失败显示错误状态，不会自动改用同名全局服务。
+
+项目 MCP 覆盖连接提供的同名 MCP 时保留原定义，删除覆盖项并刷新后会恢复原服务；连接已撤销的定义不会恢复。管理界面将被其他来源覆盖的 MCP 标记为 `shadowed`，不会将实际运行服务的状态或工具数量归给被覆盖项。
+
+每次项目重载会重试处于错误状态的 MCP，包括显式刷新、新建和恢复会话。正常运行或正在启动的配置 MCP 会保留；单纯打开管理界面或读取状态不会触发重试，也没有后台循环重试。
+
+`NEKOCODE.md` 是单个文件，可按需纳入版本管理。`.nekocode/` 下是运行数据（技能、插件、MCP 配置、权限和索引），NekoCode 不管理项目的忽略规则，建议在项目 `.gitignore` 中整体忽略 `.nekocode/`。MCP 的 `env` 可能包含密钥，需要共享配置结构时，可提交脱敏的 `.mcp.example.json`，再由使用者复制为 `.mcp.json` 并填入本机配置。示例文件不会自动加载。会话、导出和日志继续保存在用户目录。当前仍是单实例绑定单项目，不提供运行中切换项目或同进程多项目执行。
+
+### 文件位置
+
 | 文件 | 用途 | 需要手改吗 |
 |---|---|---|
 | `~/.nekocode/config.json` | 主配置：模型、MCP、权限、工作区 | ✅ 需要（至少配一次模型） |
 | `~/.nekocode/connect.json` | IM 平台凭证和配对状态 | ❌ 由 `/connect` 命令自动管理 |
+| `<项目>/NEKOCODE.md` | 项目规范，自动加载 | ✅ 可选 |
+| `<项目>/.nekocode/.mcp.json` | 项目 MCP，覆盖同名全局定义 | ✅ 可选 |
+| `<项目>/.nekocode/skills/` | 项目技能目录 | ✅ 可选 |
 | `<项目>/.nekocode/permissions.json` | 「始终允许」记录的授权规则 | ❌ 审批时自动写入 |
 | `~/.nekocode/memory.md` | 长期记忆，自由书写的 Markdown,AI 每轮都会参考 | ✅ 可选 |
 | `~/.nekocode/sessions/` | 会话存档 | ❌ 自动管理 |

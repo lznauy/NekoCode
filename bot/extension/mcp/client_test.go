@@ -80,11 +80,15 @@ func main() {
 				json.Unmarshal(b, &params)
 			}
 			name, _ := params["name"].(string)
+			text := "ok: " + name
+			if name == "cwd" {
+				text, _ = os.Getwd()
+			}
 			resp = map[string]any{
 				"jsonrpc": "2.0",
 				"id":      id,
 				"result": map[string]any{
-					"content": []map[string]string{{"type": "text", "text": "ok: " + name}},
+					"content": []map[string]string{{"type": "text", "text": text}},
 					"isError": false,
 				},
 			}

@@ -10,8 +10,9 @@ import (
 
 func TestContextReportAfterResumeOfCompactedSession(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
 	newBot := func() *Bot {
-		b := &Bot{cwd: t.TempDir(), ctxMgr: ctxmgr.New(ctxmgr.Config{
+		b := &Bot{cwd: root, ctxMgr: ctxmgr.New(ctxmgr.Config{
 			Summarizer: func([]types.Message, string) (string, error) {
 				return "<summary>durable summary of the earlier conversation</summary>", nil
 			},

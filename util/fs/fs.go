@@ -27,9 +27,15 @@ func NekocodeDataDir(subdir string) string {
 
 // NekocodeDirs returns the project-level and user-level .nekocode/<subdir> directories.
 func NekocodeDirs(subdir string) []string {
+	cwd, _ := os.Getwd()
+	return NekocodeDirsAt(cwd, subdir)
+}
+
+// NekocodeDirsAt pins project discovery to an instance's root directory.
+func NekocodeDirsAt(root, subdir string) []string {
 	var dirs []string
-	if cwd, err := os.Getwd(); err == nil {
-		dirs = append(dirs, filepath.Join(cwd, ".nekocode", subdir))
+	if root != "" {
+		dirs = append(dirs, filepath.Join(root, ".nekocode", subdir))
 	}
 	dirs = append(dirs, filepath.Join(NekocodeHome(), subdir))
 	return dirs

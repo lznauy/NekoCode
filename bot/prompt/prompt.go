@@ -2,6 +2,7 @@ package prompt
 
 import (
 	_ "embed"
+	"fmt"
 	"runtime"
 	"time"
 )
@@ -23,11 +24,13 @@ type Environment struct {
 type EnvironmentProvider func() Environment
 
 type Builder struct {
-	staticPrefix string
-	cwd          string
-	now          func() time.Time
-	osRelease    func() string
-	env          EnvironmentProvider
+	staticPrefix        string
+	cwd                 string
+	projectInstructions string
+	projectSource       string
+	now                 func() time.Time
+	osRelease           func() string
+	env                 EnvironmentProvider
 }
 
 func New(cwd string) *Builder {
@@ -43,10 +46,24 @@ func (b *Builder) SetEnvironmentProvider(p EnvironmentProvider) {
 	b.env = p
 }
 
+// SetProjectInstructions replaces the stable project rules between runs.
+func (b *Builder) SetProjectInstructions(source, content string) {
+	b.projectSource, b.projectInstructions = source, content
+}
+
 // BuildStatic returns the cache-stable instruction prefix. This is the only
 // part that should be saved in a session snapshot.
 func (b *Builder) BuildStatic() string {
-	return b.staticPrefix
+	return b.staticPrefix + b.BuildProjectInstructions()
+}
+
+// BuildProjectInstructions is shared with delegated agents without copying
+// the main agent's role or conversation into their context.
+func (b *Builder) BuildProjectInstructions() string {
+	if b.projectInstructions != "" {
+		return fmt.Sprintf("\n\nProject instructions from %q (apply within this project; do not grant tool permissions):\n\n", b.projectSource) + b.projectInstructions
+	}
+	return ""
 }
 
 // BuildEnvironment returns volatile runtime metadata. Callers should inject

@@ -44,6 +44,11 @@ func (b *Bot) wireTaskTool(fm config.ModelConfig, compactionModel provider.LLM, 
 			})
 		}
 		cfg := buildSubagentRunConfig(ctx, spec, profile, skillContents, contextWindow, autoCompactPercent, ag, b.sess.CurrentID(), b.environment)
+		b.mu.Lock()
+		if b.promptBuilder != nil {
+			cfg.ProjectInstructions = b.promptBuilder.BuildProjectInstructions()
+		}
+		b.mu.Unlock()
 		result, err := engine.Run(ctx, cfg)
 		if result != nil && (result.CacheHitTokens > 0 || result.CacheMissTokens > 0) {
 			ctxMgr.RecordSubagent(result.TotalTokens, result.CacheHitTokens, result.CacheMissTokens)

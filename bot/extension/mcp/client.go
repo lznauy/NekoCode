@@ -58,6 +58,7 @@ func (c *client) Start(ctx context.Context) error {
 	}
 
 	cmd := exec.Command(c.config.Command, c.config.Args...)
+	cmd.Dir = c.config.CWD
 	configureProcess(cmd)
 	cmd.Env = os.Environ()
 	for k, v := range c.config.Env {

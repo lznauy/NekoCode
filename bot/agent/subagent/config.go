@@ -30,13 +30,14 @@ type ToolCallEvent struct {
 // RunConfig carries resolved dependencies; the engine does not discover files
 // or consult mutable extension registries during a run.
 type RunConfig struct {
-	Prompt             string
-	Profile            Profile
-	SkillContents      []string
-	ContextWindow      int
-	AutoCompactPercent int
-	OnText             func(string)
-	OnReasoning        func(string)
+	Prompt              string
+	Profile             Profile
+	SkillContents       []string
+	ProjectInstructions string
+	ContextWindow       int
+	AutoCompactPercent  int
+	OnText              func(string)
+	OnReasoning         func(string)
 	// OnMessage receives non-empty complete model text, not a per-step end marker.
 	OnMessage      func(string)
 	OnPhase        func(string)

@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"strings"
 
 	agentcore "nekocode/bot/agent"
 	"nekocode/bot/config"
@@ -185,6 +186,13 @@ func (b *Bot) CommandMenu(ctx context.Context, input string) (protocol.CommandMe
 	if b.cmd == nil {
 		return protocol.CommandMenu{}, false
 	}
+	if b.reloadView != nil {
+		input = strings.TrimSpace(input)
+		if !strings.HasPrefix(input, "/") && !strings.HasPrefix(input, "$") {
+			return protocol.CommandMenu{}, false
+		}
+		return protocol.CommandMenu{Title: "Workspace refreshing", Empty: "Command choices will update when refresh completes."}, true
+	}
 	return b.cmd.Menu(ctx, input)
 }
 
@@ -224,7 +232,10 @@ func (b *Bot) ExecuteLocalCommand(ctx context.Context, input string) (string, pr
 	if !duringTask {
 		return "", protocol.LocalCommandRequiresIdle
 	}
-	out, handled := b.cmd.Execute(ctx, input, b.ctxMgr)
+	// Run directly on the parser: Handler.Execute also resets command
+	// continuation state, which a during-task status command must not touch.
+	parser := b.cmd.Parser()
+	out, handled := parser.Execute(ctx, parser.Parse(input))
 	if !handled {
 		return "", protocol.LocalCommandNotCommand
 	}

@@ -163,7 +163,12 @@ type Manager struct {
 // New creates a plugin manager using the standard project and user plugin
 // directories.
 func New() *Manager {
-	reg := newRegistry(defaultDirs())
+	return NewWithDirs(defaultDirs())
+}
+
+// NewWithDirs fixes project and user plugin discovery paths at construction.
+func NewWithDirs(dirs []string) *Manager {
+	reg := newRegistry(append([]string(nil), dirs...))
 	reg.Logf = logger.Log
 	return &Manager{reg: reg}
 }
@@ -181,6 +186,13 @@ func (m *Manager) Reload() {
 // ListPlugins returns all installed plugins sorted by name.
 func (m *Manager) ListPlugins() []*Plugin {
 	return m.reg.List()
+}
+
+// PluginSnapshots returns value copies of all installed plugins. Management
+// views must use this instead of ListPlugins so a published snapshot does not
+// alias Enabled, which Enable/Disable mutate in place.
+func (m *Manager) PluginSnapshots() []*Plugin {
+	return m.reg.Copies()
 }
 
 // SkillDirs returns all skill directories from enabled plugins.

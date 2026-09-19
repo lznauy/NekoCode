@@ -25,6 +25,7 @@ const (
 
 // Health reports the runtime state of one managed server.
 type Health struct {
+	Owner     string
 	Status    string
 	Error     string
 	ToolCount int
@@ -315,7 +316,12 @@ func (m *Manager) Close() {
 func (m *Manager) Health() map[string]Health {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return maps.Clone(m.health)
+	health := maps.Clone(m.health)
+	for name, state := range health {
+		state.Owner = m.owners[name]
+		health[name] = state
+	}
+	return health
 }
 
 // Owner reports the owner id that registered the server with this name, or

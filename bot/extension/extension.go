@@ -5,6 +5,10 @@ package extension
 import (
 	"context"
 	"fmt"
+	"maps"
+	"os"
+	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -19,36 +23,50 @@ import (
 	"nekocode/bot/extension/tool/builtin/capability"
 	"nekocode/bot/policy"
 	"nekocode/logger"
+	"nekocode/util/fs"
 )
 
 // Manager is the public extension entry point. Child managers remain private
 // so extension activation always follows one lifecycle.
 type Manager struct {
-	mu          sync.Mutex
-	ops         sync.Mutex
-	skills      *skill.Manager
-	plugins     *plugin.Manager
-	mcp         *mcp.Manager
-	policy      *policy.Policy
-	active      map[string]activePlugin
-	commands    *command.Handler
-	sessionMCP  map[string][]string
-	tools       *tools.Registry
-	agentErrors map[string]string
+	mu             sync.Mutex
+	ops            sync.Mutex
+	skills         *skill.Manager
+	plugins        *plugin.Manager
+	mcp            *mcp.Manager
+	policy         *policy.Policy
+	active         map[string]activePlugin
+	commands       *command.Handler
+	sessionMCP     map[string][]string
+	sessionConfigs map[string]map[string]mcp.ServerConfig
+	tools          *tools.Registry
+	agentErrors    map[string]string
+	configMCP      map[string]mcp.ServerConfig
 }
 
 // Snapshot is the read-only state used by management views.
 type Snapshot struct {
-	Skills       []*skill.Skill
-	LoadedSkills map[string]bool
-	Plugins      []*plugin.Plugin
-	MCPHealth    map[string]mcp.Health
-	AgentErrors  map[string]string
-	Agents       []AgentInfo
+	Skills        []*skill.Skill
+	LoadedSkills  map[string]bool
+	Plugins       []*plugin.Plugin
+	MCPHealth     map[string]mcp.Health
+	AgentErrors   map[string]string
+	Agents        []AgentInfo
+	ConfiguredMCP []ConfiguredMCP
+}
+
+// ConfiguredMCP describes a host definition without exposing environment secrets.
+type ConfiguredMCP struct {
+	Name    string
+	Source  string
+	Command string
+	Args    []string
+	Enabled bool
 }
 
 // Config contains the shared dependencies used by extension modules.
 type Config struct {
+	ProjectRoot   string
 	Context       *ctxmgr.Manager
 	Tools         *tools.Registry
 	Policy        *policy.Policy
@@ -63,15 +81,21 @@ type activePlugin struct {
 
 // New creates the unified extension manager.
 func New(config Config) *Manager {
+	root := config.ProjectRoot
+	if root == "" {
+		root, _ = os.Getwd()
+	}
 	m := &Manager{
-		skills:      skill.New(config.Context, config.Tools, config.ContextWindow),
-		plugins:     plugin.New(),
-		mcp:         mcp.New(),
-		policy:      config.Policy,
-		active:      make(map[string]activePlugin),
-		sessionMCP:  make(map[string][]string),
-		tools:       config.Tools,
-		agentErrors: make(map[string]string),
+		skills:         skill.NewWithDirs(config.Context, config.Tools, config.ContextWindow, fs.NekocodeDirsAt(root, "skills")),
+		plugins:        plugin.NewWithDirs(fs.NekocodeDirsAt(root, "plugins")),
+		mcp:            mcp.New(),
+		policy:         config.Policy,
+		active:         make(map[string]activePlugin),
+		sessionMCP:     make(map[string][]string),
+		sessionConfigs: make(map[string]map[string]mcp.ServerConfig),
+		tools:          config.Tools,
+		agentErrors:    make(map[string]string),
+		configMCP:      make(map[string]mcp.ServerConfig),
 	}
 	// MCP tools reach the model through one constant-schema proxy registered
 	// once here — adding/removing servers never changes the tool list, which
@@ -105,12 +129,28 @@ func (m *Manager) Load() {
 
 // Reload rebuilds plugin runtime state from disk and preserves loaded skills.
 func (m *Manager) Reload() {
+	m.reload(nil)
+}
+
+// ReloadWithMCP applies the effective host configuration, then reloads plugins
+// and skills. Unchanged host servers and unrelated transport servers survive.
+func (m *Manager) ReloadWithMCP(configs map[string]mcp.ServerConfig) {
+	if configs == nil {
+		configs = make(map[string]mcp.ServerConfig)
+	}
+	m.reload(configs)
+}
+
+func (m *Manager) reload(configs map[string]mcp.ServerConfig) {
 	m.ops.Lock()
 	defer m.ops.Unlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.deactivateAllLocked()
+	if configs != nil {
+		m.configureMCPLocked(configs)
+	}
 	m.plugins.Reload()
 	for _, p := range m.plugins.ListPlugins() {
 		if p.Enabled {
@@ -119,6 +159,7 @@ func (m *Manager) Reload() {
 	}
 	m.skills.Reload(m.activeSkillDirsLocked())
 	m.syncSkillCommandsLocked()
+	m.restoreSessionMCPLocked()
 }
 
 // Close stops plugin runtime extensions and every MCP process.
@@ -141,7 +182,7 @@ func (m *Manager) Snapshot() Snapshot {
 	return Snapshot{
 		Skills:       m.skills.List(),
 		LoadedSkills: m.skills.LoadedSet(),
-		Plugins:      m.plugins.ListPlugins(),
+		Plugins:      m.plugins.PluginSnapshots(),
 		MCPHealth:    m.mcp.Health(),
 		AgentErrors:  m.agentErrorsLocked(),
 		Agents:       m.agentInfosLocked(),
@@ -258,7 +299,11 @@ func (m *Manager) AddMCPServer(name string, cfg mcp.ServerConfig) error {
 	defer m.ops.Unlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.mcp.Add(context.Background(), "config:"+name, name, cfg)
+	if err := m.mcp.Add(context.Background(), "config:"+name, name, cfg); err != nil {
+		return err
+	}
+	m.configMCP[name] = cfg
+	return nil
 }
 
 // AddMCPServerBackground registers a host-configured MCP server and starts it
@@ -268,7 +313,72 @@ func (m *Manager) AddMCPServerBackground(name string, cfg mcp.ServerConfig) erro
 	defer m.ops.Unlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.mcp.AddBackground("config:"+name, name, cfg)
+	if err := m.mcp.AddBackground("config:"+name, name, cfg); err != nil {
+		return err
+	}
+	m.configMCP[name] = cfg
+	return nil
+}
+
+func (m *Manager) configureMCPLocked(configs map[string]mcp.ServerConfig) {
+	health := m.mcp.Health()
+	for name, previous := range m.configMCP {
+		if next, ok := configs[name]; !ok || !reflect.DeepEqual(previous, next) || health[name].Status == mcp.StatusError {
+			m.mcp.Remove("config:" + name)
+			delete(m.configMCP, name)
+		}
+	}
+	names := make([]string, 0, len(configs))
+	for name := range configs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		cfg := configs[name]
+		if _, exists := m.configMCP[name]; exists {
+			continue
+		}
+		// Host configuration has the same precedence on refresh as startup.
+		if owner := m.mcp.Owner(name); strings.HasPrefix(owner, "session:") {
+			m.mcp.Remove(owner)
+		}
+		if err := m.mcp.AddBackground("config:"+name, name, cfg); err != nil {
+			logger.Log("config mcp %s: %v", name, err)
+			continue
+		}
+		m.configMCP[name] = cfg
+	}
+}
+
+// Keep transport definitions while a host or plugin owns the same name.
+// Once that override disappears, restore only unoccupied names asynchronously.
+func (m *Manager) restoreSessionMCPLocked() {
+	health := m.mcp.Health()
+	sources := make([]string, 0, len(m.sessionConfigs))
+	for source := range m.sessionConfigs {
+		sources = append(sources, source)
+	}
+	sort.Strings(sources)
+	for _, source := range sources {
+		for name, cfg := range m.sessionConfigs[source] {
+			id := "session:" + source + ":" + name
+			owner := m.mcp.Owner(name)
+			if owner != "" && (owner != id || health[name].Status != mcp.StatusError) {
+				continue
+			}
+			if owner == id {
+				m.mcp.Remove(id)
+			}
+			if err := m.mcp.AddBackground(id, name, cfg); err != nil {
+				logger.Log("session mcp %s: %v", name, err)
+				continue
+			}
+			// IDs may still contain the entry displaced by a host override.
+			if !slices.Contains(m.sessionMCP[source], id) {
+				m.sessionMCP[source] = append(m.sessionMCP[source], id)
+			}
+		}
+	}
 }
 
 // ReplaceSessionMCPServers atomically replaces all transport-supplied MCP
@@ -297,6 +407,17 @@ func (m *Manager) ReplaceSessionMCPServers(ctx context.Context, source string, c
 	}
 	if err := m.mcp.Replace(ctx, m.sessionMCP[source], registrations); err != nil {
 		return err
+	}
+	if len(configs) == 0 {
+		delete(m.sessionConfigs, source)
+	} else {
+		stored := make(map[string]mcp.ServerConfig, len(configs))
+		for name, cfg := range configs {
+			cfg.Args = append([]string(nil), cfg.Args...)
+			cfg.Env = maps.Clone(cfg.Env)
+			stored[name] = cfg
+		}
+		m.sessionConfigs[source] = stored
 	}
 	if len(ids) == 0 {
 		delete(m.sessionMCP, source)

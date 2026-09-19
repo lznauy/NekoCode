@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"nekocode/bot/config"
 	"nekocode/protocol"
@@ -43,6 +44,7 @@ type commandEntry struct {
 }
 
 type Parser struct {
+	mu       sync.RWMutex
 	handlers map[commandKey]commandEntry
 }
 
@@ -65,8 +67,12 @@ func (p *Parser) RegisterInfo(name, description string, handler HandlerFunc) {
 // Such commands are executed immediately by frontends instead of going
 // through a run.
 func (p *Parser) RegisterLocalInfo(name, description string, handler HandlerFunc) {
-	p.RegisterWithPrefix(SlashPrefix, name, description, handler)
-	key := commandKey{Prefix: SlashPrefix, Name: strings.ToLower(strings.TrimSpace(name))}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	key, ok := p.registerWithPrefixLocked(SlashPrefix, name, description, handler)
+	if !ok {
+		return
+	}
 	entry := p.handlers[key]
 	entry.DuringTask = true
 	p.handlers[key] = entry
@@ -79,7 +85,7 @@ func (p *Parser) CommandAvailability(input string) (isCommand, duringTask bool) 
 	if cmd.Name == "" {
 		return false, false
 	}
-	entry, ok := p.handlers[commandKey{Prefix: normalizePrefix(cmd.Prefix), Name: cmd.Name}]
+	entry, ok := p.lookup(commandKey{Prefix: normalizePrefix(cmd.Prefix), Name: cmd.Name})
 	if !ok {
 		return false, false
 	}
@@ -95,23 +101,34 @@ func (p *Parser) RegisterDynamicInfo(name, description string, handler HandlerFu
 }
 
 func (p *Parser) RegisterWithPrefix(prefix, name, description string, handler HandlerFunc) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.registerWithPrefixLocked(prefix, name, description, handler)
+}
+
+// registerWithPrefixLocked writes one command entry. Caller holds p.mu, so
+// callers that also need to adjust the entry (e.g. DuringTask) can do so in
+// the same critical section.
+func (p *Parser) registerWithPrefixLocked(prefix, name, description string, handler HandlerFunc) (commandKey, bool) {
 	prefix = normalizePrefix(prefix)
 	displayName := strings.TrimSpace(name)
 	if displayName == "" {
-		return
+		return commandKey{}, false
 	}
-	keyName := strings.ToLower(displayName)
-	key := commandKey{Prefix: prefix, Name: keyName}
+	key := commandKey{Prefix: prefix, Name: strings.ToLower(displayName)}
 	entry := p.handlers[key]
 	entry.DisplayName = displayName
 	entry.Description = strings.TrimSpace(description)
 	entry.Handler = handler
 	p.handlers[key] = entry
+	return key, true
 }
 
 // RegisterMenu adds a dynamic picker to an existing slash command. Commands
 // without a finite set of choices keep their normal text behavior.
 func (p *Parser) RegisterMenu(name string, menu MenuFunc) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	displayName := strings.TrimSpace(name)
 	if displayName == "" {
 		return
@@ -127,15 +144,38 @@ func (p *Parser) RegisterMenu(name string, menu MenuFunc) {
 
 // ClearPrefix removes every command registered under one prefix.
 func (p *Parser) ClearPrefix(prefix string) {
+	p.replacePrefix(prefix, nil)
+}
+
+// replacePrefix publishes a privately prepared command set in one step.
+func (p *Parser) replacePrefix(prefix string, next map[commandKey]commandEntry) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	prefix = normalizePrefix(prefix)
 	for key := range p.handlers {
 		if key.Prefix == prefix {
 			delete(p.handlers, key)
 		}
 	}
+	for key, entry := range next {
+		if key.Prefix == prefix {
+			p.handlers[key] = entry
+		}
+	}
+}
+
+// Callbacks execute after lookup releases the lock, allowing reentrant menus
+// and commands such as /help to read the registry without deadlocking.
+func (p *Parser) lookup(key commandKey) (commandEntry, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	entry, ok := p.handlers[key]
+	return entry, ok
 }
 
 func (p *Parser) Commands() []string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	names := make([]string, 0, len(p.handlers))
 	for key, entry := range p.handlers {
 		names = append(names, key.Prefix+entry.DisplayName)
@@ -148,6 +188,8 @@ func (p *Parser) Commands() []string {
 // never auto-submit: selecting one either expands its menu or fills the input
 // for an explicit second confirmation.
 func (p *Parser) RootMenu(prefix string) protocol.CommandMenu {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	prefix = normalizePrefix(prefix)
 	items := make([]protocol.CommandMenuItem, 0, len(p.handlers))
 	for key, entry := range p.handlers {
@@ -193,7 +235,7 @@ func (p *Parser) Execute(ctx context.Context, cmd *Command) (string, bool) {
 	}
 	prefix := normalizePrefix(cmd.Prefix)
 	name := strings.ToLower(strings.TrimSpace(cmd.Name))
-	entry, exists := p.handlers[commandKey{Prefix: prefix, Name: name}]
+	entry, exists := p.lookup(commandKey{Prefix: prefix, Name: name})
 	if !exists {
 		return "Unknown command: " + prefix + name + ". Type /help for available commands.", true
 	}
@@ -213,7 +255,7 @@ func (p *Parser) Menu(ctx context.Context, input string) (protocol.CommandMenu, 
 	if cmd.Name == "" {
 		return protocol.CommandMenu{}, false
 	}
-	entry, exists := p.handlers[commandKey{Prefix: normalizePrefix(cmd.Prefix), Name: cmd.Name}]
+	entry, exists := p.lookup(commandKey{Prefix: normalizePrefix(cmd.Prefix), Name: cmd.Name})
 	if !exists || entry.Menu == nil || ctx.Err() != nil {
 		return protocol.CommandMenu{}, false
 	}

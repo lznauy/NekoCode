@@ -158,6 +158,24 @@ func (r *registry) List() []*Plugin {
 	})
 }
 
+// Copies returns value copies of all installed plugins sorted by name.
+// Callers that publish a snapshot outside the registry lock (management
+// views) must use this: Enable/Disable mutate Enabled in place, and the
+// registry's RWLock is the only synchronization for those fields.
+func (r *registry) Copies() []*Plugin {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*Plugin, 0, len(r.plugins))
+	for _, p := range r.plugins {
+		snapshot := *p
+		out = append(out, &snapshot)
+	}
+	slices.SortFunc(out, func(a, b *Plugin) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	return out
+}
+
 // Get returns a plugin by name.
 func (r *registry) Get(name string) (*Plugin, bool) {
 	r.mu.RLock()

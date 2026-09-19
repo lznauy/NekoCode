@@ -139,7 +139,7 @@ func (a *adapter) SetPluginEnabled(name string, enabled bool) (controlruntime.Sk
 }
 
 func (a *adapter) extensionView(snapshot extension.Snapshot) controlruntime.SkillManagementView {
-	return viewmodel.Extension(snapshot, a.bot.Configuration().MCPServers)
+	return viewmodel.Extension(snapshot)
 }
 
 func (a *adapter) ConfigView() controlruntime.ConfigView {

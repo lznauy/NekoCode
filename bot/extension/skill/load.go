@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"nekocode/util/fs"
@@ -48,7 +47,7 @@ func discoverSkills(dirs []string) []string {
 			return nil
 		})
 	}
-	sort.Strings(paths)
+	// Walk is lexical within a directory; preserve directory precedence.
 	return paths
 }
 

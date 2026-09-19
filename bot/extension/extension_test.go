@@ -119,6 +119,43 @@ func TestManagerOwnsPluginSkillLifecycle(t *testing.T) {
 	}
 }
 
+// A published management snapshot must not alias plugin state that
+// Enable/Disable mutate in place; otherwise viewmodel reads race with
+// /plugin toggles.
+func TestSnapshotPluginsDoNotAliasEnabledState(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", filepath.Join(root, "home"))
+	pluginDir := filepath.Join(root, ".nekocode", "plugins", "demo")
+	if err := os.MkdirAll(filepath.Join(pluginDir, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(pluginDir, ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"demo"}`),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	manager := New(Config{ProjectRoot: root})
+	manager.Load()
+	defer manager.Close()
+
+	before := manager.Snapshot()
+	if len(before.Plugins) != 1 || !before.Plugins[0].Enabled {
+		t.Fatalf("unexpected initial plugins: %+v", before.Plugins)
+	}
+	if err := manager.SetPluginEnabled("demo", false); err != nil {
+		t.Fatal(err)
+	}
+	if !before.Plugins[0].Enabled {
+		t.Fatal("published snapshot aliased live Enabled state")
+	}
+	after := manager.Snapshot()
+	if len(after.Plugins) != 1 || after.Plugins[0].Enabled {
+		t.Fatalf("fresh snapshot did not observe disabled plugin: %+v", after.Plugins)
+	}
+}
+
 func TestInstallReturnsFailure(t *testing.T) {
 	root := t.TempDir()
 	t.Chdir(root)

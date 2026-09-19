@@ -41,10 +41,10 @@ func (h *Handler) RegisterAll(deps Deps) {
 // RegisterSkills replaces all dynamic dollar commands with the extension's
 // current skill set.
 func (h *Handler) RegisterSkills(skills []SkillRegistration) {
-	h.parser.ClearPrefix(DollarPrefix)
+	next := NewParser()
 	for _, registration := range skills {
 		sk := registration
-		h.parser.RegisterDynamicInfo(sk.Name, "Load this skill", func(_ context.Context, cmd *Command) (string, bool) {
+		next.RegisterDynamicInfo(sk.Name, "Load this skill", func(_ context.Context, cmd *Command) (string, bool) {
 			if h.ctxMgr == nil {
 				return "Skill context is unavailable.", true
 			}
@@ -70,6 +70,7 @@ func (h *Handler) RegisterSkills(skills []SkillRegistration) {
 			return "", false
 		})
 	}
+	h.parser.replacePrefix(DollarPrefix, next.handlers)
 }
 
 // Parser exposes the command registry used by extension and session commands.

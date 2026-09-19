@@ -89,12 +89,16 @@ func TestBuildTaskPromptKeepsHandoffOutOfSystemRole(t *testing.T) {
 			Name:         "coder",
 			SystemPrompt: "base prompt",
 		},
-		Prompt:        "current task",
-		Handoff:       "prior findings",
-		SkillContents: []string{"<skill_content name=\"check\">review workflow</skill_content>"},
+		Prompt:              "current task",
+		Handoff:             "prior findings",
+		SkillContents:       []string{"<skill_content name=\"check\">review workflow</skill_content>"},
+		ProjectInstructions: "\n\nProject instructions from NEKOCODE.md: use project conventions",
 	}
 
 	system := buildSystemPrompt(cfg)
+	if !strings.Contains(system, cfg.ProjectInstructions) {
+		t.Fatal("delegated agent lost project instructions")
+	}
 	if strings.Contains(system, "prior findings") || strings.Contains(system, "current task") {
 		t.Fatalf("task evidence leaked into system prompt: %q", system)
 	}

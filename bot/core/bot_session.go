@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -134,6 +135,13 @@ func (b *Bot) resumeSession(id string) (*session.Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A history must never silently resume against another project's tools.
+	if strings.TrimSpace(snapshot.CWD) == "" {
+		return nil, fmt.Errorf("session %s is missing cwd metadata; restore its original absolute cwd in session.json before resuming", id)
+	}
+	if b.cwd != "" && !sameProjectDirectory(snapshot.CWD, b.cwd) {
+		return nil, fmt.Errorf("session belongs to %q; open that project to resume it", snapshot.CWD)
+	}
 	if oldID != id {
 		if err := b.closeSessionRuntime(oldID); err != nil {
 			return nil, err
@@ -149,9 +157,7 @@ func (b *Bot) resumeSession(id string) (*session.Snapshot, error) {
 	// Session files may contain a prompt from an older NekoCode version. Keep
 	// conversation state, but always pair it with the current stable rules;
 	// volatile environment data is injected separately on every Build.
-	if b.promptBuilder != nil {
-		b.ctxMgr.SetSystemPrompt(b.promptBuilder.BuildStatic())
-	}
+	b.reloadProject()
 	if ag := b.getAgent(); ag != nil {
 		ag.AddCompletionTokens(snapshot.CompletionTokens)
 	}
@@ -176,6 +182,18 @@ func (b *Bot) resumeSession(id string) (*session.Snapshot, error) {
 	return snapshot, nil
 }
 
+func sameProjectDirectory(left, right string) bool {
+	if left == "" || right == "" {
+		return false
+	}
+	a, errA := os.Stat(left)
+	b, errB := os.Stat(right)
+	if errA == nil && errB == nil {
+		return os.SameFile(a, b)
+	}
+	return filepath.Clean(left) == filepath.Clean(right)
+}
+
 func (b *Bot) ListSessions() []session.Meta {
 	return b.sess.List()
 }
@@ -192,6 +210,7 @@ func (b *Bot) resetConversation() (string, error) {
 	if err := b.closeSessionRuntime(b.sess.CurrentID()); err != nil {
 		return "", err
 	}
+	b.reloadProject()
 	b.ctxMgr.Reset()
 	newSession := b.sess.StartNew()
 	if b.checkpoints != nil {

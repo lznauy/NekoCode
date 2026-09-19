@@ -5,7 +5,6 @@ import (
 	"sort"
 	"strings"
 
-	"nekocode/bot/config"
 	extensionmgr "nekocode/bot/extension"
 	"nekocode/bot/extension/mcp"
 	"nekocode/bot/extension/plugin"
@@ -13,7 +12,7 @@ import (
 	controlruntime "nekocode/runtime"
 )
 
-func Extension(snapshot extensionmgr.Snapshot, configuredMCP map[string]config.MCPServerConfig) controlruntime.SkillManagementView {
+func Extension(snapshot extensionmgr.Snapshot) controlruntime.SkillManagementView {
 	plugins := pluginViews(snapshot.Plugins)
 	for i := range plugins {
 		plugins[i].AgentError = snapshot.AgentErrors[plugins[i].Name]
@@ -24,21 +23,18 @@ func Extension(snapshot extensionmgr.Snapshot, configuredMCP map[string]config.M
 		}
 	}
 	servers := pluginMCPViews(snapshot.Plugins)
-	servers = append(servers, configMCPViews(configuredMCP)...)
-	applyMCPHealth(servers, snapshot.MCPHealth)
+	applyMCPHealth(servers, snapshot.MCPHealth, "")
+	configured := make([]controlruntime.MCPServerView, 0, len(snapshot.ConfiguredMCP))
+	for _, cfg := range snapshot.ConfiguredMCP {
+		configured = append(configured, mcpServerView(cfg.Name, cfg.Source, cfg.Command, cfg.Args, cfg.Enabled))
+	}
+	applyMCPHealth(configured, snapshot.MCPHealth, "config:")
+	servers = append(servers, configured...)
 	return controlruntime.SkillManagementView{
 		Skills:  skillViews(snapshot.Skills, snapshot.LoadedSkills, plugins),
 		Plugins: plugins,
 		MCP:     servers,
 	}
-}
-
-func configMCPViews(servers map[string]config.MCPServerConfig) []controlruntime.MCPServerView {
-	out := make([]controlruntime.MCPServerView, 0, len(servers))
-	for name, cfg := range servers {
-		out = append(out, mcpServerView(name, "配置", cfg.Command, cfg.Args, cfg.Enabled))
-	}
-	return out
 }
 
 func mcpServerView(name, pluginName, command string, args []string, enabled bool) controlruntime.MCPServerView {
@@ -52,7 +48,7 @@ func mcpServerView(name, pluginName, command string, args []string, enabled bool
 	return view
 }
 
-func applyMCPHealth(servers []controlruntime.MCPServerView, health map[string]mcp.Health) {
+func applyMCPHealth(servers []controlruntime.MCPServerView, health map[string]mcp.Health, ownerPrefix string) {
 	for i := range servers {
 		if !servers[i].PluginEnabled {
 			servers[i].Status = "disabled"
@@ -61,6 +57,14 @@ func applyMCPHealth(servers []controlruntime.MCPServerView, health map[string]mc
 		current, ok := health[servers[i].Name]
 		if !ok {
 			servers[i].Status = "unknown"
+			continue
+		}
+		prefix := ownerPrefix
+		if prefix == "" {
+			prefix = "plugin:" + servers[i].Plugin + ":"
+		}
+		if current.Owner != "" && current.Owner != prefix+servers[i].Name {
+			servers[i].Status = "shadowed"
 			continue
 		}
 		servers[i].Status = current.Status
