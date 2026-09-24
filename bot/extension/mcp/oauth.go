@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"sync"
 	"time"
@@ -247,7 +248,19 @@ func (h *oauthHandler) Authorize(ctx context.Context, req *http.Request, resp *h
 }
 
 func authorizationFailureLog(name string, err error) string {
-	return fmt.Sprintf("mcp %s authorize failed (error_type=%T)", name, err)
+	// Keep the concrete error chain for diagnosis, but redact credential
+	// fragments that OAuth endpoints may echo in error bodies.
+	message := err.Error()
+	redacted := redactSecrets(message)
+	return fmt.Sprintf("mcp %s authorize failed (error_type=%T): %s", name, err, redacted)
+}
+
+// secretPattern masks credential-bearing fragments that OAuth endpoints may
+// echo in error bodies before the message reaches the debug log.
+var secretPattern = regexp.MustCompile(`(?i)(access_token|refresh_token|id_token|client_secret|code_verifier|authorization_code|code)["':= ]+[^&"\s,}]+`)
+
+func redactSecrets(message string) string {
+	return secretPattern.ReplaceAllString(message, "$1=REDACTED")
 }
 func (h *oauthHandler) receiveCode(ctx context.Context, listener net.Listener, authorizationURL string) (*auth.AuthorizationResult, error) {
 	parsed, err := url.Parse(authorizationURL)

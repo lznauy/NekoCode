@@ -36,11 +36,13 @@ type oauthFixture struct {
 func TestAuthorizationFailureLogDoesNotContainResponseBody(t *testing.T) {
 	err := fmt.Errorf("token endpoint echoed client_secret=top-secret")
 	got := authorizationFailureLog("docs", err)
+	// Raw body and secret values must never appear verbatim; the message is
+	// kept for diagnosis but credential-bearing fragments are redacted.
 	if strings.Contains(got, "top-secret") || strings.Contains(got, err.Error()) {
 		t.Fatalf("authorization log exposed error body: %q", got)
 	}
-	if !strings.Contains(got, "error_type=") {
-		t.Fatalf("authorization log lost error classification: %q", got)
+	if !strings.Contains(got, "error_type=") || !strings.Contains(got, "client_secret=REDACTED") {
+		t.Fatalf("authorization log lost classification or redacted detail: %q", got)
 	}
 }
 
