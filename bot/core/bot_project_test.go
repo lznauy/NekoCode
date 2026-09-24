@@ -13,6 +13,7 @@ import (
 	"nekocode/bot/prompt"
 	"nekocode/bot/provider/types"
 	"nekocode/bot/session"
+	"nekocode/protocol"
 )
 
 func writeWorkspaceFile(t *testing.T, path, body string) {
@@ -59,6 +60,40 @@ func TestProjectMCPDoesNotContaminateGlobalConfiguration(t *testing.T) {
 		if srv.Name == "disabled" && srv.Enabled {
 			t.Fatal("disabled project override shown enabled")
 		}
+	}
+}
+
+func TestMCPCommandIncludesWorkspaceDefinitions(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	writeWorkspaceFile(t, filepath.Join(root, ".nekocode", ".mcp.json"), `{"mcpServers":{
+		"workspace-broken":{"command":"/definitely/missing/nekocode-mcp"},
+		"workspace-disabled":{"enabled":false}
+	}}`)
+	b := newPersistTestBot(t)
+
+	out, status := b.ExecuteLocalCommand(context.Background(), "/mcp")
+	if status != protocol.LocalCommandExecuted {
+		t.Fatalf("/mcp status = %v", status)
+	}
+	for _, want := range []string{"workspace-broken", "workspace-disabled", b.project.MCPPath()} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("/mcp output missing %q: %s", want, out)
+		}
+	}
+	menu, ok := b.CommandMenu(context.Background(), "/mcp")
+	if !ok {
+		t.Fatal("/mcp menu unavailable")
+	}
+	if len(menu.Items) != 2 {
+		t.Fatalf("/mcp menu items = %+v, want both workspace definitions", menu.Items)
+	}
+
+	writeWorkspaceFile(t, b.project.MCPPath(), `{"mcpServers":{"workspace-reloaded":{"enabled":false}}}`)
+	b.RefreshExtensions()
+	out, _ = b.ExecuteLocalCommand(context.Background(), "/mcp")
+	if !strings.Contains(out, "workspace-reloaded") || strings.Contains(out, "workspace-disabled") || strings.Contains(out, "workspace-broken") {
+		t.Fatalf("/mcp output retained stale workspace definitions after reload: %s", out)
 	}
 }
 

@@ -70,7 +70,10 @@ func (b *Bot) reloadProject() {
 		}
 	}
 	if start.ext != nil {
-		start.ext.ReloadWithMCP(resolveMCPServers(&start.config, start.project, start.cwd))
+		start.ext.ReloadWithMCPDefinitions(
+			resolveMCPServers(&start.config, start.project, start.cwd),
+			configuredMCPDefinitions(&start.config, start.project),
+		)
 	}
 
 	b.mu.Lock()

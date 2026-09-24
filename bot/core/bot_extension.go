@@ -22,6 +22,7 @@ func (b *Bot) initExtensions() {
 	b.ext.SetMCPAuthNotifier(b.mcpAuthNotifier)
 
 	b.initConfigMCPServers()
+	b.ext.SetConfiguredMCPDefinitions(configuredMCPDefinitions(b.cfg, b.project))
 	b.ext.Load()
 }
 
@@ -112,25 +113,32 @@ func (b *Bot) Extensions() extension.Snapshot {
 // during its blocking work. Caller holds b.mu.
 func (b *Bot) extensionsLocked() extension.Snapshot {
 	snapshot := b.ext.Snapshot()
+	snapshot.ConfiguredMCP = configuredMCPDefinitions(b.cfg, b.project)
+	return snapshot
+}
+
+func configuredMCPDefinitions(cfg *config.Config, project *project.Project) []extension.ConfiguredMCP {
 	definitions := make(map[string]extension.ConfiguredMCP)
-	for name, cfg := range b.cfg.MCPServers {
-		definitions[name] = extension.ConfiguredMCP{Name: name, Source: "配置",
-			URL: cfg.URL, Command: cfg.Command, Args: append([]string(nil), cfg.Args...), Enabled: cfg.Enabled}
-	}
-	if b.project != nil {
-		for name, cfg := range b.project.Servers {
-			definitions[name] = extension.ConfiguredMCP{Name: name, Source: b.project.MCPPath(),
+	if cfg != nil {
+		for name, cfg := range cfg.MCPServers {
+			definitions[name] = extension.ConfiguredMCP{Name: name, Source: "配置",
 				URL: cfg.URL, Command: cfg.Command, Args: append([]string(nil), cfg.Args...), Enabled: cfg.Enabled}
 		}
 	}
-	snapshot.ConfiguredMCP = make([]extension.ConfiguredMCP, 0, len(definitions))
-	for _, definition := range definitions {
-		snapshot.ConfiguredMCP = append(snapshot.ConfiguredMCP, definition)
+	if project != nil {
+		for name, cfg := range project.Servers {
+			definitions[name] = extension.ConfiguredMCP{Name: name, Source: project.MCPPath(),
+				URL: cfg.URL, Command: cfg.Command, Args: append([]string(nil), cfg.Args...), Enabled: cfg.Enabled}
+		}
 	}
-	sort.Slice(snapshot.ConfiguredMCP, func(i, j int) bool {
-		return snapshot.ConfiguredMCP[i].Name < snapshot.ConfiguredMCP[j].Name
+	configured := make([]extension.ConfiguredMCP, 0, len(definitions))
+	for _, definition := range definitions {
+		configured = append(configured, definition)
+	}
+	sort.Slice(configured, func(i, j int) bool {
+		return configured[i].Name < configured[j].Name
 	})
-	return snapshot
+	return configured
 }
 
 // ReplaceSessionMCPServers atomically replaces transport-supplied MCP servers.

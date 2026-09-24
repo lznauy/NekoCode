@@ -3,7 +3,6 @@ package extension
 import (
 	"context"
 	"fmt"
-	"maps"
 	"sort"
 	"strings"
 
@@ -301,34 +300,46 @@ func (m *Manager) enablePlugin(ctx context.Context, args []string, enabled bool)
 }
 
 func (m *Manager) mcpMenu(_ context.Context, cmd *command.Command) (protocol.CommandMenu, bool) {
-	health := m.mcp.Health()
-	if len(health) == 0 {
+	health, definitions, names := m.mcpInventory()
+	if len(names) == 0 {
 		return protocol.CommandMenu{Title: "MCP 服务器", Empty: "未连接任何 MCP 服务器"}, true
 	}
-	names := make([]string, 0, len(health))
-	for name := range health {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	items := make([]protocol.CommandMenuItem, 0, len(health))
+	items := make([]protocol.CommandMenuItem, 0, len(names))
 	for _, name := range names {
-		h := health[name]
+		h, running := health[name]
+		definition, configured := definitions[name]
+		source, sourceDetail := mcpDisplaySource(definition, configured, h)
+		description := sourceDetail
 		// Logout only makes sense for servers that actually hold a stored
 		// OAuth credential; stdio and never-authorized remotes omit the row.
 		logout := m.mcp.HasStoredCredential(name)
+		if configured && !definition.Enabled {
+			items = append(items, protocol.CommandMenuItem{
+				Label: name + " · 已禁用 · " + source, Description: description,
+				Value: "/mcp", Current: true,
+			})
+			continue
+		}
+		if !running {
+			items = append(items, protocol.CommandMenuItem{
+				Label: name + " · 未加载 · " + source, Description: description,
+				Value: "/mcp", Current: true,
+			})
+			continue
+		}
 		switch h.Status {
 		case mcp.StatusReady:
 			// Green and inert: nothing to do for an authorized server.
 			items = append(items, protocol.CommandMenuItem{
-				Label: fmt.Sprintf("%s · 已就绪（%d 个工具）", name, h.ToolCount),
-				Value: "/mcp", Current: true,
+				Label:       fmt.Sprintf("%s · 已就绪（%d 个工具） · %s", name, h.ToolCount, source),
+				Description: description, Value: "/mcp", Current: true,
 			})
 			if logout {
 				items = append(items, logoutItem(name))
 			}
 		case mcp.StatusAuthRequired:
 			items = append(items, protocol.CommandMenuItem{
-				Label: name + " · 需要授权", Description: "回车获取授权链接",
+				Label: name + " · 需要授权 · " + source, Description: "回车获取授权链接 · " + description,
 				Value: "/mcp-login " + name, Submit: true,
 			})
 			if logout {
@@ -336,7 +347,7 @@ func (m *Manager) mcpMenu(_ context.Context, cmd *command.Command) (protocol.Com
 			}
 		case mcp.StatusAuthorizing:
 			items = append(items, protocol.CommandMenuItem{
-				Label: name + " · 等待浏览器授权", Description: "回车重新显示授权链接",
+				Label: name + " · 等待浏览器授权 · " + source, Description: "回车重新显示授权链接 · " + description,
 				Value: "/mcp-login " + name, Submit: true,
 			})
 			items = append(items, protocol.CommandMenuItem{
@@ -345,7 +356,7 @@ func (m *Manager) mcpMenu(_ context.Context, cmd *command.Command) (protocol.Com
 			})
 		case mcp.StatusError:
 			items = append(items, protocol.CommandMenuItem{
-				Label: name + " · 连接失败", Description: h.Error,
+				Label: name + " · 连接失败 · " + source, Description: strings.TrimSpace(h.Error + " · " + description),
 				Value: "/mcp-login " + name, Submit: true,
 			})
 			if logout {
@@ -353,7 +364,7 @@ func (m *Manager) mcpMenu(_ context.Context, cmd *command.Command) (protocol.Com
 			}
 		default:
 			items = append(items, protocol.CommandMenuItem{
-				Label: name + " · 连接中", Value: "/mcp", Current: true,
+				Label: name + " · 连接中 · " + source, Description: description, Value: "/mcp", Current: true,
 			})
 		}
 	}
@@ -368,23 +379,14 @@ func logoutItem(name string) protocol.CommandMenuItem {
 	}
 }
 
-// mcpStatus renders the health of every managed MCP server. It only reads
-// health and host-configured launch commands; plugin and session servers are
-// described by their owner label alone.
+// mcpStatus merges user-visible host definitions with runtime health. This
+// keeps disabled or failed-to-register workspace entries visible; plugin and
+// session servers are described by their runtime owner label.
 func (m *Manager) mcpStatus() string {
-	m.mu.Lock()
-	configs := maps.Clone(m.configMCP)
-	m.mu.Unlock()
-
-	health := m.mcp.Health()
-	if len(health) == 0 {
+	health, definitions, names := m.mcpInventory()
+	if len(names) == 0 {
 		return "未连接任何 MCP 服务器。"
 	}
-	names := make([]string, 0, len(health))
-	for name := range health {
-		names = append(names, name)
-	}
-	sort.Strings(names)
 	ready := 0
 	var b strings.Builder
 	for _, name := range names {
@@ -392,7 +394,8 @@ func (m *Manager) mcpStatus() string {
 		if h.Status == mcp.StatusReady {
 			ready++
 		}
-		fmt.Fprintf(&b, "  %-20s %s\n", name, strings.Join(mcpStatusParts(name, h, configs[name]), " · "))
+		definition, configured := definitions[name]
+		fmt.Fprintf(&b, "  %-20s %s\n", name, strings.Join(mcpStatusParts(name, h, definition, configured), " · "))
 		if h.AuthURL != "" {
 			fmt.Fprintf(&b, "    授权链接：%s\n", h.AuthURL)
 		}
@@ -400,8 +403,43 @@ func (m *Manager) mcpStatus() string {
 	return fmt.Sprintf("MCP 服务器 · %d/%d 已就绪\n%s", ready, len(names), strings.TrimRight(b.String(), "\n"))
 }
 
-func mcpStatusParts(name string, h mcp.Health, cfg mcp.ServerConfig) []string {
-	parts := []string{h.Status}
+func (m *Manager) mcpInventory() (map[string]mcp.Health, map[string]ConfiguredMCP, []string) {
+	m.mu.Lock()
+	definitions := make(map[string]ConfiguredMCP, len(m.configuredMCP)+len(m.configMCP))
+	for _, definition := range m.configuredMCP {
+		definitions[definition.Name] = definition
+	}
+	for name, cfg := range m.configMCP {
+		if _, exists := definitions[name]; !exists {
+			definitions[name] = ConfiguredMCP{Name: name, Source: "配置", URL: cfg.URL, Command: cfg.Command, Args: append([]string(nil), cfg.Args...), Enabled: true}
+		}
+	}
+	m.mu.Unlock()
+	health := m.mcp.Health()
+	namesByValue := make(map[string]struct{}, len(health)+len(definitions))
+	for name := range health {
+		namesByValue[name] = struct{}{}
+	}
+	for name := range definitions {
+		namesByValue[name] = struct{}{}
+	}
+	names := make([]string, 0, len(namesByValue))
+	for name := range namesByValue {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return health, definitions, names
+}
+
+func mcpStatusParts(name string, h mcp.Health, definition ConfiguredMCP, configured bool) []string {
+	status := h.Status
+	if status == "" {
+		status = "未加载"
+		if configured && !definition.Enabled {
+			status = "已禁用"
+		}
+	}
+	parts := []string{status}
 	switch {
 	case h.Status == mcp.StatusReady:
 		parts = append(parts, fmt.Sprintf("%d tools", h.ToolCount))
@@ -412,11 +450,26 @@ func mcpStatusParts(name string, h mcp.Health, cfg mcp.ServerConfig) []string {
 	case h.Error != "":
 		parts = append(parts, h.Error)
 	}
-	parts = append(parts, mcpOwnerLabel(h.Owner))
-	if cfg.Command != "" {
-		parts = append(parts, strings.TrimSpace(cfg.Command+" "+strings.Join(cfg.Args, " ")))
+	source, detail := mcpDisplaySource(definition, configured, h)
+	parts = append(parts, source)
+	if detail != "" && detail != source {
+		parts = append(parts, detail)
+	}
+	if definition.Command != "" {
+		parts = append(parts, strings.TrimSpace(definition.Command+" "+strings.Join(definition.Args, " ")))
 	}
 	return parts
+}
+
+func mcpDisplaySource(definition ConfiguredMCP, configured bool, h mcp.Health) (string, string) {
+	if !configured || definition.Source == "" {
+		source := mcpOwnerLabel(h.Owner)
+		return source, source
+	}
+	if definition.Source == "配置" {
+		return "配置", "配置"
+	}
+	return "工作区", definition.Source
 }
 
 // mcpOwnerLabel turns a lifecycle owner ID into a short source label.

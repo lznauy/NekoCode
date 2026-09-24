@@ -42,6 +42,7 @@ type Manager struct {
 	tools          *tools.Registry
 	agentErrors    map[string]string
 	configMCP      map[string]mcp.ServerConfig
+	configuredMCP  []ConfiguredMCP
 }
 
 // Snapshot is the read-only state used by management views.
@@ -63,6 +64,15 @@ type ConfiguredMCP struct {
 	Command string
 	Args    []string
 	Enabled bool
+}
+
+func cloneConfiguredMCP(definitions []ConfiguredMCP) []ConfiguredMCP {
+	out := make([]ConfiguredMCP, len(definitions))
+	copy(out, definitions)
+	for i := range out {
+		out[i].Args = append([]string(nil), out[i].Args...)
+	}
+	return out
 }
 
 // Config contains the shared dependencies used by extension modules.
@@ -130,19 +140,26 @@ func (m *Manager) Load() {
 
 // Reload rebuilds plugin runtime state from disk and preserves loaded skills.
 func (m *Manager) Reload() {
-	m.reload(nil)
+	m.reload(nil, nil)
 }
 
 // ReloadWithMCP applies the effective host configuration, then reloads plugins
 // and skills. Unchanged host servers and unrelated transport servers survive.
 func (m *Manager) ReloadWithMCP(configs map[string]mcp.ServerConfig) {
+	m.ReloadWithMCPDefinitions(configs, nil)
+}
+
+// ReloadWithMCPDefinitions applies runtime configs and their user-visible
+// definitions in one publication. Definitions include disabled workspace
+// entries that intentionally have no runtime health record.
+func (m *Manager) ReloadWithMCPDefinitions(configs map[string]mcp.ServerConfig, definitions []ConfiguredMCP) {
 	if configs == nil {
 		configs = make(map[string]mcp.ServerConfig)
 	}
-	m.reload(configs)
+	m.reload(configs, definitions)
 }
 
-func (m *Manager) reload(configs map[string]mcp.ServerConfig) {
+func (m *Manager) reload(configs map[string]mcp.ServerConfig, definitions []ConfiguredMCP) {
 	m.ops.Lock()
 	defer m.ops.Unlock()
 	m.mu.Lock()
@@ -151,6 +168,7 @@ func (m *Manager) reload(configs map[string]mcp.ServerConfig) {
 	m.deactivateAllLocked()
 	if configs != nil {
 		m.configureMCPLocked(configs)
+		m.configuredMCP = cloneConfiguredMCP(definitions)
 	}
 	m.plugins.Reload()
 	for _, p := range m.plugins.ListPlugins() {
@@ -182,17 +200,26 @@ func (m *Manager) SetMCPAuthNotifier(fn func(message string)) {
 	m.mcp.SetAuthNotifier(fn)
 }
 
+// SetConfiguredMCPDefinitions publishes host definitions used by management
+// commands. Runtime configs alone omit disabled entries and their source.
+func (m *Manager) SetConfiguredMCPDefinitions(definitions []ConfiguredMCP) {
+	m.mu.Lock()
+	m.configuredMCP = cloneConfiguredMCP(definitions)
+	m.mu.Unlock()
+}
+
 // Snapshot returns all management state under one lock.
 func (m *Manager) Snapshot() Snapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return Snapshot{
-		Skills:       m.skills.List(),
-		LoadedSkills: m.skills.LoadedSet(),
-		Plugins:      m.plugins.PluginSnapshots(),
-		MCPHealth:    m.mcp.Health(),
-		AgentErrors:  m.agentErrorsLocked(),
-		Agents:       m.agentInfosLocked(),
+		Skills:        m.skills.List(),
+		LoadedSkills:  m.skills.LoadedSet(),
+		Plugins:       m.plugins.PluginSnapshots(),
+		MCPHealth:     m.mcp.Health(),
+		AgentErrors:   m.agentErrorsLocked(),
+		Agents:        m.agentInfosLocked(),
+		ConfiguredMCP: cloneConfiguredMCP(m.configuredMCP),
 	}
 }
 
