@@ -18,15 +18,15 @@ func remoteHTTPClient() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second, Transport: endpointTransport{base: http.DefaultTransport}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
-func mcpHTTPClient(ctx context.Context) *http.Client {
+func mcpHTTPClient(ctx context.Context, cfg ServerConfig) *http.Client {
 	c := remoteHTTPClient()
 	// SSE tool responses may outlive ordinary OAuth HTTP round trips.
 	c.Timeout = 0
 	if base, ok := http.DefaultTransport.(*http.Transport); ok {
 		transport := base.Clone()
-		c.Transport = endpointTransport{base: transport, lifetime: ctx}
+		c.Transport = endpointTransport{base: transport, lifetime: ctx, headers: cfg.Headers}
 	} else {
-		c.Transport = endpointTransport{base: http.DefaultTransport, lifetime: ctx}
+		c.Transport = endpointTransport{base: http.DefaultTransport, lifetime: ctx, headers: cfg.Headers}
 	}
 	return c
 }
@@ -34,11 +34,19 @@ func mcpHTTPClient(ctx context.Context) *http.Client {
 type endpointTransport struct {
 	base     http.RoundTripper
 	lifetime context.Context
+	headers  map[string]string
 }
 
 func (t endpointTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if err := utilhttp.ValidateSecureURL(r.URL.String()); err != nil {
 		return nil, err
+	}
+	// Static credentials travel on every endpoint request unless the OAuth
+	// handler already set them, so token-based servers need no OAuth flow.
+	for key, value := range t.headers {
+		if r.Header.Get(key) == "" {
+			r.Header.Set(key, value)
+		}
 	}
 	if t.lifetime == nil {
 		return t.base.RoundTrip(r)
@@ -80,7 +88,7 @@ type remoteClient struct {
 
 func newRemoteClient(name string, cfg ServerConfig) *remoteClient {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &remoteClient{cfg: cfg, ctx: ctx, cancel: cancel, auth: newOAuthHandler(ctx, name, cfg), httpClient: mcpHTTPClient(ctx)}
+	return &remoteClient{cfg: cfg, ctx: ctx, cancel: cancel, auth: newOAuthHandler(ctx, name, cfg), httpClient: mcpHTTPClient(ctx, cfg)}
 }
 func (r *remoteClient) Start(ctx context.Context) error {
 	r.mu.Lock()

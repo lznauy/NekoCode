@@ -64,7 +64,7 @@ func resolveMCPServers(cfg *config.Config, project *project.Project, cwd string)
 	for name, cfg := range cfg.MCPServers {
 		if cfg.Enabled {
 			servers[name] = mcp.ServerConfig{Command: cfg.Command,
-				URL: cfg.URL, OAuthClientID: cfg.OAuthClientID, OAuthClientSecret: cfg.OAuthClientSecret, OAuthClientMetadataURL: cfg.OAuthClientMetadataURL, OAuthCallbackPort: cfg.OAuthCallbackPort,
+				URL: cfg.URL, Headers: maps.Clone(cfg.Headers), OAuthClientID: cfg.OAuthClientID, OAuthClientSecret: cfg.OAuthClientSecret, OAuthClientMetadataURL: cfg.OAuthClientMetadataURL, OAuthCallbackPort: cfg.OAuthCallbackPort,
 				Args: append([]string(nil), cfg.Args...), Env: maps.Clone(cfg.Env), CWD: cwd}
 		}
 	}
@@ -73,7 +73,7 @@ func resolveMCPServers(cfg *config.Config, project *project.Project, cwd string)
 			delete(servers, name)
 			if cfg.Enabled {
 				servers[name] = mcp.ServerConfig{Command: cfg.Command,
-					URL: cfg.URL, OAuthClientID: cfg.OAuthClientID, OAuthClientSecret: cfg.OAuthClientSecret, OAuthClientMetadataURL: cfg.OAuthClientMetadataURL, OAuthCallbackPort: cfg.OAuthCallbackPort,
+					URL: cfg.URL, Headers: maps.Clone(cfg.Headers), OAuthClientID: cfg.OAuthClientID, OAuthClientSecret: cfg.OAuthClientSecret, OAuthClientMetadataURL: cfg.OAuthClientMetadataURL, OAuthCallbackPort: cfg.OAuthCallbackPort,
 					Args: append([]string(nil), cfg.Args...), Env: maps.Clone(cfg.Env), CWD: cfg.CWD}
 			}
 		}

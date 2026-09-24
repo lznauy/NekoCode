@@ -8,11 +8,12 @@ import (
 
 // ServerConfig defines how to launch an MCP server.
 type ServerConfig struct {
-	URL                    string `json:"url,omitempty"`
-	OAuthClientID          string `json:"oauth_client_id,omitempty"`
-	OAuthClientSecret      string `json:"oauth_client_secret,omitempty"`
-	OAuthClientMetadataURL string `json:"oauth_client_metadata_url,omitempty"`
-	OAuthCallbackPort      int    `json:"oauth_callback_port,omitempty"`
+	URL                    string            `json:"url,omitempty"`
+	Headers                map[string]string `json:"headers,omitempty"`
+	OAuthClientID          string            `json:"oauth_client_id,omitempty"`
+	OAuthClientSecret      string            `json:"oauth_client_secret,omitempty"`
+	OAuthClientMetadataURL string            `json:"oauth_client_metadata_url,omitempty"`
+	OAuthCallbackPort      int               `json:"oauth_callback_port,omitempty"`
 	interactive            bool
 	authorizationScopes    []string
 	CWD                    string            `json:"cwd,omitempty"`

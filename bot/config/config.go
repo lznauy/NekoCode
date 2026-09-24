@@ -44,11 +44,12 @@ type ImageGenConfig struct {
 }
 
 type MCPServerConfig struct {
-	URL                    string `json:"url,omitempty"`
-	OAuthClientID          string `json:"oauth_client_id,omitempty"`
-	OAuthClientSecret      string `json:"oauth_client_secret,omitempty"`
-	OAuthClientMetadataURL string `json:"oauth_client_metadata_url,omitempty"`
-	OAuthCallbackPort      int    `json:"oauth_callback_port,omitempty"`
+	URL                    string            `json:"url,omitempty"`
+	Headers                map[string]string `json:"headers,omitempty"`
+	OAuthClientID          string            `json:"oauth_client_id,omitempty"`
+	OAuthClientSecret      string            `json:"oauth_client_secret,omitempty"`
+	OAuthClientMetadataURL string            `json:"oauth_client_metadata_url,omitempty"`
+	OAuthCallbackPort      int               `json:"oauth_callback_port,omitempty"`
 
 	Command string            `json:"command"`
 	Args    []string          `json:"args,omitempty"`
@@ -371,6 +372,11 @@ func Validate(cfg *Config) error {
 			}
 			srv.OAuthClientID = strings.TrimSpace(srv.OAuthClientID)
 			srv.OAuthClientSecret = strings.TrimSpace(srv.OAuthClientSecret)
+			headers, err := utilhttp.NormalizeHeaders(srv.Headers)
+			if err != nil {
+				return fmt.Errorf("mcp server %q: %w", name, err)
+			}
+			srv.Headers = headers
 			srv.OAuthClientMetadataURL, err = utilhttp.NormalizeSecureURL(srv.OAuthClientMetadataURL)
 			if err != nil {
 				return fmt.Errorf("mcp server %q OAuth metadata URL: %w", name, err)

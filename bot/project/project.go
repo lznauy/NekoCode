@@ -20,11 +20,12 @@ const maxMCPBytes = 1024 * 1024
 
 // Server is a complete project override, never a field-wise merge.
 type Server struct {
-	URL                    string `json:"url,omitempty"`
-	OAuthClientID          string `json:"oauth_client_id,omitempty"`
-	OAuthClientSecret      string `json:"oauth_client_secret,omitempty"`
-	OAuthClientMetadataURL string `json:"oauth_client_metadata_url,omitempty"`
-	OAuthCallbackPort      int    `json:"oauth_callback_port,omitempty"`
+	URL                    string            `json:"url,omitempty"`
+	Headers                map[string]string `json:"headers,omitempty"`
+	OAuthClientID          string            `json:"oauth_client_id,omitempty"`
+	OAuthClientSecret      string            `json:"oauth_client_secret,omitempty"`
+	OAuthClientMetadataURL string            `json:"oauth_client_metadata_url,omitempty"`
+	OAuthCallbackPort      int               `json:"oauth_callback_port,omitempty"`
 
 	Command string
 	Args    []string
@@ -119,11 +120,12 @@ func readServers(path, root string) (map[string]Server, error) {
 	}
 	var document struct {
 		Servers map[string]struct {
-			URL                    string `json:"url,omitempty"`
-			OAuthClientID          string `json:"oauth_client_id,omitempty"`
-			OAuthClientSecret      string `json:"oauth_client_secret,omitempty"`
-			OAuthClientMetadataURL string `json:"oauth_client_metadata_url,omitempty"`
-			OAuthCallbackPort      int    `json:"oauth_callback_port,omitempty"`
+			URL                    string            `json:"url,omitempty"`
+			Headers                map[string]string `json:"headers,omitempty"`
+			OAuthClientID          string            `json:"oauth_client_id,omitempty"`
+			OAuthClientSecret      string            `json:"oauth_client_secret,omitempty"`
+			OAuthClientMetadataURL string            `json:"oauth_client_metadata_url,omitempty"`
+			OAuthCallbackPort      int               `json:"oauth_callback_port,omitempty"`
 
 			Command string            `json:"command"`
 			Args    []string          `json:"args"`
@@ -163,6 +165,11 @@ func readServers(path, root string) (map[string]Server, error) {
 		}
 		raw.OAuthClientID = strings.TrimSpace(raw.OAuthClientID)
 		raw.OAuthClientSecret = strings.TrimSpace(raw.OAuthClientSecret)
+		headers, err := utilhttp.NormalizeHeaders(raw.Headers)
+		if err != nil {
+			return nil, fmt.Errorf("%s: server %q: %w", path, name, err)
+		}
+		raw.Headers = headers
 		if raw.URL != "" {
 			if raw.Command != "" {
 				return nil, fmt.Errorf("MCP server must specify command or URL, not both")
@@ -195,7 +202,7 @@ func readServers(path, root string) (map[string]Server, error) {
 		if !filepath.IsAbs(command) && strings.ContainsAny(command, `/\`) {
 			command = filepath.Join(cwd, command)
 		}
-		servers[name] = Server{URL: raw.URL, OAuthClientID: raw.OAuthClientID, OAuthClientSecret: raw.OAuthClientSecret, OAuthClientMetadataURL: raw.OAuthClientMetadataURL, OAuthCallbackPort: raw.OAuthCallbackPort, Command: command, Args: raw.Args, Env: raw.Env,
+		servers[name] = Server{URL: raw.URL, Headers: raw.Headers, OAuthClientID: raw.OAuthClientID, OAuthClientSecret: raw.OAuthClientSecret, OAuthClientMetadataURL: raw.OAuthClientMetadataURL, OAuthCallbackPort: raw.OAuthCallbackPort, Command: command, Args: raw.Args, Env: raw.Env,
 			CWD: filepath.Clean(cwd), Enabled: enabled}
 	}
 	return servers, nil

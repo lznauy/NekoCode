@@ -450,7 +450,7 @@ my-project/
 
 项目 MCP 与 `~/.nekocode/config.json` 中的全局 MCP 按名称合并；同名时项目定义完整替换全局定义，不拼接参数或环境变量。项目文件中省略 `enabled` 表示启用，`enabled: false` 会屏蔽同名全局服务；全局配置的既有 `enabled` 语义不变。项目配置不会写回用户级配置文件。
 
-MCP 子进程默认以项目根目录为工作目录；可用 `cwd` 指定绝对路径或相对项目根目录的路径。带路径的相对 `command` 基于该子进程工作目录解析，裸命令名使用 `PATH`，`args` 原样传递。当前仅支持 stdio；项目文件最大 1 MiB，空列表写作 `{"mcpServers": {}}`。
+MCP 子进程默认以项目根目录为工作目录；可用 `cwd` 指定绝对路径或相对项目根目录的路径。带路径的相对 `command` 基于该子进程工作目录解析，裸命令名使用 `PATH`，`args` 原样传递。远程 MCP 可配置 `headers`（如 `{"Authorization": "Bearer <token>"}`），每个发往该 MCP 端点的请求都会携带；Hop-by-hop 头（`Host`、`Content-Length`、`Connection` 等）不可手动设置。当前仅支持 stdio；项目文件最大 1 MiB，空列表写作 `{"mcpServers": {}}`。
 
 使用 `/workspace` 查看根目录、项目配置路径和读取错误，使用 `/workspace reload` 刷新；管理界面的技能刷新也会更新这些配置。刷新在任务之间执行，不监听磁盘变化。格式错误时保留该文件上一份有效配置，其他文件继续加载；删除文件后刷新会撤销其配置。MCP 连接失败显示错误状态，不会自动改用同名全局服务。
 
