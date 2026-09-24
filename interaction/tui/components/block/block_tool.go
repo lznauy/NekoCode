@@ -30,6 +30,9 @@ func renderToolLine(b ContentBlock, width int, sty *styles.Styles) string {
 	contentW := width - 12
 	contentW = max(contentW, 10)
 	rendered := renderToolContent(b, contentW, sty)
+	if b.JevNote != "" {
+		rendered = sty.Subtle.MaxWidth(contentW).Render(b.JevNote) + "\n" + rendered
+	}
 	return lipgloss.JoinVertical(lipgloss.Left, accentLine, renderToolBody(rendered, sty))
 }
 

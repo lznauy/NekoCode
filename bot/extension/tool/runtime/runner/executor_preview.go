@@ -42,6 +42,6 @@ func (e *Executor) emitPreview(ctx context.Context, call core.ToolCallItem) {
 	pfn := e.previewFn
 	e.fnMu.RUnlock()
 	if pfn != nil {
-		pfn(call.ID, call.Name, call.Args, preview)
+		pfn(call.ID, call.Name, call.Args, preview, "")
 	}
 }

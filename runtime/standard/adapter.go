@@ -2,6 +2,7 @@ package standard
 
 import (
 	"context"
+	"maps"
 
 	"nekocode/bot/config"
 	"nekocode/bot/core"
@@ -51,10 +52,14 @@ func (a *adapter) CurrentModel() controlruntime.ModelSelection {
 }
 
 // PermissionMode reports the permission mode: "full" when the full-takeover
-// mode is active, "manual" otherwise.
+// mode is active, "auto" when the Jev-judged bash auto mode is active, and
+// "manual" otherwise.
 func (a *adapter) PermissionMode() string {
 	if a.bot.FullAccess() {
 		return "full"
+	}
+	if a.bot.BashAuto() {
+		return "auto"
 	}
 	return "manual"
 }
@@ -187,14 +192,7 @@ func (a *adapter) DeleteSession(id string) error {
 }
 
 func (a *adapter) ReplaceMCPServers(ctx context.Context, source string, servers []controlruntime.MCPServerSpec) error {
-	configs := make(map[string]mcp.ServerConfig, len(servers))
-	for _, server := range servers {
-		configs[server.Name] = mcp.ServerConfig{
-			Command: server.Config.Command,
-			Args:    append([]string(nil), server.Config.Args...),
-			Env:     server.Config.Env,
-		}
-	}
+	configs := sessionMCPConfigs(servers)
 	return a.bot.ReplaceSessionMCPServers(ctx, source, configs)
 }
 
@@ -236,8 +234,22 @@ func (a *adapter) services() controlruntime.Services {
 		NewSession:             a.NewSession,
 		DeleteSession:          a.DeleteSession,
 		ReplaceMCPServers:      a.ReplaceMCPServers,
+		MCPAuthorizationAction: a.bot.MCPAuthorizationAction,
 		Close:                  a.Close,
 	}
 }
 
 var _ controlruntime.Runner = (*adapter)(nil)
+
+func sessionMCPConfigs(servers []controlruntime.MCPServerSpec) map[string]mcp.ServerConfig {
+	configs := make(map[string]mcp.ServerConfig, len(servers))
+	for _, server := range servers {
+		configs[server.Name] = mcp.ServerConfig{
+			Command: server.Config.Command,
+			URL:     server.Config.URL, OAuthClientID: server.Config.OAuthClientID, OAuthClientSecret: server.Config.OAuthClientSecret, OAuthClientMetadataURL: server.Config.OAuthClientMetadataURL, OAuthCallbackPort: server.Config.OAuthCallbackPort,
+			Args: append([]string(nil), server.Config.Args...),
+			Env:  maps.Clone(server.Config.Env),
+		}
+	}
+	return configs
+}

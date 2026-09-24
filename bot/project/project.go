@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	utilhttp "nekocode/util/http"
 )
 
 const MaxInstructionsBytes = 128 * 1024
@@ -18,6 +20,12 @@ const maxMCPBytes = 1024 * 1024
 
 // Server is a complete project override, never a field-wise merge.
 type Server struct {
+	URL                    string `json:"url,omitempty"`
+	OAuthClientID          string `json:"oauth_client_id,omitempty"`
+	OAuthClientSecret      string `json:"oauth_client_secret,omitempty"`
+	OAuthClientMetadataURL string `json:"oauth_client_metadata_url,omitempty"`
+	OAuthCallbackPort      int    `json:"oauth_callback_port,omitempty"`
+
 	Command string
 	Args    []string
 	Env     map[string]string
@@ -111,6 +119,12 @@ func readServers(path, root string) (map[string]Server, error) {
 	}
 	var document struct {
 		Servers map[string]struct {
+			URL                    string `json:"url,omitempty"`
+			OAuthClientID          string `json:"oauth_client_id,omitempty"`
+			OAuthClientSecret      string `json:"oauth_client_secret,omitempty"`
+			OAuthClientMetadataURL string `json:"oauth_client_metadata_url,omitempty"`
+			OAuthCallbackPort      int    `json:"oauth_callback_port,omitempty"`
+
 			Command string            `json:"command"`
 			Args    []string          `json:"args"`
 			Env     map[string]string `json:"env"`
@@ -137,7 +151,28 @@ func readServers(path, root string) (map[string]Server, error) {
 			return nil, fmt.Errorf("%s: invalid server name %q", path, name)
 		}
 		enabled := raw.Enabled == nil || *raw.Enabled
-		if enabled && strings.TrimSpace(raw.Command) == "" {
+		raw.Command = strings.TrimSpace(raw.Command)
+		var err error
+		raw.URL, err = utilhttp.NormalizeSecureURL(raw.URL)
+		if err != nil {
+			return nil, fmt.Errorf("%s: server %q URL: %w", path, name, err)
+		}
+		raw.OAuthClientMetadataURL, err = utilhttp.NormalizeSecureURL(raw.OAuthClientMetadataURL)
+		if err != nil {
+			return nil, fmt.Errorf("%s: server %q OAuth metadata URL: %w", path, name, err)
+		}
+		raw.OAuthClientID = strings.TrimSpace(raw.OAuthClientID)
+		raw.OAuthClientSecret = strings.TrimSpace(raw.OAuthClientSecret)
+		if raw.URL != "" {
+			if raw.Command != "" {
+				return nil, fmt.Errorf("MCP server must specify command or URL, not both")
+			}
+		}
+		if raw.OAuthCallbackPort < 0 || raw.OAuthCallbackPort > 65535 {
+			return nil, fmt.Errorf("invalid OAuth callback port")
+		}
+
+		if enabled && strings.TrimSpace(raw.Command) == "" && raw.URL == "" {
 			return nil, fmt.Errorf("%s: server %q requires command", path, name)
 		}
 		for _, value := range append([]string{raw.Command, raw.CWD}, raw.Args...) {
@@ -160,7 +195,7 @@ func readServers(path, root string) (map[string]Server, error) {
 		if !filepath.IsAbs(command) && strings.ContainsAny(command, `/\`) {
 			command = filepath.Join(cwd, command)
 		}
-		servers[name] = Server{Command: command, Args: raw.Args, Env: raw.Env,
+		servers[name] = Server{URL: raw.URL, OAuthClientID: raw.OAuthClientID, OAuthClientSecret: raw.OAuthClientSecret, OAuthClientMetadataURL: raw.OAuthClientMetadataURL, OAuthCallbackPort: raw.OAuthCallbackPort, Command: command, Args: raw.Args, Env: raw.Env,
 			CWD: filepath.Clean(cwd), Enabled: enabled}
 	}
 	return servers, nil

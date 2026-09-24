@@ -14,6 +14,7 @@
 package permission
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -115,6 +116,17 @@ type Engine struct {
 	matchers     map[string]SpecifierMatcher
 	rules        []Rule // ordered; evaluation is deny→ask→allow within the matched tool
 	sandboxRules []SandboxRule
+	// autoJudge can allow shell commands after deny and explicit user ask
+	// checks. A failed or dangerous verdict retains normal rule evaluation.
+	autoJudge func(ctx context.Context, command string) (allow bool, decided bool)
+}
+
+// SetAutoJudge registers the optional safety judge for shell calls.
+// decided=false retains normal rule evaluation.
+// ctx is the calling tool's context, so a slow remote judge honors
+// cancellation instead of outliving the call it is deciding for.
+func (e *Engine) SetAutoJudge(fn func(ctx context.Context, command string) (allow bool, decided bool)) {
+	e.autoJudge = fn
 }
 
 // NewEngine creates an engine with the given matchers (tool name → matcher).
@@ -169,24 +181,34 @@ type Decision struct {
 	Assessment CallAssessment
 }
 
-// Evaluate decides what to do with a tool call. Precedence (highest first):
+// Evaluate decides what to do with a tool call without cancellation support.
+// It is retained for API compatibility; runtime callers should use
+// EvaluateContext so remote judges inherit the tool call's context.
+func (e *Engine) Evaluate(toolName string, callInfo map[string]any, defaultEffect Effect) Decision {
+	return e.EvaluateContext(context.Background(), toolName, callInfo, defaultEffect)
+}
+
+// EvaluateContext decides what to do with a tool call. Precedence (highest first):
 //
-//  1. deny from ANY source (a deny can never be overridden)
-//  2. ask declared by the user (declared/remembered) — the user explicitly
-//     wants to be prompted
+//  1. deny from ANY source (a deny can never be overridden, not even by the
+//     auto-mode judge)
+//  2. ask declared by the user (declared/remembered) — explicit prompts win
 //  3. allow declared by the user (declared/remembered) — a remembered allow
-//     overrides a builtin ask so "yes, don't ask again" actually sticks
-//  4. builtin ask
-//  5. builtin allow
-//  6. defaultEffect (no rule matched)
+//     overrides a builtin ask and avoids an unnecessary remote judgment
+//  4. auto-mode judge (shell only): remaining commands are judged before
+//     builtin rules — confidently safe runs immediately, so builtin ask rules
+//     do not preempt it; a dangerous verdict falls through to the chain below
+//  5. builtin ask
+//  6. builtin allow
+//  7. defaultEffect (no rule matched)
 //
 // Tool names are compared case-insensitively so users can write "Bash(...)"
 // (claude-code style) while the engine keys on the lowercase canonical name.
-func (e *Engine) Evaluate(toolName string, callInfo map[string]any, defaultEffect Effect) (decision Decision) {
+func (e *Engine) EvaluateContext(ctx context.Context, toolName string, callInfo map[string]any, defaultEffect Effect) (decision Decision) {
 	defer func() {
 		decision = e.applyAssessment(toolName, callInfo, decision)
 	}()
-	// 1. deny from any source
+	// 1. deny from any source (hard rules — the judge never overrides them)
 	for _, r := range e.rules {
 		if r.Effect == EffectDeny && e.ruleApplies(r, toolName, callInfo) {
 			return Decision{Effect: EffectDeny, Rule: r}
@@ -198,7 +220,8 @@ func (e *Engine) Evaluate(toolName string, callInfo map[string]any, defaultEffec
 			return Decision{Effect: EffectAsk, Rule: r}
 		}
 	}
-	// 3. user-declared allow (covers remembered allows → beats builtin ask)
+	// 3. user-declared allow (covers remembered allows and avoids an
+	// unnecessary remote judgment for a decision the user already made).
 	if d, ok := e.evaluateAllowCoverage(toolName, callInfo, false); ok {
 		return d
 	}
@@ -207,13 +230,33 @@ func (e *Engine) Evaluate(toolName string, callInfo map[string]any, defaultEffec
 			return Decision{Effect: EffectAllow, Rule: r}
 		}
 	}
-	// 4. builtin ask
-	for _, r := range e.rules {
-		if r.Effect == EffectAsk && r.isBuiltin() && e.ruleApplies(r, toolName, callInfo) {
-			return Decision{Effect: EffectAsk, Rule: r}
+	// 4. auto mode: the judge is the first-pass authority for remaining shell calls —
+	// commands not covered by a user rule are judged before builtin rules
+	// (rm, git push, ...) no longer preempt it. Confidently safe runs
+	// immediately; a dangerous verdict falls through to the chain, where
+	// builtin ask rules produce the prompt.
+	judgedDangerous := false
+	if defaultEffect == EffectAsk && e.autoJudge != nil && toolName == "shell" {
+		if command, _ := callInfo["command"].(string); command != "" {
+			if allow, decided := e.autoJudge(ctx, command); decided {
+				if allow {
+					return Decision{Effect: EffectAllow, Assessment: CallAssessment{Reason: "jev: judged safe"}}
+				}
+				judgedDangerous = true
+			}
 		}
 	}
-	// 5. builtin allow
+	// 5. builtin ask
+	for _, r := range e.rules {
+		if r.Effect == EffectAsk && r.isBuiltin() && e.ruleApplies(r, toolName, callInfo) {
+			d := Decision{Effect: EffectAsk, Rule: r}
+			if judgedDangerous {
+				d.Assessment = CallAssessment{Reason: "jev: judged dangerous"}
+			}
+			return d
+		}
+	}
+	// 6. builtin allow
 	if d, ok := e.evaluateAllowCoverage(toolName, callInfo, true); ok {
 		return d
 	}
@@ -221,6 +264,11 @@ func (e *Engine) Evaluate(toolName string, callInfo map[string]any, defaultEffec
 		if r.Effect == EffectAllow && r.isBuiltin() && e.ruleApplies(r, toolName, callInfo) {
 			return Decision{Effect: EffectAllow, Rule: r}
 		}
+	}
+	// 7. defaultEffect (no rule matched): judge unavailable/uncertain keeps
+	// the default ask, a dangerous verdict is reported as the reason.
+	if judgedDangerous {
+		return Decision{Effect: defaultEffect, Assessment: CallAssessment{Reason: "jev: judged dangerous"}}
 	}
 	return Decision{Effect: defaultEffect}
 }
@@ -231,6 +279,11 @@ func (e *Engine) applyAssessment(toolName string, callInfo map[string]any, decis
 		return decision
 	}
 	assessment := assessor.Assess(callInfo)
+	if assessment.Reason == "" && decision.Assessment.Reason != "" {
+		// Preserve an earlier reason (e.g. the auto judge's verdict) when the
+		// structural assessment has nothing to add.
+		assessment.Reason = decision.Assessment.Reason
+	}
 	decision.Assessment = assessment
 	if !assessment.RequiresApproval() || decision.Effect == EffectDeny {
 		return decision

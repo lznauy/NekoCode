@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"nekocode/bot/provider/types"
+	"nekocode/logger"
 	"nekocode/util/url"
 )
 
@@ -338,6 +339,10 @@ func (c *Client) ChatStream(ctx context.Context, messages []types.Message, tools
 		types.StreamSSE(ctx, resp, tokenCh, errCh, func(data string, tokenCh chan<- types.StreamToken) error {
 			var event sseEvent
 			if err := json.Unmarshal([]byte(data), &event); err != nil {
+				// Keep-alives and non-event payloads are ignored, but leave a
+				// diagnosis trail: a stream of only such payloads yields an
+				// empty response with no other error.
+				logger.Log("anthropic stream: ignored unparseable SSE payload (%d bytes)", len(data))
 				return nil
 			}
 

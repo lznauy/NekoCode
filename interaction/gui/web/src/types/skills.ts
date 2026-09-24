@@ -29,6 +29,8 @@ export interface PluginView {
 }
 
 export interface MCPServerView {
+  url?: string
+  authUrl?: string
   name: string
   plugin: string
   command: string

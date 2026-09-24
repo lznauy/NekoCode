@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -43,7 +44,7 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) core.To
 	// If a grant already matches, skip the engine's default "ask" prompt.
 	predictedReq := e.permissionRequestFromEntry(entry, tc.Args)
 	var preApproval *escalationApproval
-	if dec := e.evaluatePermission(tc, predictedReq); dec.block {
+	if dec := e.evaluatePermission(ctx, tc, predictedReq); dec.block {
 		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: dec.reason}
 	} else if dec.prompt {
 		reply, ok := e.promptConfirm(tc, confirmFn, predictedReq, dec)
@@ -78,6 +79,7 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) core.To
 
 	paths := toolPaths(tc)
 	output, execErr := e.callTool(ctx, tool, tc)
+	e.noteExecutedShell(tc)
 	if execErr != nil {
 		preApproved := escalationApproval{}
 		if preApproval != nil {
@@ -140,10 +142,10 @@ type permissionDecision struct {
 // the basic prompt. Explicit ask rules (rm *, git push *, ...) always win:
 // they are command-level safety prompts the user opted into, orthogonal to
 // capability grants, so a net.outbound grant MUST NOT silence an "ask rm *".
-func (e *Executor) evaluatePermission(tc core.ToolCallItem, predictedReq *core.PermissionRequest) permissionDecision {
+func (e *Executor) evaluatePermission(ctx context.Context, tc core.ToolCallItem, predictedReq *core.PermissionRequest) permissionDecision {
 	engine, ws, home := e.permissionEngine()
 	if cmd, ok := shellCommandForPolicy(tc); ok {
-		if decision, hit := e.evaluateAs(engine, ws, home, "shell", map[string]any{"command": cmd}, tc, predictedReq, permission.EffectAsk); hit {
+		if decision, hit := e.evaluateAs(ctx, engine, ws, home, "shell", map[string]any{"command": cmd}, tc, predictedReq, permission.EffectAsk); hit {
 			return decision
 		}
 	}
@@ -151,14 +153,113 @@ func (e *Executor) evaluatePermission(tc core.ToolCallItem, predictedReq *core.P
 	// Delegating tools are evaluated against the effective target attached to
 	// their registry entry. The runner does not know concrete proxy protocols.
 	if tc.EffectiveName != "" {
-		if decision, hit := e.evaluateAs(engine, ws, home, tc.EffectiveName, tc.EffectiveArgs, tc, predictedReq, permission.EffectAsk); hit {
+		if decision, hit := e.evaluateAs(ctx, engine, ws, home, tc.EffectiveName, tc.EffectiveArgs, tc, predictedReq, permission.EffectAsk); hit {
 			return decision
 		}
 	}
 
 	callInfo := permission.BuildCallInfo(tc.Name, tc.Args, ws, home)
-	dec := engine.Evaluate(tc.Name, callInfo, defaultPermissionEffect(tc.Name))
-	return e.permissionDecisionForRule(dec, tc, predictedReq)
+	dec := engine.EvaluateContext(ctx, tc.Name, callInfo, defaultPermissionEffect(tc.Name))
+	decision := e.applyAutoWebGate(ctx, e.permissionDecisionForRule(dec, tc, predictedReq), tc)
+	e.annotateJevVerdict(ctx, tc, dec.Assessment.Reason, decision)
+	return decision
+}
+
+// annotateJevVerdict surfaces the judge result independently of tool output.
+func (e *Executor) annotateJevVerdict(ctx context.Context, tc core.ToolCallItem, reason string, decision permissionDecision) {
+	if decision.block {
+		return
+	}
+	if reason == "jev: judged safe" && !decision.prompt {
+		e.emitJevNote(ctx, tc, protocol.ToolDecisionJevSafe)
+	} else if reason == "jev: judged dangerous" && decision.prompt {
+		e.emitJevNote(ctx, tc, protocol.ToolDecisionJevDangerous)
+	}
+}
+
+// emitJevNote re-emits the tool's preview with a jev note appended, so every
+// UI that renders tool entries shows what the auto-mode judge decided.
+func (e *Executor) emitJevNote(ctx context.Context, tc core.ToolCallItem, decision protocol.ToolDecision) {
+	e.fnMu.RLock()
+	pfn := e.previewFn
+	e.fnMu.RUnlock()
+	if pfn == nil {
+		return
+	}
+	if tc.Args == nil {
+		tc.Args = map[string]any{}
+	}
+	preview, _ := tc.Args["_preview"].(string)
+	if preview == "" && e.registry != nil {
+		preview, _ = e.registry.Preview(e.toolContext(ctx), tc.Name, tc.Args)
+	}
+	// Keep trusted decision metadata out of both the tool-controlled preview
+	// text and the shared execution arguments.
+	pfn(tc.ID, tc.Name, tc.Args, preview, decision)
+}
+
+// noteExecutedShell reports executed shell commands to the registered hook so
+// the risk judge's later verdicts carry session context.
+func (e *Executor) noteExecutedShell(tc core.ToolCallItem) {
+	if tc.Name != "bash" && tc.Name != "shell" {
+		return
+	}
+	e.fnMu.RLock()
+	hook := e.shellExecutedHook
+	e.fnMu.RUnlock()
+	if hook == nil {
+		return
+	}
+	if cmd, _ := tc.Args["command"].(string); cmd != "" {
+		hook(cmd)
+	}
+}
+
+// webGateReason is the approval-dialog reason shown when the auto-mode URL
+// gate forces a fetch back to the normal ask.
+const webGateReason = "jev: URL judged risky by the risk judge"
+
+// applyAutoWebGate is the auto-mode safety net for web fetches: a fetch the
+// rules allow is still judged once, and a confidently-suspicious URL drops
+// back to the normal ask. Judge unavailable or undecided keeps the rule's
+// decision (fail open to the rule, fail closed to prompting only on a clear
+// dangerous verdict). Full-takeover mode is untouched.
+func (e *Executor) applyAutoWebGate(ctx context.Context, decision permissionDecision, tc core.ToolCallItem) permissionDecision {
+	if decision.block || decision.prompt {
+		return decision
+	}
+	e.fnMu.RLock()
+	judge := e.webAutoJudge
+	e.fnMu.RUnlock()
+	if e.permissionMode() != permission.ModeAuto || judge == nil {
+		return decision
+	}
+	if !isWebFetchTool(tc.Name) {
+		return decision
+	}
+	url, _ := tc.Args["url"].(string)
+	if url == "" {
+		return decision
+	}
+	dangerous, ok := judge(ctx, url)
+	if !ok {
+		e.emitJevNote(ctx, tc, protocol.ToolDecisionJevURLUnavailable)
+		return decision
+	}
+	if dangerous {
+		e.emitJevNote(ctx, tc, protocol.ToolDecisionJevURLRisky)
+		return permissionDecision{
+			prompt:     true,
+			promptTool: tc.Name,
+			promptArgs: tc.Args,
+			approval:   &protocol.ApprovalContext{Risk: webGateReason, Reason: webGateReason},
+		}
+	}
+	// The gate consulted the judge and the URL passed: surface that too,
+	// otherwise auto-mode URL approvals are indistinguishable from rule
+	// allows.
+	e.emitJevNote(ctx, tc, protocol.ToolDecisionJevURLSafe)
+	return decision
 }
 
 // evaluateAs evaluates the engine under an effective tool identity (shell
@@ -166,19 +267,22 @@ func (e *Executor) evaluatePermission(tc core.ToolCallItem, predictedReq *core.P
 // block/prompt decision is annotated with that identity so the confirm
 // dialog and remembered rules name the real tool, and hit is true; an
 // allowed call reports hit=false so the caller can fall through.
-func (e *Executor) evaluateAs(engine *permission.Engine, ws, home, name string, args map[string]any, tc core.ToolCallItem, predictedReq *core.PermissionRequest, fallback permission.Effect) (permissionDecision, bool) {
+func (e *Executor) evaluateAs(ctx context.Context, engine *permission.Engine, ws, home, name string, args map[string]any, tc core.ToolCallItem, predictedReq *core.PermissionRequest, fallback permission.Effect) (permissionDecision, bool) {
 	callInfo := permission.BuildCallInfo(name, args, ws, home)
-	dec := engine.Evaluate(name, callInfo, fallback)
+	dec := engine.EvaluateContext(ctx, name, callInfo, fallback)
 	decision := e.permissionDecisionForRule(dec, tc, predictedReq)
 	if !decision.block && !decision.prompt {
 		// A concrete allow for the delegated target is final. Falling through
 		// would evaluate the proxy name as well and could re-prompt for
 		// "capability" even though mcp__server__tool was explicitly allowed.
-		if dec.Effect == permission.EffectAllow && dec.Rule.Tool != "" {
-			return permissionDecision{}, true
+		if dec.Effect == permission.EffectAllow {
+			decision = e.applyAutoWebGate(ctx, decision, tc)
+			e.annotateJevVerdict(ctx, tc, dec.Assessment.Reason, decision)
+			return decision, true
 		}
 		return permissionDecision{}, false
 	}
+	e.annotateJevVerdict(ctx, tc, dec.Assessment.Reason, decision)
 	decision.promptTool = name
 	decision.promptArgs = args
 	decision.rememberTool = name
@@ -202,10 +306,12 @@ func (e *Executor) permissionDecisionForRule(dec permission.Decision, tc core.To
 		}
 		// Only skip the basic prompt when (a) the engine fell through to its
 		// default effect (no explicit rule matched — dec.Rule.Tool == ""),
-		// and (b) a predicted capability request is already covered by a grant.
+		// (b) no verdict reason is attached (a judge "dangerous" verdict must
+		// still prompt even when a grant covers the call), and (c) a
+		// predicted capability request is already covered by a grant.
 		// Otherwise the user's explicit command-level ask must be honored.
 		if predictedReq != nil && dec.Rule.Tool == "" && !dec.Assessment.RequiresApproval() &&
-			e.permissionAllowed(tc.Name, *predictedReq) {
+			dec.Assessment.Reason == "" && e.permissionAllowed(tc.Name, *predictedReq) {
 			return permissionDecision{}
 		}
 		return permissionDecision{
@@ -221,7 +327,10 @@ func (e *Executor) permissionDecisionForRule(dec permission.Decision, tc core.To
 }
 
 func approvalContextFromAssessment(assessment permission.CallAssessment) *protocol.ApprovalContext {
-	if !assessment.RequiresApproval() {
+	// No signals and no reason means nothing to explain. A reason without
+	// signals still surfaces: the auto-mode judge's verdict ("jev: judged
+	// dangerous") is pure reason, and the dialog must show why it asked.
+	if !assessment.RequiresApproval() && assessment.Reason == "" {
 		return nil
 	}
 	context := &protocol.ApprovalContext{
@@ -324,8 +433,9 @@ func (e *Executor) rememberAllowRule(toolName string, args map[string]any, match
 	}
 	var rules []permission.Rule
 	// Build a specifier from the call: shell uses the command prefix, file
-	// tools use the path anchor. Fall back to the matched rule's specifier
-	// (so a broad ask rule remembered becomes a broad allow).
+	// tools use the path anchor, web tools use the URL's host. Fall back to
+	// the matched rule's specifier (so a broad ask rule remembered becomes a
+	// broad allow).
 	spec := matched.Specifier
 	if toolName == "shell" {
 		if cmd, _ := args["command"].(string); cmd != "" {
@@ -333,6 +443,10 @@ func (e *Executor) rememberAllowRule(toolName string, args map[string]any, match
 		}
 	} else if p, _ := args["path"].(string); p != "" {
 		spec = pathRememberSpec(p, ws, home)
+	} else if isWebFetchTool(toolName) {
+		if u, _ := args["url"].(string); u != "" {
+			spec = "domain:" + urlHostForRemember(u)
+		}
 	}
 	if len(rules) == 0 {
 		rules = append(rules, permission.Rule{Tool: toolName, Specifier: spec, Effect: permission.EffectAllow})
@@ -341,6 +455,31 @@ func (e *Executor) rememberAllowRule(toolName string, args map[string]any, match
 		_ = store.RememberRule(ws, rule)
 	}
 	e.rebuildEngine(decl, store, ws)
+}
+
+// isWebFetchTool reports whether the tool is a URL-fetching builtin covered
+// by the auto-mode web gate.
+func isWebFetchTool(name string) bool {
+	switch name {
+	case "web_fetch", "webfetch", "web_extract":
+		return true
+	}
+	return false
+}
+
+// urlHostForRemember extracts the hostname for a remembered domain rule.
+func urlHostForRemember(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if !strings.Contains(raw, "://") {
+		if i := strings.IndexByte(raw, '/'); i > 0 {
+			return raw[:i]
+		}
+		return raw
+	}
+	if u, err := url.Parse(raw); err == nil {
+		return u.Hostname()
+	}
+	return raw
 }
 
 func (e *Executor) callbacks() (protocol.PhaseFunc, protocol.ConfirmFunc, bool) {

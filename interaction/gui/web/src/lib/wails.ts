@@ -1,6 +1,7 @@
 import { EventsOn, Quit } from '../../wailsjs/runtime/runtime'
 import {
   Abort,
+  MCPAuthorizationAction,
   ClearSelectedSkill,
   CommandMenu,
   ContextSnapshot,
@@ -227,4 +228,9 @@ export function safeQuit(): void {
   } catch {
     /* noop */
   }
+}
+
+export function safeMCPAuthorizationAction(name: string, action: string): Promise<void> {
+  if (!isWailsEnvironment()) return Promise.reject(new Error('请在 NekoCode 桌面应用中授权'))
+  return MCPAuthorizationAction(name, action)
 }

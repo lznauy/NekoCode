@@ -29,13 +29,17 @@ func (b *Bot) registerCommandMenus(p *command.Parser) {
 		if len(cmd.Args) != 0 {
 			return protocol.CommandMenu{}, false
 		}
-		full := b.fullAccess.Load()
+		full := b.FullAccess()
 		manualDesc := "Prompt for approval on guarded commands (default)"
 		fullDesc := "Run ALL commands with no approval — DANGEROUS"
-		return protocol.CommandMenu{Title: "Permission mode", Items: []protocol.CommandMenuItem{
-			{Value: "/permission manual", Label: "manual", Description: manualDesc, Submit: true, Current: !full},
-			{Value: "/permission full", Label: "full (全接管)", Description: fullDesc, Submit: true, Current: full},
-		}}, true
+		items := []protocol.CommandMenuItem{
+			{Value: "/permission manual", Label: "manual", Description: manualDesc, Submit: true, Current: !full && !b.BashAuto()},
+		}
+		if b.CanBashAuto() {
+			items = append(items, protocol.CommandMenuItem{Value: "/permission auto", Label: "auto", Description: "Jev 优先判定 shell 指令，安全直接执行，可疑弹授权", Submit: true, Current: b.BashAuto()})
+		}
+		items = append(items, protocol.CommandMenuItem{Value: "/permission full", Label: "full (全接管)", Description: fullDesc, Submit: true, Current: full})
+		return protocol.CommandMenu{Title: "Permission mode", Items: items}, true
 	})
 
 	p.RegisterMenu("effort", func(_ context.Context, cmd *command.Command) (protocol.CommandMenu, bool) {

@@ -124,17 +124,28 @@ export namespace runtime {
 		}
 	}
 	export class MCPServerConfig {
+	    url?: string;
+	    oauth_client_id?: string;
+	    oauth_client_secret?: string;
+	    oauth_client_metadata_url?: string;
+	    oauth_callback_port?: number;
 	    command: string;
 	    args?: string[];
 	    env?: Record<string, string>;
 	    enabled: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new MCPServerConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.url = source["url"];
+	        this.oauth_client_id = source["oauth_client_id"];
+	        this.oauth_client_secret = source["oauth_client_secret"];
+	        this.oauth_client_metadata_url = source["oauth_client_metadata_url"];
+	        this.oauth_callback_port = source["oauth_callback_port"];
+
 	        this.command = source["command"];
 	        this.args = source["args"];
 	        this.env = source["env"];
@@ -225,7 +236,26 @@ export namespace runtime {
 		    return a;
 		}
 	}
+	export class JevConfig {
+	    api_key?: string;
+	    model?: string;
+	    base_url?: string;
+	    keep_threshold?: number | null;
+	    enabled?: boolean | null;
+
+	    static createFrom(source: any = {}) { return new JevConfig(source); }
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.api_key = source["api_key"];
+	        this.model = source["model"];
+	        this.base_url = source["base_url"];
+	        this.keep_threshold = source["keep_threshold"];
+	        this.enabled = source["enabled"];
+	    }
+	}
+
 	export class ConfigView {
+	    jev?: JevConfig;
 	    path: string;
 	    exists: boolean;
 	    active: string;
@@ -243,6 +273,7 @@ export namespace runtime {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.jev = this.convertValues(source["jev"], JevConfig);
 	        this.path = source["path"];
 	        this.exists = source["exists"];
 	        this.active = source["active"];
@@ -449,6 +480,8 @@ export namespace runtime {
 	
 	
 	export class MCPServerView {
+	    url?: string;
+	    authUrl?: string;
 	    name: string;
 	    plugin: string;
 	    command: string;
@@ -464,6 +497,9 @@ export namespace runtime {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.url = source["url"];
+	        this.authUrl = source["authUrl"];
+
 	        this.name = source["name"];
 	        this.plugin = source["plugin"];
 	        this.command = source["command"];

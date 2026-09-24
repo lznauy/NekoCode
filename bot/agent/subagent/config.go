@@ -6,6 +6,7 @@ import (
 
 	"nekocode/bot/extension/agentprofile"
 	"nekocode/bot/extension/tool/runtime/execution"
+	"nekocode/bot/extension/tool/runtime/runner"
 	"nekocode/bot/policy"
 	"nekocode/bot/prompt"
 	providertypes "nekocode/bot/provider/types"
@@ -24,6 +25,7 @@ type ToolCallEvent struct {
 	ToolArgs  string
 	ToolInput json.RawMessage
 	Output    string
+	Decision  protocol.ToolDecision
 	IsError   bool
 }
 
@@ -39,16 +41,17 @@ type RunConfig struct {
 	OnText              func(string)
 	OnReasoning         func(string)
 	// OnMessage receives non-empty complete model text, not a per-step end marker.
-	OnMessage      func(string)
-	OnPhase        func(string)
-	AddTokens      func(int, int)
-	RecordLLMUsage func(providertypes.StreamUsage)
-	SessionID      string
-	ConfirmFn      protocol.ConfirmFunc
-	FullAccess     func() bool
-	Handoff        string // unverified prior-agent evidence, not instructions
-	OnToolCall     func(ToolCallEvent)
-	ToolState      *execution.ExecutionState
+	OnMessage            func(string)
+	OnPhase              func(string)
+	AddTokens            func(int, int)
+	RecordLLMUsage       func(providertypes.StreamUsage)
+	SessionID            string
+	ConfirmFn            protocol.ConfirmFunc
+	FullAccess           func() bool
+	ConfigurePermissions func(*runner.Executor)
+	Handoff              string // unverified prior-agent evidence, not instructions
+	OnToolCall           func(ToolCallEvent)
+	ToolState            *execution.ExecutionState
 	// Evaluated per model call so newly approved roots become visible.
 	Environment prompt.EnvironmentProvider
 	// Audit only; authorization uses the actor-local guard created by Run.

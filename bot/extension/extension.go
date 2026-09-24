@@ -57,6 +57,7 @@ type Snapshot struct {
 
 // ConfiguredMCP describes a host definition without exposing environment secrets.
 type ConfiguredMCP struct {
+	URL     string
 	Name    string
 	Source  string
 	Command string
@@ -173,6 +174,12 @@ func (m *Manager) Close() {
 	defer m.mu.Unlock()
 	m.deactivateAllLocked()
 	m.mcp.Close()
+}
+
+// SetMCPAuthNotifier forwards the callback invoked when a browser
+// authorization flow for a managed MCP server finishes.
+func (m *Manager) SetMCPAuthNotifier(fn func(message string)) {
+	m.mcp.SetAuthNotifier(fn)
 }
 
 // Snapshot returns all management state under one lock.
@@ -387,7 +394,6 @@ func (m *Manager) ReplaceSessionMCPServers(ctx context.Context, source string, c
 	m.ops.Lock()
 	defer m.ops.Unlock()
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	names := make([]string, 0, len(configs))
 	for name := range configs {
@@ -405,9 +411,17 @@ func (m *Manager) ReplaceSessionMCPServers(ctx context.Context, source string, c
 		registrations = append(registrations, mcp.Registration{ID: id, Name: name, Config: configs[name]})
 		ids = append(ids, id)
 	}
-	if err := m.mcp.Replace(ctx, m.sessionMCP[source], registrations); err != nil {
+	oldIDs := append([]string(nil), m.sessionMCP[source]...)
+	m.mu.Unlock()
+
+	// Remote session transports can spend minutes connecting. ops serializes
+	// lifecycle writers; leave the read-state mutex free so Snapshot and other
+	// management views remain responsive during that network operation.
+	if err := m.mcp.Replace(ctx, oldIDs, registrations); err != nil {
 		return err
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if len(configs) == 0 {
 		delete(m.sessionConfigs, source)
 	} else {
@@ -509,4 +523,10 @@ func (m *Manager) deactivateAllLocked() {
 	for name := range m.active {
 		m.deactivateLocked(name)
 	}
+}
+
+func (m *Manager) MCPAuthorizationAction(name, action string) error {
+	m.ops.Lock()
+	defer m.ops.Unlock()
+	return m.mcp.AuthorizationAction(name, action)
 }

@@ -7,6 +7,7 @@ import (
 	"nekocode/interaction/tui/components/block"
 	"nekocode/interaction/tui/components/message"
 	"nekocode/interaction/tui/styles"
+	"nekocode/protocol"
 )
 
 const (
@@ -110,24 +111,28 @@ func (p *ProcessingItem) AddToolBlock(b block.ContentBlock) {
 	p.invalidate()
 }
 
-func (p *ProcessingItem) AddToolOutput(toolName, output string, isError bool) {
-	p.setLastToolContent(toolName, output, isError)
+func (p *ProcessingItem) AddToolOutput(toolName, output string, isError bool, callID ...string) {
+	p.finishToolBlock("", toolName, output, isError, callID...)
 }
 
 // UpdateToolPreview sets the preview content on the first matching tool block (in creation order).
-func (p *ProcessingItem) UpdateToolPreview(toolName, preview string) {
+func (p *ProcessingItem) UpdateToolPreview(toolName, preview string, callID ...string) {
+	id := ""
+	if len(callID) > 0 {
+		id = callID[0]
+	}
+	p.UpdateToolPreviewForCall(id, "", toolName, preview, "")
+}
+
+func (p *ProcessingItem) UpdateToolPreviewForCall(callID, subID, toolName, preview string, decision protocol.ToolDecision) {
 	for i := 0; i < len(p.blocks); i++ {
 		b := &p.blocks[i]
-		if b.Type == block.BlockTool && b.ToolName == toolName && !b.Done {
-			b.Content = preview
+		if b.Type == block.BlockTool && b.ToolName == toolName && !b.Done && b.SubID == subID && matchesCallID(b, []string{callID}) {
+			b.SetPreview(preview, decision)
 			p.invalidate()
 			return
 		}
 	}
-}
-
-func (p *ProcessingItem) setLastToolContent(toolName, output string, isError bool) {
-	p.finishToolBlock("", toolName, output, isError)
 }
 
 func (p *ProcessingItem) AddThinkBlock(content string) {
@@ -179,19 +184,19 @@ func (p *ProcessingItem) RemoveSubAgent(id string) {
 }
 
 // AddSubToolOutput sets the output on the last matching sub-agent tool block.
-func (p *ProcessingItem) AddSubToolOutput(subID, toolName, output string, isError bool) {
-	p.finishToolBlock(subID, toolName, output, isError)
+func (p *ProcessingItem) AddSubToolOutput(subID, toolName, output string, isError bool, callID ...string) {
+	p.finishToolBlock(subID, toolName, output, isError, callID...)
 }
 
 // finishToolBlock finds the first matching tool block (in creation order) and marks it done.
 // If subID is non-empty, it also filters by SubID.
-func (p *ProcessingItem) finishToolBlock(subID, toolName, output string, isError bool) {
+func (p *ProcessingItem) finishToolBlock(subID, toolName, output string, isError bool, callID ...string) {
 	for i := 0; i < len(p.blocks); i++ {
 		b := &p.blocks[i]
-		if b.Type != block.BlockTool || b.ToolName != toolName || b.Done {
+		if b.Type != block.BlockTool || b.ToolName != toolName || b.Done || !matchesCallID(b, callID) {
 			continue
 		}
-		if subID != "" && b.SubID != subID {
+		if b.SubID != subID {
 			continue
 		}
 		// The final output replaces any preview so relocated/rebased edits
@@ -202,4 +207,8 @@ func (p *ProcessingItem) finishToolBlock(subID, toolName, output string, isError
 		p.invalidate()
 		return
 	}
+}
+
+func matchesCallID(b *block.ContentBlock, callID []string) bool {
+	return len(callID) == 0 || callID[0] == "" || b.CallID == callID[0]
 }

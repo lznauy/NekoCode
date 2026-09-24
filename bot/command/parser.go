@@ -41,6 +41,10 @@ type commandEntry struct {
 	// They may execute immediately, even while a run is in progress —
 	// Codex's available_during_task semantics.
 	DuringTask bool
+	// Hidden keeps the command out of listings and completions while it
+	// stays executable — for internal commands that a richer UI invokes
+	// on the user's behalf (e.g. the /mcp menu driving OAuth actions).
+	Hidden bool
 }
 
 type Parser struct {
@@ -75,6 +79,23 @@ func (p *Parser) RegisterLocalInfo(name, description string, handler HandlerFunc
 	}
 	entry := p.handlers[key]
 	entry.DuringTask = true
+	p.handlers[key] = entry
+}
+
+// RegisterHiddenInfo registers a command like RegisterLocalInfo but omits it
+// from listings, help and completions. It remains executable directly — for
+// internal actions a richer UI (e.g. the /mcp menu) drives on the user's
+// behalf, or for text transports without a picker.
+func (p *Parser) RegisterHiddenInfo(name, description string, handler HandlerFunc) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	key, ok := p.registerWithPrefixLocked(SlashPrefix, name, description, handler)
+	if !ok {
+		return
+	}
+	entry := p.handlers[key]
+	entry.DuringTask = true
+	entry.Hidden = true
 	p.handlers[key] = entry
 }
 
@@ -178,6 +199,9 @@ func (p *Parser) Commands() []string {
 	defer p.mu.RUnlock()
 	names := make([]string, 0, len(p.handlers))
 	for key, entry := range p.handlers {
+		if entry.Hidden {
+			continue
+		}
 		names = append(names, key.Prefix+entry.DisplayName)
 	}
 	sort.Strings(names)
@@ -193,7 +217,7 @@ func (p *Parser) RootMenu(prefix string) protocol.CommandMenu {
 	prefix = normalizePrefix(prefix)
 	items := make([]protocol.CommandMenuItem, 0, len(p.handlers))
 	for key, entry := range p.handlers {
-		if key.Prefix != prefix {
+		if key.Prefix != prefix || entry.Hidden {
 			continue
 		}
 		items = append(items, protocol.CommandMenuItem{
@@ -380,25 +404,42 @@ func RegisterDefaults(p *Parser, deps Deps) {
 	})
 
 	// /permission: show or switch the permission mode. "manual" (the default)
-	// prompts for approval on guarded calls; "full" is the full-takeover mode
-	// that runs everything without approval. Local: it only flips an atomic
-	// switch, so it may run while a task is in progress.
+	// prompts for approval on guarded calls; "auto" risk-judges unmatched
+	// shell commands (confidently safe → run, else prompt); "full" is the
+	// full-takeover mode that runs everything without approval. Local: it
+	// only flips an atomic switch, so it may run while a task is in progress.
 	p.RegisterLocalInfo("permission", "Show or switch the permission mode", func(_ context.Context, cmd *Command) (string, bool) {
 		if deps.GetFullAccess == nil || deps.SetFullAccess == nil {
 			return "Permission mode is unavailable.", true
 		}
 		if len(cmd.Args) == 0 {
-			return permissionModeStatus(deps.GetFullAccess()), true
+			return permissionModeStatus(deps.GetFullAccess(), deps.GetBashAuto), true
 		}
 		switch strings.ToLower(strings.Join(cmd.Args, " ")) {
 		case "manual":
 			deps.SetFullAccess(false)
+			if deps.SetBashAuto != nil {
+				deps.SetBashAuto(false)
+			}
 			return "已切回手动审批模式。", true
+		case "auto":
+			if deps.SetBashAuto == nil || deps.GetBashAuto == nil || deps.CanBashAuto == nil || !deps.CanBashAuto() {
+				return "auto 模式不可用（未接入判定引擎）。", true
+			}
+			deps.SetFullAccess(false)
+			deps.SetBashAuto(true)
+			if !deps.GetBashAuto() {
+				return "auto 模式不可用（判定引擎已关闭）。", true
+			}
+			return autoModeWarning(), true
 		case "full":
 			deps.SetFullAccess(true)
+			if deps.SetBashAuto != nil {
+				deps.SetBashAuto(false)
+			}
 			return fullAccessWarning(), true
 		default:
-			return "Usage: /permission [manual|full]", true
+			return "Usage: /permission [manual|auto|full]", true
 		}
 	})
 }
@@ -410,11 +451,22 @@ func displayReasoningEffort(effort string) string {
 	return strings.ToLower(strings.TrimSpace(effort))
 }
 
-func permissionModeStatus(full bool) string {
-	if full {
+func permissionModeStatus(full bool, getAuto func() bool) string {
+	switch {
+	case full:
 		return "Permission: FULL（全接管）· /permission manual 恢复审批"
+	case getAuto != nil && getAuto():
+		return "Permission: auto · 未匹配规则的 shell 指令经 Jev 判定，安全则直接执行 · /permission [manual|auto|full] 切换"
+	default:
+		return "Permission: manual · /permission [manual|auto|full] 切换"
 	}
-	return "Permission: manual · /permission [manual|full] 切换"
+}
+
+// autoModeWarning is the note shown on entering auto mode. Jev judging is
+// fail-closed here: unavailable or uncertain always falls back to prompting.
+func autoModeWarning() string {
+	return "已切换 auto 模式：shell 指令由 Jev 优先判定，安全直接执行，" +
+		"危险、不确定或 Jev 不可用均弹授权（sudo 等硬拒绝规则除外）。/permission manual 关闭。"
 }
 
 // fullAccessWarning is the one-line risk note shown on entering full-takeover

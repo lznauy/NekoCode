@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"fmt"
 	"nekocode/protocol"
 	"os"
@@ -25,11 +26,23 @@ type Executor struct {
 	// fullAccess is the "全接管" (full-takeover) permission mode: every tool
 	// call runs without approval prompts. Explicit deny rules still block —
 	// a deny is a hard user-configured rule, not an approval.
-	fullAccess bool
-	planTools  map[string]struct{}
-	previewFn  func(callID, toolName string, args map[string]any, preview string)
-	permStore  *permission.Store
-	fnMu       sync.RWMutex
+	mode       permission.Mode
+	modeSource func() permission.Mode
+	// bashAuto is the "auto" permission mode: shell calls that match no rule
+	// are judged by the optional risk judge — confidently safe commands run
+	// without a prompt, everything else asks. Needs bashAutoJudge set.
+	bashAutoJudge func(ctx context.Context, command string) (dangerous bool, ok bool)
+	// webAutoJudge backs the auto-mode URL gate: before silently fetching a
+	// URL the rules allow, the executor consults it and forces the normal
+	// ask on a confidently-suspicious verdict. nil disables the gate.
+	webAutoJudge func(ctx context.Context, url string) (dangerous bool, ok bool)
+	// shellExecutedHook observes every shell command that actually ran,
+	// giving the risk judge session context for later judgments.
+	shellExecutedHook func(command string)
+	planTools         map[string]struct{}
+	previewFn         func(callID, toolName string, args map[string]any, preview string, decision protocol.ToolDecision)
+	permStore         *permission.Store
+	fnMu              sync.RWMutex
 	// Permission rule engine (claude-code style allow/ask/deny). The engine's
 	// deny→ask→allow decision is the single authority for whether a tool call
 	// runs, prompts, or is blocked.
@@ -54,6 +67,82 @@ func NewExecutor(r *tools.Registry) *Executor {
 	}
 	e.rebuildEngine(permission.PermissionsDecl{}, e.permStore, root)
 	return e
+}
+
+// autoJudgeDecide adapts the optional risk judge for the permission engine:
+// auto mode on + confidently-safe verdict → allow without a prompt; judge
+// unavailable, uncertain, or dangerous → ask (fail closed).
+func (e *Executor) autoJudgeDecide(ctx context.Context, command string) (allow bool, decided bool) {
+	e.fnMu.RLock()
+	judge := e.bashAutoJudge
+	e.fnMu.RUnlock()
+	if e.permissionMode() != permission.ModeAuto || judge == nil {
+		return false, false
+	}
+	dangerous, ok := judge(ctx, command)
+	if !ok {
+		return false, false
+	}
+	return !dangerous, true
+}
+
+// SetBashAuto toggles the "auto" permission mode for shell calls. It is a
+// thin alias kept for tests; production code drives modes through
+// SetPermissionMode so the transition rules live in Bot.SetFullAccess /
+// Bot.SetBashAuto only.
+func (e *Executor) SetBashAuto(on bool) {
+	e.fnMu.RLock()
+	mode := e.mode
+	e.fnMu.RUnlock()
+	if on {
+		e.SetPermissionMode(permission.ModeAuto)
+	} else if mode == permission.ModeAuto {
+		e.SetPermissionMode(permission.ModeManual)
+	}
+}
+
+// SetBashAutoJudge installs the risk judge backing the auto mode. ctx is the
+// calling tool's context; a remote judge must honor its cancellation.
+func (e *Executor) SetBashAutoJudge(fn func(ctx context.Context, command string) (dangerous bool, ok bool)) {
+	e.fnMu.Lock()
+	e.bashAutoJudge = fn
+	e.fnMu.Unlock()
+}
+
+// SetWebAutoJudge installs the risk judge backing the auto-mode URL gate.
+func (e *Executor) SetWebAutoJudge(fn func(ctx context.Context, url string) (dangerous bool, ok bool)) {
+	e.fnMu.Lock()
+	e.webAutoJudge = fn
+	e.fnMu.Unlock()
+}
+
+// SetShellExecutedHook registers an observer fired after each shell command
+// execution attempt (successful or not), so the risk judge's "recently
+// executed" context only contains commands that actually ran.
+func (e *Executor) SetShellExecutedHook(fn func(command string)) {
+	e.fnMu.Lock()
+	e.shellExecutedHook = fn
+	e.fnMu.Unlock()
+}
+
+// ConfigureChildPermissions installs the parent's permission policy on a fresh
+// delegated executor. Callbacks are copied under lock; the child owns its engine.
+// Mode changes remain live so switching to manual also revokes delegated auto/full.
+func (e *Executor) ConfigureChildPermissions(child *Executor) {
+	e.fnMu.RLock()
+	shell, web, hook := e.bashAutoJudge, e.webAutoJudge, e.shellExecutedHook
+	decl, store, root, home := e.permDecl, e.permStore, e.permWorkspace, e.permHome
+	e.fnMu.RUnlock()
+	child.fnMu.Lock()
+	child.modeSource = e.permissionMode
+	child.fnMu.Unlock()
+	child.SetBashAutoJudge(shell)
+	child.SetWebAutoJudge(web)
+	child.SetShellExecutedHook(hook)
+	child.fnMu.Lock()
+	child.permStore = store
+	child.fnMu.Unlock()
+	child.SetPermissionPolicy(decl, root, home)
 }
 
 func (e *Executor) ExecutionState() *execution.ExecutionState { return e.state }
@@ -87,15 +176,33 @@ func (e *Executor) SetPlanMode(on bool) {
 // and the call runs immediately; explicit deny rules still block.
 func (e *Executor) SetFullAccess(on bool) {
 	e.fnMu.Lock()
-	e.fullAccess = on
+	if on {
+		e.mode = permission.ModeFull
+	} else if e.mode == permission.ModeFull {
+		e.mode = permission.ModeManual
+	}
 	e.fnMu.Unlock()
 }
 
 // FullAccess reports whether the full-takeover permission mode is active.
 func (e *Executor) FullAccess() bool {
+	return e.permissionMode() == permission.ModeFull
+}
+
+func (e *Executor) permissionMode() permission.Mode {
 	e.fnMu.RLock()
-	defer e.fnMu.RUnlock()
-	return e.fullAccess
+	mode, source := e.mode, e.modeSource
+	e.fnMu.RUnlock()
+	if source != nil {
+		return source()
+	}
+	return mode
+}
+
+func (e *Executor) SetPermissionMode(mode permission.Mode) {
+	e.fnMu.Lock()
+	e.mode = mode
+	e.fnMu.Unlock()
 }
 
 // SetPlanTools replaces the tools allowed while plan mode is active. Registry
@@ -123,7 +230,21 @@ func (e *Executor) planAllows(name string, registered bool) bool {
 	return registered
 }
 
+// SetPreviewFn retains the original preview callback API. New integrations
+// that need trusted decision metadata should use SetPreviewDecisionFn.
 func (e *Executor) SetPreviewFn(fn func(callID, toolName string, args map[string]any, preview string)) {
+	if fn == nil {
+		e.SetPreviewDecisionFn(nil)
+		return
+	}
+	e.SetPreviewDecisionFn(func(callID, toolName string, args map[string]any, preview string, _ protocol.ToolDecision) {
+		fn(callID, toolName, args, preview)
+	})
+}
+
+// SetPreviewDecisionFn registers a preview callback with trusted structured
+// decision metadata for interfaces such as the TUI.
+func (e *Executor) SetPreviewDecisionFn(fn func(callID, toolName string, args map[string]any, preview string, decision protocol.ToolDecision)) {
 	e.fnMu.Lock()
 	e.previewFn = fn
 	e.fnMu.Unlock()
@@ -209,6 +330,8 @@ func (e *Executor) rebuildEngine(decl permission.PermissionsDecl, store *permiss
 		e.fnMu.Unlock()
 		return
 	}
+	// Re-wire on every rebuild so the auto-mode judge survives rule reloads.
+	eng.SetAutoJudge(e.autoJudgeDecide)
 	e.fnMu.Lock()
 	e.permEngine = eng
 	e.fnMu.Unlock()

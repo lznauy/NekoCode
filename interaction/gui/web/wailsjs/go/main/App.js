@@ -89,3 +89,5 @@ export function SetPluginEnabled(arg1, arg2) {
 export function SwitchModel(arg1) {
   return window['go']['main']['App']['SwitchModel'](arg1);
 }
+
+export function MCPAuthorizationAction(name, action) { return window["go"]["main"]["App"]["MCPAuthorizationAction"](name, action); }

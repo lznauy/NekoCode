@@ -100,12 +100,18 @@ func (m *Messages) ProcessToolBlock(b block.ContentBlock) {
 	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.AddToolBlock(b) })
 }
 
-func (m *Messages) AddToolOutput(toolName, output string, isError bool) {
-	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.AddToolOutput(toolName, output, isError) })
+func (m *Messages) AddToolOutput(toolName, output string, isError bool, callID ...string) {
+	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.AddToolOutput(toolName, output, isError, callID...) })
 }
 
-func (m *Messages) UpdateToolPreview(toolName, preview string) {
-	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.UpdateToolPreview(toolName, preview) })
+func (m *Messages) UpdateToolPreview(toolName, preview string, callID ...string) {
+	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.UpdateToolPreview(toolName, preview, callID...) })
+}
+
+func (m *Messages) UpdateToolPreviewForCall(callID, subID, toolName, preview string, decision protocol.ToolDecision) {
+	m.UpdateProcessing(func(p *processing.ProcessingItem) {
+		p.UpdateToolPreviewForCall(callID, subID, toolName, preview, decision)
+	})
 }
 
 func (m *Messages) AccumulatedText() string {
@@ -138,8 +144,8 @@ func (m *Messages) RemoveSubAgent(id string) {
 	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.RemoveSubAgent(id) })
 }
 
-func (m *Messages) AddSubToolOutput(subID, toolName, output string, isError bool) {
-	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.AddSubToolOutput(subID, toolName, output, isError) })
+func (m *Messages) AddSubToolOutput(subID, toolName, output string, isError bool, callID ...string) {
+	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.AddSubToolOutput(subID, toolName, output, isError, callID...) })
 }
 
 func (m *Messages) ClearProcessing() {

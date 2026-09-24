@@ -495,7 +495,9 @@ func (i *Input) View() string {
 		footer += styles.SubtleStyle.Render(" · Perm: ") + permissionStyle.Render(permission)
 	default:
 		permission = i.permissionMode
-		permissionStyle = styles.MutedStyle
+		// Auto mode delegates approval decisions to the judge: make it stand
+		// out (muted gray read as "inactive") without the alarm-red of FULL.
+		permissionStyle = styles.YellowStyle.Bold(true)
 		footer += styles.SubtleStyle.Render(" · Perm: ") + permissionStyle.Render(permission)
 	}
 	if i.model != "" {

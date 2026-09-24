@@ -193,6 +193,9 @@ func (p *ProcessingItem) renderActivitySection(sepW int) string {
 			fmt.Fprintf(&sb, " %s", p.sty.Muted.Render(b.ToolArgs))
 		}
 		sb.WriteString("\n")
+		if b.JevNote != "" {
+			sb.WriteString("    " + p.sty.Subtle.MaxWidth(max(10, sepW-4)).Render(b.JevNote) + "\n")
+		}
 	}
 
 	p.cachedActivity = sb.String()

@@ -51,6 +51,7 @@ type App struct {
 }
 
 type runtimeClient interface {
+	MCPAuthorizationAction(string, string) error
 	controlruntime.Interaction
 	CurrentModel() controlruntime.ModelSelection
 	SwitchModel(string) (controlruntime.ModelSelection, error)
@@ -620,4 +621,8 @@ func (a *App) ReplyQuestion(id string, answersJSON string, rejected bool) {
 		_ = json.Unmarshal([]byte(answersJSON), &answers)
 	}
 	_ = a.rt.AnswerQuestion(a.ctx, id, controlruntime.QuestionReply{Answers: answers, Rejected: rejected})
+}
+
+func (a *App) MCPAuthorizationAction(name, action string) error {
+	return a.rt.MCPAuthorizationAction(name, action)
 }

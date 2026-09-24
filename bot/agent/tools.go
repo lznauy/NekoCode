@@ -157,11 +157,11 @@ func emitResultCallbacks(calls []core.ToolCallItem, blocked map[int]string, resu
 func (r *toolRunner) executeAllowedTools(allowed []core.ToolCallItem, callback RunCallback) []core.ToolCallResult {
 	executor := r.agent.deps.toolExecutor
 	if callback != nil {
-		executor.SetPreviewFn(func(callID, toolName string, _ map[string]any, preview string) {
-			callback(protocol.StepEvent{Action: protocol.StepActionToolPreview, CallID: callID, ToolName: toolName, Output: preview})
+		executor.SetPreviewDecisionFn(func(callID, toolName string, _ map[string]any, preview string, decision protocol.ToolDecision) {
+			callback(protocol.StepEvent{Action: protocol.StepActionToolPreview, CallID: callID, ToolName: toolName, Output: preview, Decision: decision})
 		})
 	} else {
-		executor.SetPreviewFn(nil)
+		executor.SetPreviewDecisionFn(nil)
 	}
 	if len(allowed) == 0 {
 		return nil

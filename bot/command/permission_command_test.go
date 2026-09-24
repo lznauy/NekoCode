@@ -55,3 +55,23 @@ func TestPermissionCommandUnavailableWithoutDeps(t *testing.T) {
 		t.Fatalf("missing deps = %q", out)
 	}
 }
+
+func TestPermissionAutoRequiresAvailableJudge(t *testing.T) {
+	auto := false
+	available := false
+	p := NewParser()
+	RegisterDefaults(p, Deps{
+		SetFullAccess: func(bool) {}, GetFullAccess: func() bool { return false },
+		SetBashAuto: func(on bool) { auto = on }, GetBashAuto: func() bool { return auto },
+		CanBashAuto: func() bool { return available },
+	})
+	out, _ := p.Execute(context.Background(), p.Parse("/permission auto"))
+	if auto || !strings.Contains(out, "不可用") {
+		t.Fatalf("auto enabled without judge: auto=%v output=%q", auto, out)
+	}
+	available = true
+	out, _ = p.Execute(context.Background(), p.Parse("/permission auto"))
+	if !auto || !strings.Contains(out, "已切换 auto") {
+		t.Fatalf("auto did not enable with judge: auto=%v output=%q", auto, out)
+	}
+}

@@ -11,6 +11,7 @@ import (
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/extension/tool"
 	"nekocode/bot/extension/tool/runtime/core"
+	"nekocode/bot/extension/tool/runtime/permission"
 	"nekocode/bot/extension/tool/runtime/runner"
 	"nekocode/bot/policy"
 	"nekocode/bot/policy/builtin"
@@ -502,5 +503,44 @@ func TestReasonEmitsOnlyNonEmptyMessages(t *testing.T) {
 				t.Fatalf("messages=%#v", messages)
 			}
 		})
+	}
+}
+
+func TestDelegatedJevJudgmentsAndPreviews(t *testing.T) {
+	registry := tools.New()
+	shell := &countingTool{name: "shell"}
+	web := &countingTool{name: "web_fetch"}
+	registry.Register(shell)
+	registry.Register(web)
+	parent := runner.NewExecutor(registry)
+	parent.SetProjectStore(t.TempDir())
+	parent.SetPermissionMode(permission.ModeAuto)
+	shellJudged, webJudged, executed := 0, 0, 0
+	parent.SetBashAutoJudge(func(context.Context, string) (bool, bool) { shellJudged++; return false, true })
+	parent.SetWebAutoJudge(func(context.Context, string) (bool, bool) { webJudged++; return true, true })
+	parent.SetShellExecutedHook(func(string) { executed++ })
+	var previews []ToolCallEvent
+	var approvals []protocol.ConfirmRequest
+	cfg := RunConfig{
+		ConfigurePermissions: parent.ConfigureChildPermissions,
+		ConfirmFn: func(req protocol.ConfirmRequest) protocol.ConfirmReply {
+			approvals = append(approvals, req)
+			return protocol.Deny()
+		},
+		OnToolCall: func(ev ToolCallEvent) { previews = append(previews, ev) },
+	}
+	engine := &Engine{toolRegistry: registry}
+	child, finish := engine.newExecutor(cfg)
+	defer finish()
+	result := child.ExecuteBatch(context.Background(), []core.ToolCallItem{{ID: "shell1", Name: "shell", Args: map[string]any{"command": "make all"}}})
+	if len(result) != 1 || result[0].Error != "" || shell.calls != 1 || shellJudged != 1 || executed != 1 {
+		t.Fatalf("shell delegation failed: results=%+v calls=%d judged=%d executed=%d", result, shell.calls, shellJudged, executed)
+	}
+	child.ExecuteBatch(context.Background(), []core.ToolCallItem{{ID: "web1", Name: "web_fetch", Args: map[string]any{"url": "https://example.com"}}})
+	if webJudged != 1 || web.calls != 0 || len(approvals) != 1 {
+		t.Fatalf("web gate not inherited: judged=%d ran=%d approvals=%+v", webJudged, web.calls, approvals)
+	}
+	if len(previews) != 2 || previews[0].CallID != "shell1" || previews[0].Action != protocol.StepActionToolPreview || previews[0].Decision != protocol.ToolDecisionJevSafe || previews[1].CallID != "web1" || previews[1].Decision != protocol.ToolDecisionJevURLRisky {
+		t.Fatalf("missing delegated previews: %+v", previews)
 	}
 }

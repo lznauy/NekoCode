@@ -298,6 +298,34 @@ func TestManagerNormalizesToolOutput(t *testing.T) {
 	t.Fatal("tool completed event not found")
 }
 
+func TestManagerCarriesTrustedToolDecisionMetadata(t *testing.T) {
+	bot := &testBot{}
+	bot.run = func(_ string, host RunHost) (string, error) {
+		host.Step(protocol.StepEvent{
+			Action: protocol.StepActionToolPreview, ToolName: "shell", CallID: "call-1",
+			Output: "make test", Decision: protocol.ToolDecisionJevSafe,
+		})
+		return "done", nil
+	}
+	rt := newTestRuntime(bot)
+	runID, err := rt.StartRun(context.Background(), Input{Source: SourceRef{Kind: "test"}, Text: "build"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, rt, runID)
+	for _, event := range rt.events.History(EventFilter{RunID: runID}) {
+		if event.Type != EventToolPreview {
+			continue
+		}
+		payload, ok := event.Payload.(ToolPayload)
+		if !ok || payload.Preview != "make test" || payload.Decision != protocol.ToolDecisionJevSafe {
+			t.Fatalf("tool preview payload = %#v", event.Payload)
+		}
+		return
+	}
+	t.Fatal("tool preview event not found")
+}
+
 func TestManagerCustomRuntimeCommand(t *testing.T) {
 	rt := newTestRuntime(&testBot{})
 	rt.registerCommand("hello", "", func(_ context.Context, args []string) (string, error) {

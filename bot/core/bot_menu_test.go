@@ -31,3 +31,18 @@ func TestPermissionMenuDoesNotDeadlockUnderBotLock(t *testing.T) {
 		t.Fatal("CommandMenu(/permission) deadlocked")
 	}
 }
+
+func TestPermissionMenuShowsAutoOnlyWhenJevIsAvailable(t *testing.T) {
+	b := &Bot{}
+	b.cmd = command.New(command.Deps{})
+	b.registerCommandMenus(b.cmd.Parser())
+	menu, ok := b.CommandMenu(context.Background(), "/permission")
+	if !ok || len(menu.Items) != 2 {
+		t.Fatalf("menu without Jev = %+v, %v", menu, ok)
+	}
+	b.jevAvailable.Store(true)
+	menu, ok = b.CommandMenu(context.Background(), "/permission")
+	if !ok || len(menu.Items) != 3 || menu.Items[1].Value != "/permission auto" {
+		t.Fatalf("menu with Jev = %+v, %v", menu, ok)
+	}
+}

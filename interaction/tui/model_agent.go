@@ -14,8 +14,8 @@ import (
 )
 
 func (m *Model) startChat(value string) tea.Cmd {
-	if m.tryLocalCommand(value) {
-		return nil
+	if handled, cmd := m.tryLocalCommand(value); handled {
+		return cmd
 	}
 	m.transitionTo(stateProcessing)
 	m.Messages.SetSpinnerView(m.Spinner.View())
@@ -50,8 +50,9 @@ func isCompactCommand(value string) bool {
 // run lifecycle — the fork that keeps status queries and local toggles off
 // the prompt FIFO. It reports whether the input was fully handled: either
 // executed, or rejected because the command needs an idle runtime while a
-// task is in progress.
-func (m *Model) tryLocalCommand(value string) bool {
+// task is in progress. The returned command runs after the message lands
+// (e.g. copying an emitted authorization link to the clipboard).
+func (m *Model) tryLocalCommand(value string) (bool, tea.Cmd) {
 	out, status := m.Runtime.ExecuteLocalCommand(context.Background(), value)
 	addSystem := func(content string) {
 		m.Messages.AddMessage(message.ChatMessage{Role: "system", Content: content, RenderedContent: content})
@@ -65,14 +66,20 @@ func (m *Model) tryLocalCommand(value string) bool {
 		// Local commands emit no runtime events, so status fields they can
 		// change (e.g. the permission mode) must be refreshed here.
 		m.Input.SetPermissionMode(m.Runtime.PermissionMode())
-		return true
+		// The TUI captures the mouse, so terminal hyperlinks are not
+		// clickable here: copy an emitted authorization link to the
+		// clipboard instead — paste it into the browser to authorize.
+		if url := message.LastBareURL(out); url != "" {
+			return true, tea.SetClipboard(url)
+		}
+		return true, nil
 	case controlruntime.LocalCommandRequiresIdle:
 		if m.state == stateProcessing {
 			addSystem("命令 " + value + " 需在任务结束后执行")
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func interactiveTool(toolName string) bool {

@@ -14,6 +14,7 @@ import (
 	"nekocode/bot/config"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/contextmgr/memory"
+	"nekocode/bot/decision"
 	"nekocode/bot/extension"
 	"nekocode/bot/extension/tool/builtin/catalog"
 	"nekocode/bot/extension/tool/runtime/permission"
@@ -55,15 +56,16 @@ type Bot struct {
 	ext             *extension.Manager
 	sess            *session.Manager
 	checkpoints     *checkpoint.Manager
+	mcpAuthNotifier func(message string)
 	mu              sync.Mutex
 	projectReloadMu sync.Mutex
 	reloadView      *extension.Snapshot // Previous complete view while extensions reload.
 	hostMu          sync.RWMutex
 	runHost         RunHost
-	// fullAccess mirrors the executor's full-takeover permission mode as a
-	// lock-free value: command menus are resolved with b.mu held, so reading
-	// the mode through getAgent (which takes b.mu) would self-deadlock.
-	fullAccess atomic.Bool
+	// Lock-free snapshot for menu/status reads that already hold b.mu.
+	permissionMode atomic.Int32
+	jevAvailable   atomic.Bool
+	riskJudge      decision.RiskJudge
 }
 
 // New assembles the standard bot and loads its persisted configuration,
@@ -120,6 +122,22 @@ func (b *Bot) initConfig() error {
 	return nil
 }
 
+// jevSettings maps the user-facing config onto the decision engine settings.
+// An absent section uses the environment key when present; without either
+// key, the optional decision engines remain disabled.
+func jevSettings(cfg *config.JevConfig) decision.JevSettings {
+	if cfg == nil {
+		return decision.JevSettings{}
+	}
+	return decision.JevSettings{
+		APIKey:        cfg.APIKey,
+		Model:         cfg.Model,
+		BaseURL:       cfg.BaseURL,
+		KeepThreshold: cfg.KeepThreshold,
+		Enabled:       cfg.Enabled,
+	}
+}
+
 func (b *Bot) initCtxMgr() error {
 	systemPrompt := b.promptBuilder.BuildStatic()
 	memFile, err := memory.Load(memory.DefaultPath())
@@ -148,6 +166,14 @@ func (b *Bot) rebuildRuntime() error {
 	if b.ext != nil {
 		b.ext.Close()
 	}
+	settings := jevSettings(b.cfg.Jev)
+	b.ctxMgr.SetToolPruner(decision.NewToolPruner(settings))
+	b.riskJudge = decision.NewRiskJudge(settings)
+	b.jevAvailable.Store(b.riskJudge != nil)
+	if !b.jevAvailable.Load() && b.BashAuto() {
+		b.permissionMode.Store(int32(permission.ModeManual))
+		logger.Log("permission mode changed to manual: Jev judge unavailable")
+	}
 	b.initToolRegistry()
 	b.initPolicy()
 
@@ -156,7 +182,9 @@ func (b *Bot) rebuildRuntime() error {
 	b.initAgent()
 	// A fresh agent means a fresh executor: the full-takeover mode does not
 	// carry over (e.g. after a model switch), so reset the lock-free mirror.
-	b.fullAccess.Store(false)
+	if b.FullAccess() {
+		b.setPermissionModeLocked(permission.ModeManual)
+	}
 	b.initCommands()
 	return nil
 }
@@ -236,6 +264,21 @@ func (b *Bot) initAgent() {
 	b.toolbox.WireInteraction(ask, todos)
 	b.configureAgent(b.ag)
 
+	// Auto permission mode: re-apply the risk judge and mode flag to the
+	// fresh executor (agents are rebuilt on config changes).
+	b.ag.Executor().SetBashAutoJudge(bashRiskJudgeFn(b.riskJudge))
+	if web, ok := b.riskJudge.(decision.URLRiskJudge); ok {
+		b.ag.Executor().SetWebAutoJudge(webRiskJudgeFn(web))
+	}
+	if ctxAware, ok := b.riskJudge.(decision.RiskContextAware); ok {
+		ctxAware.SetRiskContext(b.cwd)
+		b.ag.Executor().SetShellExecutedHook(ctxAware.NoteExecuted)
+	}
+	// Restore the mode on the fresh executor. Full-takeover is restored on
+	// purpose: agent-only rebuilds (model/effort switch) must preserve it —
+	// only rebuildRuntime downgrades Full after a full configuration change.
+	b.ag.Executor().SetPermissionMode(permission.Mode(b.permissionMode.Load()))
+
 	// Inject the permission engine into the shell tool so builtin sandbox
 	// rules (e.g. pnpm dev → network) are applied.
 	b.toolbox.SetSandboxEngine(b.ag.SandboxEngine())
@@ -243,24 +286,75 @@ func (b *Bot) initAgent() {
 	b.wireTaskTool(fm, compactionModel, b.ag)
 }
 
+// bashRiskJudgeFn adapts the stored RiskJudge into the executor's judge
+// signature; a nil judge stays nil so auto mode fails closed to asking. ctx
+// is the calling tool's context, so a slow remote judge honors cancellation.
+func bashRiskJudgeFn(judge decision.RiskJudge) func(ctx context.Context, command string) (dangerous bool, ok bool) {
+	if judge == nil {
+		return nil
+	}
+	return func(ctx context.Context, command string) (dangerous bool, ok bool) {
+		return judge.Dangerous(ctx, command)
+	}
+}
+
+// webRiskJudgeFn adapts the URL half of the judge for the auto-mode web gate.
+func webRiskJudgeFn(judge decision.URLRiskJudge) func(ctx context.Context, url string) (dangerous bool, ok bool) {
+	return func(ctx context.Context, url string) (dangerous bool, ok bool) {
+		return judge.DangerousURL(ctx, url)
+	}
+}
+
 // FullAccess reports the current permission mode without taking b.mu, safe
 // for status reads from menus and UI refresh paths.
-func (b *Bot) FullAccess() bool { return b.fullAccess.Load() }
-
-// SetFullAccess toggles the full-takeover permission mode: every tool call
-// runs without approval prompts. Explicit deny rules still block.
-func (b *Bot) SetFullAccess(on bool) {
-	logger.Log("permission mode changed: full_access=%v", on)
-	b.fullAccess.Store(on)
-	b.getAgent().Executor().SetFullAccess(on)
+func (b *Bot) FullAccess() bool {
+	return permission.Mode(b.permissionMode.Load()) == permission.ModeFull
 }
+
+// SetFullAccess preserves auto when full was already off, but leaving full
+// always returns to manual. All mode transitions synchronize the executor.
+func (b *Bot) SetFullAccess(on bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if on {
+		b.setPermissionModeLocked(permission.ModeFull)
+	} else if b.FullAccess() {
+		b.setPermissionModeLocked(permission.ModeManual)
+	}
+}
+
+func (b *Bot) SetBashAuto(on bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if on {
+		if !b.jevAvailable.Load() {
+			return
+		}
+		b.setPermissionModeLocked(permission.ModeAuto)
+	} else if b.BashAuto() {
+		b.setPermissionModeLocked(permission.ModeManual)
+	}
+}
+
+func (b *Bot) CanBashAuto() bool { return b.jevAvailable.Load() }
+
+func (b *Bot) setPermissionModeLocked(mode permission.Mode) {
+	b.ag.Executor().SetPermissionMode(mode)
+	b.permissionMode.Store(int32(mode))
+	logger.Log("permission mode changed: %d", mode)
+}
+
+func (b *Bot) BashAuto() bool { return permission.Mode(b.permissionMode.Load()) == permission.ModeAuto }
 
 func (b *Bot) initCommands() {
 	deps := command.Deps{
 		CtxMgr:             b.ctxMgr,
 		SetPlanMode:        func(enabled bool) { b.getAgent().Executor().SetPlanMode(enabled) },
 		SetFullAccess:      b.SetFullAccess,
-		GetFullAccess:      b.fullAccess.Load,
+		GetFullAccess:      b.FullAccess,
+		SetBashAuto:        b.SetBashAuto,
+		GetBashAuto:        b.BashAuto,
+		CanBashAuto:        b.CanBashAuto,
 		ToolRegistry:       b.toolbox.Registry,
 		GetConfigFn:        b.model,
 		ListModelsFn:       b.cfg.AllModelNames,

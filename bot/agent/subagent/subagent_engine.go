@@ -75,6 +75,15 @@ func (e *Engine) newExecutor(cfg RunConfig) (*runner.Executor, func()) {
 		executor.SetFullAccess(true)
 	}
 
+	if cfg.ConfigurePermissions != nil {
+		cfg.ConfigurePermissions(executor)
+	}
+	if cfg.OnToolCall != nil {
+		executor.SetPreviewDecisionFn(func(callID, name string, args map[string]any, preview string, decision protocol.ToolDecision) {
+			cfg.OnToolCall(ToolCallEvent{Action: protocol.StepActionToolPreview, CallID: callID, ToolName: name, Output: preview, Decision: decision})
+		})
+	}
+
 	toolState := executor.ExecutionState()
 	if cfg.ToolState != nil {
 		toolState.FileCache.Seed(cfg.ToolState.FileCache)

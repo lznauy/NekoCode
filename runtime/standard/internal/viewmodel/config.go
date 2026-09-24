@@ -5,6 +5,22 @@ import (
 	controlruntime "nekocode/runtime"
 )
 
+func jevConfigToView(in *config.JevConfig) *controlruntime.JevConfig {
+	if in == nil {
+		return nil
+	}
+	out := controlruntime.JevConfig(*in)
+	return &out
+}
+
+func jevConfigFromView(in *controlruntime.JevConfig) *config.JevConfig {
+	if in == nil {
+		return nil
+	}
+	out := config.JevConfig(*in)
+	return &out
+}
+
 func modelConfigsToView(in []config.ModelConfig) []controlruntime.ModelConfig {
 	if in == nil {
 		return nil
@@ -107,12 +123,10 @@ func mcpServerConfigsToView(in map[string]config.MCPServerConfig) map[string]con
 	}
 	out := make(map[string]controlruntime.MCPServerConfig, len(in))
 	for name, srv := range in {
-		out[name] = controlruntime.MCPServerConfig{
-			Command: srv.Command,
-			Args:    append([]string(nil), srv.Args...),
-			Env:     stringMap(srv.Env),
-			Enabled: srv.Enabled,
-		}
+		view := controlruntime.MCPServerConfig(srv)
+		view.Args = append([]string(nil), srv.Args...)
+		view.Env = stringMap(srv.Env)
+		out[name] = view
 	}
 	return out
 }
@@ -123,12 +137,10 @@ func mcpServerConfigsFromView(in map[string]controlruntime.MCPServerConfig) map[
 	}
 	out := make(map[string]config.MCPServerConfig, len(in))
 	for name, srv := range in {
-		out[name] = config.MCPServerConfig{
-			Command: srv.Command,
-			Args:    append([]string(nil), srv.Args...),
-			Env:     stringMap(srv.Env),
-			Enabled: srv.Enabled,
-		}
+		cfg := config.MCPServerConfig(srv)
+		cfg.Args = append([]string(nil), srv.Args...)
+		cfg.Env = stringMap(srv.Env)
+		out[name] = cfg
 	}
 	return out
 }

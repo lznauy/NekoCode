@@ -68,14 +68,15 @@ func buildSubagentRunConfig(
 	environment prompt.EnvironmentProvider,
 ) subagent.RunConfig {
 	cfg := subagent.RunConfig{
-		Prompt:             spec.Prompt,
-		Profile:            profile,
-		SkillContents:      skillContents,
-		ContextWindow:      contextWindow,
-		AutoCompactPercent: autoCompactPercent,
-		ConfirmFn:          ag.ConfirmFn(),
-		FullAccess:         ag.Executor().FullAccess,
-		ToolState:          ag.ToolExecutionState(),
+		Prompt:               spec.Prompt,
+		Profile:              profile,
+		SkillContents:        skillContents,
+		ContextWindow:        contextWindow,
+		AutoCompactPercent:   autoCompactPercent,
+		ConfirmFn:            ag.ConfirmFn(),
+		FullAccess:           ag.Executor().FullAccess,
+		ConfigurePermissions: ag.Executor().ConfigureChildPermissions,
+		ToolState:            ag.ToolExecutionState(),
 		AddTokens: func(_ int, completion int) {
 			ag.AddCompletionTokens(completion)
 		},
@@ -101,8 +102,9 @@ func buildSubagentRunConfig(
 				CallID:   ev.CallID,
 				ToolName: ev.ToolName,
 				ToolArgs: ev.ToolArgs, ToolInput: ev.ToolInput,
-				Output:  ev.Output,
-				IsError: ev.IsError,
+				Output:   ev.Output,
+				Decision: ev.Decision,
+				IsError:  ev.IsError,
 			})
 		}
 	}

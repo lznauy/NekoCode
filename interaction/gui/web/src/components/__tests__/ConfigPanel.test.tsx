@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ConfigPanel } from '../ConfigPanel'
 import type { ConfigView, ModelConfig } from '../../types/config'
-import { ResolveModelProfile, SaveConfig } from '../../../wailsjs/go/main/App'
+import { ResolveModelProfile, SaveConfig, MCPAuthorizationAction } from '../../../wailsjs/go/main/App'
 
 const config: ConfigView = {
   path: '/tmp/config.json',
@@ -33,10 +33,13 @@ const config: ConfigView = {
     },
   ],
   mcp_servers: {},
+  jev: { api_key: 'test-key', model: 'jev-test', keep_threshold: 0.4 },
 }
 
 vi.mock('../../../wailsjs/go/main/App', () => ({
   GetConfig: vi.fn(() => Promise.resolve(config)),
+  GetSkillManagement: vi.fn(() => Promise.resolve({ skills: [], plugins: [], mcp: [{ name: 'mcp-1', url: 'https://example.com/mcp', pluginEnabled: true, status: 'auth_required' }] })),
+  MCPAuthorizationAction: vi.fn(() => Promise.resolve()),
   SaveConfig: vi.fn((cfg: ConfigView) => Promise.resolve(cfg)),
   ResolveModelProfile: vi.fn((model: ModelConfig) => Promise.resolve(
     model.context_window
@@ -62,6 +65,21 @@ describe('ConfigPanel', () => {
     delete (window as unknown as { go?: unknown }).go
   })
 
+  it('saves a remote MCP before starting OAuth and preserves advanced settings', async () => {
+    const user = userEvent.setup()
+    render(<ConfigPanel open initialTab="mcp" onClose={vi.fn()} onSaved={vi.fn()} />)
+    await user.click(await screen.findByRole('button', { name: '添加 MCP 服务' }))
+    await user.selectOptions(screen.getByLabelText('连接方式'), 'http')
+    await user.type(screen.getByLabelText('MCP URL'), 'https://example.com/mcp')
+    await user.click(screen.getByText('OAuth 高级设置'))
+    await user.type(screen.getByLabelText('预注册 Client ID（可选）'), 'public-client')
+    await user.click(screen.getByRole('button', { name: '保存并授权' }))
+    await waitFor(() => expect(MCPAuthorizationAction).toHaveBeenCalledWith('mcp-1', 'login'))
+    const saved = vi.mocked(SaveConfig).mock.calls[0][0] as unknown as ConfigView
+    expect(saved.mcp_servers?.['mcp-1']).toMatchObject({ url: 'https://example.com/mcp', command: '', oauth_client_id: 'public-client' })
+    expect(vi.mocked(SaveConfig).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(MCPAuthorizationAction).mock.invocationCallOrder[0])
+  })
+
   it('keeps focus while editing model name', async () => {
     const user = userEvent.setup()
     render(<ConfigPanel open initialTab="models" onClose={vi.fn()} onSaved={vi.fn()} />)
@@ -76,6 +94,7 @@ describe('ConfigPanel', () => {
     await waitFor(() => expect(SaveConfig).toHaveBeenCalled())
     const saved = vi.mocked(SaveConfig).mock.calls[0][0] as unknown as ConfigView
     expect(saved.active).toBe('main-dev')
+    expect(saved.jev).toEqual(config.jev)
   })
 
   it('resolves model defaults after the model id changes', async () => {

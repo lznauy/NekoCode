@@ -422,8 +422,9 @@ func (r *Runtime) publishStep(runID RunID, step protocol.StepEvent) {
 	var eventType EventType
 	payload := ToolPayload{
 		ToolName: step.ToolName, CallID: step.CallID, Args: step.ToolArgs,
-		Input:   append([]byte(nil), step.ToolInput...),
-		IsError: step.IsError, SubAgentID: step.SubAgentID, SubAgentColor: step.SubAgentColor,
+		Input:    append([]byte(nil), step.ToolInput...),
+		Decision: step.Decision,
+		IsError:  step.IsError, SubAgentID: step.SubAgentID, SubAgentColor: step.SubAgentColor,
 	}
 	switch step.Action {
 	case protocol.StepActionRunSummary:

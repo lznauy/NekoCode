@@ -414,6 +414,11 @@ func (c *ConfirmBar) formatPermissionDesc() string {
 	if len(approval.WritePaths) > 0 {
 		lines = append(lines, "可写目录: "+strings.Join(approval.WritePaths, "、"))
 	}
+	// Footer note for jev-judged approvals: the dialog must make it obvious
+	// that the machine judge (not a rule) sent this call to the user.
+	if strings.HasPrefix(approval.Risk, "jev:") || strings.HasPrefix(approval.Reason, "jev:") {
+		lines = append(lines, "※ 本命令经过 Jev 判定，需要授权确认")
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -450,6 +455,10 @@ func friendlyPermissionReason(reason string) string {
 		return "命令包含运行时才能确定的间接执行。"
 	case "command requires public network access":
 		return "命令需要访问公共网络。"
+	case "jev: judged dangerous":
+		return "Jev 判定该命令存在风险。"
+	case "jev: URL judged risky by the risk judge":
+		return "Jev 判定该 URL 存在风险。"
 	}
 	return reason
 }

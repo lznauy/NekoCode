@@ -2,6 +2,7 @@
 package message
 
 import (
+	"net/url"
 	"strings"
 
 	"nekocode/interaction/tui/styles"
@@ -40,7 +41,11 @@ func (m *SystemMessageItem) Render(width int) string {
 	contentW := max(cw-4, 10)
 	content := m.renderedContent
 	if content == "" {
-		content = RenderMarkdown(strings.TrimSpace(m.content), contentW)
+		content = renderSystemContent(m.content, contentW, m.sty)
+	} else {
+		// Pre-rendered output (e.g. local command results) skips markdown;
+		// bare URL lines still become terminal hyperlinks.
+		content = hyperlinkURLLines(content, m.sty)
 	}
 	content = colorizeContextGlyphs(content)
 	if m.title != "" {
@@ -54,6 +59,78 @@ func (m *SystemMessageItem) Render(width int) string {
 	m.cache.width = cw
 	m.cache.height = strings.Count(out, "\n") + 1
 	return out
+}
+
+// renderSystemContent runs markdown over prose lines but renders bare URL
+// lines (e.g. OAuth authorization links) as terminal hyperlinks — a single
+// actionable line instead of a hard-wrapped URL blob.
+func renderSystemContent(content string, width int, sty *styles.Styles) string {
+	lines := strings.Split(strings.TrimSpace(content), "\n")
+	var out, prose []string
+	flush := func() {
+		if len(prose) > 0 {
+			out = append(out, RenderMarkdown(strings.Join(prose, "\n"), width))
+			prose = nil
+		}
+	}
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if isBareURL(trimmed) {
+			flush()
+			out = append(out, terminalHyperlink(sty, trimmed, "打开授权链接 ↗"))
+			continue
+		}
+		prose = append(prose, line)
+	}
+	flush()
+	return strings.Join(out, "\n")
+}
+
+// hyperlinkURLLines replaces bare URL lines with terminal hyperlinks while
+// leaving every other line (including ANSI-styled ones) untouched.
+func hyperlinkURLLines(content string, sty *styles.Styles) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if isBareURL(trimmed) {
+			lines[i] = terminalHyperlink(sty, trimmed, "打开授权链接 ↗")
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func isBareURL(s string) bool {
+	if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
+		return false
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" || u.Opaque != "" {
+		return false
+	}
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// LastBareURL returns the last bare-URL line in content (e.g. an
+// authorization link emitted by a local command), or "".
+func LastBareURL(content string) string {
+	var found string
+	for _, line := range strings.Split(content, "\n") {
+		if t := strings.TrimSpace(line); isBareURL(t) {
+			found = t
+		}
+	}
+	return found
+}
+
+// terminalHyperlink wraps label in an OSC 8 sequence pointing at url.
+// Terminals without hyperlink support render the label as plain text.
+func terminalHyperlink(sty *styles.Styles, url, label string) string {
+	return "\x1b]8;;" + url + "\x07" + sty.Primary.Render(label) + "\x1b]8;;\x07"
 }
 
 // renderSystemBody: 灰色圆点 + 缩进, 与 assistant 正文 (•) 格式统一, 仅颜色不同。

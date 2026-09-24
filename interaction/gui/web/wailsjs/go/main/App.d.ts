@@ -46,3 +46,5 @@ export function SendMessage(arg1:string):Promise<void>;
 export function SetPluginEnabled(arg1:string,arg2:boolean):Promise<runtime.SkillManagementView>;
 
 export function SwitchModel(arg1:string):Promise<string>;
+
+export function MCPAuthorizationAction(name: string, action: string): Promise<void>;

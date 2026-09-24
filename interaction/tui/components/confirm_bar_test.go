@@ -216,3 +216,44 @@ func TestDynamicApprovalWithoutCapabilitiesShowsExecutionRisk(t *testing.T) {
 		t.Fatalf("dynamic-only approval invented capabilities:\n%s", view)
 	}
 }
+
+func TestJevJudgedApprovalShowsFooterNote(t *testing.T) {
+	sty := styles.DefaultStyles()
+	cb := NewConfirmBar(&sty)
+	cb.SetRequest(&controlruntime.ConfirmRequest{
+		ToolName: "shell",
+		Args:     map[string]any{"command": "rm -rf build"},
+		Kind:     controlruntime.ConfirmKindPermission,
+		Approval: &controlruntime.ApprovalContext{
+			Risk:   "jev: judged dangerous",
+			Reason: "jev: judged dangerous",
+			Scope:  controlruntime.ApprovalScopeProject,
+		},
+	}, nil)
+
+	view := cb.View(100, 40)
+	for _, want := range []string{"Jev 判定该命令存在风险", "※ 本命令经过 Jev 判定，需要授权确认"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("jev approval missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestNonJevApprovalHasNoJevFooter(t *testing.T) {
+	sty := styles.DefaultStyles()
+	cb := NewConfirmBar(&sty)
+	cb.SetRequest(&controlruntime.ConfirmRequest{
+		ToolName: "shell",
+		Args:     map[string]any{"command": "rm -rf build"},
+		Kind:     controlruntime.ConfirmKindPermission,
+		Approval: &controlruntime.ApprovalContext{
+			Risk:   "dynamic shell execution",
+			Reason: "dynamic shell execution",
+			Scope:  controlruntime.ApprovalScopeProject,
+		},
+	}, nil)
+
+	if view := cb.View(100, 40); strings.Contains(view, "经过 Jev 判定") {
+		t.Fatalf("non-jev approval must not show the jev footer:\n%s", view)
+	}
+}

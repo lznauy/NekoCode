@@ -204,6 +204,15 @@ type ConfigView struct {
 	MCPServers         map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 	Permissions        *PermissionsConfig         `json:"permissions,omitempty"`
 	Workspaces         []WorkspaceConfig          `json:"workspaces,omitempty"`
+	Jev                *JevConfig                 `json:"jev,omitempty"`
+}
+
+type JevConfig struct {
+	APIKey        string   `json:"api_key,omitempty"`
+	Model         string   `json:"model,omitempty"`
+	BaseURL       string   `json:"base_url,omitempty"`
+	KeepThreshold *float64 `json:"keep_threshold,omitempty"`
+	Enabled       *bool    `json:"enabled,omitempty"`
 }
 
 type ModelConfig struct {
@@ -244,6 +253,12 @@ type ImageGenConfig struct {
 }
 
 type MCPServerConfig struct {
+	URL                    string `json:"url,omitempty"`
+	OAuthClientID          string `json:"oauth_client_id,omitempty"`
+	OAuthClientSecret      string `json:"oauth_client_secret,omitempty"`
+	OAuthClientMetadataURL string `json:"oauth_client_metadata_url,omitempty"`
+	OAuthCallbackPort      int    `json:"oauth_callback_port,omitempty"`
+
 	Command string            `json:"command"`
 	Args    []string          `json:"args,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
@@ -311,6 +326,8 @@ type PluginView struct {
 }
 
 type MCPServerView struct {
+	URL           string   `json:"url,omitempty"`
+	AuthURL       string   `json:"authUrl,omitempty"`
 	Name          string   `json:"name"`
 	Plugin        string   `json:"plugin"`
 	Command       string   `json:"command"`

@@ -3,9 +3,12 @@ package extension
 import (
 	"context"
 	"fmt"
+	"maps"
+	"sort"
 	"strings"
 
 	"nekocode/bot/command"
+	"nekocode/bot/extension/mcp"
 	"nekocode/bot/extension/plugin"
 	"nekocode/protocol"
 )
@@ -41,6 +44,31 @@ func (m *Manager) RegisterCommands(handler *command.Handler, confirm InstallConf
 		}
 	})
 	p.RegisterMenu("plugin", m.pluginMenu)
+	for _, action := range []string{"login", "logout", "cancel"} {
+		// Hidden: the /mcp menu drives these on the user's behalf (login is
+		// its only entry point in interactive UIs), but they stay executable
+		// for text transports without a picker.
+		p.RegisterHiddenInfo("mcp-"+action, "MCP OAuth "+action, func(_ context.Context, cmd *command.Command) (string, bool) {
+			if len(cmd.Args) != 1 {
+				return "Usage: /mcp-" + action + " <server>", true
+			}
+			name := cmd.Args[0]
+			if err := m.MCPAuthorizationAction(name, action); err != nil {
+				return err.Error(), true
+			}
+			if action != "login" {
+				return "MCP " + action + " done. Use /mcp to check status.", true
+			}
+			return name + " 授权已启动，链接生成后将通知；也可用 /mcp 查看或取消。", true
+		})
+	}
+	// /mcp: read-only status query, so it stays available during a task. The
+	// menu surfaces per-server state; ready servers are green and inert,
+	// unauthorized ones launch the login flow directly.
+	p.RegisterLocalInfo("mcp", "Show connected MCP servers", func(_ context.Context, _ *command.Command) (string, bool) {
+		return m.mcpStatus(), true
+	})
+	p.RegisterMenu("mcp", m.mcpMenu)
 }
 
 func (m *Manager) pluginMenu(_ context.Context, cmd *command.Command) (protocol.CommandMenu, bool) {
@@ -270,4 +298,147 @@ func (m *Manager) enablePlugin(ctx context.Context, args []string, enabled bool)
 		return fmt.Sprintf("Enabled plugin %q.", name)
 	}
 	return fmt.Sprintf("Disabled plugin %q.", name)
+}
+
+func (m *Manager) mcpMenu(_ context.Context, cmd *command.Command) (protocol.CommandMenu, bool) {
+	health := m.mcp.Health()
+	if len(health) == 0 {
+		return protocol.CommandMenu{Title: "MCP 服务器", Empty: "未连接任何 MCP 服务器"}, true
+	}
+	names := make([]string, 0, len(health))
+	for name := range health {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	items := make([]protocol.CommandMenuItem, 0, len(health))
+	for _, name := range names {
+		h := health[name]
+		// Logout only makes sense for servers that actually hold a stored
+		// OAuth credential; stdio and never-authorized remotes omit the row.
+		logout := m.mcp.HasStoredCredential(name)
+		switch h.Status {
+		case mcp.StatusReady:
+			// Green and inert: nothing to do for an authorized server.
+			items = append(items, protocol.CommandMenuItem{
+				Label: fmt.Sprintf("%s · 已就绪（%d 个工具）", name, h.ToolCount),
+				Value: "/mcp", Current: true,
+			})
+			if logout {
+				items = append(items, logoutItem(name))
+			}
+		case mcp.StatusAuthRequired:
+			items = append(items, protocol.CommandMenuItem{
+				Label: name + " · 需要授权", Description: "回车获取授权链接",
+				Value: "/mcp-login " + name, Submit: true,
+			})
+			if logout {
+				items = append(items, logoutItem(name))
+			}
+		case mcp.StatusAuthorizing:
+			items = append(items, protocol.CommandMenuItem{
+				Label: name + " · 等待浏览器授权", Description: "回车重新显示授权链接",
+				Value: "/mcp-login " + name, Submit: true,
+			})
+			items = append(items, protocol.CommandMenuItem{
+				Label: name + " · 取消授权", Description: "放弃等待中的浏览器授权",
+				Value: "/mcp-cancel " + name, Submit: true,
+			})
+		case mcp.StatusError:
+			items = append(items, protocol.CommandMenuItem{
+				Label: name + " · 连接失败", Description: h.Error,
+				Value: "/mcp-login " + name, Submit: true,
+			})
+			if logout {
+				items = append(items, logoutItem(name))
+			}
+		default:
+			items = append(items, protocol.CommandMenuItem{
+				Label: name + " · 连接中", Value: "/mcp", Current: true,
+			})
+		}
+	}
+	return protocol.CommandMenu{Title: "MCP 服务器", Empty: "未连接任何 MCP 服务器", Items: items}, true
+}
+
+// logoutItem offers credential deletion for a connected server.
+func logoutItem(name string) protocol.CommandMenuItem {
+	return protocol.CommandMenuItem{
+		Label: name + " · 退出登录", Description: "删除本机保存的授权凭据",
+		Value: "/mcp-logout " + name, Submit: true,
+	}
+}
+
+// mcpStatus renders the health of every managed MCP server. It only reads
+// health and host-configured launch commands; plugin and session servers are
+// described by their owner label alone.
+func (m *Manager) mcpStatus() string {
+	m.mu.Lock()
+	configs := maps.Clone(m.configMCP)
+	m.mu.Unlock()
+
+	health := m.mcp.Health()
+	if len(health) == 0 {
+		return "未连接任何 MCP 服务器。"
+	}
+	names := make([]string, 0, len(health))
+	for name := range health {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	ready := 0
+	var b strings.Builder
+	for _, name := range names {
+		h := health[name]
+		if h.Status == mcp.StatusReady {
+			ready++
+		}
+		fmt.Fprintf(&b, "  %-20s %s\n", name, strings.Join(mcpStatusParts(name, h, configs[name]), " · "))
+		if h.AuthURL != "" {
+			fmt.Fprintf(&b, "    授权链接：%s\n", h.AuthURL)
+		}
+	}
+	return fmt.Sprintf("MCP 服务器 · %d/%d 已就绪\n%s", ready, len(names), strings.TrimRight(b.String(), "\n"))
+}
+
+func mcpStatusParts(name string, h mcp.Health, cfg mcp.ServerConfig) []string {
+	parts := []string{h.Status}
+	switch {
+	case h.Status == mcp.StatusReady:
+		parts = append(parts, fmt.Sprintf("%d tools", h.ToolCount))
+	case h.Status == mcp.StatusAuthRequired:
+		// The SDK error behind this state is noise; the actionable hint is
+		// the command. Once a login flow starts, the URL line appears above.
+		parts = append(parts, fmt.Sprintf("运行 /mcp-login %s 完成授权", name))
+	case h.Error != "":
+		parts = append(parts, h.Error)
+	}
+	parts = append(parts, mcpOwnerLabel(h.Owner))
+	if cfg.Command != "" {
+		parts = append(parts, strings.TrimSpace(cfg.Command+" "+strings.Join(cfg.Args, " ")))
+	}
+	return parts
+}
+
+// mcpOwnerLabel turns a lifecycle owner ID into a short source label.
+func mcpOwnerLabel(owner string) string {
+	prefix, rest, found := strings.Cut(owner, ":")
+	if !found {
+		return owner
+	}
+	switch prefix {
+	case "config":
+		return "配置"
+	case "plugin", "session":
+		name, _, _ := strings.Cut(rest, ":")
+		if name == "" {
+			return prefix
+		}
+		label := "插件"
+		if prefix == "session" {
+			label = "会话"
+		}
+		return label + " " + name
+	default:
+		return owner
+	}
 }

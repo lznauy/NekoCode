@@ -1,6 +1,7 @@
 package permission
 
 import (
+	"context"
 	"testing"
 )
 
@@ -57,7 +58,7 @@ func TestEvaluateDenyWins(t *testing.T) {
 		{Tool: "bash", Specifier: "rm", Effect: EffectAllow, Source: "test"},
 		{Tool: "bash", Specifier: "rm", Effect: EffectDeny, Source: "test"},
 	})
-	d := e.Evaluate("bash", map[string]any{"match": "rm"}, EffectAllow)
+	d := e.EvaluateContext(context.Background(), "bash", map[string]any{"match": "rm"}, EffectAllow)
 	if d.Effect != EffectDeny {
 		t.Fatalf("deny must win, got %v", d.Effect)
 	}
@@ -69,7 +70,7 @@ func TestEvaluateAskBeforeAllow(t *testing.T) {
 		{Tool: "bash", Specifier: "git push", Effect: EffectAllow, Source: "test"},
 		{Tool: "bash", Specifier: "git push", Effect: EffectAsk, Source: "test"},
 	})
-	d := e.Evaluate("bash", map[string]any{"match": "git push"}, EffectAllow)
+	d := e.EvaluateContext(context.Background(), "bash", map[string]any{"match": "git push"}, EffectAllow)
 	if d.Effect != EffectAsk {
 		t.Fatalf("ask must beat allow, got %v", d.Effect)
 	}
@@ -80,7 +81,7 @@ func TestEvaluateAllowMatches(t *testing.T) {
 	e.SetRules([]Rule{
 		{Tool: "bash", Specifier: "npm run", Effect: EffectAllow, Source: "test"},
 	})
-	d := e.Evaluate("bash", map[string]any{"match": "npm run"}, EffectDeny)
+	d := e.EvaluateContext(context.Background(), "bash", map[string]any{"match": "npm run"}, EffectDeny)
 	if d.Effect != EffectAllow {
 		t.Fatalf("allow rule should match, got %v", d.Effect)
 	}
@@ -91,7 +92,7 @@ func TestEvaluateNoMatchReturnsDefault(t *testing.T) {
 	e.SetRules([]Rule{
 		{Tool: "bash", Specifier: "ls", Effect: EffectAllow, Source: "test"},
 	})
-	d := e.Evaluate("bash", map[string]any{"match": "rm"}, EffectAsk)
+	d := e.EvaluateContext(context.Background(), "bash", map[string]any{"match": "rm"}, EffectAsk)
 	if d.Effect != EffectAsk {
 		t.Fatalf("no match → default, got %v", d.Effect)
 	}
@@ -104,12 +105,12 @@ func TestEvaluateBareToolMatchesAll(t *testing.T) {
 		{Tool: "bash", Specifier: "rm", Effect: EffectDeny, Source: "test"},
 	})
 	// deny is more specific but bare-allow comes first; deny still wins by precedence.
-	d := e.Evaluate("bash", map[string]any{"match": "rm"}, EffectAllow)
+	d := e.EvaluateContext(context.Background(), "bash", map[string]any{"match": "rm"}, EffectAllow)
 	if d.Effect != EffectDeny {
 		t.Fatalf("deny should win over bare allow, got %v", d.Effect)
 	}
 	// bare allow covers anything else
-	d = e.Evaluate("bash", map[string]any{"match": "anything"}, EffectDeny)
+	d = e.EvaluateContext(context.Background(), "bash", map[string]any{"match": "anything"}, EffectDeny)
 	if d.Effect != EffectAllow {
 		t.Fatalf("bare allow should match unmatched calls, got %v", d.Effect)
 	}
@@ -120,7 +121,7 @@ func TestEvaluateStarToolMatchesAnyTool(t *testing.T) {
 	e.SetRules([]Rule{
 		{Tool: "*", Specifier: "dangerous", Effect: EffectDeny, Source: "test"},
 	})
-	d := e.Evaluate("bash", map[string]any{"match": "dangerous"}, EffectAllow)
+	d := e.EvaluateContext(context.Background(), "bash", map[string]any{"match": "dangerous"}, EffectAllow)
 	if d.Effect != EffectDeny {
 		t.Fatalf("* rule should match any tool, got %v", d.Effect)
 	}
@@ -132,7 +133,7 @@ func TestEvaluateUnregisteredToolScopedRuleSkipped(t *testing.T) {
 		{Tool: "web_fetch", Specifier: "domain:evil.com", Effect: EffectDeny, Source: "test"},
 	})
 	// No matcher → scoped rule can't be evaluated → treated as non-matching.
-	d := e.Evaluate("web_fetch", map[string]any{}, EffectAllow)
+	d := e.EvaluateContext(context.Background(), "web_fetch", map[string]any{}, EffectAllow)
 	if d.Effect != EffectAllow {
 		t.Fatalf("unmatched scoped rule with no matcher should fall to default, got %v", d.Effect)
 	}
@@ -146,7 +147,7 @@ func TestEvaluateDifferentToolsDontInterfere(t *testing.T) {
 		{Tool: "edit", Specifier: "/src", Effect: EffectAllow, Source: "test"},
 	})
 	// bash rm deny shouldn't affect edit
-	d := e.Evaluate("edit", map[string]any{"match": "/src"}, EffectAsk)
+	d := e.EvaluateContext(context.Background(), "edit", map[string]any{"match": "/src"}, EffectAsk)
 	if d.Effect != EffectAllow {
 		t.Fatalf("edit allow should match /src, got %v", d.Effect)
 	}
@@ -246,7 +247,7 @@ func TestEvaluateBashCompoundCoveredByUnionOfAllows(t *testing.T) {
 		Rule{Tool: "bash", Specifier: "npm run *", Effect: EffectAllow, Source: "user"},
 		Rule{Tool: "bash", Specifier: "npm test", Effect: EffectAllow, Source: "user"},
 	)
-	d := e.Evaluate("bash", bashCall("npm run build && npm test"), EffectAsk)
+	d := e.EvaluateContext(context.Background(), "bash", bashCall("npm run build && npm test"), EffectAsk)
 	if d.Effect != EffectAllow {
 		t.Fatalf("two narrow allows should jointly cover the compound call, got %v", d.Effect)
 	}
@@ -259,7 +260,7 @@ func TestEvaluateBashCompoundPartiallyCoveredFallsThrough(t *testing.T) {
 	e := newBashEngine(
 		Rule{Tool: "bash", Specifier: "npm run *", Effect: EffectAllow, Source: "user"},
 	)
-	d := e.Evaluate("bash", bashCall("npm run build && rm -rf /tmp/x"), EffectAsk)
+	d := e.EvaluateContext(context.Background(), "bash", bashCall("npm run build && rm -rf /tmp/x"), EffectAsk)
 	if d.Effect != EffectAsk {
 		t.Fatalf("uncovered subcommand must fall through to the default, got %v", d.Effect)
 	}
@@ -270,7 +271,7 @@ func TestEvaluateBashUserAllowCoverageCountsBuiltinAllows(t *testing.T) {
 		Rule{Tool: "bash", Specifier: "cargo *", Effect: EffectAllow, Source: "user"},
 		Rule{Tool: "bash", Specifier: "ls *", Effect: EffectAllow, Source: "builtin"},
 	)
-	d := e.Evaluate("bash", bashCall("cargo build && ls -la"), EffectAsk)
+	d := e.EvaluateContext(context.Background(), "bash", bashCall("cargo build && ls -la"), EffectAsk)
 	if d.Effect != EffectAllow {
 		t.Fatalf("user + builtin allows should jointly cover the compound call, got %v", d.Effect)
 	}
@@ -285,7 +286,7 @@ func TestEvaluateBashBareAllowCoversCompound(t *testing.T) {
 		Rule{Tool: "bash", Specifier: "npm run *", Effect: EffectAllow, Source: "user"},
 		bare,
 	)
-	d := e.Evaluate("bash", bashCall("npm run build && rm -rf /tmp/x"), EffectAsk)
+	d := e.EvaluateContext(context.Background(), "bash", bashCall("npm run build && rm -rf /tmp/x"), EffectAsk)
 	if d.Effect != EffectAllow {
 		t.Fatalf("bare allow should cover the whole compound call, got %v", d.Effect)
 	}
@@ -299,12 +300,12 @@ func TestEvaluateBashDenyFiresOnAnySubcommand(t *testing.T) {
 		Rule{Tool: "bash", Specifier: "rm *", Effect: EffectDeny, Source: "user"},
 		Rule{Tool: "bash", Specifier: "ls *", Effect: EffectAllow, Source: "user"},
 	)
-	d := e.Evaluate("bash", bashCall("ls -la && rm -rf /tmp/x"), EffectAllow)
+	d := e.EvaluateContext(context.Background(), "bash", bashCall("ls -la && rm -rf /tmp/x"), EffectAllow)
 	if d.Effect != EffectDeny {
 		t.Fatalf("deny must fire on any matching subcommand, got %v", d.Effect)
 	}
 	// command substitution is a subcommand too
-	d = e.Evaluate("bash", bashCall("echo $(rm -rf /tmp/x)"), EffectAllow)
+	d = e.EvaluateContext(context.Background(), "bash", bashCall("echo $(rm -rf /tmp/x)"), EffectAllow)
 	if d.Effect != EffectDeny {
 		t.Fatalf("deny must fire inside command substitution, got %v", d.Effect)
 	}
@@ -314,7 +315,7 @@ func TestEvaluateBashAskFiresOnAnySubcommand(t *testing.T) {
 	e := newBashEngine(
 		Rule{Tool: "bash", Specifier: "git push *", Effect: EffectAsk, Source: "user"},
 	)
-	d := e.Evaluate("bash", bashCall("git status && git push origin main"), EffectAllow)
+	d := e.EvaluateContext(context.Background(), "bash", bashCall("git status && git push origin main"), EffectAllow)
 	if d.Effect != EffectAsk {
 		t.Fatalf("ask must fire on any matching subcommand, got %v", d.Effect)
 	}
@@ -324,7 +325,7 @@ func TestEvaluateBashBuiltinAllowCoverage(t *testing.T) {
 	e := newBashEngine(
 		Rule{Tool: "bash", Specifier: "ls *", Effect: EffectAllow, Source: "builtin"},
 	)
-	d := e.Evaluate("bash", bashCall("ls -la && ls /tmp"), EffectDeny)
+	d := e.EvaluateContext(context.Background(), "bash", bashCall("ls -la && ls /tmp"), EffectDeny)
 	if d.Effect != EffectAllow {
 		t.Fatalf("builtin allow covering every subcommand should allow, got %v", d.Effect)
 	}
@@ -334,7 +335,7 @@ func TestEvaluateBashSingleCommandUsesPlainMatch(t *testing.T) {
 	e := newBashEngine(
 		Rule{Tool: "bash", Specifier: "npm run *", Effect: EffectAllow, Source: "user"},
 	)
-	d := e.Evaluate("bash", bashCall("npm run build"), EffectAsk)
+	d := e.EvaluateContext(context.Background(), "bash", bashCall("npm run build"), EffectAsk)
 	if d.Effect != EffectAllow {
 		t.Fatalf("single command matching an allow rule should allow, got %v", d.Effect)
 	}
@@ -346,17 +347,17 @@ func TestEvaluateBashSingleCommandUsesPlainMatch(t *testing.T) {
 func TestEvaluateBashLiteralAllowIsExact(t *testing.T) {
 	literal := `bash -c "$(cat task.txt)"`
 	e := newBashEngine(Rule{Tool: "shell", Literal: literal, Effect: EffectAllow, Source: "remembered"})
-	if d := e.Evaluate("shell", bashCall(literal), EffectAsk); d.Effect != EffectAllow {
+	if d := e.EvaluateContext(context.Background(), "shell", bashCall(literal), EffectAsk); d.Effect != EffectAllow {
 		t.Fatalf("exact literal should allow, got %+v", d)
 	}
-	if d := e.Evaluate("shell", bashCall(literal+" extra"), EffectAsk); d.Effect != EffectAsk {
+	if d := e.EvaluateContext(context.Background(), "shell", bashCall(literal+" extra"), EffectAsk); d.Effect != EffectAsk {
 		t.Fatalf("literal must not match a longer command, got %+v", d)
 	}
 }
 
 func TestEvaluateBashLiteralDoesNotBecomeBareCompoundAllow(t *testing.T) {
 	e := newBashEngine(Rule{Tool: "shell", Literal: "git status", Effect: EffectAllow, Source: "remembered"})
-	if d := e.Evaluate("shell", bashCall("git status && rm -rf build"), EffectAsk); d.Effect != EffectAsk {
+	if d := e.EvaluateContext(context.Background(), "shell", bashCall("git status && rm -rf build"), EffectAsk); d.Effect != EffectAsk {
 		t.Fatalf("literal rule must not cover a compound command, got %+v", d)
 	}
 }
@@ -369,7 +370,7 @@ func TestEvaluateBashBroadAllowCannotBypassWrappedDynamicCalls(t *testing.T) {
 		`timeout 5 bash -c 'echo ok'`,
 		`nice -n 5 bash -c 'echo ok'`,
 	} {
-		if decision := e.Evaluate("shell", bashCall(command), EffectAsk); decision.Effect != EffectAsk {
+		if decision := e.EvaluateContext(context.Background(), "shell", bashCall(command), EffectAsk); decision.Effect != EffectAsk {
 			t.Errorf("wrapped dynamic command %q = %v, want ask", command, decision.Effect)
 		}
 	}

@@ -53,7 +53,7 @@ func TestRunPathCommandRejectedWhileBusy(t *testing.T) {
 	}
 	m.transitionTo(stateProcessing)
 
-	if !m.tryLocalCommand("/run") {
+	if handled, _ := m.tryLocalCommand("/run"); !handled {
 		t.Fatal("busy run-path command should be handled (rejected), not steered")
 	}
 	if bot.runs != 0 {
@@ -62,7 +62,7 @@ func TestRunPathCommandRejectedWhileBusy(t *testing.T) {
 
 	// Same command goes through when idle: not handled by the local fork.
 	m.transitionTo(stateReady)
-	if m.tryLocalCommand("/run") {
+	if handled, _ := m.tryLocalCommand("/run"); handled {
 		t.Fatal("idle run-path command should fall through to StartRun")
 	}
 }

@@ -2,10 +2,89 @@ package mcp
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestManagerReplaceDoesNotHoldLockDuringRemoteStartup(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		once.Do(func() { close(started) })
+		<-release
+		http.Error(w, "stopped", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	m := New()
+	defer m.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- m.Replace(ctx, nil, []Registration{{ID: "session:test:slow", Name: "slow", Config: ServerConfig{URL: server.URL}}})
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		cancel()
+		close(release)
+		t.Fatal("remote startup did not begin")
+	}
+	healthDone := make(chan struct{})
+	go func() { m.Health(); close(healthDone) }()
+	select {
+	case <-healthDone:
+	case <-time.After(200 * time.Millisecond):
+		cancel()
+		close(release)
+		t.Fatal("Health blocked behind remote replacement startup")
+	}
+	cancel()
+	close(release)
+	<-result
+}
+
+func TestManagerCloseStopsStagedRemoteReplacement(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startOnce, releaseOnce sync.Once
+	releaseRequests := func() { releaseOnce.Do(func() { close(release) }) }
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		startOnce.Do(func() { close(started) })
+		<-release
+	}))
+	defer func() {
+		releaseRequests()
+		server.Close()
+	}()
+
+	m := New()
+	result := make(chan error, 1)
+	go func() {
+		result <- m.Replace(context.Background(), nil, []Registration{{ID: "session:test:slow", Name: "slow", Config: ServerConfig{URL: server.URL}}})
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		m.Close()
+		t.Fatal("remote startup did not begin")
+	}
+	m.Close()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("replacement succeeded after manager close")
+		}
+	case <-time.After(2 * time.Second):
+		releaseRequests()
+		t.Fatal("replacement did not finish after manager close")
+	}
+}
 
 func TestManagerAddServer(t *testing.T) {
 	mockTools := []toolDef{
@@ -268,4 +347,88 @@ func TestManagerCloseCancelsBackgroundStartup(t *testing.T) {
 	if len(m.Health()) != 0 {
 		t.Fatalf("health after Close = %v, want empty", m.Health())
 	}
+}
+
+func TestAuthOverrideSurvivesRebuildAndIsConsumed(t *testing.T) {
+	cmd, cleanup := startMockMCP(t, []toolDef{
+		{Name: "alpha", InputSchema: inputSchema{Type: "object"}},
+	})
+	defer cleanup()
+
+	m := New()
+	defer m.Close()
+	// AuthorizationAction("login") records the interactive state under the
+	// owner id so a rebuild (config reload, error restart) keeps it.
+	m.mu.Lock()
+	m.authOverrides["config:srv"] = authOverride{interactive: true, scopes: []string{"docs.read"}, gen: 1}
+	m.mu.Unlock()
+
+	if err := m.AddBackground("config:srv", "srv", ServerConfig{Command: cmd.Path}); err != nil {
+		t.Fatalf("AddBackground: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if m.Health()["srv"].Status == StatusReady {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if h := m.Health()["srv"]; h.Status != StatusReady {
+		t.Fatalf("server did not become ready: %+v", h)
+	}
+
+	m.mu.Lock()
+	s := m.servers["config:srv"]
+	if s == nil || s.client.config.interactive || len(s.client.config.authorizationScopes) != 0 {
+		m.mu.Unlock()
+		t.Fatal("transient authorization options leaked into persistent definition")
+	}
+	if _, pending := m.authOverrides["config:srv"]; pending {
+		m.mu.Unlock()
+		t.Fatal("override should be consumed once the start finished")
+	}
+	m.mu.Unlock()
+
+	// After consumption, a rebuild re-registers non-interactive.
+	m.Remove("config:srv")
+	if err := m.AddBackground("config:srv", "srv", ServerConfig{Command: cmd.Path}); err != nil {
+		t.Fatalf("rebuild AddBackground: %v", err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if m.Health()["srv"].Status == StatusReady {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	m.mu.Lock()
+	s = m.servers["config:srv"]
+	interactive := s != nil && s.client.config.interactive
+	m.mu.Unlock()
+	if interactive {
+		t.Fatal("consumed override must not leak into later rebuilds")
+	}
+}
+
+func TestAuthOverrideFailedStartConsumesOverride(t *testing.T) {
+	m := New()
+	defer m.Close()
+	m.mu.Lock()
+	m.authOverrides["config:bad"] = authOverride{interactive: true, scopes: []string{"docs.read"}, gen: 1}
+	m.mu.Unlock()
+
+	if err := m.AddBackground("config:bad", "bad", ServerConfig{Command: "/nonexistent-mcp-server"}); err != nil {
+		t.Fatalf("AddBackground: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		m.mu.Lock()
+		_, pending := m.authOverrides["config:bad"]
+		m.mu.Unlock()
+		if !pending {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("failed background start must still consume the override")
 }

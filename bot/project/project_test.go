@@ -47,7 +47,7 @@ func TestProjectMCPPathsAndDefaults(t *testing.T) {
 	}
 	writeProjectFile(t, p.MCPPath(), `{"mcpServers":{
 		"local":{"command":"./server","cwd":"tools","args":["./literal"," space "],"env":{"VALUE":" untouched "}},
-		"path":{"command":"node"},"off":{"enabled":false}
+		"path":{"command":" node "},"off":{"enabled":false}
 	}}`)
 	if errors := p.Refresh(); len(errors) != 0 {
 		t.Fatal(errors)
@@ -98,5 +98,46 @@ func TestRefreshRetainsInvalidFileAndRemovesDeletedFile(t *testing.T) {
 	}
 	if errors := p.Refresh(); len(errors) != 0 || p.Instructions != "" || len(p.Servers) != 0 || len(p.Diagnostics) != 0 {
 		t.Fatalf("deleted files still active: %+v %v", p, errors)
+	}
+}
+
+func TestRemoteMCPProjectDefinition(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".nekocode"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".nekocode", ".mcp.json"), []byte(`{"mcpServers":{"docs":{"url":"https://example.com/mcp","oauth_client_id":"public","oauth_callback_port":18765}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	project, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := project.Refresh(); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	server := project.Servers["docs"]
+	if server.Command != "" || server.URL != "https://example.com/mcp" || server.OAuthClientID != "public" || server.OAuthCallbackPort != 18765 || !server.Enabled {
+		t.Fatalf("lost remote config: %+v", server)
+	}
+}
+
+func TestRemoteMCPProjectNormalizesAndValidatesOAuthMetadataURL(t *testing.T) {
+	root := t.TempDir()
+	p, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeProjectFile(t, p.MCPPath(), `{"mcpServers":{"docs":{"url":" https://example.com/mcp ","oauth_client_id":" public ","oauth_client_metadata_url":" https://example.com/client.json "}}}`)
+	if errs := p.Refresh(); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	server := p.Servers["docs"]
+	if server.URL != "https://example.com/mcp" || server.OAuthClientID != "public" || server.OAuthClientMetadataURL != "https://example.com/client.json" {
+		t.Fatalf("remote fields were not normalized: %+v", server)
+	}
+	writeProjectFile(t, p.MCPPath(), `{"mcpServers":{"docs":{"url":"https://example.com/mcp","oauth_client_metadata_url":"http://metadata.example.com/client.json"}}}`)
+	if errs := p.Refresh(); len(errs) != 1 || !strings.Contains(errs[0].Error(), "OAuth metadata URL") {
+		t.Fatalf("insecure metadata URL accepted: %v", errs)
 	}
 }

@@ -281,8 +281,8 @@ func (m *Model) handleProcessingKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.Input.Reset()
 			m.Messages.GotoBottom()
 			m.Input.SetFollow(true)
-			if m.tryLocalCommand(value) {
-				return nil
+			if handled, cmd := m.tryLocalCommand(value); handled {
+				return cmd
 			}
 			m.processingStart = time.Now()
 			m.processingPhase = phaseSteer
@@ -560,14 +560,19 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) tea.Cmd {
 			m.Input.SetFollow(true)
 		}
 	case controlruntime.EventSystemMessage:
+		var clipboard tea.Cmd
 		if p, ok := ev.Payload.(controlruntime.MessagePayload); ok && strings.TrimSpace(p.Content) != "" && !m.Messages.IsDuplicateCompactionResponse(p.Content) {
 			m.Messages.AddMessage(message.ChatMessage{
 				Role:            "system",
 				Content:         p.Content,
 				RenderedContent: p.Content,
 			})
+			if url := message.LastBareURL(p.Content); url != "" {
+				clipboard = tea.SetClipboard(url)
+			}
 		}
 		m.refreshRuntimeStatus()
+		return clipboard
 	case controlruntime.EventRunStarted:
 		if m.state != stateProcessing {
 			m.transitionTo(stateProcessing)
@@ -693,34 +698,36 @@ func (m *Model) applyRuntimeToolEvent(ev controlruntime.Event) {
 		switch ev.Type {
 		case controlruntime.EventToolStarted:
 			m.Messages.ProcessToolBlock(block.ContentBlock{
-				Type: block.BlockTool, ToolName: p.ToolName,
+				Type: block.BlockTool, ToolName: p.ToolName, CallID: p.CallID,
 				ToolArgs:   interaction.ToolBrief(p.ToolName, p.Args),
 				ToolAction: interaction.ToolAction(p.ToolName, p.Args),
 				SubID:      p.SubAgentID, SubColor: p.SubAgentColor,
 			})
+		case controlruntime.EventToolPreview:
+			m.Messages.UpdateToolPreviewForCall(p.CallID, p.SubAgentID, p.ToolName, p.Preview, p.Decision)
 		case controlruntime.EventToolCompleted:
-			m.Messages.AddSubToolOutput(p.SubAgentID, p.ToolName, p.Output, p.IsError)
+			m.Messages.AddSubToolOutput(p.SubAgentID, p.ToolName, p.Output, p.IsError, p.CallID)
 		}
 		return
 	}
 	switch ev.Type {
 	case controlruntime.EventToolStarted:
 		m.Messages.ProcessToolBlock(block.ContentBlock{
-			Type: block.BlockTool, ToolName: p.ToolName,
+			Type: block.BlockTool, ToolName: p.ToolName, CallID: p.CallID,
 			ToolArgs:   interaction.ToolBrief(p.ToolName, p.Args),
 			ToolAction: interaction.ToolAction(p.ToolName, p.Args),
 			Content:    p.Preview,
 		})
 	case controlruntime.EventToolBlocked:
 		m.Messages.ProcessToolBlock(block.ContentBlock{
-			Type: block.BlockTool, ToolName: p.ToolName,
+			Type: block.BlockTool, ToolName: p.ToolName, CallID: p.CallID,
 			ToolArgs:   interaction.ToolBrief(p.ToolName, p.Args),
 			ToolAction: interaction.ToolAction(p.ToolName, p.Args),
 			Content:    p.Output, Done: true, IsError: true,
 		})
 	case controlruntime.EventToolPreview:
-		m.Messages.UpdateToolPreview(p.ToolName, p.Preview)
+		m.Messages.UpdateToolPreviewForCall(p.CallID, p.SubAgentID, p.ToolName, p.Preview, p.Decision)
 	case controlruntime.EventToolCompleted:
-		m.Messages.AddToolOutput(p.ToolName, p.Output, p.IsError)
+		m.Messages.AddToolOutput(p.ToolName, p.Output, p.IsError, p.CallID)
 	}
 }

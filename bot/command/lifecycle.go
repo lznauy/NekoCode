@@ -27,6 +27,9 @@ type Deps struct {
 	SetPlanMode        func(bool)
 	SetFullAccess      func(bool)
 	GetFullAccess      func() bool
+	SetBashAuto        func(bool)
+	GetBashAuto        func() bool
+	CanBashAuto        func() bool
 	ToolRegistry       *tools.Registry
 	GetConfigFn        func() config.ModelConfig
 	ListModelsFn       func() []string

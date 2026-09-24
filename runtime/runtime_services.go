@@ -9,6 +9,7 @@ import (
 // to a Runner. The composition root supplies this value once; Runtime and
 // transports do not discover capabilities through type assertions.
 type Services struct {
+	MCPAuthorizationAction func(string, string) error
 	Checkpoints            func() ([]CheckpointInfo, error)
 	ToolNames              func() []string
 	Rewind                 func(string) (string, error)
@@ -218,4 +219,20 @@ func (r *Runtime) publishSessionChanged() {
 func (r *Runtime) Rewind(id string) (message string, err error) {
 	err = r.mutation("rewind", r.services.Rewind != nil, func() error { message, err = r.services.Rewind(id); return err })
 	return
+}
+
+func (r *Runtime) MCPAuthorizationAction(name, action string) error {
+	// Deliberately not wrapped in mutation: authorization starts or cancels a
+	// background browser flow that touches no run state, and the 5-minute
+	// authorization window regularly overlaps a running task.
+	r.mu.Lock()
+	closed, supported := r.closed, r.services.MCPAuthorizationAction != nil
+	r.mu.Unlock()
+	if closed {
+		return protocolError(ErrorClosed, "mcp_authorization", "closed")
+	}
+	if !supported {
+		return protocolError(ErrorUnsupported, "mcp_authorization", "capability unavailable")
+	}
+	return r.services.MCPAuthorizationAction(name, action)
 }

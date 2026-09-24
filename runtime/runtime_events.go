@@ -20,6 +20,26 @@ func (r *Runtime) Events(ctx context.Context, filter EventFilter) (<-chan Event,
 	return r.events.Subscribe(ctx, filter)
 }
 
+// Notify publishes a background system message (no run attached) so
+// transports can surface out-of-band outcomes, e.g. an MCP authorization
+// flow finishing while the user was away.
+func (r *Runtime) Notify(content string) {
+	if strings.TrimSpace(content) == "" {
+		return
+	}
+	r.mu.Lock()
+	closed := r.closed
+	r.mu.Unlock()
+	if closed {
+		return
+	}
+	r.events.Publish(Event{
+		Type:    EventSystemMessage,
+		Source:  SourceRef{Kind: "runtime"},
+		Payload: MessagePayload{Content: content},
+	})
+}
+
 func (r *Runtime) ReplayEvents(ctx context.Context, filter EventFilter) (<-chan Event, error) {
 	return r.events.SubscribeReplay(ctx, filter)
 }

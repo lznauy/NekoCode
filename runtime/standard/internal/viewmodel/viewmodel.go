@@ -27,6 +27,7 @@ func Config(cfg config.Config) controlruntime.ConfigView {
 		MCPServers:         mcpServerConfigsToView(cfg.MCPServers),
 		Permissions:        permissionsConfigToView(cfg.Permissions),
 		Workspaces:         workspaceConfigsToView(cfg.Workspaces),
+		Jev:                jevConfigToView(cfg.Jev),
 	}
 }
 
@@ -40,6 +41,7 @@ func ToConfig(view controlruntime.ConfigView) config.Config {
 		MCPServers:         mcpServerConfigsFromView(view.MCPServers),
 		Permissions:        permissionsConfigFromView(view.Permissions),
 		Workspaces:         workspaceConfigsFromView(view.Workspaces),
+		Jev:                jevConfigFromView(view.Jev),
 	}
 }
 

@@ -21,6 +21,7 @@ const defaultRequestTimeout = 15 * time.Second
 // process and the stdio pipes that JSON-RPC messages flow through. The wire
 // protocol itself lives in protocol.go.
 type client struct {
+	remote *remoteClient
 	name   string
 	config ServerConfig
 
@@ -37,16 +38,27 @@ type client struct {
 
 // newClient creates an unstarted client.
 func newClient(name string, cfg ServerConfig) *client {
-	return &client{
+	c := &client{
 		name:           name,
 		config:         cfg,
 		requestTimeout: defaultRequestTimeout,
 	}
+	if cfg.URL != "" {
+		c.remote = newRemoteClient(name, cfg)
+	}
+	// Authorization options belong to this connection attempt, not to the
+	// saved definition used by cancel/logout or subsequent reconnects.
+	c.config.interactive = false
+	c.config.authorizationScopes = nil
+	return c
 }
 
 // Start launches the MCP server process and performs the initialize
 // handshake. It is idempotent: an already-running client is a no-op.
 func (c *client) Start(ctx context.Context) error {
+	if c.remote != nil {
+		return c.remote.Start(ctx)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -92,6 +104,9 @@ func (c *client) Start(ctx context.Context) error {
 
 // Close stops the MCP server process.
 func (c *client) Close() error {
+	if c.remote != nil {
+		return c.remote.Close()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.stopLocked(2 * time.Second)
@@ -132,6 +147,9 @@ func (c *client) stopLocked(timeout time.Duration) error {
 
 // ListTools discovers the server's tools, starting it if necessary.
 func (c *client) ListTools(ctx context.Context) ([]toolDef, error) {
+	if c.remote != nil {
+		return c.remote.ListTools(ctx)
+	}
 	if err := c.Start(ctx); err != nil {
 		return nil, err
 	}
@@ -157,6 +175,9 @@ func (c *client) ListTools(ctx context.Context) ([]toolDef, error) {
 
 // CallTool invokes a tool on the server, starting it if necessary.
 func (c *client) CallTool(ctx context.Context, name string, args map[string]any) (string, error) {
+	if c.remote != nil {
+		return c.remote.CallTool(ctx, name, args)
+	}
 	if err := c.Start(ctx); err != nil {
 		return "", err
 	}

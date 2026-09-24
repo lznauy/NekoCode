@@ -26,7 +26,9 @@ func Extension(snapshot extensionmgr.Snapshot) controlruntime.SkillManagementVie
 	applyMCPHealth(servers, snapshot.MCPHealth, "")
 	configured := make([]controlruntime.MCPServerView, 0, len(snapshot.ConfiguredMCP))
 	for _, cfg := range snapshot.ConfiguredMCP {
-		configured = append(configured, mcpServerView(cfg.Name, cfg.Source, cfg.Command, cfg.Args, cfg.Enabled))
+		view := mcpServerView(cfg.Name, cfg.Source, cfg.Command, cfg.Args, cfg.Enabled)
+		view.URL = cfg.URL
+		configured = append(configured, view)
 	}
 	applyMCPHealth(configured, snapshot.MCPHealth, "config:")
 	servers = append(servers, configured...)
@@ -69,6 +71,7 @@ func applyMCPHealth(servers []controlruntime.MCPServerView, health map[string]mc
 		}
 		servers[i].Status = current.Status
 		servers[i].Error = current.Error
+		servers[i].AuthURL = current.AuthURL
 		servers[i].ToolCount = current.ToolCount
 	}
 }
@@ -93,7 +96,9 @@ func pluginMCPViews(plugins []*plugin.Plugin) []controlruntime.MCPServerView {
 	for _, p := range plugins {
 		for name, cfg := range p.MCPServers() {
 			cfg = plugin.ExpandPluginMCPConfig(cfg, p.Dir)
-			out = append(out, mcpServerView(name, p.Name, cfg.Command, cfg.Args, p.Enabled))
+			view := mcpServerView(name, p.Name, cfg.Command, cfg.Args, p.Enabled)
+			view.URL = cfg.URL
+			out = append(out, view)
 		}
 	}
 	return out

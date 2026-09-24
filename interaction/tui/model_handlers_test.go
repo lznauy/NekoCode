@@ -8,6 +8,7 @@ import (
 
 	"nekocode/interaction/tui/components/message"
 	"nekocode/interaction/tui/components/processing"
+	"nekocode/protocol"
 	controlruntime "nekocode/runtime"
 
 	tea "charm.land/bubbletea/v2"
@@ -538,5 +539,42 @@ func TestEnterSubmitsExpandedLargePaste(t *testing.T) {
 	}
 	if got := bot.submittedInputs(); len(got) != 1 || got[0] != content {
 		t.Fatalf("submitted input did not preserve pasted content: got %d entries", len(got))
+	}
+}
+
+func TestJevPreviewRoutesByCallIDAndSurvivesCompletion(t *testing.T) {
+	m, err := NewModel(&statusFakeBot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunStarted})
+	send := func(kind controlruntime.EventType, id, sub, preview, output string, decision protocol.ToolDecision) {
+		m.handleRuntimeEvent(controlruntime.Event{Type: kind, Payload: controlruntime.ToolPayload{CallID: id, ToolName: "shell", SubAgentID: sub, Preview: preview, Output: output, Decision: decision}})
+	}
+	send(controlruntime.EventToolStarted, "first", "", "", "", "")
+	send(controlruntime.EventToolStarted, "first", "child", "", "", "")
+	send(controlruntime.EventToolPreview, "first", "child", "make all", "", protocol.ToolDecisionJevSafe)
+	items := m.Messages.Items()
+	p := items[0].(*processing.ProcessingItem)
+	blocks := p.Blocks()
+	if blocks[0].JevNote != "" || !strings.Contains(blocks[1].JevNote, "Jev") {
+		t.Fatalf("preview routed to wrong call: %+v", blocks)
+	}
+	if view := ansi.Strip(p.Render(100)); !strings.Contains(view, "Jev 判定安全") {
+		t.Fatalf("live verdict missing: %s", view)
+	}
+	send(controlruntime.EventToolCompleted, "first", "child", "", "second result", "")
+	send(controlruntime.EventToolCompleted, "first", "", "", "first result", "")
+	blocks = p.Blocks()
+	if blocks[0].Content != "first result" || blocks[1].Content != "second result" || blocks[1].JevNote == "" {
+		t.Fatalf("completion lost identity/verdict: %+v", blocks)
+	}
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunDone})
+	var view strings.Builder
+	for _, item := range m.Messages.Items() {
+		view.WriteString(ansi.Strip(item.Render(100)))
+	}
+	if !strings.Contains(view.String(), "Jev 判定安全") || !strings.Contains(view.String(), "second result") {
+		t.Fatalf("settled verdict missing: %s", view.String())
 	}
 }

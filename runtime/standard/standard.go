@@ -46,5 +46,9 @@ func FromBot(standardBot *core.Bot) *controlruntime.Runtime {
 		panic("runtime/standard: nil bot")
 	}
 	adapter := adapt(standardBot)
-	return controlruntime.New(adapter, adapter.services())
+	rt := controlruntime.New(adapter, adapter.services())
+	// Background MCP authorization outcomes surface as system messages in
+	// every transport, not only where the user happened to run /mcp-login.
+	standardBot.SetMCPAuthNotifier(rt.Notify)
+	return rt
 }

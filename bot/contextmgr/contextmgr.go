@@ -11,6 +11,7 @@ import (
 	"nekocode/bot/calllog"
 	"nekocode/bot/contextmgr/memory"
 	"nekocode/bot/contextmgr/token"
+	"nekocode/bot/decision"
 	"nekocode/bot/provider"
 	"nekocode/bot/provider/types"
 	"nekocode/protocol"
@@ -32,6 +33,7 @@ type Manager struct {
 	sessionIDProvider  func() string
 	beforeCompaction   func(string) error
 	afterCompaction    func()
+	toolPruner         decision.ToolPruner
 }
 
 type managerState struct {
@@ -86,9 +88,21 @@ type Config struct {
 	CompactionModel    provider.LLM
 	Reasoning          types.ReasoningSettings
 	RuntimePrompt      func() string
+	// ToolPruner is an optional fail-open relevance judge consulted before
+	// compaction summarizes old tool results. nil (the default) keeps the
+	// unpruned behavior; the capability-enhancement entry for decision
+	// engines such as Jev.
+	ToolPruner decision.ToolPruner
 }
 
 var writeCompactionRecord = calllog.Write
+
+// SetToolPruner applies configuration changes to subsequent compactions.
+func (m *Manager) SetToolPruner(pruner decision.ToolPruner) {
+	m.usageMu.Lock()
+	m.toolPruner = pruner
+	m.usageMu.Unlock()
+}
 
 func (m *Manager) makeSummarizer(ctx context.Context, client provider.LLM) Summarizer {
 	return m.streamingSummarizer(ctx, client, nil)
@@ -96,54 +110,78 @@ func (m *Manager) makeSummarizer(ctx context.Context, client provider.LLM) Summa
 
 func (m *Manager) streamingSummarizer(ctx context.Context, client provider.LLM, delta func(string)) Summarizer {
 	return func(msgs []types.Message, prevSummary string) (string, error) {
-		start := time.Now()
-		tokens, errs := client.ChatStream(ctx, buildSummaryMessages(msgs, prevSummary), nil)
-		var summary strings.Builder
-		var usage types.StreamUsage
+		var summary string
 		var err error
-		cancelled := ctx.Done()
-		for tokens != nil || errs != nil {
-			select {
-			case <-cancelled:
-				err = ctx.Err()
-				// Providers may already be blocked sending a token. Drain their
-				// cancelled request to closure and retain final usage accounting.
-				cancelled = nil
-			case tok, ok := <-tokens:
-				if !ok {
-					tokens = nil
-					continue
-				}
-				if tok.Usage != nil {
-					usage.Merge(tok.Usage)
-				}
-				if tok.Content != "" && ctx.Err() == nil {
-					summary.WriteString(tok.Content)
-					if delta != nil {
-						delta(tok.Content)
-					}
-				}
-			case streamErr, ok := <-errs:
-				if !ok {
-					errs = nil
-					continue
-				}
-				if streamErr != nil {
-					err = streamErr
-				}
+		for attempt := 0; attempt < 2; attempt++ {
+			summary, err = m.summarizeStreamOnce(ctx, client, msgs, prevSummary, delta)
+			// Any non-empty result is final: its deltas were already streamed
+			// to the UI, so a retry would duplicate them. Only a fully empty
+			// response (provider closed the stream without content — often
+			// transient) is retried once. A cancelled context ends the loop.
+			if strings.TrimSpace(summary) != "" || ctx.Err() != nil {
+				return summary, err
 			}
 		}
-		if ctx.Err() != nil {
-			err = ctx.Err()
+		if err == nil {
+			if source, ok := client.(interface{ RequestMeta() types.RequestMeta }); ok {
+				meta := source.RequestMeta()
+				err = fmt.Errorf("summarizer model %q returned no content (retried once); check the flash/compaction model", meta.Model)
+			} else {
+				err = fmt.Errorf("summarizer returned no content (retried once)")
+			}
 		}
-		if err == nil && strings.TrimSpace(summary.String()) == "" {
-			err = fmt.Errorf("no response from summarizer")
-		}
-		usage.Normalize()
-		m.recordLLMUsage(usage)
-		m.writeCompactionCall(client, usage, start, err)
-		return summary.String(), err
+		return summary, err
 	}
+}
+
+func (m *Manager) summarizeStreamOnce(ctx context.Context, client provider.LLM, msgs []types.Message, prevSummary string, delta func(string)) (string, error) {
+	start := time.Now()
+	tokens, errs := client.ChatStream(ctx, buildSummaryMessages(msgs, prevSummary), nil)
+	var summary strings.Builder
+	var usage types.StreamUsage
+	var err error
+	cancelled := ctx.Done()
+	for tokens != nil || errs != nil {
+		select {
+		case <-cancelled:
+			err = ctx.Err()
+			// Providers may already be blocked sending a token. Drain their
+			// cancelled request to closure and retain final usage accounting.
+			cancelled = nil
+		case tok, ok := <-tokens:
+			if !ok {
+				tokens = nil
+				continue
+			}
+			if tok.Usage != nil {
+				usage.Merge(tok.Usage)
+			}
+			if tok.Content != "" && ctx.Err() == nil {
+				summary.WriteString(tok.Content)
+				if delta != nil {
+					delta(tok.Content)
+				}
+			}
+		case streamErr, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			if streamErr != nil {
+				err = streamErr
+			}
+		}
+	}
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	if err == nil && strings.TrimSpace(summary.String()) == "" {
+		err = fmt.Errorf("no response from summarizer")
+	}
+	usage.Normalize()
+	m.recordLLMUsage(usage)
+	m.writeCompactionCall(client, usage, start, err)
+	return summary.String(), err
 }
 
 func (m *Manager) writeCompactionCall(client provider.LLM, usage types.StreamUsage, start time.Time, callErr error) {
@@ -204,7 +242,7 @@ func New(cfg Config) *Manager {
 		tracker:       &token.Tracker{},
 		contextWindow: cfg.ContextWindow,
 		reasoning:     cfg.Reasoning,
-	}, runtimePrompt: cfg.RuntimePrompt}
+	}, runtimePrompt: cfg.RuntimePrompt, toolPruner: cfg.ToolPruner}
 	summarizer := cfg.Summarizer
 	if summarizer == nil && cfg.CompactionModel != nil {
 		summarizer = m.makeSummarizer(context.Background(), cfg.CompactionModel)

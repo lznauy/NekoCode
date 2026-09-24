@@ -624,7 +624,7 @@ function McpView(props: {
 }
 
 function McpRow({ server }: { server: MCPServerView }) {
-  const cmd = [server.command, ...(server.args ?? [])].join(' ')
+  const cmd = server.url || [server.command, ...(server.args ?? [])].join(' ')
   return (
     <div className="grid gap-2 px-4 py-3 transition-colors hover:bg-surface-3/35 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
       <div className="min-w-0">
@@ -660,7 +660,7 @@ function StatusBadge({ status }: { status?: string }) {
 function statusTone(status: string): string {
   if (status === 'ready') return 'bg-success/12 text-success'
   if (status === 'error') return 'bg-danger/15 text-danger'
-  if (status === 'starting') return 'bg-primary/12 text-primary'
+  if (status === 'starting' || status === 'authorizing') return 'bg-primary/12 text-primary'
   if (status === 'disabled') return 'bg-surface-3 text-text-3'
   return 'bg-warning/12 text-warning'
 }

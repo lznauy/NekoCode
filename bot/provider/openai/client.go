@@ -8,6 +8,7 @@ import (
 
 	"nekocode/bot/provider/types"
 	"nekocode/bot/reasoning"
+	"nekocode/logger"
 	"nekocode/util/url"
 )
 
@@ -123,6 +124,10 @@ func (c *Client) ChatStream(ctx context.Context, messages []types.Message, tools
 		types.StreamSSE(ctx, resp, tokenCh, errCh, func(data string, tokenCh chan<- types.StreamToken) error {
 			var chunk streamChunk
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				// Providers send keep-alives and occasional non-chunk payloads;
+				// ignore unparseable data but leave a diagnosis trail, since a
+				// stream of only such payloads yields an empty response.
+				logger.Log("openai stream: ignored unparseable SSE payload (%d bytes)", len(data))
 				return nil
 			}
 			if chunk.Usage != nil {

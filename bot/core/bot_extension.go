@@ -19,9 +19,23 @@ func (b *Bot) initExtensions() {
 		Context:     b.ctxMgr, Tools: b.toolbox.Registry,
 		Policy: b.policy, ContextWindow: b.cfg.EffectiveContextWindow(),
 	})
+	b.ext.SetMCPAuthNotifier(b.mcpAuthNotifier)
 
 	b.initConfigMCPServers()
 	b.ext.Load()
+}
+
+// SetMCPAuthNotifier registers the sink for background MCP authorization
+// outcomes (success or failure) so UIs can push them to the user. Re-applied
+// automatically when the extension manager is rebuilt on config changes.
+func (b *Bot) SetMCPAuthNotifier(fn func(message string)) {
+	b.mu.Lock()
+	b.mcpAuthNotifier = fn
+	ext := b.ext
+	b.mu.Unlock()
+	if ext != nil {
+		ext.SetMCPAuthNotifier(fn)
+	}
 }
 
 func (b *Bot) initConfigMCPServers() {
@@ -49,6 +63,7 @@ func resolveMCPServers(cfg *config.Config, project *project.Project, cwd string)
 	for name, cfg := range cfg.MCPServers {
 		if cfg.Enabled {
 			servers[name] = mcp.ServerConfig{Command: cfg.Command,
+				URL: cfg.URL, OAuthClientID: cfg.OAuthClientID, OAuthClientSecret: cfg.OAuthClientSecret, OAuthClientMetadataURL: cfg.OAuthClientMetadataURL, OAuthCallbackPort: cfg.OAuthCallbackPort,
 				Args: append([]string(nil), cfg.Args...), Env: maps.Clone(cfg.Env), CWD: cwd}
 		}
 	}
@@ -57,6 +72,7 @@ func resolveMCPServers(cfg *config.Config, project *project.Project, cwd string)
 			delete(servers, name)
 			if cfg.Enabled {
 				servers[name] = mcp.ServerConfig{Command: cfg.Command,
+					URL: cfg.URL, OAuthClientID: cfg.OAuthClientID, OAuthClientSecret: cfg.OAuthClientSecret, OAuthClientMetadataURL: cfg.OAuthClientMetadataURL, OAuthCallbackPort: cfg.OAuthCallbackPort,
 					Args: append([]string(nil), cfg.Args...), Env: maps.Clone(cfg.Env), CWD: cfg.CWD}
 			}
 		}
@@ -99,12 +115,12 @@ func (b *Bot) extensionsLocked() extension.Snapshot {
 	definitions := make(map[string]extension.ConfiguredMCP)
 	for name, cfg := range b.cfg.MCPServers {
 		definitions[name] = extension.ConfiguredMCP{Name: name, Source: "配置",
-			Command: cfg.Command, Args: append([]string(nil), cfg.Args...), Enabled: cfg.Enabled}
+			URL: cfg.URL, Command: cfg.Command, Args: append([]string(nil), cfg.Args...), Enabled: cfg.Enabled}
 	}
 	if b.project != nil {
 		for name, cfg := range b.project.Servers {
 			definitions[name] = extension.ConfiguredMCP{Name: name, Source: b.project.MCPPath(),
-				Command: cfg.Command, Args: append([]string(nil), cfg.Args...), Enabled: cfg.Enabled}
+				URL: cfg.URL, Command: cfg.Command, Args: append([]string(nil), cfg.Args...), Enabled: cfg.Enabled}
 		}
 	}
 	snapshot.ConfiguredMCP = make([]extension.ConfiguredMCP, 0, len(definitions))
@@ -132,4 +148,10 @@ func (b *Bot) SetPluginEnabled(name string, enabled bool) error {
 
 func (b *Bot) RefreshExtensions() {
 	b.reloadProject()
+}
+
+func (b *Bot) MCPAuthorizationAction(name, action string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.ext.MCPAuthorizationAction(name, action)
 }

@@ -8,10 +8,17 @@ import (
 
 // ServerConfig defines how to launch an MCP server.
 type ServerConfig struct {
-	CWD     string            `json:"cwd,omitempty"`
-	Command string            `json:"command"`
-	Args    []string          `json:"args,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
+	URL                    string `json:"url,omitempty"`
+	OAuthClientID          string `json:"oauth_client_id,omitempty"`
+	OAuthClientSecret      string `json:"oauth_client_secret,omitempty"`
+	OAuthClientMetadataURL string `json:"oauth_client_metadata_url,omitempty"`
+	OAuthCallbackPort      int    `json:"oauth_callback_port,omitempty"`
+	interactive            bool
+	authorizationScopes    []string
+	CWD                    string            `json:"cwd,omitempty"`
+	Command                string            `json:"command"`
+	Args                   []string          `json:"args,omitempty"`
+	Env                    map[string]string `json:"env,omitempty"`
 }
 
 // Registration binds a lifecycle owner ID and user-visible name to one MCP

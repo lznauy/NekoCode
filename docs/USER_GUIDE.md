@@ -95,7 +95,7 @@ Headless 使用自有 `nekocode-headless/2` 协议，支持工具审批、提问
 
 - `/model`：选择已配置模型
 - `/effort`：选择当前模型的推理强度
-- `/permission`：选择手动审批或全接管模式
+- `/permission`：选择审批模式（manual / auto / full，auto 需配置 Jev，见「权限与安全」）
 - `/rewind`：按用户消息选择最近 100 个恢复点，并显示相对位置、时间和文件变更数量；没有文件修改的消息也会保留为恢复锚点
 - `/sessions`：选择历史会话；TUI 中可按 `d` 删除当前选中的会话（需二次确认）
 - `/plugin`：先选择操作；enable/disable/info/uninstall 再选择插件
@@ -114,7 +114,7 @@ GUI 使用同一份命令数据：输入 `/` 后在输入框上方弹出面板�
 | `/rewind [turn]` | 打开 checkpoint 菜单；也可手动指定 turn，回滚该回合及之后的文件改动，并向模型追加隐藏的精确回滚清单 |
 | `/model [名字]` | 打开模型菜单；也可手动指定名字切换模型 |
 | `/effort [级别]` | 打开当前模型的推理强度菜单；只显示该模型支持的级别，未知模型仅提供 `auto` |
-| `/permission [manual\|full]` | 打开权限菜单；也可手动切换审批模式 |
+| `/permission [manual\|auto\|full]` | 打开权限菜单；也可手动切换审批模式 |
 | `/plan <任务>` | 让 AI 先出方案，你确认后再动手 |
 | `/sessions [id]` | 打开历史会话菜单；也可手动指定 id 恢复会话 |
 | `/export` | 导出当前对话到文件 |
@@ -126,6 +126,8 @@ GUI 使用同一份命令数据：输入 `/` 后在输入框上方弹出面板�
 ### 上下文压缩
 
 自动压缩和 `/compact` 会在状态框实时流式展示正在生成的摘要，并显示触发方式、消息数、估算 token 用量和完成耗时。完成后以工具条目（`ฅ Compacted …`；终端过窄时标题与统计信息会分成两行）保留在消息流中；失败时保留错误信息与已收到的部分内容。压缩只裁剪发送给 LLM 的活动上下文，完整原始消息保存在 session 的 `transcript.jsonl` 中，重新加载和导出时仍然可见。每次压缩前还会在 session 的 `backups/` 目录保存当时的 `session.json`；备份失败则取消压缩。
+
+**Jev 相关性预筛（可选）**：配置 `jev.api_key` 后（见「配置文件一览」），压缩摘要前会把将被摘要的旧工具结果批量交给 Jev 判断"对当前任务是否还有用"，低相关的直接替换为一行占位再交给 LLM 摘要——摘要更快、更聚焦，也不再为无关内容付费。Jev 调用失败或超时会自动回退到原有逻辑，判定结果有缓存（同一内容不重复计费），每次判定与应用数量都会写入应用日志（`jev: …`、`compaction: relevance pruner …`）。
 
 ### 快捷键
 
@@ -371,12 +373,39 @@ MCP(Model Context Protocol）可以为 AI 接入外部工具和数据源（数�
 }
 ```
 
-- 每个服务需要一个启动命令（`command`)，可以带 `args`（参数）和 `env`（环境变量）
+- 本地服务使用启动命令 `command`，可以带 `args`（参数）和 `env`（环境变量）；远程服务使用 `url`，两者不能同时指定
 - `enabled` 设为 `false` 可临时停用而不删除配置
-- 目前支持 stdio 方式（本地进程）的 MCP 服务
+- 支持 stdio（本地进程）和 Streamable HTTP（远程服务）；远程服务支持通用 OAuth 授权
 - 配置后重启 NekoCode 生效
 - 模型通过统一的 `capability` 工具使用 MCP 服务（先 `list` 看可用工具，再 `call` 调用）；服务上下线不会改变模型的工具列表，缓存更稳定
 - 权限规则按真实工具名书写（如 `fs__read_file`)，裸工具名即可，不需要 `(...)` 修饰符
+
+### 远程 MCP 与 OAuth
+
+在 GUI 的「MCP 服务」中选择「远程 URL」，填写 MCP 地址，点击「保存并授权」。需要授权时会打开本机浏览器；完成登录和授权后，NekoCode 接收回调、保存凭据并自动连接、加载工具。不需要授权的远程服务可以直接连接。
+
+全局配置示例（项目 `.mcp.json` 中使用相同字段，外层键为 `mcpServers`）：
+
+```json
+{
+  "mcp_servers": {
+    "documents": {
+      "url": "https://example.com/mcp",
+      "enabled": true
+    }
+  }
+}
+```
+
+TUI 中使用 `/mcp-login documents` 启动后台授权，命令立即返回，授权链接生成后通过系统消息送达；`/mcp` 查看状态和浏览器未打开时的备用链接；`/mcp-cancel documents` 取消等待，`/mcp-logout documents` 删除本机登录凭据。GUI 提供对应操作。手动编辑配置后重启生效，GUI 保存会应用配置。
+
+OAuth 使用授权服务器发现、Authorization Code + PKCE（S256）和一次性 state 校验。支持动态客户端注册；高级设置也可填写 `oauth_client_id`（预注册客户端）、`oauth_client_secret`（机密客户端，如 GitHub 这类不支持动态注册的服务商要求在 token 端点出示 secret）或 `oauth_client_metadata_url`（已发布的 HTTPS 客户端元数据文档）。NekoCode 不替服务商创建预注册应用，也不代为托管客户端元数据文档。
+
+回调默认监听随机的本机端口，路径为 `/oauth/callback`。若预注册客户端要求固定回调地址，设置 `oauth_callback_port`，并在服务商登记 `http://127.0.0.1:端口/oauth/callback`。浏览器与 NekoCode 必须在同一台机器；本版不提供远程部署的公网回调或 Device Code 登录。授权等待最多 5 分钟。
+
+凭据保存在 `~/.nekocode/credentials/mcp/`，按服务名、工作目录、服务 URL 和客户端配置隔离，不写入项目配置或发送给模型。凭据文件以 `0600` 权限写入私有目录（普通文件存储，并非系统钥匙串加密）。应用重启后会恢复凭据，在请求需要时自动刷新并保存轮换后的 refresh token。服务未签发 refresh token、撤销授权或刷新凭据失效时，需要重新授权；临时网络错误可重试。后台连接不会自行打开浏览器。
+
+远程服务必须使用 HTTPS；本机测试允许使用回环 IP 的 HTTP URL。退出登录清除本机凭据，即使服务离线也会执行；这不等同于撤销服务商账号中的应用授权。旧式 HTTP+SSE transport 和服务端 URL Elicitation 不属于本版支持范围；ACP 客户端注入的 HTTP/SSE MCP 仍按现有能力声明拒绝。
 
 ## 八、配置文件一览
 
@@ -503,7 +532,10 @@ MCP 子进程默认以项目根目录为工作目录；可用 `cwd` 指定绝对
   },
   "workspaces": [
     {"path": "/home/me/other-project", "access": "read-only"}
-  ]
+  ],
+  "jev": {
+    "api_key": "apikey-xxx"
+  }
 }
 ```
 
@@ -517,6 +549,11 @@ MCP 子进程默认以项目根目录为工作目录；可用 `cwd` 指定绝对
 - `auto_compact_percent`：自动摘要压缩的上下文占用门限，范围 1～99，默认 80。达到门限后执行一次全量摘要替换；压缩后若仍达到模型窗口上限，才返回上下文已满错误
 - `permissions`：权限规则（见下一节）；`allow`、`ask`、`deny` 分别表示允许、询问和拒绝，`sandbox` 可为匹配的 Shell 命令指定 `read-only`、`workspace-write` 或 `host` 执行环境
 - `workspaces`：允许 AI 访问的项目外目录，`access` 为 `read-only` 或 `read-write`
+- `jev`：可选的 Jev 决策引擎（[TypeSafe AI](https://docs.typesafe.ai) 的 "System One" 模型，不生成文本、只返回带概率的结构化判断）。**只需填 `api_key`**（也可改用 `TYPESAFE_API_KEY` 环境变量），其余字段全部有默认值。配置后启用两项能力：
+  - **压缩相关性预筛**：见「上下文压缩」一节，降低摘要成本并提升摘要聚焦度
+  - **`/permission auto` 模式**：见「权限与安全」一节，shell 命令经 Jev 优先判定安全性，安全则免审批执行
+  - 可选字段：`model`（默认 `jev-latest`；生产环境建议锁定 `jev-1.x` 版本以稳定阈值）、`base_url`（默认官方端点）、`keep_threshold`（0～1，压缩预筛的保留阈值，默认 0.2，数值越高保留越多；auto 权限门禁使用独立的固定安全阈值，不受此项影响）、`enabled`（总开关，`false` 显式关闭 Jev——即使 `api_key` 或环境变量存在也不启用；省略或 `true` 为开启）
+  - 未配置或 Jev 服务不可用时，所有功能自动回退原有逻辑，无任何行为差异；判定明细可在应用日志中用 `jev:` 前缀检索
 
 ## 九、权限与安全
 
@@ -534,6 +571,7 @@ NekoCode 对有风险的操作默认会征求你的同意，规则按 **拒绝 >
 
 - **MCP 工具规则**：模型通过 `capability` 代理调用 MCP 工具，但规则按 canonical **真实工具名**（`mcp__服务名__工具名`，如 `mcp__fs__read_file`）匹配和书写；审批弹窗、Hook、审计与 Ledger 也使用该名称，裸工具名即可（如 `"allow": ["mcp__fs__read_file"]`)，不需要 `(...)` 修饰符
 - **审批时记住**：弹窗里选「始终允许」，同类操作以后自动放行（记录在项目 `.nekocode/permissions.json` 里，删除该文件可清空）
+- **auto 模式（可选，需配置 Jev）**：`/permission auto` 开启后，未匹配用户 deny、ask、allow 的 shell 命令会交给 Jev 判断危险性——判定安全（置信度足够高）的命令直接执行，危险**或不确定**的照常弹出授权框。安全设计：硬拒绝规则和用户声明的规则优先于 Jev；内置询问规则是 Jev 判定危险或不可用时的回退；Jev 超时、评分缺失或越界，以及命令超过 960 个字符时，都回退为询问；Jev 放行后仍会经过间接执行、管道注入等结构化检测。日志仅记录判定分数、缓存统计和输入摘要，不记录可能含密钥的命令或 URL 原文。auto 与 full 互斥：切到 full 会关闭 auto，反之亦然
 - **动态 Shell**：命令替换、进程替换、动态命令名、`eval`、`source`、`shell -c` 和 shell heredoc 会明确标注在审批卡上。宽泛的 `Bash(*)` 不会绕过这次审批；选择「始终允许」只会记住完整命令字面量，不会自动放宽成 glob
 
 ## 十、常见问题
@@ -552,3 +590,6 @@ NekoCode 对有风险的操作默认会征求你的同意，规则按 **拒绝 >
 
 **想清空「始终允许」的记录？**
 删除项目目录下的 `.nekocode/permissions.json` 即可。
+
+**Jev 判定不准或想临时关闭？**
+在 `config.json` 的 `jev` 段加 `"enabled": false` 即可一键关闭（保留 api_key，随开随用），改完通过配置接口保存会立即生效，否则重启生效；也可以直接删除 `jev` 段并取消 `TYPESAFE_API_KEY` 环境变量。关闭后当前 auto 模式会自动切回 manual，且菜单不再显示 auto。判定明细在应用日志中以 `jev:` 前缀检索，便于确认是判定质量问题还是阈值设置问题（可在 `keep_threshold` 调整保留倾向）。

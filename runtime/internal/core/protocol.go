@@ -115,15 +115,16 @@ type PhasePayload struct {
 }
 
 type ToolPayload struct {
-	ToolName      string          `json:"tool_name"`
-	CallID        string          `json:"call_id,omitempty"`
-	Args          string          `json:"args,omitempty"`
-	Input         json.RawMessage `json:"input,omitempty"`
-	Output        string          `json:"output,omitempty"`
-	Preview       string          `json:"preview,omitempty"`
-	IsError       bool            `json:"is_error,omitempty"`
-	SubAgentID    string          `json:"subagent_id,omitempty"`
-	SubAgentColor int             `json:"subagent_color,omitempty"`
+	ToolName      string                `json:"tool_name"`
+	CallID        string                `json:"call_id,omitempty"`
+	Args          string                `json:"args,omitempty"`
+	Input         json.RawMessage       `json:"input,omitempty"`
+	Output        string                `json:"output,omitempty"`
+	Preview       string                `json:"preview,omitempty"`
+	Decision      protocol.ToolDecision `json:"decision,omitempty"`
+	IsError       bool                  `json:"is_error,omitempty"`
+	SubAgentID    string                `json:"subagent_id,omitempty"`
+	SubAgentColor int                   `json:"subagent_color,omitempty"`
 }
 
 type SubAgentPayload struct {

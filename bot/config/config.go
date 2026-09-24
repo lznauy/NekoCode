@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"nekocode/util/fs"
+	utilhttp "nekocode/util/http"
 )
 
 func Path() string {
@@ -43,6 +44,12 @@ type ImageGenConfig struct {
 }
 
 type MCPServerConfig struct {
+	URL                    string `json:"url,omitempty"`
+	OAuthClientID          string `json:"oauth_client_id,omitempty"`
+	OAuthClientSecret      string `json:"oauth_client_secret,omitempty"`
+	OAuthClientMetadataURL string `json:"oauth_client_metadata_url,omitempty"`
+	OAuthCallbackPort      int    `json:"oauth_callback_port,omitempty"`
+
 	Command string            `json:"command"`
 	Args    []string          `json:"args,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
@@ -76,6 +83,20 @@ type Config struct {
 	MCPServers         map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 	Permissions        *PermissionsConfig         `json:"permissions,omitempty"`
 	Workspaces         []WorkspaceConfig          `json:"workspaces,omitempty"`
+	Jev                *JevConfig                 `json:"jev,omitempty"` // optional "System One" decision engine (e.g. context-compaction relevance pruning)
+}
+
+// JevConfig enables the optional Jev decision engine. Only api_key (or the
+// TYPESAFE_API_KEY environment variable) is required — every other field
+// carries a sensible default, so a minimal config is three lines:
+//
+//	"jev": { "api_key": "..." }
+type JevConfig struct {
+	APIKey        string   `json:"api_key,omitempty"`        // falls back to the TYPESAFE_API_KEY environment variable
+	Model         string   `json:"model,omitempty"`          // default jev-latest; pin jev-1.x for stable thresholds
+	BaseURL       string   `json:"base_url,omitempty"`       // default https://api.typesafe.ai/v1/systemone
+	KeepThreshold *float64 `json:"keep_threshold,omitempty"` // noul below this prunes a tool result; default 0.2, explicit 0 disables pruning
+	Enabled       *bool    `json:"enabled,omitempty"`        // master switch; nil/true enables the engine, explicit false disables it even when a key is present
 }
 
 // DefaultContextWindow is the final fallback context window for models the
@@ -198,6 +219,10 @@ func (c Config) Clone() Config {
 			}
 		}
 		out.Permissions = &permissions
+	}
+	if c.Jev != nil {
+		jev := *c.Jev
+		out.Jev = &jev
 	}
 	return out
 }
@@ -339,12 +364,48 @@ func Validate(cfg *Config) error {
 				}
 				srv.Env = env
 			}
-			if srv.Command == "" {
+			var err error
+			srv.URL, err = utilhttp.NormalizeSecureURL(srv.URL)
+			if err != nil {
+				return fmt.Errorf("mcp server %q URL: %w", name, err)
+			}
+			srv.OAuthClientID = strings.TrimSpace(srv.OAuthClientID)
+			srv.OAuthClientSecret = strings.TrimSpace(srv.OAuthClientSecret)
+			srv.OAuthClientMetadataURL, err = utilhttp.NormalizeSecureURL(srv.OAuthClientMetadataURL)
+			if err != nil {
+				return fmt.Errorf("mcp server %q OAuth metadata URL: %w", name, err)
+			}
+			if srv.OAuthCallbackPort < 0 || srv.OAuthCallbackPort > 65535 {
+				return fmt.Errorf("invalid MCP OAuth callback port")
+			}
+			if srv.URL != "" {
+				if srv.Command != "" {
+					return fmt.Errorf("mcp server %q must specify command or URL, not both", name)
+				}
+			}
+			if srv.Command == "" && srv.URL == "" {
 				return fmt.Errorf("mcp server %q command is required", name)
 			}
 			normalized[name] = srv
 		}
 		cfg.MCPServers = normalized
+	}
+
+	if cfg.Jev != nil {
+		cfg.Jev.APIKey = strings.TrimSpace(cfg.Jev.APIKey)
+		cfg.Jev.Model = strings.TrimSpace(cfg.Jev.Model)
+		cfg.Jev.BaseURL = strings.TrimSpace(cfg.Jev.BaseURL)
+		if cfg.Jev.KeepThreshold != nil && (*cfg.Jev.KeepThreshold < 0 || *cfg.Jev.KeepThreshold > 1) {
+			return fmt.Errorf("invalid jev keep_threshold: must be between 0 and 1")
+		}
+		if cfg.Jev.BaseURL != "" {
+			if err := utilhttp.ValidateSecureURL(cfg.Jev.BaseURL); err != nil {
+				return err
+			}
+		}
+		if cfg.Jev.Model != "" && !strings.HasPrefix(cfg.Jev.Model, "jev-") {
+			return fmt.Errorf("invalid jev model %q: expected a jev-* model id", cfg.Jev.Model)
+		}
 	}
 
 	for i := range cfg.Workspaces {

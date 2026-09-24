@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { cn } from '../lib/classnames'
-import { isWailsEnvironment, safeGetConfig, safeResolveModelProfile, safeSaveConfig } from '../lib/wails'
+import { isWailsEnvironment, safeGetConfig, safeResolveModelProfile, safeSaveConfig, safeSkillManagementView, safeMCPAuthorizationAction } from '../lib/wails'
 import type { ConfigView, ImageGenConfig, MCPServerConfig, ModelConfig } from '../types/config'
+import type { SkillManagementView } from '../types/skills'
 import { Select } from './Select'
 
 interface ConfigPanelProps {
@@ -85,6 +86,7 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
+  const mcpHealth = useMCPHealth(open && tab === 'mcp')
 
   useEffect(() => {
     if (!open) return
@@ -277,6 +279,7 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
       })
       setSaved(true)
       onSaved()
+      return savedCfg
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -444,6 +447,16 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
                         onRename={(nextNameValue) => renameMcpServer(selectedMcpEntry[0], nextNameValue)}
                         onChange={(patch) => updateMcpServer(selectedMcpEntry[0], patch)}
                         onRemove={() => removeMcpServer(selectedMcpEntry[0])}
+                        health={mcpHealth?.mcp.find((s) => s.name === selectedMcpEntry[0].trim() && s.url === selectedMcpEntry[1].url?.trim() && s.status !== 'shadowed')}
+                        onAuthorize={async (action) => {
+                          if (action === 'login' && !await save()) throw new Error(validation || '请先完成并保存配置')
+                          const live = await safeSkillManagementView()
+                          const liveServer = live?.mcp.find((server) => server.name === selectedMcpEntry[0].trim() && server.url === selectedMcpEntry[1].url?.trim())
+                          if (!liveServer) throw new Error('当前生效的服务与此配置不同，请先保存配置或检查同名定义')
+                          if (liveServer.status === 'disabled') throw new Error('该服务已停用，请先勾选「启用」并保存')
+                          if (!liveServer.pluginEnabled || liveServer.status === 'shadowed') throw new Error('当前生效的服务与此配置不同，请检查同名项目配置或插件')
+                          await safeMCPAuthorizationAction(selectedMcpEntry[0].trim(), action)
+                        }}
                       />
                     )}
                     {mcpEntries.length === 0 && (
@@ -579,20 +592,54 @@ function ImageModelCard({
   )
 }
 
+// Schedule after completion so slow requests cannot overlap or reorder status.
+function useMCPHealth(enabled: boolean) {
+  const [view, setView] = useState<SkillManagementView | null>()
+  useEffect(() => {
+    if (!enabled) return
+    let active = true
+    let timer: number | undefined
+    const poll = async () => {
+      try {
+        const next = await safeSkillManagementView()
+        if (active) setView(next)
+      } catch { /* keep the last known status and retry */ }
+      if (active) timer = window.setTimeout(poll, 1500)
+    }
+    void poll()
+    return () => { active = false; window.clearTimeout(timer) }
+  }, [enabled])
+  return view
+}
+
 function McpServerCard({
   name,
   server,
   onRename,
   onChange,
   onRemove,
+  onAuthorize,
+  health,
 }: {
   name: string
   server: MCPServerConfig
   onRename: (name: string) => void
+  onAuthorize: (action: string) => Promise<void>
+  health?: import('../types/skills').MCPServerView
   onChange: (patch: Partial<MCPServerConfig>) => void
   onRemove: () => void
 }) {
   const [draftName, setDraftName] = useState(name)
+  const [remote, setRemote] = useState(Boolean(server.url))
+  const [authError, setAuthError] = useState('')
+  const [authBusy, setAuthBusy] = useState(false)
+  const authorize = async (action: string) => {
+    setAuthBusy(true); setAuthError('')
+    try { await onAuthorize(action) } catch (err) { setAuthError(String(err)) }
+    finally { setAuthBusy(false) }
+  }
+  const statusLabels: Record<string, string> = { ready: '已连接', starting: '正在连接', auth_required: '需要授权', authorizing: '等待浏览器授权', error: '连接失败', disabled: '未启用' }
+
   useEffect(() => setDraftName(name), [name])
   const argsText = (server.args ?? []).join('\n')
   const envText = Object.entries(server.env ?? {})
@@ -632,6 +679,41 @@ function McpServerCard({
             }}
           />
         </Field>
+        <Field label="连接方式">
+          <select className="field" value={remote ? 'http' : 'stdio'} onChange={(e) => {
+            const isRemote = e.target.value === 'http'
+            setRemote(isRemote)
+            onChange(isRemote ? { command: '', args: [], env: {}, url: '' } : { url: '', oauth_client_id: '', oauth_client_secret: '', oauth_client_metadata_url: '', oauth_callback_port: 0 })
+          }}>
+            <option value="stdio">本地命令（stdio）</option>
+            <option value="http">远程 URL（Streamable HTTP）</option>
+          </select>
+        </Field>
+        {remote ? <>
+          <Field label="MCP URL">
+            <input className="field font-mono" placeholder="https://example.com/mcp" value={server.url ?? ''} onChange={(e) => onChange({ url: e.target.value })} />
+          </Field>
+          <details className="md:col-span-2 text-xs text-text-2">
+            <summary className="cursor-pointer">OAuth 高级设置</summary>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <Field label="预注册 Client ID（可选）"><input className="field" value={server.oauth_client_id ?? ''} onChange={(e) => onChange({ oauth_client_id: e.target.value })} /></Field>
+              <Field label="Client Secret（可选，机密客户端）"><input className="field" type="password" value={server.oauth_client_secret ?? ''} onChange={(e) => onChange({ oauth_client_secret: e.target.value })} /></Field>
+              <Field label="客户端元数据 URL（可选）"><input className="field" value={server.oauth_client_metadata_url ?? ''} onChange={(e) => onChange({ oauth_client_metadata_url: e.target.value })} /></Field>
+              <Field label="本机回调端口（0 为自动）"><input className="field" type="number" min="0" max="65535" value={server.oauth_callback_port ?? 0} onChange={(e) => onChange({ oauth_callback_port: Number(e.target.value) })} /></Field>
+              <p>预注册回调地址：http://127.0.0.1:端口/oauth/callback。浏览器需与 NekoCode 在同一台机器。</p>
+            </div>
+          </details>
+          <div className="md:col-span-2 space-y-2 text-xs">
+            <p role="status">{!server.enabled ? '未启用' : (statusLabels[health?.status ?? ''] ?? '保存后连接')}</p>
+            <div className="flex gap-2">
+              <button className="secondary-button" type="button" disabled={authBusy || !server.enabled || health?.status === 'authorizing'} onClick={() => void authorize('login')}>保存并授权</button>
+              {health?.status === 'authorizing' && <button className="secondary-button" type="button" disabled={authBusy} onClick={() => void authorize('cancel')}>取消授权</button>}
+              <button className="secondary-button" type="button" disabled={authBusy || !health} onClick={() => void authorize('logout')}>退出登录</button>
+            </div>
+            {health?.authUrl && <div><span>浏览器未打开时，复制链接到本机浏览器：</span><input aria-label="授权链接" className="field" readOnly value={health.authUrl} onFocus={(e) => e.target.select()} /></div>}
+            {(authError || health?.error) && <p role="alert" className="text-danger">{authError || health?.error}</p>}
+          </div>
+        </> : <>
         <Field label="Command">
           <input className="field font-mono" value={server.command} onChange={(e) => onChange({ command: e.target.value })} />
         </Field>
@@ -651,6 +733,7 @@ function McpServerCard({
             />
           </Field>
         </div>
+        </>}
       </div>
     </div>
   )
@@ -720,7 +803,11 @@ function validateConfig(cfg: ConfigView | null): string {
     if (!name) return 'MCP 服务缺少名称'
     if (mcpNames.has(name)) return `MCP 服务名称重复：${name}`
     mcpNames.add(name)
-    if (!srv.command.trim()) return `${name} 缺少 command`
+    if (!srv.command.trim() && !srv.url?.trim()) return `${name} 缺少 command 或 MCP URL`
+    if (srv.url?.trim()) {
+      try { const url = new URL(srv.url); if (!['http:', 'https:'].includes(url.protocol)) return `${name} 的 URL 无效` }
+      catch { return `${name} 的 URL 无效` }
+    }
     for (const key of Object.keys(srv.env ?? {})) {
       if (!key.trim()) return `${name} 存在空 env key`
     }
@@ -780,6 +867,11 @@ function trimMcpServers(servers: Record<string, MCPServerConfig>): Record<string
     const trimmedName = name.trim()
     if (!trimmedName) continue
     out[trimmedName] = {
+      url: server.url?.trim(),
+      oauth_client_id: server.oauth_client_id?.trim(),
+      oauth_client_secret: server.oauth_client_secret?.trim(),
+      oauth_client_metadata_url: server.oauth_client_metadata_url?.trim(),
+      oauth_callback_port: server.oauth_callback_port,
       command: server.command.trim(),
       args: (server.args ?? []).map((arg) => arg.trim()).filter(Boolean),
       env: trimEnv(server.env ?? {}),

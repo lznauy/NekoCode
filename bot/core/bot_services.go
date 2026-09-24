@@ -123,7 +123,6 @@ func (b *Bot) rebuildAgentLocked() {
 	_, completion := b.ag.TokenUsage()
 	b.initAgent()
 	b.ag.AddCompletionTokens(completion)
-	b.ag.Executor().SetFullAccess(b.fullAccess.Load())
 }
 
 func (b *Bot) Metrics() protocol.Metrics {

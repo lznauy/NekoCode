@@ -16,6 +16,18 @@ const (
 
 type StepAction string
 
+// ToolDecision is trusted permission metadata carried separately from a
+// tool's display preview so tool-controlled text cannot forge a verdict.
+type ToolDecision string
+
+const (
+	ToolDecisionJevSafe           ToolDecision = "jev_safe"
+	ToolDecisionJevDangerous      ToolDecision = "jev_dangerous"
+	ToolDecisionJevURLSafe        ToolDecision = "jev_url_safe"
+	ToolDecisionJevURLUnavailable ToolDecision = "jev_url_unavailable"
+	ToolDecisionJevURLRisky       ToolDecision = "jev_url_risky"
+)
+
 const (
 	StepActionChat            StepAction = "chat"
 	StepActionRunSummary      StepAction = "run_summary"
@@ -51,6 +63,7 @@ type StepEvent struct {
 	ToolArgs        string
 	ToolInput       json.RawMessage
 	Output          string
+	Decision        ToolDecision
 	IsError         bool
 	SubAgentID      string
 	SubAgentType    string

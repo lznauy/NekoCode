@@ -3,6 +3,8 @@ package block
 
 import (
 	"strings"
+
+	"nekocode/protocol"
 )
 
 type BlockType int
@@ -16,6 +18,8 @@ type ContentBlock struct {
 	Type     BlockType
 	Content  string
 	ToolName string
+	CallID   string
+	JevNote  string // trusted verdict extracted from a tool preview, retained after completion
 	ToolArgs string
 	// ToolAction preserves action-like tool args that affect display wording.
 	// For process this distinguishes list/wait/watch/stop.
@@ -30,7 +34,7 @@ type ContentBlock struct {
 func FilterFinalBlocks(blocks []ContentBlock) []ContentBlock {
 	out := make([]ContentBlock, 0, len(blocks))
 	for _, b := range blocks {
-		if b.Type == BlockTool && IsPersistent(b.ToolName) {
+		if b.Type == BlockTool && (IsPersistent(b.ToolName) || b.JevNote != "") {
 			out = append(out, b)
 		}
 	}
@@ -54,4 +58,23 @@ func ParseReadOutput(content string) string {
 		}
 	}
 	return content
+}
+
+// SetPreview stores tool-controlled text and trusted decision metadata in
+// separate fields so preview content cannot forge a permission verdict.
+func (b *ContentBlock) SetPreview(preview string, decision protocol.ToolDecision) {
+	b.Content = preview
+	if decision == "" {
+		return
+	}
+	note, ok := map[protocol.ToolDecision]string{
+		protocol.ToolDecisionJevSafe:           "Jev 判定安全 · 自动放行",
+		protocol.ToolDecisionJevDangerous:      "Jev 判定存在风险 · 需要授权确认",
+		protocol.ToolDecisionJevURLSafe:        "Jev 判定 URL 安全",
+		protocol.ToolDecisionJevURLUnavailable: "Jev 暂不可用 · 按权限规则处理",
+		protocol.ToolDecisionJevURLRisky:       "Jev 判定 URL 存在风险 · 需要授权确认",
+	}[decision]
+	if ok {
+		b.JevNote = note
+	}
 }
