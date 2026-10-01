@@ -94,7 +94,7 @@ func TestCompactProcessingTickUpdatesView(t *testing.T) {
 	model, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = model.(*Model)
 
-	cmd := m.startChat("/compact")
+	cmd := m.startChat("/compact", nil)
 	if cmd == nil {
 		t.Fatal("startChat should tick while compacting")
 	}

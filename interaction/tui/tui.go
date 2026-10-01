@@ -24,6 +24,7 @@ func Run() (err error) {
 	if err != nil {
 		return err
 	}
+	defer model.Input.Clear()
 	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
 		return err

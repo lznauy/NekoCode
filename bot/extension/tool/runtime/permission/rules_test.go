@@ -21,6 +21,17 @@ func newTestEngine() *Engine {
 	})
 }
 
+func TestImageUnderstandRequiresApprovalByDefault(t *testing.T) {
+	e := newTestEngine()
+	e.SetRules(BuiltinRules())
+	decision := e.EvaluateContext(context.Background(), "image_understand", map[string]any{
+		"path": "/workspace/screenshot.png",
+	}, EffectAllow)
+	if decision.Effect != EffectAsk {
+		t.Fatalf("image_understand decision = %v, want ask", decision.Effect)
+	}
+}
+
 func TestParseRule(t *testing.T) {
 	cases := []struct {
 		in     string

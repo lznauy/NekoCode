@@ -39,6 +39,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case doneMsg:
 		return m, m.handleDone(msg)
 
+	case clipboardImageMsg:
+		return m, m.handleClipboardImage(msg)
+
 	case runtimeEventMsg:
 		return m, tea.Batch(m.handleRuntimeEvent(msg.event), listenRuntimeEvent(m.runtimeEvents))
 
@@ -72,6 +75,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			text := strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ").Replace(msg.Content)
 			m.QuestionBar.Type(text)
 			return m, nil
+		}
+		if msg.Content == "" {
+			return m, readClipboardImage()
 		}
 		input, cmd := m.Input.Update(msg)
 		m.Input = input

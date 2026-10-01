@@ -80,6 +80,7 @@ Headless 使用自有 `nekocode-headless/2` 协议，支持工具审批、提问
 ### 基本操作
 
 - **开始任务**：直接输入需求，回车发送。比如"帮我给这个项目加个登录接口"
+- **粘贴图片**：在 TUI 或 GUI 输入框直接粘贴剪贴板图片，输入框会插入 `[Image #N]` 占位符；可以像普通文本一样在图片前后补充问题。删除尚未发送的占位符会同步删除临时图片
 - **停止任务**：任务运行中按 `Esc`
 - **边跑边补充**：任务运行中可以继续输入，回车后作为追加指示插入当前任务
 - **审批操作**：当 AI 要执行有风险的操作（运行命令、修改文件等）时，底部会弹出确认框：
@@ -137,6 +138,7 @@ GUI 使用同一份命令数据：输入 `/` 后在输入框上方弹出面板�
 | `Alt+Enter` | 输入框内换行 |
 | `Esc` | 停止任务 / 关闭菜单；多级菜单中返回上一级 |
 | `Ctrl+C` | 输入框非空时清空内容；输入框为空时退出程序 |
+| `Ctrl+V` | 粘贴剪贴板图片并插入 `[Image #N]` 占位符；普通文本仍按终端原有粘贴行为处理 |
 | `↑` / `↓` | 翻历史输入；菜单中移动选项 |
 | `Tab` / `Shift+Tab` | 循环命令或菜单候选 |
 | `PgUp` / `PgDown` | 滚动聊天记录 |
@@ -511,6 +513,24 @@ MCP 子进程默认以项目根目录为工作目录；可用 `cwd` 指定绝对
       "base_url": "https://visual.volcengineapi.com"
     }
   ],
+  "image_understand_models": [
+    {
+	  "name": "fast",
+	  "provider": "tencent",
+	  "api_key": "your-tokenhub-key",
+	  "model": "hy-vision-2.0-instruct",
+	  "base_url": "https://tokenhub.tencentmaas.com/v1",
+	  "protocol": "openai"
+	},
+	{
+	  "name": "accurate",
+	  "provider": "tencent",
+	  "api_key": "your-tokenhub-key",
+	  "model": "hunyuan-t1-vision-20250916",
+	  "base_url": "https://tokenhub.tencentmaas.com/v1",
+      "protocol": "openai"
+    }
+  ],
   "mcp_servers": {
     "filesystem": {
       "command": "npx",
@@ -544,6 +564,9 @@ MCP 子进程默认以项目根目录为工作目录；可用 `cwd` 指定绝对
 - `active` / `models`：模型配置（见「首次配置」）
 - `flash_model`：可选的轻量模型配置名，用于压缩和子 Agent 等辅助请求；省略时跟随 `active`
 - `image_gen_models`：可选的图片生成模型列表；只有配置后才会注册 `image_gen` 工具
+- `image_understand_models`：可选的图片理解模型列表；支持 `openai` 和 `anthropic` 协议，只有配置后才会注册 `image_understand` 工具。建议将低延迟模型命名为 `fast`，将高精度模型命名为 `accurate`。工具默认使用 `fast` 模式：优先选择同名模型，把长边超过 1280px 的 PNG/JPEG 图片等比缩小，并将最大输出限制为 1024 Token；GIF/WebP 为避免丢失动画或扩展内容会保持原文件。`accurate` 模式选择同名模型、保留原图并允许最多 4096 Token。显式传入 `model` 时以指定的配置名为准，但图片处理和输出上限仍由 `mode` 决定。旧配置没有 `fast` 名称时，默认模式仍会使用列表中的第一个模型；使用 `accurate` 模式前必须配置同名模型或显式指定 `model`
+- `image_understand` 接收本地图片路径与可选问题，将 PNG、JPEG、WebP 或 GIF 图片发送给所选多模态模型并返回文本结果。由于图片会离开本机，默认每次发送前都会显示文件路径和目标服务并请求确认；可通过权限配置显式允许该工具
+- TUI/GUI 粘贴的图片临时保存在 `~/.nekocode/tmp/images/<session-id>/`，单条消息最多 8 张、单张最大 20 MiB。草稿占位符删除时立即清理；已发送图片随会话保留，并在删除会话时一起清理
 - `reasoning_effort`：可选的模型推理强度，留空或设为 `auto` 时使用模型默认值。可选级别由模型能力表决定，`/effort` 和配置界面只展示当前模型支持的值；未知模型严格退化为 `auto`，`none`（界面显示为 Off）也只在模型明确支持关闭推理时出现。OpenAI 与 Anthropic 协议适配器只翻译已解析的生效值，不根据协议猜测模型能力
 - `context_window`：上下文窗口大小。**这是模型的属性，通常不用填**——NekoCode 内置了常见模型的对照表，会根据模型名自动确定（如 deepseek 1M、Claude 200K~1M、Gemini 1M)。需要精确控制时（比如自部署模型），在 `models[]` 里给对应模型填 `context_window`：单模型覆盖 > 内置表 > 默认 128K。GUI 概览只读显示当前模型的有效窗口；模型卡片中的“上下文窗口覆盖”留空即保持自动解析，不会把默认值固化进配置
 - `auto_compact_percent`：自动摘要压缩的上下文占用门限，范围 1～99，默认 80。达到门限后执行一次全量摘要替换；压缩后若仍达到模型窗口上限，才返回上下文已满错误

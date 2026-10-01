@@ -64,7 +64,7 @@ func main() {
 		Model: model, Protocol: getenv("NEKOCODE_PROTOCOL", "openai"),
 	})
 
-	toolbox := catalog.NewToolbox(nil)
+	toolbox := catalog.NewToolboxWithConfig(catalog.ToolboxConfig{})
 	defer func() {
 		if err := toolbox.Close(); err != nil {
 			fmt.Fprintln(os.Stderr, "close toolbox:", err)

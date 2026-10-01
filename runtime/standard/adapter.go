@@ -64,6 +64,10 @@ func (a *adapter) PermissionMode() string {
 	return "manual"
 }
 
+func (a *adapter) ImageAttachmentsEnabled() bool {
+	return len(a.bot.Configuration().ImageUnderstandModels) > 0
+}
+
 func (a *adapter) SwitchModel(name string) (controlruntime.ModelSelection, error) {
 	if err := a.bot.SwitchModel(name); err != nil {
 		return controlruntime.ModelSelection{}, err
@@ -203,39 +207,40 @@ func (a *adapter) Close() error {
 func (a *adapter) services() controlruntime.Services {
 	return controlruntime.Services{
 		ToolNames: a.bot.ToolNames, Rewind: a.bot.Rewind, Checkpoints: a.bot.Checkpoints,
-		ExecuteCommand:         a.ExecuteCommand,
-		ExecuteLocalCommand:    a.ExecuteLocalCommand,
-		CommandMenu:            a.CommandMenu,
-		Steer:                  a.Steer,
-		Metrics:                a.Metrics,
-		CurrentModel:           a.CurrentModel,
-		PermissionMode:         a.PermissionMode,
-		SwitchModel:            a.SwitchModel,
-		SwitchSessionModel:     a.SwitchSessionModel,
-		ModelOptions:           a.ModelOptions,
-		SetReasoningEffort:     a.SetReasoningEffort,
-		SetSessionReasoning:    a.SetSessionReasoning,
-		SetFullAccess:          a.SetFullAccess,
-		ContextSnapshot:        a.ContextSnapshot,
-		WorkspaceChanges:       a.WorkspaceChanges,
-		MemoryView:             a.MemoryView,
-		SkillManagementView:    a.SkillManagementView,
-		SelectSkill:            a.SelectSkill,
-		ClearSelectedSkill:     a.ClearSelectedSkill,
-		RefreshSkillManagement: a.RefreshSkillManagement,
-		SetPluginEnabled:       a.SetPluginEnabled,
-		ConfigView:             a.ConfigView,
-		ResolveModelProfile:    a.ResolveModelProfile,
-		ApplyConfig:            a.ApplyConfig,
-		CurrentSessionID:       a.CurrentSessionID,
-		ListSessions:           a.ListSessions,
-		SessionMessages:        a.SessionMessages,
-		ResumeSession:          a.ResumeSession,
-		NewSession:             a.NewSession,
-		DeleteSession:          a.DeleteSession,
-		ReplaceMCPServers:      a.ReplaceMCPServers,
-		MCPAuthorizationAction: a.bot.MCPAuthorizationAction,
-		Close:                  a.Close,
+		ExecuteCommand:          a.ExecuteCommand,
+		ExecuteLocalCommand:     a.ExecuteLocalCommand,
+		CommandMenu:             a.CommandMenu,
+		Steer:                   a.Steer,
+		Metrics:                 a.Metrics,
+		CurrentModel:            a.CurrentModel,
+		PermissionMode:          a.PermissionMode,
+		SwitchModel:             a.SwitchModel,
+		SwitchSessionModel:      a.SwitchSessionModel,
+		ModelOptions:            a.ModelOptions,
+		SetReasoningEffort:      a.SetReasoningEffort,
+		SetSessionReasoning:     a.SetSessionReasoning,
+		SetFullAccess:           a.SetFullAccess,
+		ContextSnapshot:         a.ContextSnapshot,
+		WorkspaceChanges:        a.WorkspaceChanges,
+		ImageAttachmentsEnabled: a.ImageAttachmentsEnabled,
+		MemoryView:              a.MemoryView,
+		SkillManagementView:     a.SkillManagementView,
+		SelectSkill:             a.SelectSkill,
+		ClearSelectedSkill:      a.ClearSelectedSkill,
+		RefreshSkillManagement:  a.RefreshSkillManagement,
+		SetPluginEnabled:        a.SetPluginEnabled,
+		ConfigView:              a.ConfigView,
+		ResolveModelProfile:     a.ResolveModelProfile,
+		ApplyConfig:             a.ApplyConfig,
+		CurrentSessionID:        a.CurrentSessionID,
+		ListSessions:            a.ListSessions,
+		SessionMessages:         a.SessionMessages,
+		ResumeSession:           a.ResumeSession,
+		NewSession:              a.NewSession,
+		DeleteSession:           a.DeleteSession,
+		ReplaceMCPServers:       a.ReplaceMCPServers,
+		MCPAuthorizationAction:  a.bot.MCPAuthorizationAction,
+		Close:                   a.Close,
 	}
 }
 

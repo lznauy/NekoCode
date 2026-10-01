@@ -15,8 +15,51 @@ import (
 	"nekocode/bot/extension/tool/runtime/workspace"
 	"nekocode/bot/provider/types"
 	"nekocode/bot/session"
+	"nekocode/util/attachment"
 	"nekocode/util/fs"
 )
+
+func TestSyncSessionGrantsReadOnlyAccessToItsImageDirectory(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cwd := t.TempDir()
+	manager := session.New(cwd)
+	toolbox := catalog.NewToolboxWithConfig(catalog.ToolboxConfig{})
+	t.Cleanup(func() { _ = toolbox.Close() })
+	b := &Bot{cwd: cwd, sess: manager, toolbox: toolbox}
+	b.syncPolicySessionID()
+
+	dir, err := attachment.ImageDir(manager.CurrentID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "paste.png")
+	if _, _, allowed, err := toolbox.Workspace().CheckRead(path); err != nil || !allowed {
+		t.Fatalf("session image is not readable: allowed=%v err=%v", allowed, err)
+	}
+	if _, _, allowed, err := toolbox.Workspace().CheckWrite(path); err != nil || allowed {
+		t.Fatalf("session image directory became writable: allowed=%v err=%v", allowed, err)
+	}
+}
+
+func TestDeleteSessionKeepsSessionWhenAttachmentCleanupFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".nekocode", "tmp"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".nekocode", "tmp", "images"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := session.New(t.TempDir())
+	id := manager.CurrentID()
+	b := &Bot{sess: manager}
+	if err := b.DeleteSession(id); err == nil || !strings.Contains(err.Error(), "image attachments") {
+		t.Fatalf("DeleteSession error = %v", err)
+	}
+	if manager.CurrentID() != id {
+		t.Fatal("session identity was removed despite attachment cleanup failure")
+	}
+}
 
 func TestRewindMenuShowsUserMessagesAndChangedFiles(t *testing.T) {
 	cwd := t.TempDir()
@@ -232,7 +275,7 @@ func TestSessionCommandResumesDirectManager(t *testing.T) {
 func TestEnsureSessionIdentitySyncsManagedProcesses(t *testing.T) {
 	manager := session.New(t.TempDir())
 	manager.ClearCurrent()
-	toolbox := catalog.NewToolbox(nil)
+	toolbox := catalog.NewToolboxWithConfig(catalog.ToolboxConfig{})
 	t.Cleanup(func() { _ = toolbox.Close() })
 	b := &Bot{sess: manager, toolbox: toolbox}
 
@@ -285,7 +328,7 @@ func TestBotNewAndDeleteSessionResetCurrentConversation(t *testing.T) {
 func TestResetConversationStopsOldSessionProcesses(t *testing.T) {
 	cwd := t.TempDir()
 	manager := session.New(cwd)
-	toolbox := catalog.NewToolbox(nil)
+	toolbox := catalog.NewToolboxWithConfig(catalog.ToolboxConfig{})
 	t.Cleanup(func() { _ = toolbox.Close() })
 	oldID := manager.CurrentID()
 	toolbox.SetSessionID(oldID)

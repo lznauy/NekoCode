@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"nekocode/interaction/tui/styles"
+	controlruntime "nekocode/runtime"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
@@ -25,9 +26,23 @@ const (
 )
 
 type pastedBlock struct {
-	marker  string
-	content string
-	start   int
+	marker    string
+	content   string
+	start     int
+	imagePath string
+}
+
+type InputImageAttachment struct {
+	Label string
+	Path  string
+}
+
+type inputDraft struct {
+	displayText  string
+	pastedBlocks []pastedBlock
+	nextPasteID  int
+	nextImageID  int
+	cursorOffset int
 }
 
 type Input struct {
@@ -40,10 +55,12 @@ type Input struct {
 	sending         bool
 	history         []string
 	historyIdx      int
-	savedInput      string
+	savedDraft      *inputDraft
 	historyActive   bool
 	pastedBlocks    []pastedBlock
 	nextPasteID     int
+	nextImageID     int
+	onImageRemoved  func(string)
 }
 
 func NewInput(width int) *Input {
@@ -77,8 +94,18 @@ func (i *Input) Width() int         { return i.width }
 func (i *Input) Value() string { return strings.TrimRight(i.expandedValue(), "\n\t\r ") }
 
 func (i *Input) SetValue(v string) {
+	i.releaseDraftImages()
+	i.releaseSavedDraftImages()
+	i.historyIdx = len(i.history)
+	i.historyActive = false
+	i.savedDraft = nil
+	i.setValue(v)
+}
+
+func (i *Input) setValue(v string) {
 	i.pastedBlocks = nil
 	i.nextPasteID = 0
+	i.nextImageID = 0
 	i.textarea.CharLimit = charLimit
 	i.setValueCollapsingLargeContent(v)
 	i.syncDisplayCharLimit()
@@ -88,18 +115,66 @@ func (i *Input) SetCursorEnd()    { i.textarea.MoveToEnd() }
 func (i *Input) HasContent() bool { return i.textarea.Value() != "" }
 
 func (i *Input) Clear() {
+	i.clear(true)
+}
+
+func (i *Input) clear(deleteImages bool) {
+	if deleteImages {
+		i.releaseDraftImages()
+	}
+	i.releaseSavedDraftImages()
 	i.textarea.Reset()
 	i.pastedBlocks = nil
 	i.nextPasteID = 0
+	i.nextImageID = 0
 	i.textarea.CharLimit = charLimit
 	i.historyIdx = len(i.history)
-	i.savedInput = ""
+	i.savedDraft = nil
 	i.historyActive = false
 }
 
 func (i *Input) Reset() {
-	i.Clear()
+	i.clear(false)
 	i.sending = false
+}
+
+func (i *Input) SetImageCleanup(cleanup func(string)) { i.onImageRemoved = cleanup }
+
+func (i *Input) AddImage(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" || i.historyActive || len(i.ImageAttachments()) >= controlruntime.MaxImageAttachments {
+		return false
+	}
+	var marker string
+	for {
+		i.nextImageID++
+		marker = fmt.Sprintf("[Image #%d]", i.nextImageID)
+		if !strings.Contains(i.expandedValue(), marker) {
+			break
+		}
+	}
+	start := i.cursorRuneOffset()
+	cmd, accepted := i.applyTextareaUpdate(tea.PasteMsg{Content: marker})
+	_ = cmd
+	if !accepted {
+		i.nextImageID--
+		return false
+	}
+	i.pastedBlocks = append(i.pastedBlocks, pastedBlock{
+		marker: marker, content: marker, start: start, imagePath: path,
+	})
+	i.syncDisplayCharLimit()
+	return true
+}
+
+func (i *Input) ImageAttachments() []InputImageAttachment {
+	var images []InputImageAttachment
+	for _, block := range i.pastedBlocks {
+		if block.imagePath != "" {
+			images = append(images, InputImageAttachment{Label: block.marker, Path: block.imagePath})
+		}
+	}
+	return images
 }
 
 func (i *Input) AddHistory(entry string) {
@@ -114,10 +189,26 @@ func (i *Input) AddHistory(entry string) {
 }
 
 func (i *Input) SetHistory(entries []string) {
+	if i.historyActive {
+		i.history = append(i.history[:0], entries...)
+		if len(i.history) == 0 {
+			i.restoreDraft(i.savedDraft)
+			i.savedDraft = nil
+			i.historyIdx = 0
+			i.historyActive = false
+			return
+		}
+		// rememberInput appends the currently submitted recalled entry. Keep the
+		// saved draft alive until submission succeeds and Reset explicitly
+		// transfers or discards it; one Down still returns to that draft.
+		i.historyIdx = len(i.history) - 1
+		return
+	}
+	i.releaseSavedDraftImages()
 	i.history = append(i.history[:0], entries...)
 	i.historyIdx = len(i.history)
 	i.historyActive = false
-	i.savedInput = ""
+	i.savedDraft = nil
 }
 
 func (i *Input) History() []string {
@@ -126,16 +217,23 @@ func (i *Input) History() []string {
 	return out
 }
 
+func (i *Input) BrowsingHistory() bool { return i.historyActive }
+
 func (i *Input) HistoryUp() {
 	if len(i.history) == 0 {
 		return
 	}
+	capturedDraft := false
 	if i.historyIdx == len(i.history) {
-		i.savedInput = i.Value()
+		i.savedDraft = i.captureDraft()
+		capturedDraft = true
 	}
 	if i.historyIdx > 0 {
+		if !capturedDraft {
+			i.releaseDraftImages()
+		}
 		i.historyIdx--
-		i.SetValue(i.history[i.historyIdx])
+		i.setValue(i.history[i.historyIdx])
 	}
 	i.historyActive = true
 }
@@ -146,10 +244,12 @@ func (i *Input) HistoryDown() {
 	}
 	i.historyIdx++
 	if i.historyIdx == len(i.history) {
-		i.SetValue(i.savedInput)
+		i.restoreDraft(i.savedDraft)
+		i.savedDraft = nil
 		i.historyActive = false
 	} else {
-		i.SetValue(i.history[i.historyIdx])
+		i.releaseDraftImages()
+		i.setValue(i.history[i.historyIdx])
 	}
 }
 
@@ -373,6 +473,9 @@ func (i *Input) deletePastedBlockAtCursor(backward bool) bool {
 		i.textarea.SetValue(string(append(displayRunes[:start], displayRunes[end:]...)))
 		i.setCursorRuneOffset(start)
 		i.pastedBlocks = append(i.pastedBlocks[:idx], i.pastedBlocks[idx+1:]...)
+		if block.imagePath != "" && i.onImageRemoved != nil {
+			i.onImageRemoved(block.imagePath)
+		}
 		for later := range i.pastedBlocks {
 			if i.pastedBlocks[later].start > start {
 				i.pastedBlocks[later].start -= end - start
@@ -382,6 +485,52 @@ func (i *Input) deletePastedBlockAtCursor(backward bool) bool {
 		return true
 	}
 	return false
+}
+
+func (i *Input) releaseDraftImages() {
+	i.releaseImages(i.pastedBlocks)
+}
+
+func (i *Input) releaseSavedDraftImages() {
+	if i.savedDraft != nil {
+		i.releaseImages(i.savedDraft.pastedBlocks)
+	}
+}
+
+func (i *Input) releaseImages(blocks []pastedBlock) {
+	if i.onImageRemoved == nil {
+		return
+	}
+	for _, block := range blocks {
+		if block.imagePath != "" {
+			i.onImageRemoved(block.imagePath)
+		}
+	}
+}
+
+func (i *Input) captureDraft() *inputDraft {
+	return &inputDraft{
+		displayText:  i.textarea.Value(),
+		pastedBlocks: append([]pastedBlock(nil), i.pastedBlocks...),
+		nextPasteID:  i.nextPasteID,
+		nextImageID:  i.nextImageID,
+		cursorOffset: i.cursorRuneOffset(),
+	}
+}
+
+func (i *Input) restoreDraft(draft *inputDraft) {
+	i.releaseDraftImages()
+	if draft == nil {
+		i.setValue("")
+		return
+	}
+	i.pastedBlocks = append(i.pastedBlocks[:0], draft.pastedBlocks...)
+	i.nextPasteID = draft.nextPasteID
+	i.nextImageID = draft.nextImageID
+	i.textarea.CharLimit = charLimit
+	i.textarea.SetValue(draft.displayText)
+	i.setCursorRuneOffset(draft.cursorOffset)
+	i.syncDisplayCharLimit()
 }
 
 func (i *Input) syncDisplayCharLimit() {

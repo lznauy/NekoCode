@@ -26,6 +26,10 @@ export function DeleteSession(arg1) {
   return window['go']['main']['App']['DeleteSession'](arg1);
 }
 
+export function DeleteClipboardImage(arg1) {
+  return window['go']['main']['App']['DeleteClipboardImage'](arg1);
+}
+
 export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }
@@ -74,12 +78,16 @@ export function SaveConfig(arg1) {
   return window['go']['main']['App']['SaveConfig'](arg1);
 }
 
+export function SaveClipboardImage(arg1) {
+  return window['go']['main']['App']['SaveClipboardImage'](arg1);
+}
+
 export function SelectSkill(arg1) {
   return window['go']['main']['App']['SelectSkill'](arg1);
 }
 
-export function SendMessage(arg1) {
-  return window['go']['main']['App']['SendMessage'](arg1);
+export function SendMessage(arg1, arg2) {
+  return window['go']['main']['App']['SendMessage'](arg1, arg2);
 }
 
 export function SetPluginEnabled(arg1, arg2) {

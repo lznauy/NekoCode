@@ -86,11 +86,12 @@ func newTestRuntime(b *testBot) *Runtime {
 
 func testBotServices(b *testBot) Services {
 	return Services{
-		ExecuteCommand: b.ExecuteCommand,
-		CommandMenu:    b.CommandMenu,
-		Steer:          b.Steer,
-		Metrics:        b.Metrics,
-		Close:          b.Close,
+		ExecuteCommand:          b.ExecuteCommand,
+		CommandMenu:             b.CommandMenu,
+		Steer:                   b.Steer,
+		Metrics:                 b.Metrics,
+		ImageAttachmentsEnabled: func() bool { return true },
+		Close:                   b.Close,
 	}
 }
 

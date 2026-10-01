@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { cn } from '../../lib/classnames'
 import type { Msg } from '../../types/events'
 import type { runtime } from '../../../wailsjs/go/models'
@@ -23,7 +23,17 @@ export function SessionSidebar({
   onSwitch,
   onDelete,
 }: SessionSidebarProps) {
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useState(() => window.matchMedia?.('(max-width: 639px)').matches ?? false)
+
+  useEffect(() => {
+    const media = window.matchMedia?.('(max-width: 639px)')
+    if (!media) return
+    const handleChange = (event: MediaQueryListEvent) => {
+      if (event.matches) setCollapsed(true)
+    }
+    media.addEventListener('change', handleChange)
+    return () => media.removeEventListener('change', handleChange)
+  }, [])
 
   if (collapsed) {
     return (
@@ -42,7 +52,7 @@ export function SessionSidebar({
   }
 
   return (
-    <aside className="flex h-full w-[272px] flex-col border-r border-border/80 bg-surface">
+    <aside className="flex h-full w-[272px] flex-col border-r border-border/80 bg-surface max-sm:absolute max-sm:inset-y-0 max-sm:left-0 max-sm:z-40 max-sm:shadow-xl">
       <div className="flex h-[52px] items-center justify-between px-3">
         <span className="text-[13px] font-semibold leading-none text-text-2">会话</span>
         <div className="flex items-center gap-1">

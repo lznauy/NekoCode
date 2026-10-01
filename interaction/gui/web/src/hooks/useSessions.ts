@@ -12,6 +12,24 @@ import type { runtime } from '../../wailsjs/go/models'
 type SessionMeta = runtime.SessionMeta
 type DisplayMessage = runtime.DisplayMessage
 
+export interface SessionChangeEvent {
+  attachmentDraft?: boolean
+  id?: string
+  reason?: string
+  changedId?: string
+	currentChanged?: boolean
+  messages?: DisplayMessage[]
+}
+
+export function shouldReloadSessionMessages(change: SessionChangeEvent): boolean {
+  if (change.attachmentDraft) return false
+	return change.reason !== 'delete' || change.currentChanged === true
+}
+
+export function shouldHydrateEmptySession(currentId: string | null, attachmentDraftId: string | null): boolean {
+	return Boolean(currentId) && currentId !== attachmentDraftId
+}
+
 export interface UseSessionsReturn {
   sessions: SessionMeta[]
   currentId: string | null
@@ -20,7 +38,7 @@ export interface UseSessionsReturn {
   refresh: () => Promise<void>
   createSession: () => Promise<SessionMeta | null>
   switchSession: (id: string) => Promise<Msg[] | null>
-  deleteSession: (id: string) => Promise<SessionMeta[]>
+  deleteSession: (id: string) => Promise<{ sessions: SessionMeta[]; deleted: boolean }>
 }
 
 export function useSessions(): UseSessionsReturn {
@@ -104,7 +122,7 @@ export function useSessions(): UseSessionsReturn {
     }
   }, [])
 
-  const deleteSession = useCallback(async (id: string): Promise<SessionMeta[]> => {
+  const deleteSession = useCallback(async (id: string): Promise<{ sessions: SessionMeta[]; deleted: boolean }> => {
     setError(null)
     try {
       await safeDeleteSession(id)
@@ -113,10 +131,18 @@ export function useSessions(): UseSessionsReturn {
       if (currentId === id) {
         setCurrentId(null)
       }
-      return list
+      return { sessions: list, deleted: true }
     } catch (err) {
       setError(String(err))
-      return sessions
+      try {
+        const list = normalizeSessions(await safeListSessions())
+        setSessions(list)
+        const deleted = !list.some((session) => session.id === id)
+        if (deleted && currentId === id) setCurrentId(null)
+        return { sessions: list, deleted }
+      } catch {
+        return { sessions, deleted: false }
+      }
     }
   }, [currentId, sessions])
 

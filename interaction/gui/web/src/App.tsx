@@ -16,7 +16,7 @@ import { useChat } from './hooks/useChat'
 import { useModelInfo } from './hooks/useModelInfo'
 import { useAutoScroll } from './hooks/useAutoScroll'
 import { useTextareaResize } from './hooks/useTextareaResize'
-import { mapDisplayMessage, useSessions } from './hooks/useSessions'
+import { mapDisplayMessage, shouldHydrateEmptySession, shouldReloadSessionMessages, useSessions } from './hooks/useSessions'
 import { useTheme } from './hooks/useTheme'
 import {
   safeClearSelectedSkill,
@@ -34,11 +34,10 @@ import type { ConfirmEvent, Msg, QuestionEvent } from './types/events'
 import type { ModelConfig } from './types/config'
 import type { runtime } from '../wailsjs/go/models'
 type ContextSnapshot = runtime.ContextSnapshot
-type DisplayMessage = runtime.DisplayMessage
 import type { SkillView } from './types/skills'
 
 export default function App() {
-  const { msgs, text, setText, busy, send, stop, toggleStep, setMessages, clearMessages } = useChat()
+  const { msgs, text, setText, busy, send, stop, toggleStep, setMessages, clearMessages, imageAttachments, pasteImages } = useChat()
   const [modelRefreshKey, setModelRefreshKey] = useState(0)
   const model = useModelInfo(modelRefreshKey)
   const { containerRef, endRef, follow } = useAutoScroll([msgs])
@@ -65,6 +64,7 @@ export default function App() {
   const [models, setModels] = useState<ModelConfig[]>([])
   const [skills, setSkills] = useState<SkillView[]>([])
   const [selectedSkill, setSelectedSkill] = useState('')
+	const attachmentDraftSessionRef = useRef<string | null>(null)
   const [contextOpen, setContextOpen] = useState(false)
   const [contextLoading, setContextLoading] = useState(false)
   const [contextSnapshot, setContextSnapshot] = useState<ContextSnapshot | null>(null)
@@ -205,14 +205,17 @@ export default function App() {
   const handleDeleteSession = useCallback(
     async (id: string) => {
       const wasCurrent = id === currentId
-      const remaining = await deleteSession(id)
-      if (wasCurrent || remaining.length === 0) clearMessages()
+      const result = await deleteSession(id)
+	  if (result.deleted && wasCurrent) clearMessages()
     },
     [currentId, deleteSession, clearMessages],
   )
 
   useEffect(() => {
-    if (currentId && msgs.length === 0 && !sessionsLoading && !busy) {
+	if (currentId && attachmentDraftSessionRef.current === currentId) {
+	  return
+	}
+	if (currentId && shouldHydrateEmptySession(currentId, attachmentDraftSessionRef.current) && msgs.length === 0 && !sessionsLoading && !busy) {
       switchSession(currentId).then((loaded) => {
         if (loaded) {
           setMessages(loaded)
@@ -258,8 +261,12 @@ export default function App() {
   }, [refreshSessions])
 
   useEffect(() => {
-    return safeEventsOn('session:changed', (event: unknown) => {
-      const messages = (event as { messages?: DisplayMessage[] })?.messages
+	return safeEventsOn('session:changed', (event: unknown) => {
+	  const change = event as Parameters<typeof shouldReloadSessionMessages>[0]
+	  if (change.attachmentDraft) attachmentDraftSessionRef.current = change.id ?? null
+	  else attachmentDraftSessionRef.current = null
+	  if (!shouldReloadSessionMessages(change)) return
+      const messages = change.messages
       setMessages(Array.isArray(messages) ? messages.map(mapDisplayMessage) : [])
       follow()
     })
@@ -314,6 +321,8 @@ export default function App() {
           onClearSkill={clearSkill}
 		  commandMenu={commandMenu}
 		  onSelectCommand={handleCommandSelect}
+		  imageAttachments={imageAttachments}
+		  onPasteImages={pasteImages}
         />
       </div>
 

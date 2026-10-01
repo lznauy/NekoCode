@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -193,7 +194,8 @@ func TestConfig_JSONRoundTrip(t *testing.T) {
 
 func TestConfigCloneDoesNotShareMutableState(t *testing.T) {
 	original := Config{
-		Models: []ModelConfig{{Name: "model"}},
+		Models:                []ModelConfig{{Name: "model"}},
+		ImageUnderstandModels: []ImageUnderstandConfig{{Name: "vision"}},
 		MCPServers: map[string]MCPServerConfig{
 			"server": {Args: []string{"first"}, Env: map[string]string{"KEY": "value"}},
 		},
@@ -207,6 +209,7 @@ func TestConfigCloneDoesNotShareMutableState(t *testing.T) {
 
 	clone := original.Clone()
 	clone.Models[0].Name = "changed"
+	clone.ImageUnderstandModels[0].Name = "changed"
 	server := clone.MCPServers["server"]
 	server.Args[0] = "changed"
 	server.Env["KEY"] = "changed"
@@ -217,11 +220,47 @@ func TestConfigCloneDoesNotShareMutableState(t *testing.T) {
 	clone.Permissions.Sandbox["shell"] = sandbox
 
 	if original.Models[0].Name != "model" ||
+		original.ImageUnderstandModels[0].Name != "vision" ||
 		original.MCPServers["server"].Args[0] != "first" ||
 		original.MCPServers["server"].Env["KEY"] != "value" ||
 		original.Permissions.Allow[0] != "read" ||
 		original.Permissions.Sandbox["shell"].WritableRoots[0] != "/work" {
 		t.Fatalf("clone mutated original: %+v", original)
+	}
+}
+
+func TestValidateImageUnderstandModels(t *testing.T) {
+	cfg := Config{
+		Models: []ModelConfig{{Name: "default", Provider: "openai", Model: "gpt-5"}},
+		ImageUnderstandModels: []ImageUnderstandConfig{{
+			Name: " vision ", Provider: " openai ", Model: " gpt-5 ", Protocol: " OPENAI ",
+		}},
+	}
+	if err := Validate(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.ImageUnderstandModels[0]; got.Name != "vision" || got.Protocol != "openai" {
+		t.Fatalf("image understand config was not normalized: %+v", got)
+	}
+	cfg.ImageUnderstandModels[0].Protocol = "unknown"
+	if err := Validate(&cfg); err == nil {
+		t.Fatal("unsupported image understand protocol should fail validation")
+	}
+	cfg.ImageUnderstandModels[0].Protocol = "openai"
+	cfg.ImageUnderstandModels[0].BaseURL = "http://example.com/v1"
+	if err := Validate(&cfg); err == nil {
+		t.Fatal("insecure image understand base URL should fail validation")
+	}
+
+	duplicate := Config{
+		Models: []ModelConfig{{Name: "default", Provider: "openai", Model: "gpt-5"}},
+		ImageUnderstandModels: []ImageUnderstandConfig{
+			{Name: "fast", Provider: "openai", Model: "vision-fast"},
+			{Name: "FAST", Provider: "openai", Model: "vision-other"},
+		},
+	}
+	if err := Validate(&duplicate); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("case-insensitive duplicate image model name should fail validation: %v", err)
 	}
 }
 

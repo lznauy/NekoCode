@@ -217,7 +217,7 @@ nekocode/
 │   │       │   ├── filesystem/     #         read/write/edit/list/tree/glob/grep
 │   │       │   ├── shell/          #         Bash 执行 + 危险分级
 │   │       │   ├── web/            #         web_search / web_fetch / web_extract / html2md
-│   │       │   ├── media/          #         image_gen（即梦文生图）
+│   │       │   ├── media/          #         image_gen、image_understand
 │   │       │   ├── task/           #         子 Agent 任务工具
 │   │       │   ├── todo/           #         todo_write 工具
 │   │       │   ├── question/       #         question 工具
@@ -493,9 +493,11 @@ type Tool interface {
 
 ### 工具注册
 
-`bot/extension/tool/builtin/catalog/toolbox.go` 中的 `Toolbox` 注册内置工具（shell/process/read/write/list/tree/glob/edit/grep/web_search/web_fetch/web_extract/question/todo_write/task/diff/index）。`image_gen` 按配置条件注册；Extension manager 统一注册 `skill` 和 constant-schema `capability` 工具。`bot/core/bot.go` 只负责 Extension、Agent 和 command parser 的顶层组装。
+`bot/extension/tool/builtin/catalog/toolbox.go` 中的 `Toolbox` 注册内置工具（shell/process/read/write/list/tree/glob/edit/grep/web_search/web_fetch/web_extract/question/todo_write/task/diff/index）。`image_gen` 与 `image_understand` 按各自模型配置条件注册；Extension manager 统一注册 `skill` 和 constant-schema `capability` 工具。`bot/core/bot.go` 只负责 Extension、Agent 和 command parser 的顶层组装。
 
 `Registry` 除了保存 `Tool`，还集中保存 preview 与 delegated-call target 等执行元数据。模型侧名称仍是固定的 `capability`，但解析后的 canonical identity 会随 `ToolCallItem` 贯穿权限、Pre/Post Hook、Ledger、audit、结果和 UI 回调。canonical identity 会转义 server/tool 名称中的 `%` 和 `__`，避免不同 server.tool 组合碰撞到同一条权限规则。Runner 和 Policy 都不通过 optional interface 或硬编码 MCP 参数来推断行为。
+
+TUI 与 GUI 的图片粘贴统一使用 runtime `Input.Images` 附件字段。交互层通过中立的 `util/attachment` 将剪贴板图片写入 `~/.nekocode/tmp/images/<session-id>/`，输入框仅显示可原子删除的 `[Image #N]`；runtime 在送入 Agent 前追加模型可见、UI 不展示的附件路径元数据，引导 Agent 调用条件注册的 `image_understand`。未发送附件由输入组件清理，已发送附件在删除会话时清理。`image_understand` 默认采用 `fast` 模式（优先选择名为 `fast` 的配置、将大尺寸 PNG/JPEG 长边缩至 1280px、最大输出 1024 Token）；GIF/WebP 保持原文件，`accurate` 模式选择同名配置、保留原图并将最大输出提高到 4096 Token。显式 `model` 参数可覆盖模式的模型选择。
 
 ### 内置工具
 
@@ -519,6 +521,7 @@ type Tool interface {
 | tree | Parallel | Safe | `bot/extension/tool/builtin/filesystem/tree/` |
 | index | Parallel | Safe（条件注册） | `bot/extension/tool/builtin/index/` |
 | image_gen | Sequential | Safe（条件注册） | `bot/extension/tool/builtin/media/` |
+| image_understand | Sequential | Ask（条件注册；向外部模型发送本地图片） | `bot/extension/tool/builtin/media/` |
 | skill | Parallel | Safe（动态注册） | `bot/extension/skill/` |
 | capability | Sequential | 按真实 MCP `mcp__server__tool` 目标执行权限匹配 | `bot/extension/tool/builtin/capability/` |
 
@@ -530,7 +533,7 @@ type Tool interface {
 | `builtin/filesystem/{read,write,edit,list,tree,search}/` | 文件系统工具 |
 | `builtin/shell/` | Shell 执行、托管进程、事件式等待 + 危险分级 |
 | `builtin/web/` | Web 搜索/直抓/正文抽取/HTML2MD |
-| `builtin/media/` | 图片生成（即梦文生图） |
+| `builtin/media/` | 图片生成与图片理解 |
 | `builtin/task/` | 子 Agent 任务工具 |
 | `builtin/todo/` | Todo 管理工具 |
 | `builtin/question/` | 用户提问工具 |
@@ -749,7 +752,7 @@ TUI 和 GUI 直接渲染菜单；Telegram 渲染 inline keyboard 并同步平台
 允许走环境代理（`HTTPS_PROXY`/`http_proxy` 等），加固 DialContext 仅对用户配置的那个代理地址放行；
 回退那一跳与 `web_fetch` 一致：忽略代理、拒绝私网。是否把 URL 交给第三方由 Agent 选择工具决定，
 不再有全局开关。
-| 媒体工具 | `bot/extension/tool/builtin/media/` | image_gen（即梦文生图） |
+| 媒体工具 | `bot/extension/tool/builtin/media/` | image_gen、image_understand |
 | 任务工具 | `bot/extension/tool/builtin/task/`, `bot/extension/tool/builtin/todo/` | sub-agent task 与 todo_write |
 | 代码索引工具 | `bot/extension/tool/builtin/index/` | 代码索引（条件注册） |
 | 上下文管理 | `bot/contextmgr/` | Build 管线 + 可配置摘要压缩 + token 估算 |

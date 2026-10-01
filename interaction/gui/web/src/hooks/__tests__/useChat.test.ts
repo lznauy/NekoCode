@@ -10,6 +10,7 @@ function emit(event: string, data: unknown): void {
 
  beforeEach(() => {
   Object.keys(listeners).forEach((k) => delete listeners[k])
+	delete (window as unknown as { go?: unknown }).go
 
   vi.stubGlobal('runtime', {
     EventsOnMultiple: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
@@ -23,6 +24,241 @@ function emit(event: string, data: unknown): void {
 })
 
 describe('useChat', () => {
+	it('persists pasted images, inserts a placeholder, and sends the attachment', async () => {
+	  const save = vi.fn().mockResolvedValue('/tmp/paste.png')
+	  const remove = vi.fn().mockResolvedValue(undefined)
+	  const send = vi.fn().mockResolvedValue(undefined)
+	  ;(window as unknown as { go: unknown }).go = { main: { App: {
+		SaveClipboardImage: save,
+		DeleteClipboardImage: remove,
+		SendMessage: send,
+	  } } }
+	  const { result } = renderHook(() => useChat())
+	  const image = new File(['png'], 'shot.png', { type: 'image/png' })
+
+	  await act(async () => {
+		await result.current.pasteImages([image], 0, 0)
+	  })
+	  expect(result.current.text).toBe('[Image #1]')
+	  expect(result.current.imageAttachments).toEqual([{ label: '[Image #1]', path: '/tmp/paste.png' }])
+
+	  act(() => result.current.send())
+	  expect(send).toHaveBeenCalledWith('[Image #1]', [{ label: '[Image #1]', path: '/tmp/paste.png' }])
+	  expect(remove).not.toHaveBeenCalled()
+	})
+
+	it('restores an image draft when a control command finishes without accepting it', async () => {
+	  const remove = vi.fn().mockResolvedValue(undefined)
+	  ;(window as unknown as { go: unknown }).go = { main: { App: {
+		SaveClipboardImage: vi.fn().mockResolvedValue('/tmp/draft.png'),
+		DeleteClipboardImage: remove,
+		SendMessage: vi.fn().mockResolvedValue(undefined),
+	  } } }
+	  const { result } = renderHook(() => useChat())
+	  await act(async () => {
+		await result.current.pasteImages([new File(['png'], 'shot.png', { type: 'image/png' })], 0, 0)
+	  })
+	  act(() => result.current.send('/compact'))
+	  act(() => emit('agent:done', { output: '', error: '' }))
+	  expect(result.current.text).toBe('[Image #1]')
+	  expect(result.current.imageAttachments).toEqual([{ label: '[Image #1]', path: '/tmp/draft.png' }])
+	  expect(remove).not.toHaveBeenCalled()
+	})
+
+	it('does not restore images after the runtime accepts them', async () => {
+	  ;(window as unknown as { go: unknown }).go = { main: { App: {
+		SaveClipboardImage: vi.fn().mockResolvedValue('/tmp/accepted.png'),
+		DeleteClipboardImage: vi.fn().mockResolvedValue(undefined),
+		SendMessage: vi.fn().mockResolvedValue(undefined),
+	  } } }
+	  const { result } = renderHook(() => useChat())
+	  await act(async () => {
+		await result.current.pasteImages([new File(['png'], 'shot.png', { type: 'image/png' })], 0, 0)
+	  })
+	  act(() => result.current.send())
+	  act(() => emit('agent:input_accepted', {
+		source: { kind: 'gui' },
+		images: [{ label: '[Image #1]', path: '/tmp/accepted.png' }],
+	  }))
+	  act(() => emit('agent:done', { output: '', error: '' }))
+	  expect(result.current.text).toBe('')
+	  expect(result.current.imageAttachments).toEqual([])
+	})
+
+	it('restores an unaccepted image draft when the run is stopped', async () => {
+	  ;(window as unknown as { go: unknown }).go = { main: { App: {
+		SaveClipboardImage: vi.fn().mockResolvedValue('/tmp/stopped.png'),
+		DeleteClipboardImage: vi.fn().mockResolvedValue(undefined),
+		SendMessage: vi.fn().mockResolvedValue(undefined),
+		Abort: vi.fn(),
+	  } } }
+	  const { result } = renderHook(() => useChat())
+	  await act(async () => {
+		await result.current.pasteImages([new File(['png'], 'shot.png', { type: 'image/png' })], 0, 0)
+	  })
+	  act(() => result.current.send('/compact'))
+	  act(() => result.current.stop())
+	  expect(result.current.text).toBe('[Image #1]')
+	  expect(result.current.imageAttachments).toEqual([{ label: '[Image #1]', path: '/tmp/stopped.png' }])
+	})
+
+	it('skips image markers already present as literal draft text', async () => {
+	  ;(window as unknown as { go: unknown }).go = { main: { App: {
+		SaveClipboardImage: vi.fn().mockResolvedValue('/tmp/paste.png'),
+		DeleteClipboardImage: vi.fn().mockResolvedValue(undefined),
+	  } } }
+	  const { result } = renderHook(() => useChat())
+	  act(() => result.current.setText('literal [Image #1] '))
+	  const literal = 'literal [Image #1] '
+	  await act(async () => {
+		await result.current.pasteImages([new File(['png'], 'shot.png', { type: 'image/png' })], literal.length, literal.length)
+	  })
+	  expect(result.current.text).toContain('[Image #2]')
+	  expect(result.current.imageAttachments[0]?.label).toBe('[Image #2]')
+	})
+
+	it('keeps the draft available when starting the run fails', async () => {
+	  const send = vi.fn().mockRejectedValue(new Error('model was removed'))
+	  const remove = vi.fn().mockResolvedValue(undefined)
+	  ;(window as unknown as { go: unknown }).go = { main: { App: {
+		SaveClipboardImage: vi.fn().mockResolvedValue('/tmp/draft.png'),
+		DeleteClipboardImage: remove,
+		SendMessage: send,
+	  } } }
+	  const { result } = renderHook(() => useChat())
+	  await act(async () => {
+		await result.current.pasteImages([new File(['png'], 'shot.png', { type: 'image/png' })], 0, 0)
+	  })
+
+	  await act(async () => {
+		result.current.send()
+		await Promise.resolve()
+	  })
+
+	  expect(result.current.text).toBe('[Image #1]')
+	  expect(result.current.imageAttachments).toEqual([{ label: '[Image #1]', path: '/tmp/draft.png' }])
+	  expect(remove).not.toHaveBeenCalled()
+	  expect(result.current.error).toContain('model was removed')
+	})
+
+	it('does not restore hidden images when the draft changes before start failure returns', async () => {
+	  let rejectSend!: (reason: Error) => void
+	  const send = vi.fn().mockReturnValue(new Promise<void>((_, reject) => { rejectSend = reject }))
+	  const remove = vi.fn().mockResolvedValue(undefined)
+	  ;(window as unknown as { go: unknown }).go = { main: { App: {
+		SaveClipboardImage: vi.fn().mockResolvedValue('/tmp/old-draft.png'),
+		DeleteClipboardImage: remove,
+		SendMessage: send,
+	  } } }
+	  const { result } = renderHook(() => useChat())
+	  await act(async () => {
+		await result.current.pasteImages([new File(['png'], 'shot.png', { type: 'image/png' })], 0, 0)
+	  })
+
+	  act(() => result.current.send())
+	  act(() => {
+		emit('agent:status', { status: 'idle' })
+		result.current.setText('new draft')
+	  })
+	  await act(async () => {
+		rejectSend(new Error('start failed'))
+		await Promise.resolve()
+	  })
+
+	  expect(result.current.text).toBe('new draft')
+	  expect(result.current.imageAttachments).toHaveLength(0)
+	  expect(remove).toHaveBeenCalledWith('/tmp/old-draft.png')
+	  expect(result.current.msgs).toHaveLength(1)
+	  expect(result.current.msgs[0].text).toContain('start failed')
+	})
+
+	it('deletes a draft image when its placeholder is removed', async () => {
+	  const remove = vi.fn().mockResolvedValue(undefined)
+	  ;(window as unknown as { go: unknown }).go = { main: { App: {
+		SaveClipboardImage: vi.fn().mockResolvedValue('/tmp/draft.png'),
+		DeleteClipboardImage: remove,
+	  } } }
+	  const { result } = renderHook(() => useChat())
+	  await act(async () => {
+		await result.current.pasteImages([new File(['png'], 'shot.png', { type: 'image/png' })], 0, 0)
+	  })
+	  act(() => result.current.setText(''))
+	  await waitFor(() => expect(remove).toHaveBeenCalledWith('/tmp/draft.png'))
+	  expect(result.current.imageAttachments).toHaveLength(0)
+	})
+
+	it('reports clipboard image cleanup failures', async () => {
+	  const remove = vi.fn().mockRejectedValue(new Error('disk is read-only'))
+	  const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+	  ;(window as unknown as { go: unknown }).go = { main: { App: {
+		SaveClipboardImage: vi.fn().mockResolvedValue('/tmp/draft.png'),
+		DeleteClipboardImage: remove,
+	  } } }
+	  const { result } = renderHook(() => useChat())
+	  await act(async () => {
+		await result.current.pasteImages([new File(['png'], 'shot.png', { type: 'image/png' })], 0, 0)
+	  })
+
+	  act(() => result.current.setText(''))
+	  await waitFor(() => expect(result.current.error).toContain('disk is read-only'))
+	  expect(log).toHaveBeenCalled()
+	  log.mockRestore()
+	})
+
+	it('replaces and cleans an image when another image is pasted over its marker', async () => {
+	  const remove = vi.fn().mockResolvedValue(undefined)
+	  const save = vi.fn()
+		.mockResolvedValueOnce('/tmp/first.png')
+		.mockResolvedValueOnce('/tmp/second.png')
+	  ;(window as unknown as { go: unknown }).go = { main: { App: {
+		SaveClipboardImage: save,
+		DeleteClipboardImage: remove,
+	  } } }
+	  const { result } = renderHook(() => useChat())
+	  const file = new File(['png'], 'shot.png', { type: 'image/png' })
+	  await act(async () => { await result.current.pasteImages([file], 0, 0) })
+	  await act(async () => { await result.current.pasteImages([file], 0, '[Image #1]'.length) })
+
+	  expect(remove).toHaveBeenCalledWith('/tmp/first.png')
+	  expect(result.current.text).toBe('[Image #2]')
+	  expect(result.current.imageAttachments).toEqual([{ label: '[Image #2]', path: '/tmp/second.png' }])
+	})
+
+	it('discards an in-flight paste when the session draft changes', async () => {
+	  let finishSave!: (path: string) => void
+	  const remove = vi.fn().mockResolvedValue(undefined)
+	  const save = vi.fn().mockReturnValue(new Promise<string>((resolve) => { finishSave = resolve }))
+	  ;(window as unknown as { go: unknown }).go = { main: { App: {
+		SaveClipboardImage: save,
+		DeleteClipboardImage: remove,
+	  } } }
+	  const { result } = renderHook(() => useChat())
+	  let paste!: Promise<void>
+	  act(() => { paste = result.current.pasteImages([new File(['png'], 'shot.png', { type: 'image/png' })], 0, 0) })
+	  await waitFor(() => expect(save).toHaveBeenCalled())
+	  act(() => result.current.clearMessages())
+	  await act(async () => {
+		finishSave('/tmp/old-session.png')
+		await paste
+	  })
+
+	  expect(remove).toHaveBeenCalledWith('/tmp/old-session.png')
+	  expect(result.current.text).toBe('')
+	  expect(result.current.imageAttachments).toHaveLength(0)
+	})
+
+	it('rejects oversized images before reading or saving them', async () => {
+	  const save = vi.fn()
+	  ;(window as unknown as { go: unknown }).go = { main: { App: { SaveClipboardImage: save } } }
+	  const { result } = renderHook(() => useChat())
+	  const image = new File(['x'], 'huge.png', { type: 'image/png' })
+	  Object.defineProperty(image, 'size', { value: 20 * 1024 * 1024 + 1 })
+
+	  await act(async () => { await result.current.pasteImages([image], 0, 0) })
+	  expect(save).not.toHaveBeenCalled()
+	  expect(result.current.error).toContain('20 MiB')
+	})
+
   it('keeps streaming compaction separate and restores the final summary after missed deltas', () => {
     const { result } = renderHook(() => useChat())
     act(() => result.current.send('/compact'))

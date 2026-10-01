@@ -56,6 +56,20 @@ export namespace protocol {
 }
 
 export namespace runtime {
+	export class ImageAttachment {
+	    label: string;
+	    path: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ImageAttachment(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.label = source["label"];
+	        this.path = source["path"];
+	    }
+	}
 	
 	export class WorkspaceConfig {
 	    path: string;
@@ -174,6 +188,28 @@ export namespace runtime {
 	        this.model = source["model"];
 	    }
 	}
+	export class ImageUnderstandConfig {
+	    name: string;
+	    provider: string;
+	    api_key: string;
+	    model: string;
+	    base_url?: string;
+	    protocol?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ImageUnderstandConfig(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.provider = source["provider"];
+	        this.api_key = source["api_key"];
+	        this.model = source["model"];
+	        this.base_url = source["base_url"];
+	        this.protocol = source["protocol"];
+	    }
+	}
 	export class ModelProfile {
 	    context_window: number;
 	    context_window_source: string;
@@ -263,6 +299,7 @@ export namespace runtime {
 	    flash_model?: string;
 	    models: ModelConfig[];
 	    image_gen_models?: ImageGenConfig[];
+	    image_understand_models?: ImageUnderstandConfig[];
 	    mcp_servers?: Record<string, MCPServerConfig>;
 	    permissions?: PermissionsConfig;
 	    workspaces?: WorkspaceConfig[];
@@ -281,6 +318,7 @@ export namespace runtime {
 	        this.flash_model = source["flash_model"];
 	        this.models = this.convertValues(source["models"], ModelConfig);
 	        this.image_gen_models = this.convertValues(source["image_gen_models"], ImageGenConfig);
+	        this.image_understand_models = this.convertValues(source["image_understand_models"], ImageUnderstandConfig);
 	        this.mcp_servers = this.convertValues(source["mcp_servers"], MCPServerConfig, true);
 	        this.permissions = this.convertValues(source["permissions"], PermissionsConfig);
 	        this.workspaces = this.convertValues(source["workspaces"], WorkspaceConfig);
@@ -649,4 +687,3 @@ export namespace runtime {
 	
 
 }
-

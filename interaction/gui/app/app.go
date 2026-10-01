@@ -35,6 +35,7 @@ import (
 
 	controlruntime "nekocode/runtime"
 	"nekocode/runtime/standard"
+	"nekocode/util/attachment"
 
 	"github.com/google/uuid"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -42,12 +43,16 @@ import (
 
 // App 是绑定到 Wails 前端的应用实例。
 type App struct {
-	ctx   context.Context
-	rt    runtimeClient
-	mu    sync.Mutex
-	runs  int
-	ready atomic.Bool
-	start time.Time
+	ctx                      context.Context
+	rt                       runtimeClient
+	mu                       sync.Mutex
+	attachmentMu             sync.Mutex
+	runs                     int
+	pendingImages            map[string]struct{}
+	attachmentDraftSessionID string
+	attachmentsClosed        bool
+	ready                    atomic.Bool
+	start                    time.Time
 }
 
 type runtimeClient interface {
@@ -66,6 +71,7 @@ type runtimeClient interface {
 	ResolveModelProfile(controlruntime.ModelSpec) controlruntime.ModelProfile
 	ApplyConfig(controlruntime.ConfigView) (controlruntime.ConfigView, error)
 	CurrentSessionID() string
+	ImageAttachmentsEnabled() bool
 	ListSessions() []controlruntime.SessionMeta
 	SessionMessages() []controlruntime.DisplayMessage
 	ResumeSession(string) error
@@ -97,6 +103,19 @@ func (a *App) Startup(ctx context.Context) {
 // Shutdown 在窗口关闭时调用。
 func (a *App) Shutdown(_ context.Context) {
 	wailsruntime.LogInfo(a.ctx, "NekoCode GUI shutting down")
+	a.attachmentMu.Lock()
+	defer a.attachmentMu.Unlock()
+	a.attachmentsClosed = true
+	pending := make([]string, 0, len(a.pendingImages))
+	for path := range a.pendingImages {
+		pending = append(pending, path)
+	}
+	a.pendingImages = nil
+	for _, path := range pending {
+		if err := attachment.DeleteImage(path); err != nil {
+			wailsruntime.LogError(a.ctx, "draft image cleanup failed: "+err.Error())
+		}
+	}
 	if err := a.rt.Close(); err != nil {
 		wailsruntime.LogError(a.ctx, "runtime shutdown failed: "+err.Error())
 	}
@@ -185,32 +204,143 @@ func (a *App) CommandMenu(input string) *controlruntime.CommandMenu {
 }
 
 // SendMessage 发送一条用户消息并启动 Agent 循环。
-func (a *App) SendMessage(input string) {
+func (a *App) SendMessage(input string, images []controlruntime.ImageAttachment) error {
+	return a.startMessage(input, images)
+}
+
+func (a *App) startMessage(input string, images []controlruntime.ImageAttachment) error {
+	a.attachmentMu.Lock()
+	defer a.attachmentMu.Unlock()
+	if a.attachmentsClosed {
+		return fmt.Errorf("application is shutting down")
+	}
 	a.mu.Lock()
 	a.runs++
 	a.start = time.Now()
 	a.mu.Unlock()
 
-	wailsruntime.EventsEmit(a.ctx, "agent:status", map[string]string{
-		"status": "thinking",
-	})
 	_, err := a.rt.StartRun(a.ctx, controlruntime.Input{
 		Source: controlruntime.SourceRef{Kind: "gui"},
 		Text:   input,
+		Images: images,
 	})
 	if err != nil {
-		wailsruntime.EventsEmit(a.ctx, "agent:done", map[string]string{
-			"output": "",
-			"error":  err.Error(),
-		})
-		wailsruntime.EventsEmit(a.ctx, "agent:status", map[string]string{
-			"status": "idle",
-		})
+		return err
 	}
+	return nil
+}
+
+func (a *App) commitAcceptedImages(images []controlruntime.ImageAttachment) {
+	a.attachmentMu.Lock()
+	defer a.attachmentMu.Unlock()
+	for _, image := range images {
+		delete(a.pendingImages, image.Path)
+	}
+}
+
+// SaveClipboardImage persists a pasted GUI image in the active session's
+// private temporary attachment directory.
+func (a *App) SaveClipboardImage(dataURL string) (string, error) {
+	comma := strings.IndexByte(dataURL, ',')
+	if comma < 0 || !strings.HasPrefix(dataURL[:comma], "data:image/") || !strings.HasSuffix(dataURL[:comma], ";base64") {
+		return "", fmt.Errorf("invalid clipboard image payload")
+	}
+	encoded := dataURL[comma+1:]
+	if base64.StdEncoding.DecodedLen(len(encoded)) > attachment.MaxImageBytes {
+		return "", fmt.Errorf("clipboard image exceeds 20 MiB limit")
+	}
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", fmt.Errorf("decode clipboard image: %w", err)
+	}
+	a.attachmentMu.Lock()
+	defer a.attachmentMu.Unlock()
+	if err := a.ensureAttachmentsOpenLocked(); err != nil {
+		return "", err
+	}
+	if !a.rt.ImageAttachmentsEnabled() {
+		return "", fmt.Errorf("未配置图片理解模型，请先配置 image_understand_models")
+	}
+	sessionID := a.rt.CurrentSessionID()
+	createdSession := false
+	if sessionID == "" {
+		a.mu.Lock()
+		createdSession = true
+		meta, err := a.rt.NewSession()
+		if err != nil {
+			a.mu.Unlock()
+			return "", fmt.Errorf("create attachment session: %w", err)
+		}
+		sessionID = meta.ID
+		// The session event is already queued. Mark it as attachment-only before
+		// any subsequent save can fail so the frontend preserves its draft while
+		// still synchronizing the new session ID.
+		a.attachmentDraftSessionID = sessionID
+	}
+	path, err := attachment.SaveImage(sessionID, data)
+	if err != nil {
+		if createdSession {
+			a.mu.Unlock()
+		}
+		return "", err
+	}
+	if a.rt.CurrentSessionID() != sessionID {
+		_ = attachment.DeleteImage(path)
+		if createdSession {
+			a.mu.Unlock()
+		}
+		return "", fmt.Errorf("session changed while saving clipboard image")
+	}
+	if createdSession {
+		a.mu.Unlock()
+	}
+	if a.pendingImages == nil {
+		a.pendingImages = make(map[string]struct{})
+	}
+	a.pendingImages[path] = struct{}{}
+	return path, nil
+}
+
+func (a *App) DeleteClipboardImage(path string) error {
+	a.attachmentMu.Lock()
+	defer a.attachmentMu.Unlock()
+	if err := a.ensureAttachmentsOpenLocked(); err != nil {
+		return err
+	}
+	if _, ok := a.pendingImages[path]; !ok {
+		return fmt.Errorf("clipboard image is not part of the active draft")
+	}
+	if err := attachment.DeleteImage(path); err != nil {
+		return err
+	}
+	delete(a.pendingImages, path)
+	return nil
+}
+
+func (a *App) ensureAttachmentsOpenLocked() error {
+	if a.attachmentsClosed {
+		return fmt.Errorf("application is shutting down")
+	}
+	return nil
+}
+
+func (a *App) consumeAttachmentDraftSession(sessionID string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if sessionID == "" || sessionID != a.attachmentDraftSessionID {
+		return false
+	}
+	a.attachmentDraftSessionID = ""
+	return true
 }
 
 func (a *App) dispatchRuntimeEvent(ev controlruntime.Event) {
 	switch ev.Type {
+	case controlruntime.EventInputAccepted:
+		if p, ok := ev.Payload.(controlruntime.MessagePayload); ok {
+			a.commitAcceptedImages(p.Images)
+			wailsruntime.EventsEmit(a.ctx, "agent:input_accepted", p)
+		}
 	case controlruntime.EventCompaction:
 		if p, ok := ev.Payload.(controlruntime.CompactionPayload); ok {
 			wailsruntime.EventsEmit(a.ctx, "agent:compaction", p)
@@ -242,8 +372,10 @@ func (a *App) dispatchRuntimeEvent(ev controlruntime.Event) {
 		wailsruntime.EventsEmit(a.ctx, "agent:todos", map[string]any{"items": ev.Payload})
 	case controlruntime.EventSessionChanged:
 		if p, ok := ev.Payload.(controlruntime.SessionPayload); ok {
+			attachmentDraft := a.consumeAttachmentDraftSession(p.ID)
 			wailsruntime.EventsEmit(a.ctx, "session:changed", map[string]any{
-				"id": p.ID, "messages": a.rt.SessionMessages(),
+				"id": p.ID, "messages": a.rt.SessionMessages(), "attachmentDraft": attachmentDraft,
+				"reason": p.Reason, "changedId": p.ChangedID, "currentChanged": p.CurrentChanged,
 			})
 		}
 	case controlruntime.EventMetricsUpdated:
@@ -492,6 +624,11 @@ func (a *App) ListSessions() []controlruntime.SessionMeta {
 
 // NewSession 创建一个新会话并将其设为当前会话，返回会话元数据。
 func (a *App) NewSession() (controlruntime.SessionMeta, error) {
+	a.attachmentMu.Lock()
+	defer a.attachmentMu.Unlock()
+	if err := a.ensureAttachmentsOpenLocked(); err != nil {
+		return controlruntime.SessionMeta{}, err
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	meta, err := a.rt.NewSession()
@@ -502,6 +639,11 @@ func (a *App) NewSession() (controlruntime.SessionMeta, error) {
 }
 
 func (a *App) LoadSession(id string) ([]controlruntime.DisplayMessage, error) {
+	a.attachmentMu.Lock()
+	defer a.attachmentMu.Unlock()
+	if err := a.ensureAttachmentsOpenLocked(); err != nil {
+		return nil, err
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -513,6 +655,11 @@ func (a *App) LoadSession(id string) ([]controlruntime.DisplayMessage, error) {
 
 // DeleteSession 删除指定会话。若删除的是当前会话，会清空上下文并等待下一次真实对话再创建会话。
 func (a *App) DeleteSession(id string) error {
+	a.attachmentMu.Lock()
+	defer a.attachmentMu.Unlock()
+	if err := a.ensureAttachmentsOpenLocked(); err != nil {
+		return err
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.rt.DeleteSession(id)

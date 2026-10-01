@@ -28,7 +28,7 @@ export function LogoMark({ size = 'md', showWordmark = false }: LogoMarkProps) {
         </svg>
       </span>
       {showWordmark && (
-        <span className="text-[13px] font-semibold leading-none text-text select-none">
+        <span className="hidden text-[13px] font-semibold leading-none text-text select-none sm:inline">
           Neko<span className="text-primary">Code</span>
         </span>
       )}

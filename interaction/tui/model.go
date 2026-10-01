@@ -10,6 +10,7 @@ import (
 	"nekocode/interaction/tui/components"
 	"nekocode/interaction/tui/styles"
 	controlruntime "nekocode/runtime"
+	"nekocode/util/attachment"
 	"nekocode/util/version"
 
 	"charm.land/bubbles/v2/spinner"
@@ -84,6 +85,7 @@ func NewModel(rt RuntimeClient) (*Model, error) {
 		runtimeEvents: events,
 	}
 	m.Input.SetHistory(loadInputHistory())
+	m.Input.SetImageCleanup(func(path string) { _ = attachment.DeleteImage(path) })
 	m.refreshRuntimeStatus()
 
 	return m, nil

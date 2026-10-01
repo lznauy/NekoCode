@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { useSessions } from '../useSessions'
+import { shouldHydrateEmptySession, shouldReloadSessionMessages, useSessions } from '../useSessions'
 import type { runtime } from '../../../wailsjs/go/models'
 type SessionMeta = runtime.SessionMeta
 
@@ -38,6 +38,23 @@ describe('useSessions', () => {
     mockSafeNewSession.mockResolvedValue(meta('draft'))
     mockSafeLoadSession.mockResolvedValue([])
     mockSafeDeleteSession.mockResolvedValue()
+  })
+
+  it('does not reload current messages when another session is deleted', () => {
+	expect(shouldReloadSessionMessages({
+	  id: 'current', reason: 'delete', changedId: 'other', currentChanged: false, messages: [],
+	})).toBe(false)
+	expect(shouldReloadSessionMessages({
+	  id: '', reason: 'delete', changedId: 'current', currentChanged: true, messages: [],
+	})).toBe(true)
+	expect(shouldReloadSessionMessages({
+	  id: '', reason: 'delete', changedId: 'history', currentChanged: false, messages: [],
+	})).toBe(false)
+  })
+
+  it('does not hydrate an attachment-created draft session', () => {
+	expect(shouldHydrateEmptySession('draft', 'draft')).toBe(false)
+	expect(shouldHydrateEmptySession('normal', null)).toBe(true)
   })
 
   it('keeps an empty persisted list empty', async () => {
@@ -81,12 +98,28 @@ describe('useSessions', () => {
     await waitFor(() => expect(result.current.currentId).toBe('one'))
 
     await act(async () => {
-      const remaining = await result.current.deleteSession('one')
-      expect(remaining).toEqual([])
+	  const resultValue = await result.current.deleteSession('one')
+	  expect(resultValue).toEqual({ sessions: [], deleted: true })
     })
 
     expect(result.current.sessions).toEqual([])
     expect(result.current.currentId).toBeNull()
+  })
+
+  it('reports a failed deletion without claiming the session was removed', async () => {
+    mockSafeListSessions.mockResolvedValue([meta('one')])
+    mockSafeDeleteSession.mockRejectedValue(new Error('delete failed'))
+    const { result } = renderHook(() => useSessions())
+    await waitFor(() => expect(result.current.currentId).toBe('one'))
+
+    let deletion!: { sessions: SessionMeta[]; deleted: boolean }
+    await act(async () => {
+      deletion = await result.current.deleteSession('one')
+    })
+
+    expect(deletion.deleted).toBe(false)
+    expect(deletion.sessions.map((session) => session.id)).toEqual(['one'])
+    expect(result.current.currentId).toBe('one')
   })
 
   it('synchronizes the current session from runtime events', async () => {

@@ -6,6 +6,7 @@ import {
   CommandMenu,
   ContextSnapshot,
   DeleteSession,
+  DeleteClipboardImage,
   GetConfig,
   GetSkillManagement,
   ListSessions,
@@ -19,6 +20,7 @@ import {
   ReplyConfirmDecision,
   ReplyQuestion,
   SaveConfig,
+  SaveClipboardImage,
   SendMessage,
   SetPluginEnabled,
   SelectSkill,
@@ -44,11 +46,28 @@ export function safeEventsOn(event: string, cb: (...args: unknown[]) => void): (
   }
 }
 
-export function safeSendMessage(msg: string): Promise<void> {
+export function safeSendMessage(msg: string, images: runtime.ImageAttachment[] = []): Promise<void> {
+	if (!isWailsEnvironment()) return Promise.resolve()
+	try {
+		return SendMessage(msg, images)
+	} catch (err) {
+		return Promise.reject(err)
+	}
+}
+
+export function safeSaveClipboardImage(dataURL: string): Promise<string> {
   try {
-    return SendMessage(msg)
-  } catch {
-    return Promise.resolve()
+    return SaveClipboardImage(dataURL)
+  } catch (err) {
+    return Promise.reject(err)
+  }
+}
+
+export function safeDeleteClipboardImage(path: string): Promise<void> {
+  try {
+    return DeleteClipboardImage(path)
+  } catch (err) {
+    return Promise.reject(err)
   }
 }
 

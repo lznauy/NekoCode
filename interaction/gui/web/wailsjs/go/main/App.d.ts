@@ -15,6 +15,8 @@ export function CurrentModel():Promise<string>;
 
 export function DeleteSession(arg1:string):Promise<void>;
 
+export function DeleteClipboardImage(arg1:string):Promise<void>;
+
 export function GetConfig():Promise<runtime.ConfigView>;
 
 export function GetSkillManagement():Promise<runtime.SkillManagementView>;
@@ -39,9 +41,11 @@ export function ResolveModelProfile(arg1:runtime.ModelSpec):Promise<runtime.Mode
 
 export function SaveConfig(arg1:runtime.ConfigView):Promise<runtime.ConfigView>;
 
+export function SaveClipboardImage(arg1:string):Promise<string>;
+
 export function SelectSkill(arg1:string):Promise<void>;
 
-export function SendMessage(arg1:string):Promise<void>;
+export function SendMessage(arg1:string,arg2:Array<runtime.ImageAttachment>):Promise<void>;
 
 export function SetPluginEnabled(arg1:string,arg2:boolean):Promise<runtime.SkillManagementView>;
 

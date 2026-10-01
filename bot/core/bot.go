@@ -4,6 +4,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,7 @@ import (
 	"nekocode/bot/session"
 	"nekocode/logger"
 	"nekocode/protocol"
+	"nekocode/util/attachment"
 )
 
 // RunHost is the synchronous boundary used by one bot run. Runtime and other
@@ -86,6 +88,9 @@ func New() (*Bot, error) {
 		return nil, err
 	}
 	b.initSession()
+	if err := attachment.ReconcileSessionImages(b.sess.Exists); err != nil {
+		log.Printf("attachment: reconcile session image storage: %v", err)
+	}
 	if err := b.rebuildRuntime(); err != nil {
 		return nil, err
 	}
@@ -208,10 +213,14 @@ func (b *Bot) configuredWorkspaceRoots() []workspace.Root {
 
 func (b *Bot) initToolRegistry() {
 	if b.toolbox == nil {
-		b.toolbox = catalog.NewToolbox(b.cfg.ImageGenModels)
+		b.toolbox = catalog.NewToolboxWithConfig(catalog.ToolboxConfig{
+			ImageGenModels: b.cfg.ImageGenModels, ImageUnderstandModels: b.cfg.ImageUnderstandModels,
+		})
 		return
 	}
-	b.toolbox.RebuildRegistry(b.cfg.ImageGenModels)
+	b.toolbox.RebuildRegistryWithConfig(catalog.ToolboxConfig{
+		ImageGenModels: b.cfg.ImageGenModels, ImageUnderstandModels: b.cfg.ImageUnderstandModels,
+	})
 }
 
 func (b *Bot) initPolicy() {

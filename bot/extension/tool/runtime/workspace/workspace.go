@@ -101,6 +101,22 @@ func (m *Manager) CheckRead(path string) (string, Root, bool, error) {
 	return m.check(path, AccessReadOnly)
 }
 
+// CheckReadLexical checks an already configured root without resolving links
+// or touching the filesystem. Callers must subsequently use a no-follow open.
+func (m *Manager) CheckReadLexical(path string) (string, Root, bool, error) {
+	abs, err := filepath.Abs(expandHome(path))
+	if err != nil {
+		return "", Root{}, false, fmt.Errorf("path resolution failed: %w", err)
+	}
+	clean := filepath.Clean(abs)
+	for _, root := range m.Snapshot() {
+		if rootAllows(root, AccessReadOnly) && insideRoot(clean, root.Path) {
+			return clean, root, true, nil
+		}
+	}
+	return clean, Root{}, false, nil
+}
+
 func (m *Manager) CheckWrite(path string) (string, Root, bool, error) {
 	return m.check(path, AccessReadWrite)
 }

@@ -77,6 +77,14 @@ type captureTool struct {
 	seen map[string]any
 }
 
+type privilegedCaptureTool struct {
+	fakeTool
+}
+
+func (t privilegedCaptureTool) ExecuteWithPermission(context.Context, map[string]any, core.PermissionRequest) (string, error) {
+	return "ok", nil
+}
+
 func (t *captureTool) Execute(_ context.Context, args map[string]any) (string, error) {
 	t.seen = args
 	return "ok", nil
@@ -129,6 +137,53 @@ func TestExecutorUsesRegisteredPreviews(t *testing.T) {
 	e.PreparePreviewsContext(context.Background(), calls)
 	if calls[0].Args["_preview"] != "first-preview" || calls[1].Args["_preview"] != "second-preview" {
 		t.Fatalf("previews = %#v, %#v", calls[0].Args, calls[1].Args)
+	}
+}
+
+func TestPermissionPlanRunsOnlyAfterWorkspaceAccessIsApproved(t *testing.T) {
+	planned := false
+	registry := tools.New()
+	registry.SetWorkspace(workspace.New(t.TempDir(), nil))
+	tool := privilegedCaptureTool{fakeTool: fakeTool{name: "image_understand"}}
+	registry.RegisterWithOptions(tool, tools.RegistrationOptions{
+		Privileged: tool.ExecuteWithPermission,
+		PermissionPlan: func(map[string]any, string) *core.PermissionRequest {
+			planned = true
+			return &core.PermissionRequest{Capabilities: []string{core.CapNetOutbound}}
+		},
+	})
+	e := NewExecutor(registry)
+	result := e.ExecuteBatch(context.Background(), []core.ToolCallItem{{
+		ID: "image", Name: "image_understand", Args: map[string]any{"path": filepath.Join(t.TempDir(), "outside.png")},
+	}})[0]
+	if result.Error == "" {
+		t.Fatal("expected workspace access rejection")
+	}
+	if planned {
+		t.Fatal("permission planner ran before workspace approval")
+	}
+}
+
+func TestDeniedFileToolDoesNotResolveOrPromptForWorkspacePath(t *testing.T) {
+	registry := tools.New()
+	registry.SetWorkspace(workspace.New(t.TempDir(), nil))
+	registry.Register(fakeTool{name: "read", mode: core.ModeParallel})
+	e := NewExecutor(registry)
+	e.SetPermissionPolicy(permission.PermissionsDecl{Deny: []string{"read"}}, "/repo", "/home/user")
+	prompted := false
+	e.SetConfirmFn(func(protocol.ConfirmRequest) protocol.ConfirmReply {
+		prompted = true
+		return protocol.Deny()
+	})
+
+	result := e.ExecuteBatch(context.Background(), []core.ToolCallItem{{
+		ID: "denied-read", Name: "read", Args: map[string]any{"path": filepath.Join(t.TempDir(), "outside.txt")},
+	}})[0]
+	if result.Error == "" || !strings.Contains(result.Error, "denied") {
+		t.Fatalf("denied read result = %+v", result)
+	}
+	if prompted {
+		t.Fatal("denied read prompted for workspace access before its deny rule")
 	}
 }
 

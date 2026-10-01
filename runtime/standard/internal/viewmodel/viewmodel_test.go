@@ -39,6 +39,22 @@ func TestConfigPreservesReasoningEffort(t *testing.T) {
 	}
 }
 
+func TestConfigPreservesImageUnderstandModels(t *testing.T) {
+	source := config.Config{
+		ImageUnderstandModels: []config.ImageUnderstandConfig{{
+			Name: "vision", Provider: "anthropic", APIKey: "secret", Model: "claude", BaseURL: "https://example.com", Protocol: "anthropic",
+		}},
+	}
+	view := Config(source)
+	if len(view.ImageUnderstandModels) != 1 || view.ImageUnderstandModels[0].Model != "claude" {
+		t.Fatalf("unexpected image understand view: %+v", view.ImageUnderstandModels)
+	}
+	got := ToConfig(view).ImageUnderstandModels
+	if len(got) != 1 || got[0] != source.ImageUnderstandModels[0] {
+		t.Fatalf("image understand config did not round-trip: %+v", got)
+	}
+}
+
 func TestModelProfileResolvesOverrideKnownAndDefaultWindows(t *testing.T) {
 	tests := []struct {
 		model  config.ModelConfig

@@ -14,6 +14,7 @@ type RunID = core.RunID
 type SourceRef = core.SourceRef
 type SenderRef = core.SenderRef
 type Input = core.Input
+type ImageAttachment = core.ImageAttachment
 
 type RunStatus = core.RunStatus
 
@@ -194,17 +195,18 @@ type ImageRef struct {
 
 // ConfigView is the configuration contract exposed to interaction surfaces.
 type ConfigView struct {
-	Path               string                     `json:"path"`
-	Exists             bool                       `json:"exists"`
-	Active             string                     `json:"active"`
-	AutoCompactPercent int                        `json:"auto_compact_percent"`
-	FlashModel         string                     `json:"flash_model,omitempty"`
-	Models             []ModelConfig              `json:"models"`
-	ImageGenModels     []ImageGenConfig           `json:"image_gen_models,omitempty"`
-	MCPServers         map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
-	Permissions        *PermissionsConfig         `json:"permissions,omitempty"`
-	Workspaces         []WorkspaceConfig          `json:"workspaces,omitempty"`
-	Jev                *JevConfig                 `json:"jev,omitempty"`
+	Path                  string                     `json:"path"`
+	Exists                bool                       `json:"exists"`
+	Active                string                     `json:"active"`
+	AutoCompactPercent    int                        `json:"auto_compact_percent"`
+	FlashModel            string                     `json:"flash_model,omitempty"`
+	Models                []ModelConfig              `json:"models"`
+	ImageGenModels        []ImageGenConfig           `json:"image_gen_models,omitempty"`
+	ImageUnderstandModels []ImageUnderstandConfig    `json:"image_understand_models,omitempty"`
+	MCPServers            map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
+	Permissions           *PermissionsConfig         `json:"permissions,omitempty"`
+	Workspaces            []WorkspaceConfig          `json:"workspaces,omitempty"`
+	Jev                   *JevConfig                 `json:"jev,omitempty"`
 }
 
 type JevConfig struct {
@@ -250,6 +252,15 @@ type ImageGenConfig struct {
 	SecretKey string `json:"secret_key"`
 	BaseURL   string `json:"base_url,omitempty"`
 	Model     string `json:"model,omitempty"`
+}
+
+type ImageUnderstandConfig struct {
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+	APIKey   string `json:"api_key"`
+	Model    string `json:"model"`
+	BaseURL  string `json:"base_url,omitempty"`
+	Protocol string `json:"protocol,omitempty"`
 }
 
 type MCPServerConfig struct {

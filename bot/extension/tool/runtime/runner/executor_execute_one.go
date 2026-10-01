@@ -38,6 +38,20 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) core.To
 		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: "plan mode: blocked"}
 	}
 
+	var errMsg string
+	var ok bool
+	workspaceChecked := false
+	if tc.Name == "image_understand" {
+		// Its permission planner hashes the file for approval binding, so first
+		// enforce a strictly lexical workspace check. Other file tools stay below
+		// permission evaluation: resolving their paths first could touch a denied
+		// Windows UNC path and leak DNS/SMB traffic before the deny takes effect.
+		if tc, errMsg, ok = e.ensureWorkspaceAccess(tc, confirmFn); !ok {
+			return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: errMsg}
+		}
+		workspaceChecked = true
+	}
+
 	// Predict the escalation request a privileged tool will raise from explicit
 	// sandbox arguments. This lets the command approval dialog offer a single
 	// unified decision without exposing legacy capability args.
@@ -65,11 +79,12 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) core.To
 		}
 	}
 
-	var errMsg string
-	var ok bool
-	if tc, errMsg, ok = e.ensureWorkspaceAccess(tc, confirmFn); !ok {
-		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: errMsg}
+	if !workspaceChecked {
+		if tc, errMsg, ok = e.ensureWorkspaceAccess(tc, confirmFn); !ok {
+			return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: errMsg}
+		}
 	}
+
 	captured, captureErr := e.captureMutationPaths(tc)
 	if captureErr != nil {
 		e.finalizeMutationPaths(captured)

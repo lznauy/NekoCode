@@ -53,6 +53,14 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 	if strings.TrimSpace(input.Text) == "" {
 		return "", protocolError(ErrorInvalidInput, "start_run", "empty input")
 	}
+	if len(input.Images) > MaxImageAttachments {
+		return "", protocolError(ErrorInvalidInput, "start_run", "too many image attachments")
+	}
+	r.mutationMu.Lock()
+	defer r.mutationMu.Unlock()
+	if len(input.Images) > 0 && !r.ImageAttachmentsEnabled() {
+		return "", protocolError(ErrorUnsupported, "start_run", "image attachments require a configured image understanding model")
+	}
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
@@ -91,6 +99,12 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 func (r *Runtime) SteerRun(ctx context.Context, runID RunID, input Input) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if len(input.Images) > MaxImageAttachments {
+		return protocolError(ErrorInvalidInput, "steer_run", "too many image attachments")
+	}
+	if len(input.Images) > 0 && !r.ImageAttachmentsEnabled() {
+		return protocolError(ErrorUnsupported, "steer_run", "image attachments require a configured image understanding model")
 	}
 	r.mu.Lock()
 	if r.closed {
@@ -134,7 +148,7 @@ func (r *Runtime) SteerRun(ctx context.Context, runID RunID, input Input) error 
 	}()
 	var steerErr error
 	if !lease.guard(func() {
-		steerErr = steer(steerCtx, input.Text)
+		steerErr = steer(steerCtx, InputWithImageAttachments(input.Text, input.Images))
 		if steerErr == nil {
 			r.events.Publish(Event{
 				RunID:  runID,
@@ -145,6 +159,7 @@ func (r *Runtime) SteerRun(ctx context.Context, runID RunID, input Input) error 
 					Content: RedactInputText(input.Text),
 					Source:  input.Source,
 					Sender:  input.Sender,
+					Images:  ValidImageAttachments(input.Text, input.Images),
 				},
 			})
 		}

@@ -26,7 +26,7 @@ func DisplayMessages(messages []types.Message) []controlruntime.DisplayMessage {
 		switch m.Role {
 		case "user":
 			if !isInternalMessage(m) {
-				out = append(out, controlruntime.DisplayMessage{Role: "user", Content: m.Content})
+				out = append(out, controlruntime.DisplayMessage{Role: "user", Content: controlruntime.VisibleInputText(m.Content)})
 			}
 			i++
 		case "assistant":

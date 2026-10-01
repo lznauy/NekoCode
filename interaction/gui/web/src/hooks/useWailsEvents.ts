@@ -17,6 +17,7 @@ import type {
   MetricsPayload,
   ConfirmEvent,
   SystemEvent,
+  InputAcceptedEvent,
 } from '../types/events'
 
 export interface AgentEventHandlers {
@@ -36,6 +37,7 @@ export interface AgentEventHandlers {
   onStatus: (e: StatusEvent) => void
   onConfirm?: (e: ConfirmEvent) => void
   onSystem?: (e: SystemEvent) => void
+  onInputAccepted?: (e: InputAcceptedEvent) => void
 }
 
 export function useWailsEvents(handlers: AgentEventHandlers): void {
@@ -62,6 +64,7 @@ export function useWailsEvents(handlers: AgentEventHandlers): void {
     cleanups.push(safeEventsOn('agent:status', (e: unknown) => ref.current.onStatus(e as StatusEvent)))
     cleanups.push(safeEventsOn('agent:confirm', (e: unknown) => ref.current.onConfirm?.(e as ConfirmEvent)))
     cleanups.push(safeEventsOn('agent:system', (e: unknown) => ref.current.onSystem?.(e as SystemEvent)))
+    cleanups.push(safeEventsOn('agent:input_accepted', (e: unknown) => ref.current.onInputAccepted?.(e as InputAcceptedEvent)))
 
     return () => {
       cleanups.forEach((fn) => {

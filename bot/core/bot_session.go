@@ -16,10 +16,12 @@ import (
 	"nekocode/bot/command"
 	"nekocode/bot/contextmgr"
 	"nekocode/bot/extension/tool/runtime/execution"
+	"nekocode/bot/extension/tool/runtime/workspace"
 	"nekocode/bot/policy/ledger"
 	"nekocode/bot/provider/types"
 	"nekocode/bot/session"
 	"nekocode/protocol"
+	"nekocode/util/attachment"
 )
 
 func (b *Bot) initSession() {
@@ -246,13 +248,14 @@ func (b *Bot) DeleteSession(id string) error {
 	if err := b.closeSessionRuntime(id); err != nil {
 		return err
 	}
-	if err := b.sess.Delete(id); err != nil {
-		return err
+	attachmentDelete, err := attachment.BeginSessionDelete(id)
+	if err != nil {
+		b.syncPolicySessionID()
+		return fmt.Errorf("stage session image attachments: %w", err)
 	}
-	if b.checkpoints != nil {
-		if err := b.checkpoints.Delete(id); err != nil {
-			return err
-		}
+	if err := b.sess.Delete(id); err != nil {
+		b.syncPolicySessionID()
+		return errors.Join(err, attachmentDelete.Rollback())
 	}
 	if b.sess.CurrentID() == id {
 		b.ctxMgr.Reset()
@@ -268,8 +271,33 @@ func (b *Bot) DeleteSession(id string) error {
 		}
 		b.syncPolicySessionID()
 	}
+	var cleanupErrors []error
+	if err := attachmentDelete.Commit(); err != nil {
+		cleanupErrors = append(cleanupErrors, err)
+	}
+	if b.checkpoints != nil {
+		if err := b.checkpoints.Delete(id); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("delete checkpoints: %w", err))
+		}
+	}
+	if len(cleanupErrors) > 0 {
+		return &sessionDeleteCleanupError{err: errors.Join(cleanupErrors...)}
+	}
 	return nil
 }
+
+// sessionDeleteCleanupError reports that the durable session record was
+// deleted even though one or more ancillary stores could not be cleaned.
+// Runtime uses this marker to publish the authoritative session state while
+// still surfacing the cleanup failure to the caller.
+type sessionDeleteCleanupError struct{ err error }
+
+func (e *sessionDeleteCleanupError) Error() string {
+	return "session deleted, but cleanup is incomplete: " + e.err.Error()
+}
+
+func (e *sessionDeleteCleanupError) Unwrap() error           { return e.err }
+func (e *sessionDeleteCleanupError) MutationCommitted() bool { return true }
 
 func (b *Bot) rewindCheckpoint(turn string) (string, error) {
 	if b.checkpoints == nil || b.sess == nil {
@@ -429,6 +457,13 @@ func (b *Bot) syncPolicySessionID() {
 	}
 	if b.toolbox != nil {
 		b.toolbox.SetSessionID(id)
+		if id != "" {
+			if dir, err := attachment.ImageDir(id); err == nil {
+				if _, err := b.toolbox.Workspace().AddSessionRoot(dir, workspace.AccessReadOnly); err != nil {
+					log.Printf("attachment: grant session image directory %s: %v", id, err)
+				}
+			}
+		}
 	}
 }
 

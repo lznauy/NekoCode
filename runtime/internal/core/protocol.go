@@ -28,9 +28,15 @@ type SenderRef struct {
 }
 
 type Input struct {
-	Source SourceRef `json:"source"`
-	Sender SenderRef `json:"sender"`
-	Text   string    `json:"text"`
+	Source SourceRef         `json:"source"`
+	Sender SenderRef         `json:"sender"`
+	Text   string            `json:"text"`
+	Images []ImageAttachment `json:"images,omitempty"`
+}
+
+type ImageAttachment struct {
+	Label string `json:"label"`
+	Path  string `json:"path"`
 }
 
 type RunStatus string
@@ -99,10 +105,11 @@ type EventFilter struct {
 }
 
 type MessagePayload struct {
-	Role    string    `json:"role"`
-	Content string    `json:"content"`
-	Source  SourceRef `json:"source"`
-	Sender  SenderRef `json:"sender"`
+	Role    string            `json:"role"`
+	Content string            `json:"content"`
+	Source  SourceRef         `json:"source"`
+	Sender  SenderRef         `json:"sender"`
+	Images  []ImageAttachment `json:"images,omitempty"`
 }
 
 type DeltaPayload struct {
@@ -136,7 +143,10 @@ type SubAgentPayload struct {
 }
 
 type SessionPayload struct {
-	ID string `json:"id,omitempty"`
+	ID             string `json:"id,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+	ChangedID      string `json:"changed_id,omitempty"`
+	CurrentChanged bool   `json:"current_changed,omitempty"`
 }
 
 type RunResult struct {

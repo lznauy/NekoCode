@@ -250,6 +250,7 @@ func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runL
 
 	withMetrics = true
 	stopMetricsUpdates = r.startMetricsUpdates(runID, lease)
+	agentInput = InputWithImageAttachments(agentInput, input.Images)
 	result, err := r.runner.Run(ctx, agentInput, host)
 	r.finishRun(runID, result, err, true)
 }
@@ -263,6 +264,7 @@ func (r *Runtime) publishAcceptedInput(runID RunID, input Input) {
 		Payload: MessagePayload{
 			Role: "user", Content: RedactInputText(input.Text),
 			Source: input.Source, Sender: input.Sender,
+			Images: ValidImageAttachments(input.Text, input.Images),
 		},
 	})
 }
@@ -293,7 +295,7 @@ func (r *Runtime) handleBotCommand(ctx context.Context, runID RunID, input strin
 			host.lease.emit(func() {
 				r.events.Publish(Event{
 					RunID: runID, Type: EventSessionChanged, Source: SourceRef{Kind: "bot"},
-					Payload: SessionPayload{ID: nextSessionID},
+					Payload: r.sessionChangedPayload("resume", nextSessionID, true),
 				})
 			})
 		}

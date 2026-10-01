@@ -9,10 +9,12 @@ import (
 	"time"
 
 	"nekocode/interaction"
+	"nekocode/interaction/tui/components"
 	"nekocode/interaction/tui/components/block"
 	"nekocode/interaction/tui/components/message"
 	"nekocode/interaction/tui/components/processing"
 	controlruntime "nekocode/runtime"
+	"nekocode/util/attachment"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
@@ -176,6 +178,8 @@ func (m *Model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
+	case "ctrl+v":
+		return readClipboardImage()
 	case "ctrl+c":
 		if m.Input.HasContent() {
 			m.Input.Clear()
@@ -234,6 +238,7 @@ func (m *Model) handleProcessingKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
 		value := m.Input.Value()
+		preserveImageDraft := false
 		// Accept a highlighted suggestion first, mirroring the idle path:
 		// without this the popup would be visible but not selectable.
 		if m.Suggestions.Visible() {
@@ -261,6 +266,7 @@ func (m *Model) handleProcessingKey(msg tea.KeyPressMsg) tea.Cmd {
 				return nil
 			}
 			value = selected.Value
+			preserveImageDraft = len(m.Input.ImageAttachments()) > 0
 		}
 		if value != "" {
 			// A fully typed command with a menu (e.g. /permission) opens it
@@ -277,21 +283,36 @@ func (m *Model) handleProcessingKey(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			m.Suggestions.Hide()
 			m.resizeMessages()
-			m.rememberInput(value)
-			m.Input.Reset()
+			images := inputImageAttachments(m.Input.ImageAttachments())
+			if len(images) == 0 {
+				m.rememberInput(value)
+			}
 			m.Messages.GotoBottom()
 			m.Input.SetFollow(true)
 			if handled, cmd := m.tryLocalCommand(value); handled {
+				m.finishLocalCommandInput()
 				return cmd
 			}
 			m.processingStart = time.Now()
+			previousPhase := m.processingPhase
 			m.processingPhase = phaseSteer
 			m.Messages.SetProcessingStatus(phaseSteer)
+			runImages := images
+			if preserveImageDraft {
+				runImages = nil
+			}
 			if err := m.Runtime.SteerRun(context.Background(), "", controlruntime.Input{
 				Source: controlruntime.SourceRef{Kind: "tui"},
 				Text:   value,
+				Images: runImages,
 			}); err != nil {
+				m.processingPhase = previousPhase
+				m.Messages.SetProcessingStatus(previousPhase)
 				m.Messages.AddMessage(message.ChatMessage{Role: "error", Content: err.Error()})
+			} else if preserveImageDraft {
+				m.notifyImageDraftPreserved("命令已提交；图片未发送，草稿已保留。")
+			} else {
+				m.Input.Reset()
 			}
 		}
 	case "esc":
@@ -359,15 +380,20 @@ func (m *Model) handleIdleKey(msg tea.KeyPressMsg) tea.Cmd {
 			parent := m.Input.Value()
 			wasMenu := m.Suggestions.IsMenu()
 			if selected, ok := m.Suggestions.Accept(); ok {
-				m.Input.SetValue(selected.Value + " ")
-				m.Input.SetCursorEnd()
 				if selected.Submit {
+					images := inputImageAttachments(m.Input.ImageAttachments())
 					m.commandMenuBack = nil
 					m.resizeMessages()
 					m.rememberInput(selected.Value)
-					m.Input.Reset()
-					return m.startChat(selected.Value)
+					if len(images) > 0 {
+						return m.startChat(selected.Value, nil)
+					}
+					m.Input.SetValue(selected.Value + " ")
+					m.Input.SetCursorEnd()
+					return m.startChat(selected.Value, nil)
 				}
+				m.Input.SetValue(selected.Value + " ")
+				m.Input.SetCursorEnd()
 				if m.openCommandMenu(selected.Value) {
 					if wasMenu {
 						m.commandMenuBack = append(m.commandMenuBack, parent)
@@ -391,9 +417,11 @@ func (m *Model) handleIdleKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.Suggestions.Hide()
 		m.commandMenuBack = nil
 		m.resizeMessages()
-		m.rememberInput(value)
-		m.Input.Reset()
-		return m.startChat(value)
+		images := inputImageAttachments(m.Input.ImageAttachments())
+		if len(images) == 0 {
+			m.rememberInput(value)
+		}
+		return m.startChat(value, images)
 	default:
 		input, cmd := m.Input.Update(msg)
 		m.Input = input
@@ -401,6 +429,65 @@ func (m *Model) handleIdleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return cmd
 	}
 	return nil
+}
+
+type attachmentSessionRuntime interface {
+	CurrentSessionID() string
+	NewSession() (controlruntime.SessionMeta, error)
+	ImageAttachmentsEnabled() bool
+}
+
+func (m *Model) handleClipboardImage(msg clipboardImageMsg) tea.Cmd {
+	if msg.err != nil {
+		m.Messages.AddMessage(message.ChatMessage{Role: "error", Content: "读取剪贴板图片失败：" + msg.err.Error()})
+		return nil
+	}
+	if len(msg.data) == 0 {
+		return nil
+	}
+	if m.Input.BrowsingHistory() {
+		m.Messages.AddMessage(message.ChatMessage{Role: "error", Content: "浏览历史记录时不能粘贴图片，请先按 ↓ 返回当前草稿"})
+		return nil
+	}
+	sessionRuntime, ok := m.Runtime.(attachmentSessionRuntime)
+	if !ok {
+		m.Messages.AddMessage(message.ChatMessage{Role: "error", Content: "当前运行时不支持图片附件"})
+		return nil
+	}
+	if !sessionRuntime.ImageAttachmentsEnabled() {
+		m.Messages.AddMessage(message.ChatMessage{Role: "error", Content: "未配置图片理解模型，请先配置 image_understand_models"})
+		return nil
+	}
+	sessionID := sessionRuntime.CurrentSessionID()
+	if sessionID == "" {
+		meta, err := sessionRuntime.NewSession()
+		if err != nil {
+			m.Messages.AddMessage(message.ChatMessage{Role: "error", Content: "创建图片附件会话失败：" + err.Error()})
+			return nil
+		}
+		sessionID = meta.ID
+	}
+	path, err := attachment.SaveImage(sessionID, msg.data)
+	if err != nil {
+		m.Messages.AddMessage(message.ChatMessage{Role: "error", Content: "保存剪贴板图片失败：" + err.Error()})
+		return nil
+	}
+	if !m.Input.AddImage(path) {
+		_ = attachment.DeleteImage(path)
+		m.Messages.AddMessage(message.ChatMessage{Role: "error", Content: fmt.Sprintf("单条消息最多附加 %d 张图片", controlruntime.MaxImageAttachments)})
+		return nil
+	}
+	m.refreshSuggestions()
+	m.resizeMessages()
+	return nil
+}
+
+func inputImageAttachments(images []components.InputImageAttachment) []controlruntime.ImageAttachment {
+	out := make([]controlruntime.ImageAttachment, 0, len(images))
+	for _, image := range images {
+		out = append(out, controlruntime.ImageAttachment{Label: image.Label, Path: image.Path})
+	}
+	return out
 }
 
 // --- suggestions ---
@@ -479,8 +566,13 @@ func (m *Model) requestSessionDelete() bool {
 				return
 			}
 			if err := deleter.DeleteSession(sessionID); err != nil {
-				content := fmt.Sprintf("删除会话 %s 失败：%v", sessionID, err)
-				m.Messages.AddMessage(message.ChatMessage{Role: "error", Content: content})
+				if sessionDeleteCommitted(err) {
+					content := fmt.Sprintf("会话 %s 已删除，但关联数据清理未完成：%v", sessionID, err)
+					m.Messages.AddMessage(message.ChatMessage{Role: "system", Content: content, RenderedContent: content})
+				} else {
+					content := fmt.Sprintf("删除会话 %s 失败：%v", sessionID, err)
+					m.Messages.AddMessage(message.ChatMessage{Role: "error", Content: content})
+				}
 				m.Messages.GotoBottom()
 			}
 			m.openCommandMenu("/sessions")
@@ -488,6 +580,12 @@ func (m *Model) requestSessionDelete() bool {
 	)
 	m.resizeMessages()
 	return true
+}
+
+func sessionDeleteCommitted(err error) bool {
+	type committedMutation interface{ MutationCommitted() bool }
+	var committed committedMutation
+	return errors.As(err, &committed) && committed.MutationCommitted()
 }
 
 func (m *Model) cycleSuggestion(delta int) {
@@ -544,6 +642,13 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) tea.Cmd {
 		}
 	case controlruntime.EventInputAccepted:
 		if p, ok := ev.Payload.(controlruntime.MessagePayload); ok {
+			if p.Source.Kind == "tui" {
+				if len(p.Images) > 0 || len(m.Input.ImageAttachments()) == 0 {
+					m.Input.Reset()
+				} else {
+					m.notifyImageDraftPreserved("命令已执行；图片未发送，草稿已保留。")
+				}
+			}
 			title := ""
 			if p.Source.Kind != "" && p.Source.Kind != "tui" {
 				title = "You · " + p.Source.Kind

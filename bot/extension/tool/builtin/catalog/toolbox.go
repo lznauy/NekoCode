@@ -26,16 +26,33 @@ type Toolbox struct {
 	workspace *workspace.Manager
 }
 
-// NewToolbox assembles a fresh registry with the full catalog.
-func NewToolbox(imageGen []config.ImageGenConfig) *Toolbox {
+// ToolboxConfig groups configuration-dependent builtins without making the
+// constructor signature grow for every optional tool.
+type ToolboxConfig struct {
+	ImageGenModels        []config.ImageGenConfig
+	ImageUnderstandModels []config.ImageUnderstandConfig
+}
+
+// NewToolbox preserves the original image-generation-only constructor.
+func NewToolbox(imageGenModels []config.ImageGenConfig) *Toolbox {
+	return NewToolboxWithConfig(ToolboxConfig{ImageGenModels: imageGenModels})
+}
+
+// NewToolboxWithConfig assembles a fresh registry with the full catalog.
+func NewToolboxWithConfig(cfg ToolboxConfig) *Toolbox {
 	e := &Toolbox{workspace: workspace.New("", nil)}
-	e.RebuildRegistry(imageGen)
+	e.RebuildRegistryWithConfig(cfg)
 	return e
 }
 
-// RebuildRegistry keeps the shell and LSP runtimes alive while replacing tool
-// schemas and configuration-dependent tools.
-func (e *Toolbox) RebuildRegistry(imageGen []config.ImageGenConfig) {
+// RebuildRegistry preserves the original image-generation-only rebuild API.
+func (e *Toolbox) RebuildRegistry(imageGenModels []config.ImageGenConfig) {
+	e.RebuildRegistryWithConfig(ToolboxConfig{ImageGenModels: imageGenModels})
+}
+
+// RebuildRegistryWithConfig keeps the shell and LSP runtimes alive while
+// replacing tool schemas and configuration-dependent tools.
+func (e *Toolbox) RebuildRegistryWithConfig(cfg ToolboxConfig) {
 	if e.shell == nil {
 		e.shell = &shell.ShellTool{}
 	}
@@ -56,7 +73,7 @@ func (e *Toolbox) RebuildRegistry(imageGen []config.ImageGenConfig) {
 	}
 	e.Registry = tools.New()
 	e.Registry.SetWorkspace(e.workspace)
-	registerAll(e.Registry, imageGen, e.shell, e.lsp, e.task, e.question, e.todo)
+	registerAll(e.Registry, cfg.ImageGenModels, cfg.ImageUnderstandModels, e.shell, e.lsp, e.task, e.question, e.todo)
 }
 
 func (e *Toolbox) Workspace() *workspace.Manager { return e.workspace }

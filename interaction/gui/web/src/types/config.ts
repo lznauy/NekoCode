@@ -25,6 +25,15 @@ export interface ImageGenConfig {
   model?: string
 }
 
+export interface ImageUnderstandConfig {
+  name: string
+  provider: string
+  api_key: string
+  model: string
+  base_url?: string
+  protocol?: 'openai' | 'anthropic' | ''
+}
+
 export interface MCPServerConfig {
   url?: string
   oauth_client_id?: string
@@ -72,6 +81,7 @@ export interface ConfigView {
   flash_model?: string
   models: ModelConfig[]
   image_gen_models?: ImageGenConfig[]
+  image_understand_models?: ImageUnderstandConfig[]
   mcp_servers?: Record<string, MCPServerConfig>
   permissions?: PermissionsConfig
   workspaces?: WorkspaceConfig[]

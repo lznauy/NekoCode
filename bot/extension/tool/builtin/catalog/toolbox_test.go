@@ -4,11 +4,28 @@ import (
 	"path/filepath"
 	"testing"
 
+	"nekocode/bot/config"
 	"nekocode/bot/extension/tool/runtime/workspace"
 )
 
+func TestToolboxConditionallyRegistersImageUnderstand(t *testing.T) {
+	without := NewToolboxWithConfig(ToolboxConfig{})
+	t.Cleanup(func() { _ = without.Close() })
+	if _, err := without.Registry.Lookup("image_understand"); err == nil {
+		t.Fatal("image_understand should not be registered without configuration")
+	}
+
+	with := NewToolboxWithConfig(ToolboxConfig{ImageUnderstandModels: []config.ImageUnderstandConfig{{
+		Name: "vision", Provider: "openai", Model: "vision-1",
+	}}})
+	t.Cleanup(func() { _ = with.Close() })
+	if _, err := with.Registry.Lookup("image_understand"); err != nil {
+		t.Fatalf("image_understand should be registered with configuration: %v", err)
+	}
+}
+
 func TestToolboxScopesTemporaryRootsBySession(t *testing.T) {
-	box := NewToolbox(nil)
+	box := NewToolboxWithConfig(ToolboxConfig{})
 	t.Cleanup(func() { _ = box.Close() })
 	primary := t.TempDir()
 	extra := t.TempDir()

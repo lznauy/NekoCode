@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { cn } from '../lib/classnames'
 import { isWailsEnvironment, safeGetConfig, safeResolveModelProfile, safeSaveConfig, safeSkillManagementView, safeMCPAuthorizationAction } from '../lib/wails'
-import type { ConfigView, ImageGenConfig, MCPServerConfig, ModelConfig } from '../types/config'
+import type { ConfigView, ImageGenConfig, ImageUnderstandConfig, MCPServerConfig, ModelConfig } from '../types/config'
 import type { SkillManagementView } from '../types/skills'
 import { Select } from './Select'
 
@@ -26,9 +26,11 @@ const emptyModel = (name: string): ModelConfig => ({
 
 type EditableModelConfig = ModelConfig & { uiKey: string }
 type EditableImageGenConfig = ImageGenConfig & { uiKey: string }
-type EditableConfigView = Omit<ConfigView, 'models' | 'image_gen_models'> & {
+type EditableImageUnderstandConfig = ImageUnderstandConfig & { uiKey: string }
+type EditableConfigView = Omit<ConfigView, 'models' | 'image_gen_models' | 'image_understand_models'> & {
   models: EditableModelConfig[]
   image_gen_models?: EditableImageGenConfig[]
+  image_understand_models?: EditableImageUnderstandConfig[]
 }
 
 const emptyImageModel = (name: string): ImageGenConfig => ({
@@ -38,6 +40,15 @@ const emptyImageModel = (name: string): ImageGenConfig => ({
   secret_key: '',
   base_url: 'https://visual.volcengineapi.com',
   model: 'jimeng_t2i_v31',
+})
+
+const emptyImageUnderstandModel = (name: string): ImageUnderstandConfig => ({
+  name,
+  provider: 'openai',
+  api_key: '',
+  model: '',
+  base_url: 'https://api.openai.com/v1',
+  protocol: 'openai',
 })
 
 const emptyMcpServer = (): MCPServerConfig => ({
@@ -78,6 +89,14 @@ function withImageModelKeys(models: ImageGenConfig[]): EditableImageGenConfig[] 
   return models.map(withImageModelKey)
 }
 
+function withImageUnderstandModelKey(model: ImageUnderstandConfig): EditableImageUnderstandConfig {
+  return { ...model, uiKey: nextConfigRowKey('image-understand') }
+}
+
+function withImageUnderstandModelKeys(models: ImageUnderstandConfig[]): EditableImageUnderstandConfig[] {
+  return models.map(withImageUnderstandModelKey)
+}
+
 export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }: ConfigPanelProps) {
   const [cfg, setCfg] = useState<EditableConfigView | null>(null)
   const [tab, setTab] = useState<ConfigTab>(initialTab)
@@ -110,6 +129,7 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
           ...next,
           models: withModelKeys(next.models ?? []),
           image_gen_models: withImageModelKeys(next.image_gen_models ?? []),
+          image_understand_models: withImageUnderstandModelKeys(next.image_understand_models ?? []),
           mcp_servers: next.mcp_servers ?? {},
         })
         setSelectedMcp(Object.keys(next.mcp_servers ?? {})[0] ?? '')
@@ -156,6 +176,15 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
     })
   }
 
+  const updateImageUnderstandModel = (idx: number, patch: Partial<ImageUnderstandConfig>) => {
+    setSaved(false)
+    setCfg((prev) => {
+      if (!prev) return prev
+      const image_understand_models = (prev.image_understand_models ?? []).map((m, i) => (i === idx ? { ...m, ...patch } : m))
+      return { ...prev, image_understand_models }
+    })
+  }
+
   const addModel = () => {
     setCfg((prev) => {
       if (!prev) return prev
@@ -193,6 +222,24 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
     setCfg((prev) => {
       if (!prev) return prev
       return { ...prev, image_gen_models: (prev.image_gen_models ?? []).filter((_, i) => i !== idx) }
+    })
+    setSaved(false)
+  }
+
+  const addImageUnderstandModel = () => {
+    setCfg((prev) => {
+      if (!prev) return prev
+      const names = (prev.image_understand_models ?? []).map((m) => m.name)
+      const model = withImageUnderstandModelKey(emptyImageUnderstandModel(nextName(names, 'vision')))
+      return { ...prev, image_understand_models: [...(prev.image_understand_models ?? []), model] }
+    })
+    setSaved(false)
+  }
+
+  const removeImageUnderstandModel = (idx: number) => {
+    setCfg((prev) => {
+      if (!prev) return prev
+      return { ...prev, image_understand_models: (prev.image_understand_models ?? []).filter((_, i) => i !== idx) }
     })
     setSaved(false)
   }
@@ -265,6 +312,7 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
         ...cfg,
         models: cfg.models.map((model) => trimModel(model)),
         image_gen_models: (cfg.image_gen_models ?? []).map((model) => trimImageModel(model)),
+        image_understand_models: (cfg.image_understand_models ?? []).map((model) => trimImageUnderstandModel(model)),
         mcp_servers: trimMcpServers(cfg.mcp_servers ?? {}),
       })
       if (!savedCfg) {
@@ -275,6 +323,7 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
         ...savedCfg,
         models: withModelKeys(savedCfg.models ?? []),
         image_gen_models: withImageModelKeys(savedCfg.image_gen_models ?? []),
+        image_understand_models: withImageUnderstandModelKeys(savedCfg.image_understand_models ?? []),
         mcp_servers: savedCfg.mcp_servers ?? {},
       })
       setSaved(true)
@@ -332,7 +381,8 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
                 <div className="flex flex-wrap items-center gap-2">
                   <StatusPill ok={cfg.exists} text={cfg.exists ? '已识别配置文件' : '未找到配置文件，保存后创建'} />
                   <span className="text-[11px] text-text-3">{cfg.models.length} 个文本模型</span>
-                  <span className="text-[11px] text-text-3">{cfg.image_gen_models?.length ?? 0} 个图片模型</span>
+                  <span className="text-[11px] text-text-3">{cfg.image_gen_models?.length ?? 0} 个图片生成模型</span>
+                  <span className="text-[11px] text-text-3">{cfg.image_understand_models?.length ?? 0} 个图片理解模型</span>
                   <span className="text-[11px] text-text-3">{mcpEntries.length} 个 MCP 服务</span>
                 </div>
               </section>
@@ -371,7 +421,7 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
               </section>
               <section className="grid gap-2 md:grid-cols-3">
                 <ConfigShortcut title="文本模型" detail={`${cfg.models.length} 个，当前 ${cfg.active || '未设置'}`} onClick={() => setTab('models')} />
-                <ConfigShortcut title="图片模型" detail={`${cfg.image_gen_models?.length ?? 0} 个可用配置`} onClick={() => setTab('models')} />
+                <ConfigShortcut title="图片模型" detail={`${cfg.image_gen_models?.length ?? 0} 个生成，${cfg.image_understand_models?.length ?? 0} 个理解`} onClick={() => setTab('models')} />
                 <ConfigShortcut title="MCP 服务" detail={`${enabledMcpCount}/${mcpEntries.length} 已启用`} onClick={() => setTab('mcp')} />
               </section>
                 </>
@@ -396,7 +446,7 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
               </section>
 
               <section>
-                <SectionTitle title="图片模型" action="添加图片模型" onAction={addImageModel} />
+                <SectionTitle title="图片生成模型" action="添加生成模型" onAction={addImageModel} />
                 <div className="mt-2 space-y-2">
                   {(cfg.image_gen_models ?? []).map((model, idx) => (
                     <ImageModelCard
@@ -408,7 +458,26 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
                   ))}
                   {(cfg.image_gen_models ?? []).length === 0 && (
                     <div className="rounded-md border border-dashed border-border/70 px-4 py-6 text-center text-xs text-text-3">
-                      暂无图片模型
+                      暂无图片生成模型
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <section>
+                <SectionTitle title="图片理解模型" action="添加理解模型" onAction={addImageUnderstandModel} />
+                <div className="mt-2 space-y-2">
+                  {(cfg.image_understand_models ?? []).map((model, idx) => (
+                    <ImageUnderstandModelCard
+                      key={model.uiKey}
+                      model={model}
+                      onChange={(patch) => updateImageUnderstandModel(idx, patch)}
+                      onRemove={() => removeImageUnderstandModel(idx)}
+                    />
+                  ))}
+                  {(cfg.image_understand_models ?? []).length === 0 && (
+                    <div className="rounded-md border border-dashed border-border/70 px-4 py-6 text-center text-xs text-text-3">
+                      未配置时不会加载 image_understand 工具
                     </div>
                   )}
                 </div>
@@ -587,6 +656,39 @@ function ImageModelCard({
         <Field label="Base URL"><input className="field font-mono" value={model.base_url ?? ''} onChange={(e) => onChange({ base_url: e.target.value })} /></Field>
         <Field label="Access Key"><input className="field font-mono" type="password" value={model.api_key} onChange={(e) => onChange({ api_key: e.target.value })} /></Field>
         <Field label="Secret Key"><input className="field font-mono" type="password" value={model.secret_key} onChange={(e) => onChange({ secret_key: e.target.value })} /></Field>
+      </div>
+    </div>
+  )
+}
+
+function ImageUnderstandModelCard({
+  model,
+  onChange,
+  onRemove,
+}: {
+  model: ImageUnderstandConfig
+  onChange: (patch: Partial<ImageUnderstandConfig>) => void
+  onRemove: () => void
+}) {
+  return (
+    <div className="rounded-md border border-border/50 bg-surface px-4 py-3">
+      <div className="mb-3 flex items-center gap-2">
+        <span className="min-w-0 flex-1 truncate text-xs font-semibold text-text">{model.name || '未命名图片理解模型'}</span>
+        <button className="danger-button" type="button" onClick={onRemove}>删除</button>
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field label="名称"><input className="field" value={model.name} onChange={(e) => onChange({ name: e.target.value })} /></Field>
+        <Field label="Provider"><input className="field" value={model.provider} onChange={(e) => onChange({ provider: e.target.value })} /></Field>
+        <Field label="协议">
+          <Select
+            value={model.protocol || 'openai'}
+            options={[{ value: 'openai', label: 'OpenAI Compatible' }, { value: 'anthropic', label: 'Anthropic' }]}
+            onChange={(value) => onChange({ protocol: value as ImageUnderstandConfig['protocol'] })}
+          />
+        </Field>
+        <Field label="模型 ID"><input className="field" value={model.model} onChange={(e) => onChange({ model: e.target.value })} /></Field>
+        <Field label="Base URL"><input className="field font-mono" value={model.base_url ?? ''} onChange={(e) => onChange({ base_url: e.target.value })} /></Field>
+        <Field label="API Key"><input className="field font-mono" type="password" value={model.api_key} onChange={(e) => onChange({ api_key: e.target.value })} /></Field>
       </div>
     </div>
   )
@@ -797,6 +899,15 @@ function validateConfig(cfg: ConfigView | null): string {
   if (!names.has(cfg.active)) return '当前模型不在模型列表中'
   if (cfg.flash_model && !names.has(cfg.flash_model)) return 'Flash 模型不在模型列表中'
   if (cfg.auto_compact_percent < 1 || cfg.auto_compact_percent > 99) return '自动压缩门限必须在 1% 到 99% 之间'
+  const imageUnderstandNames = new Set<string>()
+  for (const [idx, model] of (cfg.image_understand_models ?? []).entries()) {
+    const name = model.name.trim()
+    if (!name) return `第 ${idx + 1} 个图片理解模型缺少名称`
+    if (imageUnderstandNames.has(name)) return `图片理解模型名称重复：${name}`
+    imageUnderstandNames.add(name)
+    if (!model.provider.trim()) return `${name} 缺少 provider`
+    if (!model.model.trim()) return `${name} 缺少模型 ID`
+  }
   const mcpNames = new Set<string>()
   for (const [rawName, srv] of Object.entries(cfg.mcp_servers ?? {})) {
     const name = rawName.trim()
@@ -858,6 +969,17 @@ function trimImageModel(model: ImageGenConfig): ImageGenConfig {
     secret_key: model.secret_key.trim(),
     base_url: model.base_url?.trim(),
     model: model.model?.trim(),
+  }
+}
+
+function trimImageUnderstandModel(model: ImageUnderstandConfig): ImageUnderstandConfig {
+  return {
+    name: model.name.trim(),
+    provider: model.provider.trim(),
+    api_key: model.api_key.trim(),
+    model: model.model.trim(),
+    base_url: model.base_url?.trim(),
+    protocol: model.protocol || 'openai',
   }
 }
 

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"nekocode/bot/provider/types"
+	controlruntime "nekocode/runtime"
 )
 
 func TestDisplayMessagesKeepsPersistentToolBlocks(t *testing.T) {
@@ -24,6 +25,20 @@ func TestDisplayMessagesKeepsPersistentToolBlocks(t *testing.T) {
 	}
 	if len(got[0].Blocks) != 1 || got[0].Blocks[0].ToolName != "edit" || got[0].Blocks[0].Content != "edit output" {
 		t.Fatalf("display messages = %+v, want edit block", got)
+	}
+}
+
+func TestDisplayMessagesHidesImageAttachmentMetadata(t *testing.T) {
+	content := controlruntime.InputWithImageAttachments("分析图片 [Image #1]", []controlruntime.ImageAttachment{{
+		Label: "[Image #1]", Path: "/tmp/paste.png",
+	}})
+	msgs := []types.Message{{
+		Role:    "user",
+		Content: content,
+	}}
+	got := DisplayMessages(msgs)
+	if len(got) != 1 || got[0].Content != "分析图片 [Image #1]" {
+		t.Fatalf("display messages = %#v", got)
 	}
 }
 

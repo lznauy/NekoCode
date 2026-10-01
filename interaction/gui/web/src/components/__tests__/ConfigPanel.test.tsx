@@ -32,6 +32,7 @@ const config: ConfigView = {
       base_url: '',
     },
   ],
+  image_understand_models: [],
   mcp_servers: {},
   jev: { api_key: 'test-key', model: 'jev-test', keep_threshold: 0.4 },
 }
@@ -125,5 +126,21 @@ describe('ConfigPanel', () => {
     const saved = vi.mocked(SaveConfig).mock.calls[0][0] as unknown as ConfigView
     expect(saved.models[0].context_window).toBe(96000)
     expect(saved.models[0].profile).toBeUndefined()
+  })
+
+  it('adds and saves an image understanding model', async () => {
+    const user = userEvent.setup()
+    render(<ConfigPanel open initialTab="models" onClose={vi.fn()} onSaved={vi.fn()} />)
+
+    await user.click(await screen.findByRole('button', { name: '添加理解模型' }))
+    const modelIDs = screen.getAllByLabelText('模型 ID')
+    await user.type(modelIDs[modelIDs.length - 1], 'gpt-5-mini')
+    await user.click(screen.getByRole('button', { name: '保存配置' }))
+
+    await waitFor(() => expect(SaveConfig).toHaveBeenCalled())
+    const saved = vi.mocked(SaveConfig).mock.calls[0][0] as unknown as ConfigView
+    expect(saved.image_understand_models).toEqual([
+      expect.objectContaining({ name: 'vision-1', protocol: 'openai', model: 'gpt-5-mini' }),
+    ])
   })
 })

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -9,42 +10,52 @@ import (
 // to a Runner. The composition root supplies this value once; Runtime and
 // transports do not discover capabilities through type assertions.
 type Services struct {
-	MCPAuthorizationAction func(string, string) error
-	Checkpoints            func() ([]CheckpointInfo, error)
-	ToolNames              func() []string
-	Rewind                 func(string) (string, error)
-	ExecuteCommand         func(ctx context.Context, input string, host RunHost) (CommandResult, error)
-	ExecuteLocalCommand    func(context.Context, string) (string, LocalCommandResult)
-	CommandMenu            func(context.Context, string) (CommandMenu, bool)
-	Steer                  func(ctx context.Context, message string) error
-	Metrics                func() MetricsSnapshot
-	CurrentModel           func() ModelSelection
-	PermissionMode         func() string
-	SwitchModel            func(string) (ModelSelection, error)
-	SwitchSessionModel     func(string) (ModelSelection, error)
-	ModelOptions           func() ([]ModelOption, string)
-	SetReasoningEffort     func(string) error
-	SetSessionReasoning    func(string) error
-	SetFullAccess          func(bool)
-	ContextSnapshot        func() ContextSnapshot
-	WorkspaceChanges       func() WorkspaceChanges
-	MemoryView             func(MemoryScope) MemoryView
-	SkillManagementView    func() SkillManagementView
-	SelectSkill            func(string) error
-	ClearSelectedSkill     func()
-	RefreshSkillManagement func() SkillManagementView
-	SetPluginEnabled       func(string, bool) (SkillManagementView, error)
-	ConfigView             func() ConfigView
-	ResolveModelProfile    func(ModelSpec) ModelProfile
-	ApplyConfig            func(ConfigView) (ConfigView, error)
-	CurrentSessionID       func() string
-	ListSessions           func() []SessionMeta
-	SessionMessages        func() []DisplayMessage
-	ResumeSession          func(string) error
-	NewSession             func() (SessionMeta, error)
-	DeleteSession          func(string) error
-	ReplaceMCPServers      func(context.Context, string, []MCPServerSpec) error
-	Close                  func() error
+	MCPAuthorizationAction  func(string, string) error
+	Checkpoints             func() ([]CheckpointInfo, error)
+	ToolNames               func() []string
+	Rewind                  func(string) (string, error)
+	ExecuteCommand          func(ctx context.Context, input string, host RunHost) (CommandResult, error)
+	ExecuteLocalCommand     func(context.Context, string) (string, LocalCommandResult)
+	CommandMenu             func(context.Context, string) (CommandMenu, bool)
+	Steer                   func(ctx context.Context, message string) error
+	Metrics                 func() MetricsSnapshot
+	CurrentModel            func() ModelSelection
+	PermissionMode          func() string
+	SwitchModel             func(string) (ModelSelection, error)
+	SwitchSessionModel      func(string) (ModelSelection, error)
+	ModelOptions            func() ([]ModelOption, string)
+	SetReasoningEffort      func(string) error
+	SetSessionReasoning     func(string) error
+	SetFullAccess           func(bool)
+	ContextSnapshot         func() ContextSnapshot
+	WorkspaceChanges        func() WorkspaceChanges
+	ImageAttachmentsEnabled func() bool
+	MemoryView              func(MemoryScope) MemoryView
+	SkillManagementView     func() SkillManagementView
+	SelectSkill             func(string) error
+	ClearSelectedSkill      func()
+	RefreshSkillManagement  func() SkillManagementView
+	SetPluginEnabled        func(string, bool) (SkillManagementView, error)
+	ConfigView              func() ConfigView
+	ResolveModelProfile     func(ModelSpec) ModelProfile
+	ApplyConfig             func(ConfigView) (ConfigView, error)
+	CurrentSessionID        func() string
+	ListSessions            func() []SessionMeta
+	SessionMessages         func() []DisplayMessage
+	ResumeSession           func(string) error
+	NewSession              func() (SessionMeta, error)
+	DeleteSession           func(string) error
+	ReplaceMCPServers       func(context.Context, string, []MCPServerSpec) error
+	Close                   func() error
+}
+
+// ImageAttachmentsEnabled reports whether the active runtime has a configured
+// image-understanding tool that can consume pasted image attachments.
+func (r *Runtime) ImageAttachmentsEnabled() bool {
+	r.mu.Lock()
+	service, closed := r.services.ImageAttachmentsEnabled, r.closed
+	r.mu.Unlock()
+	return !closed && service != nil && service()
 }
 
 func (r *Runtime) mutation(op string, supported bool, fn func() error) error {
@@ -170,7 +181,7 @@ func (r *Runtime) ResumeSession(id string) error {
 		return r.services.ResumeSession(id)
 	})
 	if err == nil {
-		r.publishSessionChanged()
+		r.publishSessionChanged("resume", id, true)
 	}
 	return err
 }
@@ -181,17 +192,21 @@ func (r *Runtime) NewSession() (session SessionMeta, err error) {
 		return err
 	})
 	if err == nil {
-		r.publishSessionChanged()
+		r.publishSessionChanged("new", session.ID, true)
 	}
 	return session, err
 }
 
 func (r *Runtime) DeleteSession(id string) error {
+	previousID := ""
 	err := r.mutation("delete_session", r.services.DeleteSession != nil, func() error {
+		if r.services.CurrentSessionID != nil {
+			previousID = r.services.CurrentSessionID()
+		}
 		return r.services.DeleteSession(id)
 	})
-	if err == nil {
-		r.publishSessionChanged()
+	if err == nil || mutationCommitted(err) {
+		r.publishSessionChanged("delete", id, previousID == id)
 	}
 	return err
 }
@@ -204,15 +219,25 @@ func (r *Runtime) ReplaceMCPServers(ctx context.Context, source string, servers 
 	})
 }
 
-func (r *Runtime) publishSessionChanged() {
+func (r *Runtime) publishSessionChanged(reason, changedID string, currentChanged bool) {
+	r.events.Publish(Event{
+		Type: EventSessionChanged, Source: SourceRef{Kind: "runtime"},
+		Payload: r.sessionChangedPayload(reason, changedID, currentChanged),
+	})
+}
+
+func (r *Runtime) sessionChangedPayload(reason, changedID string, currentChanged bool) SessionPayload {
 	sessionID := ""
 	if r.services.CurrentSessionID != nil {
 		sessionID = r.services.CurrentSessionID()
 	}
-	r.events.Publish(Event{
-		Type: EventSessionChanged, Source: SourceRef{Kind: "runtime"},
-		Payload: SessionPayload{ID: sessionID},
-	})
+	return SessionPayload{ID: sessionID, Reason: reason, ChangedID: changedID, CurrentChanged: currentChanged}
+}
+
+func mutationCommitted(err error) bool {
+	type committed interface{ MutationCommitted() bool }
+	var target committed
+	return errors.As(err, &target) && target.MutationCommitted()
 }
 
 // Rewind restores checkpointed workspace files while the runtime is idle.

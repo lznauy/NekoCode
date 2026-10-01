@@ -59,6 +59,38 @@ func TestCompactionStepHasDedicatedRunEvent(t *testing.T) {
 	}
 }
 
+func TestRunReceivesImageMetadataButInputEventStaysVisible(t *testing.T) {
+	var received string
+	bot := &testBot{run: func(input string, _ RunHost) (string, error) {
+		received = input
+		return "done", nil
+	}}
+	rt := newTestRuntime(bot)
+	runID, err := rt.StartRun(context.Background(), Input{
+		Source: SourceRef{Kind: "test"},
+		Text:   "inspect [Image #1]",
+		Images: []ImageAttachment{{Label: "[Image #1]", Path: "/tmp/paste.png"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, rt, runID)
+	if !strings.Contains(received, `"path":"/tmp/paste.png"`) {
+		t.Fatalf("runner input is missing attachment metadata: %q", received)
+	}
+	events := rt.events.History(EventFilter{RunID: runID, Types: []EventType{EventInputAccepted}})
+	if len(events) != 1 {
+		t.Fatalf("input events = %d, want 1", len(events))
+	}
+	payload, ok := events[0].Payload.(MessagePayload)
+	if !ok || payload.Content != "inspect [Image #1]" {
+		t.Fatalf("input event = %#v", events[0].Payload)
+	}
+	if len(payload.Images) != 1 || payload.Images[0].Path != "/tmp/paste.png" {
+		t.Fatalf("accepted attachments = %#v", payload.Images)
+	}
+}
+
 func TestManagerCommandFinishesWithoutRunningAgent(t *testing.T) {
 	bot := &testBot{}
 	bot.command = func(string, RunHost) CommandResult {
@@ -94,6 +126,28 @@ func TestManagerCommandFinishesWithoutRunningAgent(t *testing.T) {
 	}
 	if got := rt.events.History(EventFilter{RunID: runID, Types: []EventType{EventInputAccepted}}); len(got) != 0 {
 		t.Fatalf("handled command was projected as user input: %+v", got)
+	}
+}
+
+func TestBotSessionSwitchPublishesCompletePayload(t *testing.T) {
+	runner := &sessionCommandRunner{current: "old-session"}
+	runner.command = func(string, RunHost) CommandResult {
+		runner.current = "new-session"
+		return CommandResult{Action: CommandHandled}
+	}
+	rt := New(runner, sessionRunnerServices(runner))
+	runID, err := rt.StartRun(context.Background(), Input{Text: "/sessions new-session"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, rt, runID)
+	events := rt.events.History(EventFilter{RunID: runID, Types: []EventType{EventSessionChanged}})
+	if len(events) != 1 {
+		t.Fatalf("session events = %d, want 1", len(events))
+	}
+	payload, ok := events[0].Payload.(SessionPayload)
+	if !ok || payload.ID != runner.current || payload.ChangedID != runner.current || payload.Reason != "resume" || !payload.CurrentChanged {
+		t.Fatalf("session payload = %#v", events[0].Payload)
 	}
 }
 

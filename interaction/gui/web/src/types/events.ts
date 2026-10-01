@@ -137,6 +137,11 @@ export interface SystemEvent {
   content: string
 }
 
+export interface InputAcceptedEvent {
+  source: { kind: string }
+  images?: Array<{ label: string; path: string }>
+}
+
 export type AgentPhase =
   | 'ready'
   | 'waiting'

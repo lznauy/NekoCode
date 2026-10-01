@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -156,6 +157,23 @@ func (m *Manager) Activate(sess *Snapshot) error {
 
 func (m *Manager) List() []Meta {
 	return list()
+}
+
+// Exists checks the durable session record without parsing it. This is used
+// by crash recovery, where an unreadable record must not be mistaken for a
+// successfully deleted session.
+func (m *Manager) Exists(id string) (bool, error) {
+	if err := validateID(id); err != nil {
+		return false, err
+	}
+	_, err := os.Stat(filepath.Join(dir(), id, "session.json"))
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
 }
 
 func (m *Manager) Delete(id string) error {

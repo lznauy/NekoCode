@@ -89,6 +89,9 @@ var builtinRules = []Rule{
 	{Tool: "web_search", Effect: EffectAllow, Source: "builtin"},
 	{Tool: "web_fetch", Effect: EffectAllow, Source: "builtin"},
 	{Tool: "web_extract", Effect: EffectAllow, Source: "builtin"},
+	// Image understanding uploads a local file to the configured external
+	// model, so require an explicit decision unless the user adds an allow rule.
+	{Tool: "image_understand", Effect: EffectAsk, Source: "builtin"},
 	{Tool: "question", Effect: EffectAllow, Source: "builtin"},
 }
 

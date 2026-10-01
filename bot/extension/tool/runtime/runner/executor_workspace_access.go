@@ -18,10 +18,26 @@ func (e *Executor) ensureWorkspaceAccess(tc core.ToolCallItem, confirmFn protoco
 	if path == "" {
 		return tc, "", true
 	}
+	if tc.Name == "image_understand" {
+		if err := validateLocalImagePath(path); err != nil {
+			return tc, err.Error(), false
+		}
+	}
 
 	var safePath string
 	var allowed bool
 	var err error
+	if tc.Name == "image_understand" {
+		safePath, _, allowed, err = e.workspace.CheckReadLexical(path)
+		if err != nil {
+			return tc, err.Error(), false
+		}
+		if !allowed {
+			return tc, fmt.Sprintf("image path is outside configured workspaces: %s", safePath), false
+		}
+		tc.Args = setToolPath(tc.Args, safePath)
+		return tc, "", true
+	}
 	if access == workspace.AccessReadWrite {
 		safePath, _, allowed, err = e.workspace.CheckWrite(path)
 	} else {
@@ -94,7 +110,7 @@ func (e *Executor) ensureWorkspaceAccess(tc core.ToolCallItem, confirmFn protoco
 
 func fileToolAccess(toolName string) (workspace.Access, bool) {
 	switch toolName {
-	case "read", "list", "tree", "grep", "glob", "diff":
+	case "read", "list", "tree", "grep", "glob", "diff", "image_understand":
 		return workspace.AccessReadOnly, true
 	case "write", "edit":
 		return workspace.AccessReadWrite, true

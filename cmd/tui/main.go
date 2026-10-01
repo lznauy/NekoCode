@@ -13,6 +13,9 @@ import (
 )
 
 func main() {
+	if handled, exitCode := tui.RunClipboardHelper(); handled {
+		os.Exit(exitCode)
+	}
 	if len(os.Args) >= 2 && os.Args[1] == "--acp" {
 		options := acp.ServerOptions{}
 		for _, arg := range os.Args[2:] {

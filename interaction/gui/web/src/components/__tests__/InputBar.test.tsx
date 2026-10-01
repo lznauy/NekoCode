@@ -1,5 +1,5 @@
 import { createRef } from 'react'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { InputBar } from '../InputBar'
 
@@ -108,6 +108,57 @@ describe('InputBar', () => {
 	expect(screen.getByText('Commands')).toBeInTheDocument()
 	fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Escape' })
 	expect(screen.queryByText('Commands')).toBeNull()
+  })
+
+  it('routes pasted clipboard images to the attachment handler', async () => {
+    const onPasteImages = vi.fn().mockResolvedValue(undefined)
+    setup({ text: 'look ', onPasteImages })
+    const image = new File(['png'], 'shot.png', { type: 'image/png' })
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+    textarea.setSelectionRange(5, 5)
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        items: [{ kind: 'file', type: 'image/png', getAsFile: () => image }],
+      },
+    })
+
+    expect(onPasteImages).toHaveBeenCalledWith([image], 5, 5)
+    await waitFor(() => expect(screen.getByText(/可粘贴图片/)).toBeInTheDocument())
+  })
+
+  it('removes an image placeholder atomically with Backspace', () => {
+    const onChange = vi.fn()
+    const marker = '[Image #1]'
+    setup({
+      text: marker,
+      onChange,
+      imageAttachments: [{ label: marker, path: '/tmp/paste.png' }],
+    })
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+    textarea.setSelectionRange(marker.length, marker.length)
+
+    fireEvent.keyDown(textarea, { key: 'Backspace' })
+
+    expect(onChange).toHaveBeenCalledWith('')
+  })
+
+  it('replaces the whole image placeholder when text is pasted across part of it', () => {
+    const onChange = vi.fn()
+    const marker = '[Image #1]'
+    setup({
+      text: marker,
+      onChange,
+      imageAttachments: [{ label: marker, path: '/tmp/paste.png' }],
+    })
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+    textarea.setSelectionRange(2, 5)
+
+    fireEvent.paste(textarea, {
+      clipboardData: { items: [], getData: () => 'replacement' },
+    })
+
+    expect(onChange).toHaveBeenCalledWith('replacement')
   })
 
 })

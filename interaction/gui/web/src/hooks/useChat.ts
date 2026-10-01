@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from 'react'
 import type { MutableRefObject } from 'react'
 import { genId } from '../lib/id'
 import { isUnifiedDiffContent } from '../lib/diffFormat'
-import { safeAbort, safeSendMessage } from '../lib/wails'
+import { safeAbort, safeDeleteClipboardImage, safeSaveClipboardImage, safeSendMessage } from '../lib/wails'
 import { useWailsEvents } from './useWailsEvents'
 import type {
   CompactionEvent,
@@ -12,6 +12,7 @@ import type {
   SubAgent,
   TodoItem,
   ToolStep,
+  InputAcceptedEvent,
 } from '../types/events'
 import type { UIImageRef } from '../types/events'
 
@@ -26,7 +27,23 @@ export interface UseChatReturn {
   toggleStep: (stepId: string) => void
   setMessages: (msgs: Msg[]) => void
   clearMessages: () => void
+  imageAttachments: ImageInputAttachment[]
+  pasteImages: (files: File[], start: number, end: number) => Promise<void>
 }
+
+export interface ImageInputAttachment {
+  label: string
+  path: string
+}
+
+interface PendingSubmission {
+  draftText: string
+  draftImages: ImageInputAttachment[]
+  draftGeneration: number
+  acceptedImagePaths: Set<string>
+}
+
+const MAX_IMAGE_ATTACHMENTS = 8
 
 const emptyRunMsg = (id: string): Msg => ({
   id,
@@ -48,7 +65,8 @@ const emptyRunMsg = (id: string): Msg => ({
 
 export function useChat(): UseChatReturn {
   const [msgs, setMsgs] = useState<Msg[]>([])
-  const [text, setText] = useState('')
+  const [text, setTextState] = useState('')
+  const [imageAttachments, setImageAttachments] = useState<ImageInputAttachment[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -64,6 +82,85 @@ export function useChat(): UseChatReturn {
   const hasStreamTextRef = useRef(false)
   const streamBreakPendingRef = useRef(false)
   const flushTimerRef = useRef<number | null>(null)
+	const nextImageIDRef = useRef(0)
+	const draftGenerationRef = useRef(0)
+	const pendingSubmissionRef = useRef<PendingSubmission | null>(null)
+
+	const deleteClipboardImage = useCallback((path: string) => {
+	  void safeDeleteClipboardImage(path).catch((err: unknown) => {
+		const detail = String(err)
+		console.error(`Failed to clean up clipboard image ${path}:`, err)
+		if (detail.includes('application is shutting down')) return
+		setError((current) => current ?? `清理图片附件失败：${detail}`)
+	  })
+	}, [])
+
+	const settlePendingSubmission = useCallback((restoreCurrentDraft: boolean) => {
+	  const pending = pendingSubmissionRef.current
+	  pendingSubmissionRef.current = null
+	  if (!pending || pending.draftImages.length === 0) return
+	  const unaccepted = pending.draftImages.filter((image) => !pending.acceptedImagePaths.has(image.path))
+	  if (unaccepted.length === 0) return
+	  if (restoreCurrentDraft && pending.draftGeneration === draftGenerationRef.current) {
+		const acceptedLabels = pending.draftImages
+		  .filter((image) => pending.acceptedImagePaths.has(image.path))
+		  .map((image) => image.label)
+		const restoredText = acceptedLabels.reduce((value, label) => value.split(label).join(''), pending.draftText).trim()
+		setTextState((current) => current === '' ? restoredText : current)
+		setImageAttachments((current) => current.length === 0 ? unaccepted : current)
+		return
+	  }
+	  for (const image of unaccepted) deleteClipboardImage(image.path)
+	}, [deleteClipboardImage])
+
+  const setText = useCallback((next: string) => {
+	draftGenerationRef.current += 1
+    setTextState(next)
+    setImageAttachments((current) => {
+      const kept = current.filter((image) => next.includes(image.label))
+      for (const image of current) {
+		if (!kept.includes(image)) deleteClipboardImage(image.path)
+      }
+      return kept
+    })
+  }, [deleteClipboardImage])
+
+  const pasteImages = useCallback(async (files: File[], start: number, end: number) => {
+	const generation = draftGenerationRef.current
+	if (imageAttachments.length + files.length > MAX_IMAGE_ATTACHMENTS) {
+	  setError(`单条消息最多附加 ${MAX_IMAGE_ATTACHMENTS} 张图片`)
+	  return
+	}
+    const saved: ImageInputAttachment[] = []
+    try {
+      for (const file of files) {
+		const dataURL = await fileDataURL(file)
+		const path = await safeSaveClipboardImage(dataURL)
+		let label: string
+		do {
+		  nextImageIDRef.current += 1
+		  label = `[Image #${nextImageIDRef.current}]`
+		} while (text.includes(label) || saved.some((image) => image.label === label))
+		saved.push({ label, path })
+      }
+    } catch (err) {
+	  for (const image of saved) deleteClipboardImage(image.path)
+      setError(String(err))
+      return
+    }
+	if (generation !== draftGenerationRef.current) {
+	  for (const image of saved) deleteClipboardImage(image.path)
+	  return
+	}
+    if (saved.length === 0) return
+	const replaced = imageAttachments.filter((image) => {
+	  const markerStart = text.indexOf(image.label)
+	  return markerStart >= 0 && start < markerStart + image.label.length && end > markerStart
+	})
+	for (const image of replaced) deleteClipboardImage(image.path)
+    setImageAttachments((current) => [...current.filter((image) => !replaced.includes(image)), ...saved])
+    setTextState((current) => insertImageMarkers(current, saved.map((image) => image.label), start, end))
+  }, [imageAttachments, text, deleteClipboardImage])
 
   const flushBuffers = useCallback(() => {
     flushTimerRef.current = null
@@ -341,11 +438,19 @@ export function useChat(): UseChatReturn {
     sidRef.current = null
     userSidRef.current = null
     sendingRef.current = false
-  }, [flushBuffers])
+	settlePendingSubmission(true)
+  }, [flushBuffers, settlePendingSubmission])
 
   const onStatus = useCallback((e: { status: string }) => {
     if (abortedRef.current) return
     setBusy(e.status !== 'idle')
+  }, [])
+
+  const onInputAccepted = useCallback((e: InputAcceptedEvent) => {
+	if (e.source?.kind !== 'gui') return
+	const pending = pendingSubmissionRef.current
+	if (!pending) return
+	for (const image of e.images ?? []) pending.acceptedImagePaths.add(image.path)
   }, [])
 
   // onSystem 处理命令输出（/devices、/config 等）：作为独立 system 消息展示。
@@ -395,39 +500,71 @@ export function useChat(): UseChatReturn {
     onDone,
     onStatus,
     onSystem,
+	onInputAccepted,
   })
 
   const send = useCallback((input?: string) => {
 	const t = (input ?? text).trim()
     if (!t || busy || sendingRef.current) return
+	const sendImages = input === undefined ? imageAttachments : []
+	const draftText = text
+	const draftImages = imageAttachments
+	const draftGeneration = draftGenerationRef.current
+	pendingSubmissionRef.current = {
+	  draftText,
+	  draftImages,
+	  draftGeneration,
+	  acceptedImagePaths: new Set<string>(),
+	}
 
     resetBuffers(textBufferRef, reasoningBufferRef, textDoneRef, reasoningDoneRef, activityBufferRef, hasStreamTextRef, streamBreakPendingRef, flushTimerRef)
     sendingRef.current = true
     abortedRef.current = false
+	setBusy(true)
     setError(null)
     const userSid = genId()
     userSidRef.current = userSid
     setMsgs((prev) => [...prev, { id: userSid, role: 'user' as const, text: t, streaming: false }])
-    setText('')
+    setTextState('')
+    setImageAttachments([])
+	nextImageIDRef.current = 0
     const sid = genId()
     sidRef.current = sid
     setMsgs((prev) => [...prev, emptyRunMsg(sid)])
 
-    safeSendMessage(t).catch((err: unknown) => {
+	void safeSendMessage(t, sendImages).catch((err: unknown) => {
       const errStr = String(err)
-      setError(errStr)
-      setMsgs((prev) => [
-        ...prev,
-        { id: genId(), role: 'assistant' as const, text: 'Error: ' + errStr, streaming: false },
-      ])
+	  setError(errStr)
+	  if (draftGeneration !== draftGenerationRef.current) {
+		for (const image of draftImages) deleteClipboardImage(image.path)
+		setMsgs((prev) => [
+		  ...prev.filter((message) => message.id !== userSid && message.id !== sid),
+		  { id: genId(), role: 'assistant' as const, text: 'Error: ' + errStr, streaming: false },
+		])
+		setBusy(false)
+		sidRef.current = null
+		userSidRef.current = null
+		sendingRef.current = false
+		pendingSubmissionRef.current = null
+		return
+	  }
+	  setMsgs((prev) => [
+		...prev.filter((message) => message.id !== userSid && message.id !== sid),
+		{ id: genId(), role: 'assistant' as const, text: 'Error: ' + errStr, streaming: false },
+	  ])
+	  setTextState((current) => current === '' ? draftText : current)
+	  setImageAttachments((current) => current.length === 0 ? draftImages : current)
+	  pendingSubmissionRef.current = null
       setBusy(false)
       sidRef.current = null
       userSidRef.current = null
       sendingRef.current = false
     })
-  }, [text, busy])
+	}, [text, busy, imageAttachments, deleteClipboardImage])
 
   const stop = useCallback(() => {
+	settlePendingSubmission(true)
+	draftGenerationRef.current += 1
     abortedRef.current = true
     flushBuffers()
     setMsgs((prev) => settleCompactions(prev, '已取消，未收到压缩完成确认'))
@@ -441,7 +578,7 @@ export function useChat(): UseChatReturn {
     userSidRef.current = null
     sendingRef.current = false
     setBusy(false)
-  }, [flushBuffers])
+  }, [flushBuffers, settlePendingSubmission])
 
   const toggleStep = useCallback((stepId: string) => {
     setMsgs((prev) => prev.map((m) => ({
@@ -451,27 +588,58 @@ export function useChat(): UseChatReturn {
   }, [])
 
   const setMessages = useCallback((next: Msg[]) => {
+	settlePendingSubmission(false)
+	draftGenerationRef.current += 1
     resetBuffers(textBufferRef, reasoningBufferRef, textDoneRef, reasoningDoneRef, activityBufferRef, hasStreamTextRef, streamBreakPendingRef, flushTimerRef)
     setMsgs(next)
+    setImageAttachments((current) => {
+	  for (const image of current) deleteClipboardImage(image.path)
+      return []
+    })
+    setTextState('')
+    nextImageIDRef.current = 0
     setError(null)
     sidRef.current = null
     userSidRef.current = null
     sendingRef.current = false
     abortedRef.current = false
-  }, [])
+	}, [deleteClipboardImage, settlePendingSubmission])
 
   const clearMessages = useCallback(() => {
+	settlePendingSubmission(false)
+	draftGenerationRef.current += 1
     resetBuffers(textBufferRef, reasoningBufferRef, textDoneRef, reasoningDoneRef, activityBufferRef, hasStreamTextRef, streamBreakPendingRef, flushTimerRef)
     setMsgs([])
     setText('')
+    nextImageIDRef.current = 0
     setError(null)
     sidRef.current = null
     userSidRef.current = null
     sendingRef.current = false
     abortedRef.current = false
-  }, [setText])
+  }, [setText, settlePendingSubmission])
 
-  return { msgs, text, setText, busy, error, send, stop, toggleStep, setMessages, clearMessages }
+  return { msgs, text, setText, busy, error, send, stop, toggleStep, setMessages, clearMessages, imageAttachments, pasteImages }
+}
+
+function fileDataURL(file: File): Promise<string> {
+	if (file.size > 20 * 1024 * 1024) return Promise.reject(new Error('剪贴板图片超过 20 MiB 限制'))
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(reader.error ?? new Error('读取剪贴板图片失败'))
+    reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('剪贴板图片格式无效'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function insertImageMarkers(text: string, markers: string[], start: number, end: number): string {
+  const safeStart = Math.max(0, Math.min(start, text.length))
+  const safeEnd = Math.max(safeStart, Math.min(end, text.length))
+  const before = text.slice(0, safeStart)
+  const after = text.slice(safeEnd)
+  const prefix = before && !/\s$/.test(before) ? ' ' : ''
+  const suffix = after && !/^\s/.test(after) ? ' ' : ''
+  return before + prefix + markers.join(' ') + suffix + after
 }
 
 function settleCompactions(msgs: Msg[], error: string): Msg[] {

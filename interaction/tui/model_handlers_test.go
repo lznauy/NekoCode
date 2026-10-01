@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"nekocode/interaction/tui/components/processing"
 	"nekocode/protocol"
 	controlruntime "nekocode/runtime"
+	"nekocode/util/attachment"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -133,6 +135,37 @@ type sessionDeleteFakeBot struct {
 func (b *sessionDeleteFakeBot) DeleteSession(id string) error {
 	b.deleted = append(b.deleted, id)
 	return b.deleteErr
+}
+
+type committedSessionDeleteError struct{ error }
+
+func (committedSessionDeleteError) MutationCommitted() bool { return true }
+
+type imageCommandFakeBot struct {
+	commandFakeBot
+	inputs  []controlruntime.Input
+	steered []controlruntime.Input
+}
+
+func (b *imageCommandFakeBot) StartRun(_ context.Context, input controlruntime.Input) (controlruntime.RunID, error) {
+	b.inputs = append(b.inputs, input)
+	return "", nil
+}
+
+func (b *imageCommandFakeBot) SteerRun(_ context.Context, _ controlruntime.RunID, input controlruntime.Input) error {
+	b.steered = append(b.steered, input)
+	return nil
+}
+
+type localMenuFakeBot struct{ localFakeBot }
+
+func (*localMenuFakeBot) CommandMenu(_ context.Context, input string) (controlruntime.CommandMenu, bool) {
+	if input != "/local" {
+		return controlruntime.CommandMenu{}, false
+	}
+	return controlruntime.CommandMenu{Items: []controlruntime.CommandMenuItem{{
+		Value: "/local detail", Label: "detail", Submit: true,
+	}}}, true
 }
 
 func (b *statusFakeBot) CurrentModel() controlruntime.ModelSelection { return b.selection }
@@ -286,6 +319,97 @@ func TestEnterOpensCommandMenuAndSubmitsLeafChoice(t *testing.T) {
 	}
 	if got := bot.submittedInputs(); len(got) != 1 || got[0] != "/model fast" {
 		t.Fatalf("submitted inputs = %#v", got)
+	}
+}
+
+func TestSubmitSuggestionPreservesImageDraftWithoutSendingAttachment(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	bot := &imageCommandFakeBot{commandFakeBot: commandFakeBot{menus: map[string]controlruntime.CommandMenu{
+		"/model": {Items: []controlruntime.CommandMenuItem{{Value: "/model fast", Label: "fast", Submit: true}}},
+	}}}
+	m, err := NewModel(bot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Input.SetValue("/model")
+	m.handleIdleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	path, err := attachment.SaveImage("session_1", []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0, 'I', 'H', 'D', 'R'})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.Input.AddImage(path) {
+		t.Fatal("AddImage failed")
+	}
+	draft := m.Input.Value()
+
+	m.handleIdleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("suggestion submit deleted draft image: %v", err)
+	}
+	if m.Input.Value() != draft || len(m.Input.ImageAttachments()) != 1 {
+		t.Fatalf("suggestion submit discarded image draft: value=%q images=%#v", m.Input.Value(), m.Input.ImageAttachments())
+	}
+	if len(bot.inputs) != 1 || bot.inputs[0].Text != "/model fast" || len(bot.inputs[0].Images) != 0 {
+		t.Fatalf("submitted inputs = %#v", bot.inputs)
+	}
+}
+
+func TestSubmitLocalSuggestionPreservesImageDraft(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m, err := NewModel(&localMenuFakeBot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Input.SetValue("/local")
+	m.handleIdleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	path, err := attachment.SaveImage("session_1", []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0, 'I', 'H', 'D', 'R'})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.Input.AddImage(path) {
+		t.Fatal("AddImage failed")
+	}
+	draft := m.Input.Value()
+
+	m.handleIdleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("local suggestion deleted draft image: %v", err)
+	}
+	if m.Input.Value() != draft || len(m.Input.ImageAttachments()) != 1 {
+		t.Fatalf("local suggestion discarded image draft: value=%q images=%#v", m.Input.Value(), m.Input.ImageAttachments())
+	}
+}
+
+func TestProcessingSubmitSuggestionPreservesImageDraftWithoutSendingAttachment(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	bot := &imageCommandFakeBot{commandFakeBot: commandFakeBot{menus: map[string]controlruntime.CommandMenu{
+		"/model": {Items: []controlruntime.CommandMenuItem{{Value: "/model fast", Label: "fast", Submit: true}}},
+	}}}
+	m, err := NewModel(bot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.transitionTo(stateProcessing)
+	m.Input.SetValue("/model")
+	m.handleProcessingKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	path, err := attachment.SaveImage("session_1", []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0, 'I', 'H', 'D', 'R'})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.Input.AddImage(path) {
+		t.Fatal("AddImage failed")
+	}
+	draft := m.Input.Value()
+
+	m.handleProcessingKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("processing suggestion deleted draft image: %v", err)
+	}
+	if m.Input.Value() != draft || len(m.Input.ImageAttachments()) != 1 {
+		t.Fatalf("processing suggestion discarded image draft: value=%q images=%#v", m.Input.Value(), m.Input.ImageAttachments())
+	}
+	if len(bot.steered) != 1 || bot.steered[0].Text != "/model fast" || len(bot.steered[0].Images) != 0 {
+		t.Fatalf("steered inputs = %#v", bot.steered)
 	}
 }
 
@@ -455,6 +579,37 @@ func TestSessionDeleteFailureIsShownAndMenuReopens(t *testing.T) {
 	}
 	if !m.Suggestions.IsMenu() {
 		t.Fatal("session menu should reopen after deletion failure")
+	}
+}
+
+func TestCommittedSessionDeleteCleanupFailureIsShownAsWarning(t *testing.T) {
+	bot := &sessionDeleteFakeBot{
+		commandFakeBot: commandFakeBot{menus: map[string]controlruntime.CommandMenu{
+			"/sessions": {
+				Items: []controlruntime.CommandMenuItem{{Key: "session_1", Value: "/sessions session_1", Label: "session_1", Submit: true}},
+			},
+		}},
+		deleteErr: committedSessionDeleteError{errors.New("attachment cleanup failed")},
+	}
+	m, err := NewModel(bot)
+	if err != nil {
+		t.Fatalf("NewModel: %v", err)
+	}
+	m.Input.SetValue("/sessions")
+	m.handleIdleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m.handleKeyPress(tea.KeyPressMsg(tea.Key{Code: 'd', Text: "d"}))
+	m.handleConfirmKey(tea.KeyPressMsg(tea.Key{Code: 'y', Text: "y"}))
+
+	items := m.Messages.Items()
+	if len(items) != 1 {
+		t.Fatalf("message count = %d, want cleanup warning", len(items))
+	}
+	rendered := ansi.Strip(items[0].Render(100))
+	if !strings.Contains(rendered, "已删除") || !strings.Contains(rendered, "清理") || strings.Contains(rendered, "删除会话 session_1 失败") {
+		t.Fatalf("committed deletion rendered as failure: %q", rendered)
+	}
+	if !m.Suggestions.IsMenu() {
+		t.Fatal("session menu should reopen after committed deletion warning")
 	}
 }
 

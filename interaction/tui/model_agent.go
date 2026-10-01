@@ -13,8 +13,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-func (m *Model) startChat(value string) tea.Cmd {
+func (m *Model) startChat(value string, images []controlruntime.ImageAttachment) tea.Cmd {
 	if handled, cmd := m.tryLocalCommand(value); handled {
+		m.finishLocalCommandInput()
 		return cmd
 	}
 	m.transitionTo(stateProcessing)
@@ -28,6 +29,7 @@ func (m *Model) startChat(value string) tea.Cmd {
 	if _, err := m.Runtime.StartRun(context.Background(), controlruntime.Input{
 		Source: controlruntime.SourceRef{Kind: "tui"},
 		Text:   value,
+		Images: images,
 	}); err != nil {
 		m.transitionTo(stateReady)
 		m.Messages.AddMessage(message.ChatMessage{
@@ -36,7 +38,25 @@ func (m *Model) startChat(value string) tea.Cmd {
 		})
 		return nil
 	}
+	// Text-only input can be cleared immediately. Image ownership transfers
+	// only after EventInputAccepted confirms that the agent received it.
+	if len(m.Input.ImageAttachments()) == 0 {
+		m.Input.Reset()
+	}
 	return spinnerTick()
+}
+
+func (m *Model) finishLocalCommandInput() {
+	if len(m.Input.ImageAttachments()) == 0 {
+		m.Input.Reset()
+		return
+	}
+	m.notifyImageDraftPreserved("图片未发送，草稿已保留。")
+}
+
+func (m *Model) notifyImageDraftPreserved(content string) {
+	m.Messages.AddMessage(message.ChatMessage{Role: "system", Content: content, RenderedContent: content})
+	m.Messages.GotoBottom()
 }
 
 func isCompactCommand(value string) bool {

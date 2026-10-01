@@ -43,6 +43,18 @@ type ImageGenConfig struct {
 	Model     string `json:"model,omitempty"`
 }
 
+// ImageUnderstandConfig describes a multimodal model used by the
+// image_understand tool. Provider is a user-facing label; Protocol controls
+// the wire format and defaults to openai when omitted.
+type ImageUnderstandConfig struct {
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+	APIKey   string `json:"api_key"`
+	Model    string `json:"model"`
+	BaseURL  string `json:"base_url,omitempty"`
+	Protocol string `json:"protocol,omitempty"`
+}
+
 type MCPServerConfig struct {
 	URL                    string            `json:"url,omitempty"`
 	Headers                map[string]string `json:"headers,omitempty"`
@@ -76,15 +88,16 @@ type WorkspaceConfig struct {
 }
 
 type Config struct {
-	Active             string                     `json:"active"`                // name of the active model
-	FlashModel         string                     `json:"flash_model,omitempty"` // optional lightweight model; empty uses the active model
-	AutoCompactPercent int                        `json:"auto_compact_percent,omitempty"`
-	Models             []ModelConfig              `json:"models"`
-	ImageGenModels     []ImageGenConfig           `json:"image_gen_models,omitempty"` // text-to-image models
-	MCPServers         map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
-	Permissions        *PermissionsConfig         `json:"permissions,omitempty"`
-	Workspaces         []WorkspaceConfig          `json:"workspaces,omitempty"`
-	Jev                *JevConfig                 `json:"jev,omitempty"` // optional "System One" decision engine (e.g. context-compaction relevance pruning)
+	Active                string                     `json:"active"`                // name of the active model
+	FlashModel            string                     `json:"flash_model,omitempty"` // optional lightweight model; empty uses the active model
+	AutoCompactPercent    int                        `json:"auto_compact_percent,omitempty"`
+	Models                []ModelConfig              `json:"models"`
+	ImageGenModels        []ImageGenConfig           `json:"image_gen_models,omitempty"`        // text-to-image models
+	ImageUnderstandModels []ImageUnderstandConfig    `json:"image_understand_models,omitempty"` // image-to-text models
+	MCPServers            map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
+	Permissions           *PermissionsConfig         `json:"permissions,omitempty"`
+	Workspaces            []WorkspaceConfig          `json:"workspaces,omitempty"`
+	Jev                   *JevConfig                 `json:"jev,omitempty"` // optional "System One" decision engine (e.g. context-compaction relevance pruning)
 }
 
 // JevConfig enables the optional Jev decision engine. Only api_key (or the
@@ -197,6 +210,7 @@ func (c Config) Clone() Config {
 	out := c
 	out.Models = append([]ModelConfig(nil), c.Models...)
 	out.ImageGenModels = append([]ImageGenConfig(nil), c.ImageGenModels...)
+	out.ImageUnderstandModels = append([]ImageUnderstandConfig(nil), c.ImageUnderstandModels...)
 	out.Workspaces = append([]WorkspaceConfig(nil), c.Workspaces...)
 
 	if c.MCPServers != nil {
@@ -331,6 +345,38 @@ func Validate(cfg *Config) error {
 		imageSeen[m.Name] = true
 		if m.Provider == "" {
 			return fmt.Errorf("image model %q provider is required", m.Name)
+		}
+	}
+
+	imageUnderstandSeen := make(map[string]bool, len(cfg.ImageUnderstandModels))
+	for i := range cfg.ImageUnderstandModels {
+		m := &cfg.ImageUnderstandModels[i]
+		m.Name = strings.TrimSpace(m.Name)
+		m.Provider = strings.TrimSpace(m.Provider)
+		m.APIKey = strings.TrimSpace(m.APIKey)
+		m.Model = strings.TrimSpace(m.Model)
+		var err error
+		m.BaseURL, err = utilhttp.NormalizeSecureURL(m.BaseURL)
+		if err != nil {
+			return fmt.Errorf("image understand model %q base URL: %w", m.Name, err)
+		}
+		m.Protocol = strings.ToLower(strings.TrimSpace(m.Protocol))
+		if m.Name == "" {
+			return fmt.Errorf("image understand model #%d name is required", i+1)
+		}
+		nameKey := strings.ToLower(m.Name)
+		if imageUnderstandSeen[nameKey] {
+			return fmt.Errorf("duplicate image understand model name %q", m.Name)
+		}
+		imageUnderstandSeen[nameKey] = true
+		if m.Provider == "" {
+			return fmt.Errorf("image understand model %q provider is required", m.Name)
+		}
+		if m.Model == "" {
+			return fmt.Errorf("image understand model %q model id is required", m.Name)
+		}
+		if m.Protocol != "" && m.Protocol != "openai" && m.Protocol != "anthropic" {
+			return fmt.Errorf("image understand model %q protocol must be openai or anthropic", m.Name)
 		}
 	}
 

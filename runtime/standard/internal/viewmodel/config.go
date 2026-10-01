@@ -117,6 +117,34 @@ func imageGenConfigsFromView(in []controlruntime.ImageGenConfig) []config.ImageG
 	return out
 }
 
+func imageUnderstandConfigsToView(in []config.ImageUnderstandConfig) []controlruntime.ImageUnderstandConfig {
+	if in == nil {
+		return nil
+	}
+	out := make([]controlruntime.ImageUnderstandConfig, 0, len(in))
+	for _, m := range in {
+		out = append(out, controlruntime.ImageUnderstandConfig{
+			Name: m.Name, Provider: m.Provider, APIKey: m.APIKey,
+			Model: m.Model, BaseURL: m.BaseURL, Protocol: m.Protocol,
+		})
+	}
+	return out
+}
+
+func imageUnderstandConfigsFromView(in []controlruntime.ImageUnderstandConfig) []config.ImageUnderstandConfig {
+	if in == nil {
+		return nil
+	}
+	out := make([]config.ImageUnderstandConfig, 0, len(in))
+	for _, m := range in {
+		out = append(out, config.ImageUnderstandConfig{
+			Name: m.Name, Provider: m.Provider, APIKey: m.APIKey,
+			Model: m.Model, BaseURL: m.BaseURL, Protocol: m.Protocol,
+		})
+	}
+	return out
+}
+
 func mcpServerConfigsToView(in map[string]config.MCPServerConfig) map[string]controlruntime.MCPServerConfig {
 	if in == nil {
 		return nil

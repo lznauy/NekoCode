@@ -6,6 +6,11 @@ import (
 	"testing"
 )
 
+type committedTestError struct{}
+
+func (committedTestError) Error() string           { return "cleanup incomplete" }
+func (committedTestError) MutationCommitted() bool { return true }
+
 func TestManagerPublishesSessionChangeFromServiceState(t *testing.T) {
 	runner := &sessionCommandRunner{current: "session_1"}
 	runner.command = func(string, RunHost) CommandResult {
@@ -90,15 +95,56 @@ func TestManagerSessionMutationsPublishCurrentSession(t *testing.T) {
 	}
 
 	events := rt.events.History(EventFilter{Types: []EventType{EventSessionChanged}})
-	want := []string{"session_2", "session_new", ""}
+	want := []SessionPayload{
+		{ID: "session_2", Reason: "resume", ChangedID: "session_2", CurrentChanged: true},
+		{ID: "session_new", Reason: "new", ChangedID: "session_new", CurrentChanged: true},
+		{ID: "", Reason: "delete", ChangedID: "session_new", CurrentChanged: true},
+	}
 	if len(events) != len(want) {
 		t.Fatalf("session_changed events = %d, want %d", len(events), len(want))
 	}
 	for i, event := range events {
 		payload, ok := event.Payload.(SessionPayload)
-		if !ok || payload.ID != want[i] {
-			t.Fatalf("event %d payload = %#v, want ID %q", i, event.Payload, want[i])
+		if !ok || payload != want[i] {
+			t.Fatalf("event %d payload = %#v, want %#v", i, event.Payload, want[i])
 		}
+	}
+}
+
+func TestDeleteSessionPublishesCommittedStateWhenCleanupFails(t *testing.T) {
+	runner := &sessionCommandRunner{current: "session_1"}
+	services := sessionRunnerServices(runner)
+	services.DeleteSession = func(string) error {
+		runner.current = ""
+		return committedTestError{}
+	}
+	rt := New(runner, services)
+	if err := rt.DeleteSession("session_1"); err == nil {
+		t.Fatal("expected cleanup error")
+	}
+	events := rt.events.History(EventFilter{Types: []EventType{EventSessionChanged}})
+	if len(events) != 1 {
+		t.Fatalf("session_changed events = %d, want 1", len(events))
+	}
+	payload, ok := events[0].Payload.(SessionPayload)
+	if !ok || payload.Reason != "delete" || payload.ChangedID != "session_1" || payload.ID != "" || !payload.CurrentChanged {
+		t.Fatalf("session_changed payload = %#v", events[0].Payload)
+	}
+}
+
+func TestDeleteSessionMarksNonCurrentDeletionWithoutChangingCurrentSession(t *testing.T) {
+	runner := &sessionCommandRunner{current: "session_1"}
+	rt := New(runner, sessionRunnerServices(runner))
+	if err := rt.DeleteSession("session_2"); err != nil {
+		t.Fatal(err)
+	}
+	events := rt.events.History(EventFilter{Types: []EventType{EventSessionChanged}})
+	if len(events) != 1 {
+		t.Fatalf("session_changed events = %d, want 1", len(events))
+	}
+	payload, ok := events[0].Payload.(SessionPayload)
+	if !ok || payload.ID != "session_1" || payload.ChangedID != "session_2" || payload.CurrentChanged {
+		t.Fatalf("session_changed payload = %#v", events[0].Payload)
 	}
 }
 

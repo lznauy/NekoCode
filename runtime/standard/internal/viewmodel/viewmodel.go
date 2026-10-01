@@ -17,31 +17,33 @@ func Model(model config.ModelConfig) controlruntime.ModelSelection {
 
 func Config(cfg config.Config) controlruntime.ConfigView {
 	return controlruntime.ConfigView{
-		Path:               config.Path(),
-		Exists:             config.Exists(),
-		Active:             cfg.Active,
-		AutoCompactPercent: cfg.EffectiveAutoCompactPercent(),
-		FlashModel:         cfg.FlashModel,
-		Models:             modelConfigsToView(cfg.Models),
-		ImageGenModels:     imageGenConfigsToView(cfg.ImageGenModels),
-		MCPServers:         mcpServerConfigsToView(cfg.MCPServers),
-		Permissions:        permissionsConfigToView(cfg.Permissions),
-		Workspaces:         workspaceConfigsToView(cfg.Workspaces),
-		Jev:                jevConfigToView(cfg.Jev),
+		Path:                  config.Path(),
+		Exists:                config.Exists(),
+		Active:                cfg.Active,
+		AutoCompactPercent:    cfg.EffectiveAutoCompactPercent(),
+		FlashModel:            cfg.FlashModel,
+		Models:                modelConfigsToView(cfg.Models),
+		ImageGenModels:        imageGenConfigsToView(cfg.ImageGenModels),
+		ImageUnderstandModels: imageUnderstandConfigsToView(cfg.ImageUnderstandModels),
+		MCPServers:            mcpServerConfigsToView(cfg.MCPServers),
+		Permissions:           permissionsConfigToView(cfg.Permissions),
+		Workspaces:            workspaceConfigsToView(cfg.Workspaces),
+		Jev:                   jevConfigToView(cfg.Jev),
 	}
 }
 
 func ToConfig(view controlruntime.ConfigView) config.Config {
 	return config.Config{
-		Active:             view.Active,
-		FlashModel:         view.FlashModel,
-		AutoCompactPercent: view.AutoCompactPercent,
-		Models:             modelConfigsFromView(view.Models),
-		ImageGenModels:     imageGenConfigsFromView(view.ImageGenModels),
-		MCPServers:         mcpServerConfigsFromView(view.MCPServers),
-		Permissions:        permissionsConfigFromView(view.Permissions),
-		Workspaces:         workspaceConfigsFromView(view.Workspaces),
-		Jev:                jevConfigFromView(view.Jev),
+		Active:                view.Active,
+		FlashModel:            view.FlashModel,
+		AutoCompactPercent:    view.AutoCompactPercent,
+		Models:                modelConfigsFromView(view.Models),
+		ImageGenModels:        imageGenConfigsFromView(view.ImageGenModels),
+		ImageUnderstandModels: imageUnderstandConfigsFromView(view.ImageUnderstandModels),
+		MCPServers:            mcpServerConfigsFromView(view.MCPServers),
+		Permissions:           permissionsConfigFromView(view.Permissions),
+		Workspaces:            workspaceConfigsFromView(view.Workspaces),
+		Jev:                   jevConfigFromView(view.Jev),
 	}
 }
 

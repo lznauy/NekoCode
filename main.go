@@ -42,8 +42,16 @@ func (a *App) DomReady(ctx context.Context) {
 	a.impl.DomReady(ctx)
 }
 
-func (a *App) SendMessage(input string) {
-	a.impl.SendMessage(input)
+func (a *App) SendMessage(input string, images []controlruntime.ImageAttachment) error {
+	return a.impl.SendMessage(input, images)
+}
+
+func (a *App) SaveClipboardImage(dataURL string) (string, error) {
+	return a.impl.SaveClipboardImage(dataURL)
+}
+
+func (a *App) DeleteClipboardImage(path string) error {
+	return a.impl.DeleteClipboardImage(path)
 }
 
 func (a *App) CommandMenu(input string) *controlruntime.CommandMenu {
