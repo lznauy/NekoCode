@@ -23,15 +23,15 @@ var SharedHTTPStreamClient = &nethttp.Client{
 }
 
 type Message struct {
-	Role               string         `json:"role"`
-	Content            string         `json:"content,omitempty"`
-	ReasoningContent   string         `json:"reasoning_content,omitempty"`
-	ReasoningSignature string         `json:"reasoning_signature,omitempty"`
-	Name               string         `json:"name,omitempty"`
-	ToolCalls          []ToolCall     `json:"tool_calls,omitempty"`
-	ToolCallID         string         `json:"tool_call_id,omitempty"`
-	IsError            bool           `json:"is_error,omitempty"`
-	Source             string         `json:"source,omitempty"` // internal routing metadata; provider wire structs omit it
+	Role               string     `json:"role"`
+	Content            string     `json:"content,omitempty"`
+	ReasoningContent   string     `json:"reasoning_content,omitempty"`
+	ReasoningSignature string     `json:"reasoning_signature,omitempty"`
+	Name               string     `json:"name,omitempty"`
+	ToolCalls          []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID         string     `json:"tool_call_id,omitempty"`
+	IsError            bool       `json:"is_error,omitempty"`
+	Source             string     `json:"source,omitempty"` // internal routing metadata; provider wire structs omit it
 	// Images carries native image input for user messages when the active
 	// model supports vision. Only local file references are persisted; the
 	// base64 encoding happens at provider wire-build time. Providers with
