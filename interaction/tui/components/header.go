@@ -95,7 +95,9 @@ func (h *Header) brand(showVersion bool) string {
 	cat := styles.CatBodyStyle.Render("(=") + styles.CatEyeStyle.Render("^.^") + styles.CatBodyStyle.Render("=)")
 	brand := cat + " " + styles.PrimaryStyle.Bold(true).Render("NEKOCODE")
 	if showVersion {
-		brand += " " + styles.SubtleStyle.Render("v"+h.Version)
+		// Version already carries its tag prefix ("v0.4.8", or "dev" for
+		// local builds); prepending another "v" printed "vv0.4.8".
+		brand += " " + styles.SubtleStyle.Render(h.Version)
 	}
 	return brand
 }
