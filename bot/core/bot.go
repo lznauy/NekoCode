@@ -229,6 +229,19 @@ func (b *Bot) initPolicy() {
 	builtin.Register(b.policy)
 }
 
+// effectiveModelWindow resolves one model's context window the same way the
+// active model's is resolved: the per-model override, then the built-in
+// table, then the default. It feeds the compaction pre-flight check.
+func effectiveModelWindow(m config.ModelConfig) int {
+	if m.ContextWindow > 0 {
+		return m.ContextWindow
+	}
+	if w, ok := config.KnownContextWindow(m.Model); ok {
+		return w
+	}
+	return config.DefaultContextWindow
+}
+
 func (b *Bot) initAgent() {
 	am := b.cfg.ActiveModelConfig()
 	llmClient := provider.New(provider.Config{
@@ -249,6 +262,7 @@ func (b *Bot) initAgent() {
 	b.ctxMgr.ConfigureModel(ctxmgr.ModelContext{
 		Window: b.cfg.EffectiveContextWindow(), AutoCompactPercent: b.cfg.EffectiveAutoCompactPercent(),
 		CompactionModel: compactionModel, Reasoning: resolvedReasoning(am), Vision: am.EffectiveVision(),
+		CompactionWindow: effectiveModelWindow(fm),
 	})
 
 	b.ag = agent.New(context.Background(), agent.Config{

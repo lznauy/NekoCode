@@ -1,21 +1,13 @@
-// message_shared.go — 消息渲染共享 helper：缓存、宽度计算、左侧彩色竖条。
+// message_shared.go — 消息渲染共享 helper：缓存、宽度计算、前导空格处理。
 package message
 
 import (
-	"image/color"
 	"strings"
 
 	"nekocode/interaction/tui/styles"
 
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
-
-const (
-	barOverhead = 3
-)
-
-var barBorder = lipgloss.Border{Left: "▐"}
 
 type cachedRender struct {
 	rendered string
@@ -64,14 +56,4 @@ func stripLeadingSpaces(s string) string {
 func isTableRenderLine(line string) bool {
 	line = ansi.Strip(line)
 	return strings.ContainsRune(line, '│') || strings.ContainsRune(line, '┼')
-}
-
-func thickLeftBar(content string, barColor color.Color, width int) string {
-	return lipgloss.NewStyle().
-		BorderLeft(true).
-		BorderStyle(barBorder).
-		BorderForeground(barColor).
-		PaddingLeft(1).PaddingRight(1).
-		Width(width).MaxWidth(width).
-		Render(content)
 }

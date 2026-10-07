@@ -135,9 +135,15 @@ func terminalHyperlink(sty *styles.Styles, url, label string) string {
 
 // renderSystemBody: 灰色圆点 + 缩进, 与 assistant 正文 (•) 格式统一, 仅颜色不同。
 func renderSystemBody(body string, sty *styles.Styles) string {
+	return renderBulletBody(body, "  "+sty.Muted.Render("•")+" ")
+}
+
+// renderBulletBody renders body with a bullet prefix on the first line and a
+// fixed continuation indent, matching the shared dot-item layout used by
+// system and error messages. Blank lines are dropped.
+func renderBulletBody(body, prefix string) string {
 	body = stripLeadingSpaces(body)
 	lines := strings.Split(body, "\n")
-	prefix := "  " + sty.Muted.Render("•") + " "
 	continuation := "    "
 
 	var out strings.Builder

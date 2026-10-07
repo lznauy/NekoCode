@@ -239,6 +239,11 @@ type ModelContext struct {
 	// Token estimation only charges image tokens when the request will
 	// actually carry them, so switching models re-prices history correctly.
 	Vision bool
+	// CompactionWindow is the summarizer model's context window. It feeds
+	// the pre-flight check that refuses summary requests the summarizer
+	// cannot possibly read (e.g. a large-context session switched to a
+	// small-window model). 0 disables the check.
+	CompactionWindow int
 }
 
 // ConfigureModel updates model-dependent context settings atomically.
@@ -254,6 +259,7 @@ func (m *Manager) ConfigureModel(cfg ModelContext) {
 	m.state.prefix.Reset()
 	if m.state.compressor != nil {
 		m.state.compressor.autoCompactPercent = normalizeAutoCompactPercent(cfg.AutoCompactPercent)
+		m.state.compressor.modelWindow = cfg.CompactionWindow
 		var summarizer Summarizer
 		if cfg.CompactionModel != nil {
 			summarizer = m.makeSummarizer(context.Background(), cfg.CompactionModel)

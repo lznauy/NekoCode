@@ -14,11 +14,21 @@ import (
 // It summarizes the old visible prefix, then replaces active history with
 // the archive plus recent messages in active history.
 type replacementCompactor struct {
-	model              provider.LLM
+	model provider.LLM
+	// modelWindow is the summarizer model's context window (0 = unknown,
+	// skip the pre-flight check). It gates the summary request: sending
+	// more tokens than the summarizer can read turns into a guaranteed
+	// empty response or API rejection, so the request is refused up front
+	// with an actionable error instead.
+	modelWindow        int
 	summarizer         Summarizer
 	autoCompactPercent int
 	keepTurns          int
 }
+
+// summaryRequestReserve covers the summary system prompt, the requested
+// 2000 completion tokens, and encoding slack between estimate and wire.
+const summaryRequestReserve = 4096
 
 func newReplacementCompactor(summarizer Summarizer, autoCompactPercent int) *replacementCompactor {
 	return &replacementCompactor{
@@ -26,6 +36,17 @@ func newReplacementCompactor(summarizer Summarizer, autoCompactPercent int) *rep
 		autoCompactPercent: normalizeAutoCompactPercent(autoCompactPercent),
 		keepTurns:          3,
 	}
+}
+
+// summarizerModelName resolves the model id for error messages; unknown
+// clients report a placeholder instead of an empty string.
+func summarizerModelName(model provider.LLM) string {
+	if source, ok := model.(interface{ RequestMeta() types.RequestMeta }); ok {
+		if name := source.RequestMeta().Model; name != "" {
+			return name
+		}
+	}
+	return "unknown"
 }
 
 func (s *replacementCompactor) shouldAutoCompact(budget, estimate int) bool {
@@ -62,6 +83,21 @@ func (s *replacementCompactor) summarize(history []types.Message, prevArchive st
 
 	toSummarize := withoutInternalContext(history[:keepStart])
 	recent := append([]types.Message(nil), history[keepStart:]...)
+
+	// Pre-flight: refuse a summary request the summarizer cannot read.
+	// A summary larger than the model's window is a guaranteed failure
+	// (empty response or API rejection) and would otherwise retry forever.
+	if s.modelWindow > 0 {
+		input := token.EstimateTokens(toSummarize) + token.EstimateString(prevArchive)
+		if input+summaryRequestReserve >= s.modelWindow {
+			modelName := summarizerModelName(s.model)
+			return "", nil, 0, fmt.Errorf(
+				"待摘要上下文约 %d tokens（含旧摘要 %d）超过摘要模型 %q 的窗口 %d；"+
+					"请切回大窗口模型执行 /compact 后再切换，或在配置中把 flash_model 指向大窗口轻量模型",
+				input, token.EstimateString(prevArchive), modelName, s.modelWindow)
+		}
+	}
+
 	rawSummary, err := summarizer(toSummarize, prevArchive)
 	if err != nil {
 		return "", nil, 0, fmt.Errorf("replacement compact: %w", err)

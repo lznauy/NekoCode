@@ -129,3 +129,49 @@ func TestCompactionThresholdScalesWithContextWindow(t *testing.T) {
 		t.Fatalf("custom compaction threshold = %d, want 650000", got)
 	}
 }
+
+func TestSummarizeRefusesInputBeyondSummarizerWindow(t *testing.T) {
+	ctx := newContextContent("system")
+	// 40 user/assistant turns with long bodies: far beyond a 16K window.
+	for i := 1; i <= 40; i++ {
+		ctx.Messages = append(ctx.Messages,
+			types.Message{Role: "user", Content: fmt.Sprintf("question %d %s", i, strings.Repeat("x", 2000))},
+			types.Message{Role: "assistant", Content: fmt.Sprintf("answer %d %s", i, strings.Repeat("y", 2000))},
+		)
+	}
+	s := newReplacementCompactor(func([]types.Message, string) (string, error) {
+		t.Fatal("summarizer must not be called when the input cannot fit its window")
+		return "", nil
+	}, 0)
+	s.modelWindow = 16384
+
+	_, _, _, err := s.summarize(ctx.Messages, "", 64000, nil)
+	if err == nil {
+		t.Fatal("oversized summary input was not refused")
+	}
+	if !strings.Contains(err.Error(), "16384") || !strings.Contains(err.Error(), "flash_model") {
+		t.Fatalf("error lacks window or guidance: %v", err)
+	}
+}
+
+func TestSummarizeAllowsInputWithinSummarizerWindow(t *testing.T) {
+	ctx := newContextContent("system")
+	for i := 1; i <= 8; i++ {
+		ctx.Messages = append(ctx.Messages,
+			types.Message{Role: "user", Content: "question " + string(rune('0'+i))},
+			types.Message{Role: "assistant", Content: "answer " + string(rune('0'+i))},
+		)
+	}
+	s := newReplacementCompactor(func([]types.Message, string) (string, error) {
+		return "<summary>A summary long enough to clear the quality floor check.</summary>", nil
+	}, 0)
+	s.modelWindow = 64000
+
+	_, recent, _, err := s.summarize(ctx.Messages, "", 64000, nil)
+	if err != nil {
+		t.Fatalf("in-window summary failed: %v", err)
+	}
+	if len(recent) == 0 {
+		t.Fatal("no recent messages kept")
+	}
+}
