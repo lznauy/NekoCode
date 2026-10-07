@@ -115,16 +115,6 @@ NekoCode-owned `nekocode-headless/2` protocol with session management, model sel
 checkpoint rewind, subagent output, steering, and graceful shutdown.
 See [STREAM_JSON.md](STREAM_JSON.md) for the supported contract (Chinese).
 
-## Star History
-
-<a href="https://www.star-history.com/?repos=lznauy%2FNekoCode&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/lznauy/NekoCode/star-history/assets/star-history/star-history-dark.svg" />
-   <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/lznauy/NekoCode/star-history/assets/star-history/star-history-light.svg" />
-   <img alt="NekoCode Star History Chart" src="https://raw.githubusercontent.com/lznauy/NekoCode/star-history/assets/star-history/star-history-light.svg" />
- </picture>
-</a>
-
 ## Learn More
 
 - Detailed usage and configuration guide: [User Guide](USER_GUIDE.md)
@@ -154,3 +144,13 @@ The developer documents cover tool design, prefix caching, context compaction, a
 ## License
 
 NekoCode is available under the [MIT License](../LICENSE).
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=lznauy%2FNekoCode&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/lznauy/NekoCode/star-history/assets/star-history/star-history-dark.svg" />
+   <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/lznauy/NekoCode/star-history/assets/star-history/star-history-light.svg" />
+   <img alt="NekoCode Star History Chart" src="https://raw.githubusercontent.com/lznauy/NekoCode/star-history/assets/star-history/star-history-light.svg" />
+ </picture>
+</a>
