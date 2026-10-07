@@ -93,9 +93,9 @@ var knownModelProfiles = []modelProfile{
 	{match: "gpt-4.1", contextWindow: 1047576, vision: true},
 	{match: "gpt-4o", contextWindow: 128000, vision: true},
 	{match: "gpt-4-turbo", contextWindow: 128000, vision: true},
-	// Zhipu GLM: 5.x and 4.6 are 200K; older 4.x is 128K. GLM-5 and the
-	// GLM-4V series accept native image input.
-	{match: "glm-5", contextWindow: 200000, vision: true},
+	// Zhipu GLM: 5.x (including flash variants) is 1M; 4.6 is 200K; older
+	// 4.x is 128K. GLM-5 and the GLM-4V series accept native image input.
+	{match: "glm-5", contextWindow: 1048576, vision: true},
 	{match: "glm-4v", contextWindow: 131072, vision: true},
 	{match: "glm-4.6", contextWindow: 200000},
 	{match: "glm-4", contextWindow: 131072},

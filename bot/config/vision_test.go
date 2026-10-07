@@ -32,6 +32,10 @@ func TestEffectiveVisionRespectsExplicitOverride(t *testing.T) {
 		// Provider-prefixed IDs strip the prefix before matching.
 		{"zhipu/glm-5.3", nil, true},
 		{"deepseek/deepseek-v4-pro", nil, false},
+		// GLM-5.x (including flash variants) is a 1M-context family.
+		{"glm-5.3-flash", nil, true},
+		{"glm-5.3", nil, true},
+		{"glm-5", nil, true},
 		// o-series text-only variants must not inherit the family vision
 		// flag; a false positive would deliver images natively and fail
 		// with an API 400.
