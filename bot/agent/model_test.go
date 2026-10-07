@@ -39,6 +39,23 @@ func (f *fakeLLM) SetDisableThinking(bool) {}
 
 func (f *fakeLLM) GetDisableThinking() bool { return false }
 
+// failingLLM simulates a misconfigured model: the stream errors immediately
+// on every call, so no assistant content ever reaches the context.
+type failingLLM struct {
+	fakeLLM
+	calls int
+}
+
+func (f *failingLLM) ChatStream(context.Context, []types.Message, []types.ToolDef) (<-chan types.StreamToken, <-chan error) {
+	f.calls++
+	tokenCh := make(chan types.StreamToken)
+	errCh := make(chan error, 1)
+	errCh <- context.DeadlineExceeded
+	close(tokenCh)
+	close(errCh)
+	return tokenCh, errCh
+}
+
 func newTestAgentWithLLM(tokens ...types.StreamToken) (*Agent, *fakeLLM) {
 	a := newTestAgent()
 	llm := &fakeLLM{tokens: tokens}

@@ -65,6 +65,7 @@ func (r *loopRunner) run(input string, images []types.MessageImage, callback Run
 	// the run, so they are still recorded in the context instead of being lost.
 	result.Error = errors.Join(result.Error, a.drainSteering())
 	r.restoreInterruptedRun(beforeRun, result)
+	r.restoreUnansweredRun(beforeRun, result)
 	r.publishSummary(result, callback)
 	return result
 }
@@ -73,6 +74,36 @@ func (r *loopRunner) restoreInterruptedRun(before contextmgr.ManagerSnapshot, re
 	if result != nil && result.Interrupted {
 		r.agent.deps.ctxMgr.Restore(before)
 	}
+}
+
+// restoreUnansweredRun rolls back a run that ended without a single model
+// response — a misconfigured model, a dead endpoint, or a failed compaction
+// before the first call. Without the rollback the user message stays
+// stranded in the context and the next attempt would send both copies.
+// Runs that produced any assistant message (text or tool call) are kept.
+func (r *loopRunner) restoreUnansweredRun(before contextmgr.ManagerSnapshot, result *RunResult) {
+	if result == nil || result.Interrupted {
+		return
+	}
+	a := r.agent
+	after := a.deps.ctxMgr.Snapshot()
+	if len(after.Messages) <= len(before.Messages) {
+		return // nothing was appended
+	}
+	if assistantCount(after.Messages) > assistantCount(before.Messages) {
+		return // the model answered; keep the turn
+	}
+	a.deps.ctxMgr.Restore(before)
+}
+
+func assistantCount(messages []types.Message) int {
+	count := 0
+	for _, m := range messages {
+		if m.Role == "assistant" {
+			count++
+		}
+	}
+	return count
 }
 
 func (r *loopRunner) runTurn(input string, callback RunCallback) (finished bool) {
