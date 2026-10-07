@@ -115,15 +115,18 @@ nekocode-tui --headless
 会话管理、模型选择、检查点回滚和运行控制。接入开发指南见 [headless/README.md](headless/README.md)，
 完整消息契约见 [STREAM_JSON.md](docs/STREAM_JSON.md)。
 
-## Star 趋势
+### 作为 A2A Agent 使用
 
-<a href="https://www.star-history.com/?repos=lznauy%2FNekoCode&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/lznauy/NekoCode/star-history/assets/star-history/star-history-dark.svg" />
-   <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/lznauy/NekoCode/star-history/assets/star-history/star-history-light.svg" />
-   <img alt="NekoCode Star 趋势图" src="https://raw.githubusercontent.com/lznauy/NekoCode/star-history/assets/star-history/star-history-light.svg" />
- </picture>
-</a>
+daemon 提供 A2A 1.0 HTTP+JSON 接口和 Agent Card，可让其他 Agent 发现并调用 NekoCode：
+
+```bash
+NEKOCODE_DAEMON_TOKEN=change-me go run ./cmd/daemon
+curl http://127.0.0.1:8765/.well-known/agent-card.json
+```
+
+A2A 操作位于 `/a2a`，支持文本任务、SSE 流式输出、查询、订阅、取消，以及审批/提问的
+`TASK_STATE_INPUT_REQUIRED` 往返。公网或反向代理部署方式见 [A2A 接入文档](docs/A2A.md)。
+
 
 ## 了解更多
 
@@ -139,6 +142,7 @@ NekoCode 仍处于测试阶段，尚未经过大规模生产验证。工具设�
 - [CI_CD.md](docs/CI_CD.md)：持续集成、版本发布、产物校验与失败处理
 - [RUNTIME_APP_GUIDE.md](docs/RUNTIME_APP_GUIDE.md)：基于底座组装上层 AI 应用
 - [RUNTIME_HTTP_API.md](docs/RUNTIME_HTTP_API.md)：Runtime HTTP/SSE 协议
+- [A2A.md](docs/A2A.md)：A2A 1.0 Agent Card、REST 接口与交互说明
 - [CHANGELOG.md](docs/CHANGELOG.md)：版本变化记录
 
 ## 开源
@@ -150,3 +154,14 @@ NekoCode 仍处于测试阶段，尚未经过大规模生产验证。工具设�
 - [支持范围](docs/SUPPORT.md)
 
 NekoCode 使用 [MIT License](LICENSE)，可以按许可证条款使用、修改和分发。
+
+
+## Star 趋势
+
+<a href="https://www.star-history.com/?repos=lznauy%2FNekoCode&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/lznauy/NekoCode/star-history/assets/star-history/star-history-dark.svg" />
+   <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/lznauy/NekoCode/star-history/assets/star-history/star-history-light.svg" />
+   <img alt="NekoCode Star 趋势图" src="https://raw.githubusercontent.com/lznauy/NekoCode/star-history/assets/star-history/star-history-light.svg" />
+ </picture>
+</a>

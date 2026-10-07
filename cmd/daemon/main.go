@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"nekocode/runtime/a2aapi"
 	"nekocode/runtime/httpapi"
 	"nekocode/runtime/standard"
 )
@@ -19,7 +20,11 @@ import (
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8765", "HTTP listen address")
 	token := flag.String("token", os.Getenv("NEKOCODE_DAEMON_TOKEN"), "optional bearer token for HTTP API")
+	a2aURL := flag.String("a2a-url", "", "public base URL advertised by A2A (default: first local access URL plus /a2a)")
 	flag.Parse()
+	if err := validateListenSecurity(*addr, *token); err != nil {
+		log.Fatal(err)
+	}
 
 	rt, err := standard.New()
 	if err != nil {
@@ -34,9 +39,29 @@ func main() {
 		log.Printf("connector %s: %s", status.name, status.message)
 	}
 
+	publicA2AURL := strings.TrimRight(strings.TrimSpace(*a2aURL), "/")
+	if publicA2AURL == "" {
+		publicA2AURL = strings.TrimRight(accessURLs(*addr)[0], "/") + "/a2a"
+	}
+	a2aServer, err := a2aapi.New(rt, a2aapi.Options{
+		Endpoint: publicA2AURL,
+		Secured:  strings.TrimSpace(*token) != "",
+	})
+	if err != nil {
+		_ = rt.Close()
+		log.Fatalf("initialize A2A server: %v", err)
+	}
+
+	protectedAPI := httpapi.WithBearerAuth(httpapi.New(rt).Handler(), *token)
+	protectedA2A := httpapi.WithBearerAuth(http.StripPrefix("/a2a", a2aServer.Handler()), *token)
+	mux := http.NewServeMux()
+	mux.Handle("GET /.well-known/agent-card.json", a2aServer.AgentCardHandler())
+	mux.Handle("/a2a/", protectedA2A)
+	mux.Handle("/", protectedAPI)
+
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           httpapi.WithBearerAuth(httpapi.New(rt).Handler(), *token),
+		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {

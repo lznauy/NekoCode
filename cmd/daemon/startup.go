@@ -3,7 +3,22 @@ package main
 import (
 	"fmt"
 	"net"
+	"strings"
 )
+
+func validateListenSecurity(addr, token string) error {
+	if strings.TrimSpace(token) != "" {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("refusing unauthenticated listener %q: invalid address: %w", addr, err)
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return nil
+	}
+	return fmt.Errorf("refusing unauthenticated network listener %q: set -token or NEKOCODE_DAEMON_TOKEN", addr)
+}
 
 // printStartup prints the daemon's listen URLs and auth hints.
 func printStartup(addr string, hasToken bool) {
@@ -22,6 +37,8 @@ func printStartup(addr string, hasToken bool) {
 		fmt.Println(`Example: curl -X POST http://127.0.0.1:8765/input -d '{"text":"hello"}'`)
 	}
 	fmt.Println("SSE: /events")
+	fmt.Println("A2A Agent Card: /.well-known/agent-card.json")
+	fmt.Println("A2A REST: /a2a")
 }
 
 func accessURLs(addr string) []string {

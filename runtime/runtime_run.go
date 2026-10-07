@@ -393,10 +393,21 @@ func (r *Runtime) endRun(runID RunID) {
 	}
 	status := r.status
 	cancelDone := r.cancelDone
+	restoreSession := r.restoreSession
+	restoreSessionID := r.restoreSessionID
+	closed := r.closed
 	r.mu.Unlock()
 
 	if status == RunCancelled && cancelDone != nil {
 		<-cancelDone
+	}
+	if !closed && restoreSession {
+		fellBack, err := r.restoreSessionOrFallback(restoreSessionID)
+		if err != nil {
+			r.events.Publish(Event{Type: EventSystemMessage, Source: SourceRef{Kind: "runtime"}, Payload: MessagePayload{Role: "system", Content: "failed to restore session: " + err.Error()}})
+		} else if fellBack {
+			r.events.Publish(Event{Type: EventSystemMessage, Source: SourceRef{Kind: "runtime"}, Payload: MessagePayload{Role: "system", Content: "previous session could not be restored; started a fresh session"}})
+		}
 	}
 
 	r.mu.Lock()
@@ -408,6 +419,8 @@ func (r *Runtime) endRun(runID RunID) {
 		r.status = RunIdle
 		r.runContext = nil
 		r.runExecution = nil
+		r.restoreSession = false
+		r.restoreSessionID = ""
 	}
 	delete(r.cancelled, runID)
 	if r.runDone != nil {

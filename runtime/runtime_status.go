@@ -74,7 +74,7 @@ func (r *Runtime) Status() RuntimeStatus {
 	state := RuntimeReady
 	if r.closed {
 		state = RuntimeClosed
-	} else if r.status != RunIdle || r.mutating {
+	} else if r.status != RunIdle || r.mutating || r.sessionRestoreFailed {
 		state = RuntimeBusy
 	}
 	activeRun := r.currentRun

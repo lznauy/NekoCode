@@ -181,6 +181,9 @@ func (r *Runtime) ResumeSession(id string) error {
 		return r.services.ResumeSession(id)
 	})
 	if err == nil {
+		r.mu.Lock()
+		r.sessionRestoreFailed = false
+		r.mu.Unlock()
 		r.publishSessionChanged("resume", id, true)
 	}
 	return err
@@ -192,6 +195,9 @@ func (r *Runtime) NewSession() (session SessionMeta, err error) {
 		return err
 	})
 	if err == nil {
+		r.mu.Lock()
+		r.sessionRestoreFailed = false
+		r.mu.Unlock()
 		r.publishSessionChanged("new", session.ID, true)
 	}
 	return session, err
@@ -209,6 +215,18 @@ func (r *Runtime) DeleteSession(id string) error {
 		r.publishSessionChanged("delete", id, previousID == id)
 	}
 	return err
+}
+
+// DeleteInactiveSession removes a session only if it is not the runtime's
+// current session. The check and deletion are serialized with session changes
+// and run starts so retention cleanup cannot delete a newly selected session.
+func (r *Runtime) DeleteInactiveSession(id string) error {
+	return r.mutation("delete_inactive_session", r.services.DeleteSession != nil && r.services.CurrentSessionID != nil, func() error {
+		if r.services.CurrentSessionID() == id {
+			return protocolError(ErrorConflict, "delete_inactive_session", "session is currently active")
+		}
+		return r.services.DeleteSession(id)
+	})
 }
 
 // ReplaceMCPServers atomically replaces transport-supplied MCP servers owned

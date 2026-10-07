@@ -7,6 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.2
 	charm.land/glamour/v2 v2.0.1
 	charm.land/lipgloss/v2 v2.0.4
+	github.com/a2aproject/a2a-go/v2 v2.5.0
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/dop251/goja v0.0.0-20260627200808-0b76000cabdb
 	github.com/fsnotify/fsnotify v1.10.1

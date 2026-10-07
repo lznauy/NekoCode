@@ -50,24 +50,27 @@ type Runtime struct {
 	recorder        *recording.EventRecorder
 	runtimeCommands map[string]runtimeCommand
 
-	mu            sync.Mutex
-	mutationMu    sync.Mutex
-	recordingMu   sync.Mutex
-	mutating      bool
-	currentRun    RunID
-	runContext    context.Context
-	cancelRun     context.CancelFunc
-	cancelDone    chan struct{}
-	runDone       chan struct{}
-	runLease      *runLease
-	runExecution  *runExecution
-	status        RunStatus
-	latestMetrics MetricsSnapshot
-	nextRun       uint64
-	cancelled     map[RunID]struct{}
-	closed        bool
-	closeOnce     sync.Once
-	closeErr      error
+	mu                   sync.Mutex
+	mutationMu           sync.Mutex
+	recordingMu          sync.Mutex
+	mutating             bool
+	currentRun           RunID
+	runContext           context.Context
+	cancelRun            context.CancelFunc
+	cancelDone           chan struct{}
+	runDone              chan struct{}
+	runLease             *runLease
+	runExecution         *runExecution
+	restoreSession       bool
+	restoreSessionID     string
+	sessionRestoreFailed bool
+	status               RunStatus
+	latestMetrics        MetricsSnapshot
+	nextRun              uint64
+	cancelled            map[RunID]struct{}
+	closed               bool
+	closeOnce            sync.Once
+	closeErr             error
 }
 
 var (

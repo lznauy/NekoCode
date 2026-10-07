@@ -50,17 +50,111 @@ func RedactInputText(input string) string {
 }
 
 func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
-	if strings.TrimSpace(input.Text) == "" {
-		return "", protocolError(ErrorInvalidInput, "start_run", "empty input")
-	}
-	if len(input.Images) > MaxImageAttachments {
-		return "", protocolError(ErrorInvalidInput, "start_run", "too many image attachments")
-	}
 	r.mutationMu.Lock()
 	defer r.mutationMu.Unlock()
-	if len(input.Images) > 0 && !r.ImageAttachmentsEnabled() {
-		return "", protocolError(ErrorUnsupported, "start_run", "image attachments require a configured image understanding model")
+	if err := r.validateStartInput(input); err != nil {
+		return "", err
 	}
+	return r.startRunLocked(ctx, input, false, "")
+}
+
+// StartRunInSession atomically selects or creates a session and starts a run.
+// The previously active session is restored before the runtime becomes idle.
+func (r *Runtime) StartRunInSession(ctx context.Context, sessionID string, input Input) (RunID, string, error) {
+	r.mutationMu.Lock()
+	defer r.mutationMu.Unlock()
+	if err := r.validateStartInput(input); err != nil {
+		return "", "", err
+	}
+	if r.services.CurrentSessionID == nil || r.services.ResumeSession == nil || r.services.NewSession == nil {
+		return "", "", protocolError(ErrorUnsupported, "start_run_in_session", "session capability unavailable")
+	}
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return "", "", protocolError(ErrorClosed, "start_run_in_session", "closed")
+	}
+	if r.mutating || r.status != RunIdle || r.sessionRestoreFailed {
+		runID, status := r.currentRun, r.status
+		restoreFailed := r.sessionRestoreFailed
+		r.mu.Unlock()
+		if restoreFailed {
+			return runID, "", protocolError(ErrorConflict, "start_run_in_session", "previous session restoration failed")
+		}
+		return runID, "", protocolError(ErrorBusy, "start_run_in_session", fmt.Sprintf("run %s is %s", runID, status))
+	}
+	r.mu.Unlock()
+
+	previousSessionID := r.services.CurrentSessionID()
+	selectedSessionID := sessionID
+	if selectedSessionID == "" {
+		session, err := r.services.NewSession()
+		if err != nil {
+			if _, recoveryErr := r.restoreSessionOrFallback(previousSessionID); recoveryErr != nil {
+				return "", "", errors.Join(err, recoveryErr)
+			}
+			return "", "", err
+		}
+		selectedSessionID = session.ID
+	} else if selectedSessionID != previousSessionID {
+		if err := r.services.ResumeSession(selectedSessionID); err != nil {
+			if _, recoveryErr := r.restoreSessionOrFallback(previousSessionID); recoveryErr != nil {
+				return "", "", errors.Join(err, recoveryErr)
+			}
+			return "", "", err
+		}
+	}
+	restoreSession := previousSessionID != selectedSessionID
+	runID, err := r.startRunLocked(ctx, input, restoreSession, previousSessionID)
+	if err != nil && restoreSession {
+		if _, recoveryErr := r.restoreSessionOrFallback(previousSessionID); recoveryErr != nil {
+			err = errors.Join(err, recoveryErr)
+		}
+	}
+	return runID, selectedSessionID, err
+}
+
+// restoreSessionOrFallback restores the requested session, falling back to a
+// fresh session when restoration is no longer possible. The bool reports that
+// fallback so callers can surface the session change when appropriate.
+func (r *Runtime) restoreSessionOrFallback(previousSessionID string) (bool, error) {
+	var restoreErr error
+	if previousSessionID == "" {
+		_, restoreErr = r.services.NewSession()
+	} else {
+		restoreErr = r.services.ResumeSession(previousSessionID)
+	}
+	fellBack := false
+	if restoreErr != nil {
+		_, fallbackErr := r.services.NewSession()
+		if fallbackErr != nil {
+			restoreErr = errors.Join(restoreErr, fallbackErr)
+		} else {
+			restoreErr = nil
+			fellBack = true
+		}
+	}
+	r.mu.Lock()
+	r.sessionRestoreFailed = restoreErr != nil
+	r.mu.Unlock()
+	return fellBack, restoreErr
+}
+
+func (r *Runtime) validateStartInput(input Input) error {
+	if strings.TrimSpace(input.Text) == "" {
+		return protocolError(ErrorInvalidInput, "start_run", "empty input")
+	}
+	if len(input.Images) > MaxImageAttachments {
+		return protocolError(ErrorInvalidInput, "start_run", "too many image attachments")
+	}
+	if len(input.Images) > 0 && !r.ImageAttachmentsEnabled() {
+		return protocolError(ErrorUnsupported, "start_run", "image attachments require a configured image understanding model")
+	}
+	return nil
+}
+
+// startRunLocked starts a run while mutationMu is held.
+func (r *Runtime) startRunLocked(ctx context.Context, input Input, restoreSession bool, restoreSessionID string) (RunID, error) {
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
@@ -70,9 +164,12 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 		r.mu.Unlock()
 		return "", protocolError(ErrorBusy, "start_run", "runtime capability mutation in progress")
 	}
+	if r.sessionRestoreFailed {
+		r.mu.Unlock()
+		return "", protocolError(ErrorConflict, "start_run", "previous session restoration failed")
+	}
 	if r.status != RunIdle {
-		runID := r.currentRun
-		status := r.status
+		runID, status := r.currentRun, r.status
 		r.mu.Unlock()
 		return runID, protocolError(ErrorBusy, "start_run", fmt.Sprintf("run %s is %s", runID, status))
 	}
@@ -90,6 +187,8 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 	execution := newRunExecution()
 	r.runLease = lease
 	r.runExecution = execution
+	r.restoreSession = restoreSession
+	r.restoreSessionID = restoreSessionID
 	r.mu.Unlock()
 
 	go r.run(runCtx, runID, input, lease, execution)
