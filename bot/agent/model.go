@@ -80,13 +80,15 @@ func (r *modelRunner) callLLMForTool() (*llmstream.LLMCallResult, error) {
 // limit, repeated failures): it asks the LLM once for a tool-free summary
 // and persists it. On failure or garbled output it falls back to a fixed
 // message — no retries: this path fires precisely when the model is already
-// misbehaving, so extra calls rarely help.
+// misbehaving, so extra calls rarely help. The fallback itself is not
+// persisted: it is not a model response, and recording it as one would mark
+// an unanswered run as answered, stranding the user message in the context.
 func (r *modelRunner) synthesize() string {
 	a := r.agent
 	text, err := r.streamSynthesize(a.getCtx())
 	if err != nil || !usableFinalText(text) {
 		logger.Log("synthesize: LLM summary failed (err=%v), using fallback", err)
-		text = fallbackSynthesize
+		return fallbackSynthesize
 	}
 	a.deps.ctxMgr.AddAssistant(types.Message{Role: "assistant", Content: text})
 	return text

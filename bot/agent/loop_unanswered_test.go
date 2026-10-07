@@ -50,3 +50,22 @@ func TestSuccessfulRunKeepsTurnInContext(t *testing.T) {
 		t.Fatalf("answered turn was rolled back: user=%v assistant=%v", hasUser, hasAssistant)
 	}
 }
+
+// The synthesize fallback is not a model response and must not be persisted:
+// recording it would mark an unanswered run as answered and strand the user
+// message even after the rollback fix.
+func TestSynthesizeFallbackIsNotPersisted(t *testing.T) {
+	a := newTestAgent()
+	llm := &failingLLM{}
+	a.deps.llmClient = llm
+	before := a.deps.ctxMgr.Len()
+
+	output := a.modelRunner.synthesize()
+
+	if output != fallbackSynthesize {
+		t.Fatalf("output = %q, want the fixed fallback", output)
+	}
+	if got := a.deps.ctxMgr.Len(); got != before {
+		t.Fatalf("fallback was persisted: context grew from %d to %d", before, got)
+	}
+}
