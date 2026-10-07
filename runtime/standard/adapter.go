@@ -8,8 +8,11 @@ import (
 	"nekocode/bot/core"
 	"nekocode/bot/extension"
 	"nekocode/bot/extension/mcp"
+	"nekocode/bot/provider/types"
+	"nekocode/logger"
 	controlruntime "nekocode/runtime"
 	"nekocode/runtime/standard/internal/viewmodel"
+	"nekocode/util/attachment"
 )
 
 // adapter is the only standard-application boundary between the bot domain
@@ -23,7 +26,34 @@ func adapt(standardBot *core.Bot) *adapter {
 }
 
 func (a *adapter) Run(ctx context.Context, input string, host controlruntime.RunHost) (string, error) {
-	return a.bot.Run(ctx, input, host)
+	return a.bot.Run(ctx, input, messageImages(host), host)
+}
+
+// messageImages retrieves this run's attachments from the runtime host and
+// converts them into message metadata for native delivery. The host is
+// shared with the bot for the duration of the run, so reading it here is
+// race-free. Attachment files are probed once; failures degrade to
+// headerless entries that providers sniff themselves.
+func messageImages(host controlruntime.RunHost) []types.MessageImage {
+	source, ok := host.(controlruntime.RunImageSource)
+	if !ok {
+		return nil
+	}
+	attachments := source.RunImages()
+	if len(attachments) == 0 {
+		return nil
+	}
+	images := make([]types.MessageImage, 0, len(attachments))
+	for _, item := range attachments {
+		image := types.MessageImage{Path: item.Path}
+		if mime, width, height, err := attachment.InspectImage(item.Path); err == nil {
+			image.MIME, image.Width, image.Height = mime, width, height
+		} else {
+			logger.Log("vision: attachment %s could not be inspected (%v); provider will sniff its header", item.Path, err)
+		}
+		images = append(images, image)
+	}
+	return images
 }
 
 func (a *adapter) ExecuteCommand(ctx context.Context, input string, host controlruntime.RunHost) (controlruntime.CommandResult, error) {
@@ -65,7 +95,20 @@ func (a *adapter) PermissionMode() string {
 }
 
 func (a *adapter) ImageAttachmentsEnabled() bool {
-	return len(a.bot.Configuration().ImageUnderstandModels) > 0
+	// Pasted images are consumable when the active model accepts native image
+	// input, or when an image-understanding model is configured for the tool
+	// proxy path.
+	configuration := a.bot.Configuration()
+	if configuration.ActiveModelConfig().EffectiveVision() {
+		return true
+	}
+	return len(configuration.ImageUnderstandModels) > 0
+}
+
+// VisionEnabled reports whether the active model accepts native image input.
+func (a *adapter) VisionEnabled() bool {
+	configuration := a.bot.Configuration()
+	return configuration.ActiveModelConfig().EffectiveVision()
 }
 
 func (a *adapter) SwitchModel(name string) (controlruntime.ModelSelection, error) {
@@ -223,6 +266,7 @@ func (a *adapter) services() controlruntime.Services {
 		ContextSnapshot:         a.ContextSnapshot,
 		WorkspaceChanges:        a.WorkspaceChanges,
 		ImageAttachmentsEnabled: a.ImageAttachmentsEnabled,
+		VisionEnabled:           a.VisionEnabled,
 		MemoryView:              a.MemoryView,
 		SkillManagementView:     a.SkillManagementView,
 		SelectSkill:             a.SelectSkill,

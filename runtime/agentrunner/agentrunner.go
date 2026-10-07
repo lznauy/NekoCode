@@ -52,7 +52,7 @@ func (r *Runner) Run(ctx context.Context, input string, host controlruntime.RunH
 		<-watchDone
 	}()
 
-	result := r.agent.Run(input, host.Step)
+	result := r.agent.Run(input, nil, host.Step)
 	return result.FinalOutput, result.Error
 }
 

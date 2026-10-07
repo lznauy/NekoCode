@@ -46,6 +46,12 @@ type Config struct {
 	Model     string
 	Protocol  string
 	Reasoning types.ReasoningSettings
+	// Vision enables native image input: user-message Images are encoded as
+	// image content parts. When false, the wire layer strips Images and the
+	// placeholder text plus image_attachments envelope remain the only image
+	// trace, so a non-vision model never receives a request it cannot parse.
+	// Flash/compaction clients must always pass false.
+	Vision bool
 }
 
 // New creates an LLM client. Protocol may be "openai" or "anthropic".
@@ -54,10 +60,12 @@ func New(config Config) LLM {
 	case "anthropic":
 		client := anthropic.New(config.APIKey, config.BaseURL, config.Model)
 		client.SetReasoningSettings(config.Reasoning)
+		client.SetVision(config.Vision)
 		return client
 	default:
 		client := openai.New(config.APIKey, config.BaseURL, config.Model)
 		client.SetReasoningSettings(config.Reasoning)
+		client.SetVision(config.Vision)
 		return client
 	}
 }

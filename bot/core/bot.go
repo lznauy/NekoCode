@@ -233,10 +233,13 @@ func (b *Bot) initAgent() {
 	am := b.cfg.ActiveModelConfig()
 	llmClient := provider.New(provider.Config{
 		APIKey: am.APIKey, BaseURL: am.BaseURL, Model: am.Model, Protocol: am.Protocol,
-		Reasoning: resolvedReasoning(am),
+		Reasoning: resolvedReasoning(am), Vision: am.EffectiveVision(),
 	})
 
 	fm := b.cfg.ResolveModel(b.cfg.FlashModel)
+	// The compaction client never receives native image input: summaries are
+	// text-only and the flash model may not be multimodal, so Vision stays
+	// false and image-bearing history is stripped at its wire boundary.
 	compactionModel := provider.New(provider.Config{
 		APIKey: fm.APIKey, BaseURL: fm.BaseURL, Model: fm.Model, Protocol: fm.Protocol,
 		Reasoning: resolvedReasoning(fm),
@@ -245,7 +248,7 @@ func (b *Bot) initAgent() {
 	compactionModel.SetMaxTokens(2000)
 	b.ctxMgr.ConfigureModel(ctxmgr.ModelContext{
 		Window: b.cfg.EffectiveContextWindow(), AutoCompactPercent: b.cfg.EffectiveAutoCompactPercent(),
-		CompactionModel: compactionModel, Reasoning: resolvedReasoning(am),
+		CompactionModel: compactionModel, Reasoning: resolvedReasoning(am), Vision: am.EffectiveVision(),
 	})
 
 	b.ag = agent.New(context.Background(), agent.Config{

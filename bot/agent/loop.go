@@ -46,11 +46,11 @@ func newLoopRunner(agent *Agent) *loopRunner {
 	return &loopRunner{agent: agent}
 }
 
-func (r *loopRunner) run(input string, callback RunCallback) *RunResult {
+func (r *loopRunner) run(input string, images []types.MessageImage, callback RunCallback) *RunResult {
 	a := r.agent
 	r.stepLimitHit = false
 	beforeRun := a.deps.ctxMgr.Snapshot()
-	r.startRun(input)
+	r.startRun(input, images)
 	defer r.logGovernanceSummary()
 	r.applyUserSubmitHooks()
 
@@ -105,11 +105,13 @@ func (r *loopRunner) runTurn(input string, callback RunCallback) (finished bool)
 	return a.turnRunner.handleText(reasoning, callback)
 }
 
-func (r *loopRunner) startRun(input string) {
+func (r *loopRunner) startRun(input string, images []types.MessageImage) {
 	a := r.agent
 	a.Reset()
 	a.deps.ctxMgr.BeginModelTurn()
-	a.deps.ctxMgr.Add("user", input, "user")
+	// AddUser is exactly Add("user", input, "user") when images is empty,
+	// so the single path covers both.
+	a.deps.ctxMgr.AddUser(input, images)
 }
 
 func (r *loopRunner) applyUserSubmitHooks() {

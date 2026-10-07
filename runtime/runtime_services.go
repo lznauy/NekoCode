@@ -30,6 +30,7 @@ type Services struct {
 	ContextSnapshot         func() ContextSnapshot
 	WorkspaceChanges        func() WorkspaceChanges
 	ImageAttachmentsEnabled func() bool
+	VisionEnabled           func() bool
 	MemoryView              func(MemoryScope) MemoryView
 	SkillManagementView     func() SkillManagementView
 	SelectSkill             func(string) error
@@ -49,11 +50,22 @@ type Services struct {
 	Close                   func() error
 }
 
-// ImageAttachmentsEnabled reports whether the active runtime has a configured
-// image-understanding tool that can consume pasted image attachments.
+// ImageAttachmentsEnabled reports whether the active runtime can consume
+// pasted image attachments: natively (vision model) or through a configured
+// image-understanding tool.
 func (r *Runtime) ImageAttachmentsEnabled() bool {
 	r.mu.Lock()
 	service, closed := r.services.ImageAttachmentsEnabled, r.closed
+	r.mu.Unlock()
+	return !closed && service != nil && service()
+}
+
+// VisionEnabled reports whether the active model accepts native image input,
+// in which case pasted images are encoded as image content parts instead of
+// only being reachable through the image_understand tool.
+func (r *Runtime) VisionEnabled() bool {
+	r.mu.Lock()
+	service, closed := r.services.VisionEnabled, r.closed
 	r.mu.Unlock()
 	return !closed && service != nil && service()
 }

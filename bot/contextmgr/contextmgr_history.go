@@ -28,6 +28,33 @@ func (m *Manager) Add(role, content string, source ...string) {
 	m.state.revision++
 }
 
+// AddUser appends a user message carrying native image attachments. The
+// images ride on the message (and persist with the session). Text is charged
+// as characters (AddNew applies the chars→tokens conversion) while image
+// estimates are already token counts and must bypass that conversion —
+// mixing them would undercharge images by 4x and delay compaction until the
+// request overflows. Image tokens are charged only while the active model
+// actually receives image input, so switching models re-prices history
+// correctly.
+func (m *Manager) AddUser(content string, images []types.MessageImage) {
+	m.state.mu.Lock()
+	defer m.state.mu.Unlock()
+	message := types.Message{Role: "user", Content: content, Source: "user", Images: images}
+	m.state.ctx.Messages = append(m.state.ctx.Messages, message)
+	m.state.transcript = append(m.state.transcript, message)
+	m.state.tracker.AddNew(len("user") + len(content))
+	if m.state.vision {
+		imageTokens := 0
+		for _, image := range images {
+			imageTokens += token.EstimateImageTokens(image)
+		}
+		if imageTokens > 0 {
+			m.state.tracker.AddEstimated(imageTokens)
+		}
+	}
+	m.state.revision++
+}
+
 // AddAssistant persists the complete assistant message while charging only the
 // reasoning that the active model contract will replay on its next request.
 func (m *Manager) AddAssistant(message types.Message) {
@@ -36,7 +63,7 @@ func (m *Manager) AddAssistant(message types.Message) {
 	message.Role = "assistant"
 	m.state.ctx.Messages = append(m.state.ctx.Messages, message)
 	m.state.transcript = append(m.state.transcript, message)
-	m.state.tracker.AddEstimated(token.EstimateModelTokens([]types.Message{message}, m.state.reasoning))
+	m.state.tracker.AddEstimated(token.EstimateModelTokens([]types.Message{message}, m.state.reasoning, m.state.vision))
 	m.state.revision++
 }
 

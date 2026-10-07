@@ -148,7 +148,14 @@ func (r *Runtime) SteerRun(ctx context.Context, runID RunID, input Input) error 
 	}()
 	var steerErr error
 	if !lease.guard(func() {
-		steerErr = steer(steerCtx, InputWithImageAttachments(input.Text, input.Images))
+		// The steer chain (bot.Steer → TrySteer → drainSteering) appends the
+		// message as text only: images never enter Message.Images, so they
+		// cannot be delivered as native content parts even on vision models.
+		// The envelope must therefore always carry the tool-proxy
+		// instruction; the vision variant would claim native delivery that
+		// never happened and the model would answer about images it cannot
+		// see.
+		steerErr = steer(steerCtx, InputWithImageAttachments(input.Text, input.Images, false))
 		if steerErr == nil {
 			r.events.Publish(Event{
 				RunID:  runID,

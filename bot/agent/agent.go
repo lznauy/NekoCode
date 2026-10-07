@@ -129,8 +129,8 @@ func (a *Agent) sessionID() string {
 	return a.deps.sessionID()
 }
 
-func (a *Agent) Run(input string, callback RunCallback) *RunResult {
-	return a.loopRunner.run(input, callback)
+func (a *Agent) Run(input string, images []types.MessageImage, callback RunCallback) *RunResult {
+	return a.loopRunner.run(input, images, callback)
 }
 
 func (a *Agent) getCtx() context.Context {

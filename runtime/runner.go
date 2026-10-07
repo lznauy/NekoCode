@@ -35,6 +35,13 @@ type RunHost interface {
 	Ask(request QuestionRequest) QuestionReply
 }
 
+// RunImageSource is an optional RunHost extension implemented by the
+// runtime's own host. Runners that support native image input retrieve this
+// run's attached images through it instead of a Runner signature change.
+type RunImageSource interface {
+	RunImages() []ImageAttachment
+}
+
 // CommandAction describes what runtime should do after a bot command.
 type CommandAction = protocol.CommandAction
 

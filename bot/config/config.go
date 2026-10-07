@@ -32,6 +32,12 @@ type ModelConfig struct {
 	// ContextWindow overrides the context window for this model. When 0,
 	// the window is resolved from the built-in model table, then Default.
 	ContextWindow int `json:"context_window,omitempty"`
+	// Vision controls native image input (multimodal). nil resolves from
+	// the built-in model table (false for unknown models); an explicit
+	// value always overrides it. When enabled, pasted images are sent to
+	// the model as image content parts instead of only being available
+	// through the image_understand tool.
+	Vision *bool `json:"vision,omitempty"`
 }
 
 type ImageGenConfig struct {
@@ -209,6 +215,12 @@ func (c *Config) EffectiveAutoCompactPercent() int {
 func (c Config) Clone() Config {
 	out := c
 	out.Models = append([]ModelConfig(nil), c.Models...)
+	for i := range out.Models {
+		if c.Models[i].Vision != nil {
+			vision := *c.Models[i].Vision
+			out.Models[i].Vision = &vision
+		}
+	}
 	out.ImageGenModels = append([]ImageGenConfig(nil), c.ImageGenModels...)
 	out.ImageUnderstandModels = append([]ImageUnderstandConfig(nil), c.ImageUnderstandModels...)
 	out.Workspaces = append([]WorkspaceConfig(nil), c.Workspaces...)

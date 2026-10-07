@@ -120,6 +120,15 @@ type runHost struct {
 	runtime *Runtime
 	runID   RunID
 	lease   *runLease
+	// images holds this run's input attachments so vision-capable runners
+	// can retrieve them via RunImages.
+	images []ImageAttachment
+}
+
+// RunImages implements RunImageSource, exposing the run's attachments to
+// runners without changing the Runner signature.
+func (h runHost) RunImages() []ImageAttachment {
+	return append([]ImageAttachment(nil), h.images...)
 }
 
 func (h runHost) Text(delta string) {
@@ -230,7 +239,7 @@ func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runL
 		r.endRun(runID)
 	}()
 
-	host := runHost{runtime: r, runID: runID, lease: lease}
+	host := runHost{runtime: r, runID: runID, lease: lease, images: input.Images}
 	if !lease.guard(func() {
 		r.events.Publish(Event{RunID: runID, Type: EventRunStarted, Source: SourceRef{Kind: "runtime"}})
 	}) {
@@ -250,7 +259,7 @@ func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runL
 
 	withMetrics = true
 	stopMetricsUpdates = r.startMetricsUpdates(runID, lease)
-	agentInput = InputWithImageAttachments(agentInput, input.Images)
+	agentInput = InputWithImageAttachments(agentInput, input.Images, r.VisionEnabled())
 	result, err := r.runner.Run(ctx, agentInput, host)
 	r.finishRun(runID, result, err, true)
 }

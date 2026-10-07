@@ -31,7 +31,7 @@ func TestDisplayMessagesKeepsPersistentToolBlocks(t *testing.T) {
 func TestDisplayMessagesHidesImageAttachmentMetadata(t *testing.T) {
 	content := controlruntime.InputWithImageAttachments("分析图片 [Image #1]", []controlruntime.ImageAttachment{{
 		Label: "[Image #1]", Path: "/tmp/paste.png",
-	}})
+	}}, false)
 	msgs := []types.Message{{
 		Role:    "user",
 		Content: content,

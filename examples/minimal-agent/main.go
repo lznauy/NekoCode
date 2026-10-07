@@ -51,7 +51,7 @@ func main() {
 		Tools: toolbox.Registry,
 	})
 
-	result := agent.Run("你好，介绍一下你自己", func(ev protocol.StepEvent) {
+	result := agent.Run("你好，介绍一下你自己", nil, func(ev protocol.StepEvent) {
 		fmt.Printf("[%s] %s %s\n", ev.Action, ev.ToolName, ev.Output)
 	})
 	fmt.Println("---")

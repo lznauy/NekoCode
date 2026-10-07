@@ -2,6 +2,7 @@ package types
 
 import (
 	nethttp "net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -22,15 +23,61 @@ var SharedHTTPStreamClient = &nethttp.Client{
 }
 
 type Message struct {
-	Role               string     `json:"role"`
-	Content            string     `json:"content,omitempty"`
-	ReasoningContent   string     `json:"reasoning_content,omitempty"`
-	ReasoningSignature string     `json:"reasoning_signature,omitempty"`
-	Name               string     `json:"name,omitempty"`
-	ToolCalls          []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID         string     `json:"tool_call_id,omitempty"`
-	IsError            bool       `json:"is_error,omitempty"`
-	Source             string     `json:"source,omitempty"` // internal routing metadata; provider wire structs omit it
+	Role               string         `json:"role"`
+	Content            string         `json:"content,omitempty"`
+	ReasoningContent   string         `json:"reasoning_content,omitempty"`
+	ReasoningSignature string         `json:"reasoning_signature,omitempty"`
+	Name               string         `json:"name,omitempty"`
+	ToolCalls          []ToolCall     `json:"tool_calls,omitempty"`
+	ToolCallID         string         `json:"tool_call_id,omitempty"`
+	IsError            bool           `json:"is_error,omitempty"`
+	Source             string         `json:"source,omitempty"` // internal routing metadata; provider wire structs omit it
+	// Images carries native image input for user messages when the active
+	// model supports vision. Only local file references are persisted; the
+	// base64 encoding happens at provider wire-build time. Providers with
+	// Vision disabled strip this field at the wire boundary, leaving the
+	// placeholder text (and image_attachments envelope) as the only image
+	// trace, so switching models never breaks a conversation.
+	Images []MessageImage `json:"images,omitempty"`
+}
+
+// MessageImage references one image attached to a user message. Width and
+// Height describe the stored file so token estimation never needs file IO.
+type MessageImage struct {
+	Path   string `json:"path"`
+	MIME   string `json:"mime,omitempty"`
+	Width  int    `json:"width,omitempty"`
+	Height int    `json:"height,omitempty"`
+}
+
+// DetectImageMIME falls back to header sniffing when a MessageImage carries
+// no recorded MIME type (e.g. sessions written before metadata was tracked).
+func DetectImageMIME(data []byte) string {
+	switch {
+	case len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP":
+		return "image/webp"
+	case len(data) >= 3 && string(data[:3]) == "GIF":
+		return "image/gif"
+	case len(data) >= 2 && data[0] == 0xFF && data[1] == 0xD8:
+		return "image/jpeg"
+	default:
+		return "image/png"
+	}
+}
+
+// LoadImage reads one attachment's bytes and resolves its media type,
+// preferring the recorded MIME and falling back to header sniffing. ok is
+// false when the file cannot be read; callers skip such images with a log
+// trail instead of failing the whole request.
+func LoadImage(image MessageImage) (data []byte, mediaType string, ok bool) {
+	data, err := os.ReadFile(image.Path)
+	if err != nil {
+		return nil, "", false
+	}
+	if mediaType = image.MIME; mediaType == "" {
+		mediaType = DetectImageMIME(data)
+	}
+	return data, mediaType, true
 }
 
 const (
@@ -233,10 +280,18 @@ type BaseClient struct {
 	Model       string
 	MaxTokens   int
 	Temperature float64
+	// Vision enables native image input on the wire. Compaction/flash
+	// clients keep it false so image-bearing history is always safe to send.
+	Vision bool
 
 	reasoning   ReasoningSettings
 	reasoningMu sync.RWMutex // protects reasoning configuration mutated by subagent setup
 	maxTokensMu sync.RWMutex // protects MaxTokens (merge/summarize mutates concurrently)
+}
+
+// SetVision toggles native image input for this client.
+func (b *BaseClient) SetVision(vision bool) {
+	b.Vision = vision
 }
 
 type ReasoningSettings = reasoning.Settings

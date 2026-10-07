@@ -259,7 +259,7 @@ func (a *App) SaveClipboardImage(dataURL string) (string, error) {
 		return "", err
 	}
 	if !a.rt.ImageAttachmentsEnabled() {
-		return "", fmt.Errorf("未配置图片理解模型，请先配置 image_understand_models")
+		return "", fmt.Errorf("当前模型不支持图片且未配置图片理解模型；可在模型配置中开启 vision，或配置 image_understand_models")
 	}
 	sessionID := a.rt.CurrentSessionID()
 	createdSession := false

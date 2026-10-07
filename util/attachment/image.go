@@ -36,6 +36,10 @@ func SaveImage(sessionID string, data []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Compress before writing: the stored bytes are final and are reused
+	// verbatim on every provider re-encode, keeping the prompt-cache prefix
+	// byte-stable.
+	data, ext = compressForStorage(data, ext)
 	dir, err := ImageDir(sessionID)
 	if err != nil {
 		return "", err

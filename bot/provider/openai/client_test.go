@@ -97,7 +97,8 @@ func TestBuildBodyUsesDeepSeekThinkingToolContract(t *testing.T) {
 // cache matches byte-for-byte from the front, so hoisting a per-turn hint
 // ahead of the history would cold-start the cache on every turn.
 func TestToAPIMessagesPreservesOrderAndPositions(t *testing.T) {
-	got := toAPIMessages([]types.Message{
+	c := New("", "", "test")
+	got := c.toAPIMessages([]types.Message{
 		{Role: "system", Content: "stable"},
 		{Role: "user", Content: "request"},
 		{Role: "system", Content: "runtime"},
@@ -122,8 +123,9 @@ func TestToAPIMessagesPreservesOrderAndPositions(t *testing.T) {
 }
 
 func TestToAPIMessagesReplaysOnlyRequiredReasoning(t *testing.T) {
+	c := New("", "", "test")
 	settings := types.ReasoningSettings{Replay: reasoning.ReplayToolCalls}
-	got := toAPIMessages([]types.Message{
+	got := c.toAPIMessages([]types.Message{
 		{Role: "assistant", Content: "answer", ReasoningContent: "private reasoning"},
 		{Role: "assistant", ReasoningContent: "tool reasoning", ToolCalls: []types.ToolCall{{ID: "call-1"}}},
 		{Role: "assistant", ToolCalls: []types.ToolCall{{ID: "call-2"}}},
@@ -138,7 +140,7 @@ func TestToAPIMessagesReplaysOnlyRequiredReasoning(t *testing.T) {
 		t.Fatalf("required empty reasoning_content field missing: %+v", got[2])
 	}
 
-	got = toAPIMessages([]types.Message{{
+	got = c.toAPIMessages([]types.Message{{
 		Role: "assistant", ReasoningContent: "provider reasoning", ToolCalls: []types.ToolCall{{ID: "call-1"}},
 	}}, types.ReasoningSettings{})
 	if got[0].ReasoningContent != nil {

@@ -11,7 +11,13 @@ const imageAttachmentsEnd = "\n</image_attachments>"
 const (
 	imageAttachmentEnvelopeKind    = "nekocode.image_attachments"
 	imageAttachmentEnvelopeVersion = 1
-	imageAttachmentInstruction     = "Use the image_understand tool with the corresponding local path when image contents are needed."
+	// imageAttachmentInstruction is used when the model cannot see images
+	// natively and must go through the image_understand tool.
+	imageAttachmentInstruction = "Use the image_understand tool with the corresponding local path when image contents are needed."
+	// imageAttachmentVisionInstruction is used when the model also receives
+	// the images as native image content parts; the tool remains available
+	// for a closer look at a specific image.
+	imageAttachmentVisionInstruction = "These images are also delivered natively as image content parts. Use the image_understand tool with the corresponding local path only when a closer look at a specific image is needed."
 )
 
 const MaxImageAttachments = 8
@@ -24,17 +30,24 @@ type imageAttachmentEnvelope struct {
 }
 
 // InputWithImageAttachments adds model-only attachment metadata while the
-// visible input remains the user's placeholder text.
-func InputWithImageAttachments(text string, images []ImageAttachment) string {
+// visible input remains the user's placeholder text. The envelope is always
+// injected — including on vision models — so switching to a non-vision model
+// mid-session still leaves every image path reachable. When vision is
+// enabled the images are additionally delivered as native content parts.
+func InputWithImageAttachments(text string, images []ImageAttachment, vision bool) string {
 	valid := ValidImageAttachments(text, images)
 	if len(valid) == 0 {
 		return text
+	}
+	instruction := imageAttachmentInstruction
+	if vision {
+		instruction = imageAttachmentVisionInstruction
 	}
 	payload, err := json.Marshal(imageAttachmentEnvelope{
 		Kind:        imageAttachmentEnvelopeKind,
 		Version:     imageAttachmentEnvelopeVersion,
 		Images:      valid,
-		Instruction: imageAttachmentInstruction,
+		Instruction: instruction,
 	})
 	if err != nil {
 		return text
@@ -60,7 +73,9 @@ func ValidImageAttachments(text string, images []ImageAttachment) []ImageAttachm
 }
 
 // VisibleInputText removes runtime-added attachment metadata from persisted
-// user messages while preserving the placeholders the user saw.
+// user messages while preserving the placeholders the user saw. Both the
+// tool-proxy and the vision instruction variants are accepted so sessions
+// written by either mode stay strippable.
 func VisibleInputText(text string) string {
 	index := strings.LastIndex(text, imageAttachmentsStart)
 	if index < 0 || !strings.HasSuffix(text, imageAttachmentsEnd) {
@@ -71,7 +86,7 @@ func VisibleInputText(text string) string {
 	if json.Unmarshal([]byte(payload), &envelope) != nil ||
 		envelope.Kind != imageAttachmentEnvelopeKind ||
 		envelope.Version != imageAttachmentEnvelopeVersion ||
-		envelope.Instruction != imageAttachmentInstruction ||
+		(envelope.Instruction != imageAttachmentInstruction && envelope.Instruction != imageAttachmentVisionInstruction) ||
 		len(envelope.Images) == 0 || len(envelope.Images) > MaxImageAttachments {
 		return text
 	}

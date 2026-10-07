@@ -3,6 +3,7 @@ package anthropic
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -42,6 +43,14 @@ type contentBlock struct {
 	Input     json.RawMessage `json:"input,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   string          `json:"content,omitempty"`
+	Source    *imageSource    `json:"source,omitempty"`
+}
+
+// imageSource carries base64 image input for user messages.
+type imageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
 }
 
 type tool struct {
@@ -128,7 +137,7 @@ func toTools(tools []types.ToolDef) []tool {
 	return out
 }
 
-func toMessages(messages []types.Message, reasoning types.ReasoningSettings) ([]message, string) {
+func (c *Client) toMessages(messages []types.Message, reasoning types.ReasoningSettings) ([]message, string) {
 	var systemPrompt string
 	var out []message
 
@@ -174,9 +183,47 @@ func toMessages(messages []types.Message, reasoning types.ReasoningSettings) ([]
 			out = append(out, message{Role: msg.Role, Content: blocks})
 			continue
 		}
+		if c.Vision && msg.Role == "user" && len(msg.Images) > 0 {
+			if blocks := userImageBlocks(msg); blocks != nil {
+				out = append(out, message{Role: msg.Role, Content: blocks})
+				continue
+			}
+		}
 		out = append(out, message{Role: msg.Role, Content: msg.Content})
 	}
 	return out, systemPrompt
+}
+
+// userImageBlocks builds the multimodal content blocks for one user message:
+// the image blocks first (Anthropic convention), then the text block.
+// Missing files are skipped with a log trail; when nothing loads the caller
+// falls back to plain text.
+func userImageBlocks(msg types.Message) []contentBlock {
+	blocks := make([]contentBlock, 0, len(msg.Images)+1)
+	loaded := 0
+	for _, image := range msg.Images {
+		data, mediaType, ok := types.LoadImage(image)
+		if !ok {
+			logger.Log("anthropic vision: skipped unreadable image %s", image.Path)
+			continue
+		}
+		blocks = append(blocks, contentBlock{
+			Type: "image",
+			Source: &imageSource{
+				Type:      "base64",
+				MediaType: mediaType,
+				Data:      base64.StdEncoding.EncodeToString(data),
+			},
+		})
+		loaded++
+	}
+	if loaded == 0 {
+		return nil
+	}
+	if msg.Content != "" {
+		blocks = append(blocks, contentBlock{Type: "text", Text: msg.Content})
+	}
+	return blocks
 }
 
 func toResponse(ar *response) *types.Response {
@@ -242,7 +289,7 @@ func intValue(value *int) int {
 
 func (c *Client) buildRequest(messages []types.Message, tools []types.ToolDef, stream bool) *request {
 	reasoning := c.ReasoningSettings()
-	msgs, sys := toMessages(messages, reasoning)
+	msgs, sys := c.toMessages(messages, reasoning)
 	req := &request{
 		Model:       c.Model,
 		MaxTokens:   c.GetMaxTokens(),

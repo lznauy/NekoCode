@@ -48,6 +48,9 @@ type managerState struct {
 	trimCount     int
 	compressor    *replacementCompactor
 	reasoning     types.ReasoningSettings
+	// vision mirrors the active model's native image input capability so
+	// token estimation charges image tokens only when requests carry them.
+	vision bool
 	// Append-only projections remember their latest provider-visible value so
 	// unchanged controller state does not add noise to the cached prefix.
 	runtimeProjection appendProjection

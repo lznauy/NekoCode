@@ -6,21 +6,29 @@ const asciiCharsPerToken = 4
 
 // EstimateTokens uses a language-aware heuristic: ASCII ≈ 4 chars/token,
 // CJK ≈ 1.5 chars/token. Used when API-calibrated counts are unavailable.
+// Image tokens are always included: callers without a model context should
+// stay on the conservative (higher) side.
 func EstimateTokens(msgs []types.Message) int {
-	return estimateTokens(msgs, nil)
+	return estimateTokens(msgs, nil, true)
 }
 
 // EstimateModelTokens estimates the messages as serialized for the active
 // model, excluding locally retained reasoning that its replay contract omits.
-func EstimateModelTokens(msgs []types.Message, reasoning types.ReasoningSettings) int {
-	return estimateTokens(msgs, &reasoning)
+// Image tokens are charged only when the model receives native image input.
+func EstimateModelTokens(msgs []types.Message, reasoning types.ReasoningSettings, vision bool) int {
+	return estimateTokens(msgs, &reasoning, vision)
 }
 
-func estimateTokens(msgs []types.Message, reasoning *types.ReasoningSettings) int {
+func estimateTokens(msgs []types.Message, reasoning *types.ReasoningSettings, vision bool) int {
 	n := 0
 	for _, m := range msgs {
 		n += EstimateString(m.Role)
 		n += EstimateString(m.Content)
+		if vision {
+			for _, image := range m.Images {
+				n += EstimateImageTokens(image)
+			}
+		}
 		if reasoning == nil {
 			n += EstimateString(m.ReasoningContent)
 			n += EstimateString(m.ReasoningSignature)
@@ -59,3 +67,17 @@ func EstimateString(s string) int {
 	tokens += (cjkChars*2 + 2) / 3
 	return tokens
 }
+
+// EstimateImageTokens approximates one image's visual-token cost using the
+// Anthropic formula (width*height/750), which is also a reasonable proxy for
+// OpenAI/Gemini tile pricing. Unknown dimensions fall back to the storage
+// compression cap (1568x1568, mirroring util/attachment's storageMaxDimension),
+// the largest image native input can carry.
+func EstimateImageTokens(image types.MessageImage) int {
+	if image.Width <= 0 || image.Height <= 0 {
+		return (storageMaxImageDimension * storageMaxImageDimension) / 750
+	}
+	return (image.Width * image.Height) / 750
+}
+
+const storageMaxImageDimension = 1568

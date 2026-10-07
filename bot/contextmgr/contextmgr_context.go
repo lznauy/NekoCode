@@ -235,6 +235,10 @@ type ModelContext struct {
 	AutoCompactPercent int
 	CompactionModel    provider.LLM
 	Reasoning          types.ReasoningSettings
+	// Vision reports whether the active model receives native image input.
+	// Token estimation only charges image tokens when the request will
+	// actually carry them, so switching models re-prices history correctly.
+	Vision bool
 }
 
 // ConfigureModel updates model-dependent context settings atomically.
@@ -246,6 +250,7 @@ func (m *Manager) ConfigureModel(cfg ModelContext) {
 	}
 	m.state.tracker.ResetModel()
 	m.state.reasoning = cfg.Reasoning
+	m.state.vision = cfg.Vision
 	m.state.prefix.Reset()
 	if m.state.compressor != nil {
 		m.state.compressor.autoCompactPercent = normalizeAutoCompactPercent(cfg.AutoCompactPercent)
@@ -357,7 +362,7 @@ func (m *Manager) totalTokenEstimate() int {
 		token.EstimateString(m.state.ctx.Skills) +
 		token.EstimateString(m.state.ctx.Memory) +
 		token.EstimateString(m.state.ctx.Archive) +
-		token.EstimateModelTokens(m.state.ctx.Messages, m.state.reasoning)
+		token.EstimateModelTokens(m.state.ctx.Messages, m.state.reasoning, m.state.vision)
 }
 
 func (m *Manager) estimatedTokens() int {

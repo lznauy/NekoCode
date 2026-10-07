@@ -13,17 +13,43 @@ func TestEstimateString_Empty(t *testing.T) {
 	}
 }
 
+func TestEstimateImageTokens(t *testing.T) {
+	if got := EstimateImageTokens(types.MessageImage{Width: 1568, Height: 1568}); got != 1568*1568/750 {
+		t.Fatalf("estimate = %d, want %d", got, 1568*1568/750)
+	}
+	if got := EstimateImageTokens(types.MessageImage{}); got != 1568*1568/750 {
+		t.Fatalf("dimensionless estimate = %d, want the storage-cap fallback %d", got, 1568*1568/750)
+	}
+}
+
+func TestEstimateTokensIncludesImages(t *testing.T) {
+	without := EstimateTokens([]types.Message{{Role: "user", Content: "hi"}})
+	with := EstimateTokens([]types.Message{{Role: "user", Content: "hi", Images: []types.MessageImage{{Path: "/tmp/a.png", Width: 800, Height: 600}}}})
+	if with-without != 800*600/750 {
+		t.Fatalf("image token delta = %d, want %d", with-without, 800*600/750)
+	}
+}
+
 func TestEstimateModelTokensUsesReasoningReplayPolicy(t *testing.T) {
 	plain := types.Message{Role: "assistant", Content: "answer", ReasoningContent: "a long private chain of thought"}
 	toolCall := types.Message{Role: "assistant", ReasoningContent: "tool reasoning", ToolCalls: []types.ToolCall{{ID: "call-1"}}}
 	settings := types.ReasoningSettings{Replay: reasoning.ReplayToolCalls}
 
-	withoutReasoning := EstimateModelTokens([]types.Message{plain}, settings)
+	withoutReasoning := EstimateModelTokens([]types.Message{plain}, settings, false)
 	if full := EstimateTokens([]types.Message{plain}); withoutReasoning >= full {
 		t.Fatalf("plain reasoning was not excluded: model=%d full=%d", withoutReasoning, full)
 	}
-	if got, full := EstimateModelTokens([]types.Message{toolCall}, settings), EstimateTokens([]types.Message{toolCall}); got != full {
+	if got, full := EstimateModelTokens([]types.Message{toolCall}, settings, false), EstimateTokens([]types.Message{toolCall}); got != full {
 		t.Fatalf("tool-call reasoning estimate = %d, want full replay estimate %d", got, full)
+	}
+}
+
+func TestEstimateModelTokensChargesImagesOnlyOnVision(t *testing.T) {
+	msg := []types.Message{{Role: "user", Content: "hi", Images: []types.MessageImage{{Path: "/tmp/a.png", Width: 800, Height: 600}}}}
+	nonVision := EstimateModelTokens(msg, types.ReasoningSettings{}, false)
+	vision := EstimateModelTokens(msg, types.ReasoningSettings{}, true)
+	if vision-nonVision != 800*600/750 {
+		t.Fatalf("vision delta = %d, want %d", vision-nonVision, 800*600/750)
 	}
 }
 

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -112,6 +113,63 @@ func TestSteerCallbackDoesNotDeadlockWithCancel(t *testing.T) {
 		t.Fatal("CancelRun deadlocked with Steer callback")
 	}
 	waitForRun(t, rt, runID)
+}
+
+func TestSteerEnvelopeNeverClaimsNativeDelivery(t *testing.T) {
+	// The steer chain delivers text only; images never become content parts.
+	// Even with VisionEnabled the envelope must keep the tool-proxy
+	// instruction — the vision variant would tell the model images are
+	// already visible when they are not.
+	steered := make(chan string, 1)
+	runner := &steerCaptureRunner{started: make(chan struct{}), steered: steered}
+	rt := New(runner, Services{
+		Steer:                   func(_ context.Context, message string) error { steered <- message; return nil },
+		ImageAttachmentsEnabled: func() bool { return true },
+		VisionEnabled:           func() bool { return true },
+	})
+	runID, err := rt.StartRun(context.Background(), Input{Source: SourceRef{Kind: "test"}, Text: "run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-runner.started
+
+	if err := rt.SteerRun(context.Background(), runID, Input{
+		Source: SourceRef{Kind: "test"},
+		Text:   "look at [Image #1]",
+		Images: []ImageAttachment{{Label: "[Image #1]", Path: "/tmp/paste.png"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case message := <-steered:
+		if !strings.Contains(message, "Use the image_understand tool") {
+			t.Fatalf("steer envelope lost the tool instruction: %q", message)
+		}
+		if strings.Contains(message, "delivered natively") {
+			t.Fatalf("steer envelope claimed native delivery that never happens: %q", message)
+		}
+		if !strings.Contains(message, `"path":"/tmp/paste.png"`) {
+			t.Fatalf("steer envelope missing image path: %q", message)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("steer was never invoked")
+	}
+	if err := rt.CancelRun(context.Background(), runID); err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, rt, runID)
+}
+
+// steerCaptureRunner blocks the run so SteerRun can race it.
+type steerCaptureRunner struct {
+	started chan struct{}
+	steered chan string
+}
+
+func (r *steerCaptureRunner) Run(ctx context.Context, _ string, _ RunHost) (string, error) {
+	close(r.started)
+	<-ctx.Done()
+	return "", ctx.Err()
 }
 
 func TestCancelInterruptsBlockingSteerer(t *testing.T) {

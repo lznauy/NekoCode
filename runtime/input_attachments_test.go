@@ -111,7 +111,7 @@ func TestInputWithImageAttachmentsKeepsVisibleTextSeparate(t *testing.T) {
 	got := InputWithImageAttachments(visible, []ImageAttachment{{
 		Label: "[Image #1]",
 		Path:  "/tmp/paste.png",
-	}})
+	}}, false)
 	if !strings.Contains(got, `"label":"[Image #1]"`) || !strings.Contains(got, `"path":"/tmp/paste.png"`) {
 		t.Fatalf("attachment metadata missing: %q", got)
 	}
@@ -120,9 +120,25 @@ func TestInputWithImageAttachmentsKeepsVisibleTextSeparate(t *testing.T) {
 	}
 }
 
+func TestVisionEnvelopeIsStrippableAndDistinguished(t *testing.T) {
+	visible := "分析这张图 [Image #1]"
+	attachments := []ImageAttachment{{Label: "[Image #1]", Path: "/tmp/paste.png"}}
+
+	toolEnvelope := InputWithImageAttachments(visible, attachments, false)
+	visionEnvelope := InputWithImageAttachments(visible, attachments, true)
+	if toolEnvelope == visionEnvelope {
+		t.Fatal("vision and tool envelopes must differ in instruction")
+	}
+	for name, envelope := range map[string]string{"tool": toolEnvelope, "vision": visionEnvelope} {
+		if restored := VisibleInputText(envelope); restored != visible {
+			t.Fatalf("%s envelope visible text = %q, want %q", name, restored, visible)
+		}
+	}
+}
+
 func TestInputWithImageAttachmentsIgnoresIncompleteEntries(t *testing.T) {
 	const text = "hello"
-	got := InputWithImageAttachments(text, []ImageAttachment{{Label: "[Image #1]"}})
+	got := InputWithImageAttachments(text, []ImageAttachment{{Label: "[Image #1]"}}, false)
 	if got != text {
 		t.Fatalf("invalid attachment changed input: %q", got)
 	}

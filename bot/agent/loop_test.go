@@ -26,7 +26,7 @@ func TestSmallContextWindowDoesNotTriggerSyntheticBlocking(t *testing.T) {
 		Policy: policy.New(),
 	})
 
-	result := a.Run("hello", nil)
+	result := a.Run("hello", nil, nil)
 	if result.Error != nil {
 		t.Fatalf("run error = %v", result.Error)
 	}
@@ -144,7 +144,7 @@ func TestInterruptedRunRestoresContextBeforeUserInput(t *testing.T) {
 	ctxMgr.Restore(compacted)
 
 	before := ctxMgr.Snapshot()
-	a.loopRunner.startRun("long task")
+	a.loopRunner.startRun("long task", nil)
 	for i := 0; i < 40; i++ {
 		id := "call-" + strconv.Itoa(i)
 		ctxMgr.AddAssistant(types.Message{Content: "working", ToolCalls: []types.ToolCall{{
@@ -185,7 +185,7 @@ func TestInterruptedRunBeforeFirstToolDropsInputAndPreservesPriorHistory(t *test
 	ctxMgr.Add("user", "previous")
 	ctxMgr.AddAssistant(types.Message{Content: "previous answer"})
 	before := ctxMgr.Snapshot()
-	a.loopRunner.startRun("current request")
+	a.loopRunner.startRun("current request", nil)
 
 	a.run.stopReason = policy.StopInterrupted
 	result := a.loopRunner.finishRun(nil)

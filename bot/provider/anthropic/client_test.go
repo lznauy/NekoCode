@@ -10,7 +10,8 @@ import (
 )
 
 func TestToMessagesConsolidatesSystemContext(t *testing.T) {
-	got, system := toMessages([]types.Message{
+	c := New("", "", "test")
+	got, system := c.toMessages([]types.Message{
 		{Role: "system", Content: "stable"},
 		{Role: "user", Content: "request"},
 		{Role: "system", Content: "runtime", Source: types.MessageSourceVolatileTail},
@@ -94,8 +95,9 @@ func TestBuildRequestUsesModelThinkingMode(t *testing.T) {
 }
 
 func TestToMessagesReplaysOnlySignedReasoning(t *testing.T) {
+	c := New("", "", "test")
 	settings := types.ReasoningSettings{Replay: reasoning.ReplaySigned}
-	got, _ := toMessages([]types.Message{
+	got, _ := c.toMessages([]types.Message{
 		{Role: "assistant", Content: "plain", ReasoningContent: "unsigned"},
 		{Role: "assistant", ReasoningContent: "signed", ReasoningSignature: "sig", ToolCalls: []types.ToolCall{{
 			ID: "call-1", Function: types.FunctionCall{Name: "read", Arguments: `{}`},
@@ -111,7 +113,8 @@ func TestToMessagesReplaysOnlySignedReasoning(t *testing.T) {
 }
 
 func TestToMessagesPreservesSignatureOnlyThinkingBlock(t *testing.T) {
-	got, _ := toMessages([]types.Message{{
+	c := New("", "", "test")
+	got, _ := c.toMessages([]types.Message{{
 		Role: "assistant", ReasoningSignature: "sig", ToolCalls: []types.ToolCall{{
 			ID: "call-1", Function: types.FunctionCall{Name: "read", Arguments: `{}`},
 		}},

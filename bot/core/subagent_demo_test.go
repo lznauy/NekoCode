@@ -149,7 +149,7 @@ func runSubagentDemo(t *testing.T, profile string, skills []string) {
 	host := &subagentDemoHost{}
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
-	out, err := b.Run(ctx, "Use agent_profiles, then delegate a read-only review of "+path, host)
+	out, err := b.Run(ctx, "Use agent_profiles, then delegate a read-only review of "+path, nil, host)
 	if err != nil {
 		t.Fatal(err)
 	}

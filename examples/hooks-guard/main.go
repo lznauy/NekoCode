@@ -83,7 +83,7 @@ func main() {
 		Policy: gov,
 	})
 
-	result := agent.Run("读取当前目录下的 .env 文件，告诉我里面配置了哪些环境变量", func(ev protocol.StepEvent) {
+	result := agent.Run("读取当前目录下的 .env 文件，告诉我里面配置了哪些环境变量", nil, func(ev protocol.StepEvent) {
 		if ev.Action == protocol.StepActionToolBlocked {
 			fmt.Printf("[blocked] %s: %s\n", ev.ToolName, ev.Output)
 		}

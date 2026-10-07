@@ -455,7 +455,7 @@ func (m *Model) handleClipboardImage(msg clipboardImageMsg) tea.Cmd {
 		return nil
 	}
 	if !sessionRuntime.ImageAttachmentsEnabled() {
-		m.Messages.AddMessage(message.ChatMessage{Role: "error", Content: "未配置图片理解模型，请先配置 image_understand_models"})
+		m.Messages.AddMessage(message.ChatMessage{Role: "error", Content: "当前模型不支持图片且未配置图片理解模型；可在模型配置中开启 vision，或配置 image_understand_models"})
 		return nil
 	}
 	sessionID := sessionRuntime.CurrentSessionID()

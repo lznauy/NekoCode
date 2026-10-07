@@ -10,7 +10,7 @@ import (
 func TestRunPublishesActualSummary(t *testing.T) {
 	a, llm := newTestAgentWithLLM(types.StreamToken{Content: "hello"})
 	var summaries []protocol.RunSummary
-	result := a.Run("hi", func(event protocol.StepEvent) {
+	result := a.Run("hi", nil, func(event protocol.StepEvent) {
 		if event.Summary != nil {
 			summaries = append(summaries, *event.Summary)
 		}

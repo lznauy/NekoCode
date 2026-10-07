@@ -9,6 +9,7 @@ import (
 	"nekocode/bot/config"
 	"nekocode/bot/extension/plugin"
 	"nekocode/bot/extension/tool/runtime/permission"
+	"nekocode/bot/provider/types"
 	"nekocode/protocol"
 )
 
@@ -25,7 +26,7 @@ func (b *Bot) getAgent() *agentcore.Agent {
 	return b.ag
 }
 
-func (b *Bot) Run(ctx context.Context, input string, host RunHost) (string, error) {
+func (b *Bot) Run(ctx context.Context, input string, images []types.MessageImage, host RunHost) (string, error) {
 	b.ensureSessionIdentity()
 	release := b.bindHost(host)
 	defer release()
@@ -45,11 +46,11 @@ func (b *Bot) Run(ctx context.Context, input string, host RunHost) (string, erro
 		close(finished)
 		<-watchDone
 	}()
-	output, err := b.runAgent(ctx, input, host.Step)
+	output, err := b.runAgent(ctx, input, images, host.Step)
 	return output, err
 }
 
-func (b *Bot) runAgent(ctx context.Context, input string, onStep func(ev protocol.StepEvent)) (string, error) {
+func (b *Bot) runAgent(ctx context.Context, input string, images []types.MessageImage, onStep func(ev protocol.StepEvent)) (string, error) {
 	sessionID := b.sess.CurrentID()
 	ag := b.getAgent()
 	defer func() {
@@ -61,7 +62,7 @@ func (b *Bot) runAgent(ctx context.Context, input string, onStep func(ev protoco
 			return "", err
 		}
 	}
-	result := ag.Run(input, onStep)
+	result := ag.Run(input, images, onStep)
 	var checkpointErr error
 	if b.checkpoints != nil {
 		checkpointErr = b.checkpoints.Finish(sessionID)
