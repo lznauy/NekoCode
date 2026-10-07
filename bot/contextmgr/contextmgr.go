@@ -178,9 +178,9 @@ func (m *Manager) summarizeStreamOnce(ctx context.Context, client provider.LLM, 
 	if ctx.Err() != nil {
 		err = ctx.Err()
 	}
-	if err == nil && strings.TrimSpace(summary.String()) == "" {
-		err = fmt.Errorf("no response from summarizer")
-	}
+	// An empty stream with no error is reported by the caller
+	// (streamingSummarizer), which names the flash/compaction model so the
+	// failure is diagnosable from the message alone.
 	usage.Normalize()
 	m.recordLLMUsage(usage)
 	m.writeCompactionCall(client, usage, start, err)

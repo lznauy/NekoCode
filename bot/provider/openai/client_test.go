@@ -161,3 +161,18 @@ func TestEndpointAddsMissingVersion(t *testing.T) {
 		t.Fatalf("endpoint = %q", got)
 	}
 }
+
+// Compaction runs GLM with thinking disabled; the request must actually
+// carry the switch, or the 2000-token summary budget is burned on reasoning
+// and the summarizer returns empty (the "no response" compaction failures).
+func TestBuildBodyDisablesThinkingWhenModelDeclaresIt(t *testing.T) {
+	c := New("", "", "glm-5.3")
+	c.SetReasoningSettings(types.ReasoningSettings{Disabled: true, ThinkingMode: "enabled"})
+	data, err := json.Marshal(c.buildBody(nil, nil, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"thinking":{"type":"disabled"}`) {
+		t.Fatalf("disabled thinking switch missing for GLM: %s", data)
+	}
+}

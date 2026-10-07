@@ -55,6 +55,18 @@ func TestEffectiveVisionRespectsExplicitOverride(t *testing.T) {
 	}
 }
 
+// TestGLMThinkingModeDeclared ensures GLM's thinking switch is declared so
+// compaction's SetDisableThinking(true) emits thinking:{"type":"disabled"}.
+// Without the profile the request carries no switch, the 2000-token
+// summary budget is burned on reasoning, and the summarizer returns empty.
+func TestGLMThinkingModeDeclared(t *testing.T) {
+	for _, model := range []string{"glm-5.3", "glm-5.3-flash", "glm-4.6"} {
+		if mode := ReasoningCapabilityFor(ModelConfig{Model: model}).ThinkingMode; mode != "enabled" {
+			t.Errorf("ReasoningCapabilityFor(%q).ThinkingMode = %q, want enabled", model, mode)
+		}
+	}
+}
+
 func TestCloneDeepCopiesVisionPointer(t *testing.T) {
 	original := Config{Models: []ModelConfig{{Name: "m", Model: "glm-5", Vision: visionPtr(true)}}}
 	cloned := original.Clone()
