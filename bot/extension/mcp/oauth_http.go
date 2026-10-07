@@ -25,9 +25,24 @@ func oauthHTTPClient(mcpURL string) *http.Client {
 	transport.DialTLS = nil
 	transport.DialTLSContext = nil
 	return &http.Client{
-		Timeout:       30 * time.Second,
-		Transport:     endpointTransport{base: transport},
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Timeout:   30 * time.Second,
+		Transport: endpointTransport{base: transport},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("stopped after 5 OAuth redirects")
+			}
+			// SSRF is still contained: every hop re-enters this transport,
+			// which re-validates the secure URL and the resolved IP. What
+			// must not be followed is a redirect that rewrote the method:
+			// Go turns a POST 301/302/303 into GET, which would silently
+			// drop dynamic-registration and token-exchange bodies. Only
+			// method-preserving redirects (GET, or POST over 307/308)
+			// continue; anything else returns the original response.
+			if via[len(via)-1].Method != req.Method {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
 	}
 }
 
