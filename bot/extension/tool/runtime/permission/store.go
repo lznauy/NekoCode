@@ -99,9 +99,6 @@ func (s *Store) find(tool string, req core.PermissionRequest, effect string, mat
 }
 
 func (s *Store) Allow(tool string, req core.PermissionRequest) error {
-	if hasCapability(req.Capabilities, core.CapProcessHost) {
-		return nil
-	}
 	tool = normalizeToolName(tool)
 	return s.mutate(func(f *permissionFile) bool {
 		p := f.Projects[s.root]

@@ -59,7 +59,10 @@ func TestStoreScopesFsWriteGrantToWritePaths(t *testing.T) {
 	}
 }
 
-func TestStoreDoesNotPersistHostExecution(t *testing.T) {
+func TestStorePersistsHostExecutionGrant(t *testing.T) {
+	// Host execution grants are persistable: jev-safe can grant them
+	// automatically, so an explicit user "always allow" must be remembered
+	// with the same durability. Deny rules still override any grant.
 	store := NewStore(t.TempDir())
 	req := core.PermissionRequest{
 		Capabilities: []string{core.CapProcessHost},
@@ -67,8 +70,8 @@ func TestStoreDoesNotPersistHostExecution(t *testing.T) {
 	if err := store.Allow("bash", req); err != nil {
 		t.Fatalf("AllowProject: %v", err)
 	}
-	if _, ok := store.Match("bash", req); ok {
-		t.Fatal("process.host grant must not be persisted")
+	if _, ok := store.Match("bash", req); !ok {
+		t.Fatal("process.host grant was not persisted — explicit user choices must outlive the prompt")
 	}
 }
 

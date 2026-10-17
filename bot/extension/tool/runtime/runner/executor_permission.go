@@ -213,16 +213,11 @@ func (e *Executor) permissionAllowed(toolName string, req core.PermissionRequest
 
 // rememberPermission persists a capability grant only for an explicit
 // remembered approval. One-time approvals remain bound to the current call.
+// Host execution is persistable too: jev-safe can grant it automatically, so
+// refusing to remember an explicit user "always allow" trusted the machine
+// more than its owner. Deny rules and jev verdicts still apply on top of any
+// remembered grant.
 func (e *Executor) rememberPermission(toolName string, req core.PermissionRequest, persistStore bool) {
-	// CapProcessHost must never be persisted — every unsandboxed host
-	// execution requires an explicit user prompt, regardless of prior
-	// grants. The store layer also enforces this, but we short-circuit
-	// here to make the architectural intent explicit.
-	for _, cap := range req.Capabilities {
-		if cap == core.CapProcessHost {
-			return
-		}
-	}
 	e.fnMu.RLock()
 	store := e.permStore
 	e.fnMu.RUnlock()
