@@ -187,8 +187,15 @@ func (e *Executor) evaluatePermission(ctx context.Context, tc core.ToolCallItem,
 	dec := engine.EvaluateContext(ctx, tc.Name, callInfo, defaultPermissionEffect(tc.Name))
 	decision := e.applyAutoWebGate(ctx, e.permissionDecisionForRule(dec, tc, predictedReq), tc)
 	e.annotateJevVerdict(ctx, tc, dec.Assessment.Reason, decision)
-	decision.jevSafe = dec.Assessment.Reason == "jev: judged safe" && !decision.prompt && !decision.block
+	decision.jevSafe = jevSafeVerdict(dec.Assessment.Reason, decision)
 	return decision
+}
+
+// jevSafeVerdict reports whether the auto-mode risk judge explicitly passed
+// this call and no rule prompt/block overrode it — the condition the
+// privileged escalation consults to skip a redundant capability dialog.
+func jevSafeVerdict(reason string, decision permissionDecision) bool {
+	return reason == "jev: judged safe" && !decision.prompt && !decision.block
 }
 
 // annotateJevVerdict surfaces the judge result independently of tool output.
@@ -304,6 +311,7 @@ func (e *Executor) evaluateAs(ctx context.Context, engine *permission.Engine, ws
 		if dec.Effect == permission.EffectAllow {
 			decision = e.applyAutoWebGate(ctx, decision, tc)
 			e.annotateJevVerdict(ctx, tc, dec.Assessment.Reason, decision)
+			decision.jevSafe = jevSafeVerdict(dec.Assessment.Reason, decision)
 			return decision, true
 		}
 		return permissionDecision{}, false
