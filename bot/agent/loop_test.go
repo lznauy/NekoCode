@@ -124,12 +124,11 @@ func TestFinishRunDoesNotPersistNonRecordableText(t *testing.T) {
 	}
 }
 
-func TestInterruptedRunRestoresContextBeforeUserInput(t *testing.T) {
+func TestInterruptedRunWithOutputKeepsFactsAndAppendsMarker(t *testing.T) {
 	ctxMgr := ctxmgr.New(ctxmgr.Config{SystemPrompt: "test", ContextWindow: 128000})
 	a := New(context.Background(), Config{Context: ctxMgr, Tools: tools.New()})
 
-	// A completed earlier turn after a tool result used to be lost because the
-	// rollback searched globally for the last tool message.
+	// A completed earlier turn after a tool result stays untouched.
 	ctxMgr.AddAssistant(types.Message{Content: "old tool", ToolCalls: []types.ToolCall{{
 		ID: "old", Type: "function", Function: types.FunctionCall{Name: "read", Arguments: `{}`},
 	}}})
@@ -138,20 +137,16 @@ func TestInterruptedRunRestoresContextBeforeUserInput(t *testing.T) {
 	}})
 	ctxMgr.Add("user", "follow-up")
 	ctxMgr.AddAssistant(types.Message{Content: "completed answer after old tool"})
-	compacted := ctxMgr.Snapshot()
-	compacted.Archive = "summary of the old tool turn"
-	compacted.Messages = compacted.Messages[2:]
-	ctxMgr.Restore(compacted)
 
 	before := ctxMgr.Snapshot()
 	a.loopRunner.startRun("long task", nil)
 	for i := 0; i < 40; i++ {
 		id := "call-" + strconv.Itoa(i)
 		ctxMgr.AddAssistant(types.Message{Content: "working", ToolCalls: []types.ToolCall{{
-			ID: id, Type: "function", Function: types.FunctionCall{Name: "read", Arguments: `{}`},
+			ID: id, Type: "function", Function: types.FunctionCall{Name: "edit", Arguments: `{}`},
 		}}})
 		ctxMgr.AddToolResultsBatch([]ctxmgr.ToolResultMsg{{
-			Message: types.Message{Content: "result", ToolCallID: id}, ToolName: "read",
+			Message: types.Message{Content: "result", ToolCallID: id}, ToolName: "edit",
 		}})
 	}
 	a.run.stopReason = policy.StopInterrupted
@@ -162,11 +157,18 @@ func TestInterruptedRunRestoresContextBeforeUserInput(t *testing.T) {
 	if !result.Interrupted || result.FinalOutput != msgInterrupted {
 		t.Fatalf("result = %+v, want interrupted", result)
 	}
-	if !sameConversation(after, before) {
-		t.Fatalf("interruption retained current run: before=%+v after=%+v", before, after)
+	// The executed tool calls are facts on disk — they must stay in the
+	// context so the next turn knows what was already changed.
+	if !containsMessage(after.Messages, "long task") {
+		t.Fatalf("interrupted request was dropped from context: %+v", after.Messages)
 	}
-	if containsMessage(after.Messages, "long task") || containsMessage(after.Transcript, "long task") {
-		t.Fatalf("interrupted request remained in context or transcript: %+v", after)
+	if last := lastAssistantContent(a.deps.ctxMgr.Build()); last != "working" {
+		t.Fatalf("executed tool turns were rolled back: last assistant = %q", last)
+	}
+	// The marker states where the turn stopped, so the model does not
+	// assume the run completed.
+	if !containsMessage(after.Messages, interruptedMarker) {
+		t.Fatalf("interruption marker missing: %+v", after.Messages)
 	}
 }
 

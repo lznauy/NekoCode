@@ -70,10 +70,32 @@ func (r *loopRunner) run(input string, images []types.MessageImage, callback Run
 	return result
 }
 
+// interruptedMarker is appended as a hint-tagged user message when an
+// interrupted run is kept in the context: the tool calls above already took
+// effect on disk, so the model must know where the turn stopped instead of
+// being blind to its own work.
+const interruptedMarker = "The user interrupted the previous run. The tool calls and results above already took effect — files on disk may have been modified. Do not assume the run finished; ask the user how to proceed."
+
 func (r *loopRunner) restoreInterruptedRun(before contextmgr.ManagerSnapshot, result *RunResult) {
-	if result != nil && result.Interrupted {
-		r.agent.deps.ctxMgr.Restore(before)
+	if result == nil || !result.Interrupted {
+		return
 	}
+	a := r.agent
+	after := a.deps.ctxMgr.Snapshot()
+	if len(after.Messages) <= len(before.Messages) {
+		return // nothing was appended
+	}
+	if assistantCount(after.Messages) == assistantCount(before.Messages) {
+		// The turn produced nothing — roll back so a retry does not send the
+		// user message twice.
+		a.deps.ctxMgr.Restore(before)
+		return
+	}
+	// The turn already executed tools or produced output. Those are facts
+	// the next turn must see: the file system keeps those changes, and a
+	// context rollback here would leave the model blind to its own work.
+	// Keep everything and append a marker stating where the turn stopped.
+	a.deps.ctxMgr.Add("user", interruptedMarker, types.MessageSourceHint)
 }
 
 // restoreUnansweredRun rolls back a run that ended without a single model
