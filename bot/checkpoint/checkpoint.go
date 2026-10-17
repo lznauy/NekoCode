@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -19,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"nekocode/logger"
 	"unicode"
 
 	"nekocode/util/fs"
@@ -227,7 +228,7 @@ func (m *Manager) finish(session string) error {
 		oldest := turns[0]
 		if err := os.RemoveAll(m.turnDir(session, oldest)); err != nil {
 			m.turns[session] = append([]string(nil), turns...)
-			log.Printf("checkpoint: defer pruning turn %s: %v", oldest, err)
+			logger.Log("checkpoint: defer pruning turn %s: %v", oldest, err)
 			return nil
 		}
 		turns = turns[1:]

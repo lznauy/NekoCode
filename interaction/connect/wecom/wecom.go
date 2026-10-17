@@ -151,11 +151,14 @@ func (c *Connector) handleMessage(ctx context.Context, sender messageSender, fra
 	if msg.MessageType == "voice" {
 		text = strings.TrimSpace(msg.Voice.Content)
 	}
-	if msg.MessageType != "text" && msg.MessageType != "voice" {
-		_ = sender.replyText(ctx, frame.Headers.RequestID, "暂不支持这种消息类型，请发送文本消息。")
+	if msg.MessageType != "text" && msg.MessageType != "voice" && msg.MessageType != "image" {
+		_ = sender.replyText(ctx, frame.Headers.RequestID, "暂不支持这种消息类型，请发送文本或图片消息。")
 		return
 	}
-	if text == "" || msg.From.UserID == "" || msg.chatTarget() == "" {
+	if msg.MessageType != "image" && (text == "" || msg.From.UserID == "" || msg.chatTarget() == "") {
+		return
+	}
+	if msg.MessageType == "image" && (msg.From.UserID == "" || msg.chatTarget() == "") {
 		return
 	}
 
@@ -194,10 +197,24 @@ func (c *Connector) handleMessage(ctx context.Context, sender messageSender, fra
 		}
 		return
 	}
+	// Image messages: download after the pairing gate, then reference the
+	// file through the shared [Image #N] marker convention.
+	var images []controlruntime.ImageAttachment
+	if msg.MessageType == "image" {
+		path, err := connect.DownloadImageToTemp(ctx, msg.Image.URL, "nekocode-wecom-*.jpg")
+		if err != nil {
+			_ = sender.replyText(ctx, frame.Headers.RequestID, "图片下载失败，请重发。")
+			return
+		}
+		marker := fmt.Sprintf("[Image #%s]", msg.MessageID)
+		text = connect.AppendMarker(text, marker)
+		images = append(images, controlruntime.ImageAttachment{Label: marker, Path: path})
+	}
 	err = c.startRunRouted(context.WithoutCancel(ctx), msg.chatTarget(), controlruntime.Input{
 		Source: controlruntime.SourceRef{Kind: "wecom", ID: msg.chatTarget()},
 		Sender: controlruntime.SenderRef{ID: msg.From.UserID},
 		Text:   text,
+		Images: images,
 	})
 	if err != nil {
 		_ = sender.replyText(ctx, frame.Headers.RequestID, "错误: "+err.Error())

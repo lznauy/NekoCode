@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,6 +19,7 @@ import (
 	"nekocode/bot/policy/ledger"
 	"nekocode/bot/provider/types"
 	"nekocode/bot/session"
+	"nekocode/logger"
 	"nekocode/protocol"
 	"nekocode/util/attachment"
 )
@@ -320,7 +320,7 @@ func (b *Bot) rewindCheckpoint(turn string) (string, error) {
 		return "", fmt.Errorf("persist rewind event: %w", err)
 	}
 	if err := b.checkpoints.AcknowledgeRecovered(b.sess.CurrentID(), result.RewindID); err != nil {
-		log.Printf("checkpoint: defer rewind journal cleanup: %v", err)
+		logger.Log("checkpoint: defer rewind journal cleanup: %v", err)
 	}
 	label := result.UserMessage
 	if label == "" {
@@ -350,7 +350,7 @@ func (b *Bot) recoverCheckpointEvents(sessionID string) error {
 	}
 	for _, result := range pending {
 		if err := b.checkpoints.AcknowledgeRecovered(sessionID, result.RewindID); err != nil {
-			log.Printf("checkpoint: defer recovered rewind cleanup: %v", err)
+			logger.Log("checkpoint: defer recovered rewind cleanup: %v", err)
 		}
 	}
 	return nil
@@ -460,7 +460,7 @@ func (b *Bot) syncPolicySessionID() {
 		if id != "" {
 			if dir, err := attachment.ImageDir(id); err == nil {
 				if _, err := b.toolbox.Workspace().AddSessionRoot(dir, workspace.AccessReadOnly); err != nil {
-					log.Printf("attachment: grant session image directory %s: %v", id, err)
+					logger.Log("attachment: grant session image directory %s: %v", id, err)
 				}
 			}
 		}

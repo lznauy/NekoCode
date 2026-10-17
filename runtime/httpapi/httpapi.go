@@ -72,6 +72,9 @@ type submitRequest struct {
 	Text   string                    `json:"text"`
 	Source *controlruntime.SourceRef `json:"source,omitempty"`
 	Sender *controlruntime.SenderRef `json:"sender,omitempty"`
+	// Images are optional local image attachments; each Label must appear in
+	// Text for the runtime's attachment envelope to accept it.
+	Images []controlruntime.ImageAttachment `json:"images,omitempty"`
 }
 
 type submitResponse struct {
@@ -267,6 +270,7 @@ func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
 		Source: source,
 		Sender: sender,
 		Text:   req.Text,
+		Images: req.Images,
 	})
 	if err != nil {
 		writeRuntimeError(w, err)

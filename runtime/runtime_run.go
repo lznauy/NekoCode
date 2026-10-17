@@ -239,6 +239,11 @@ func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runL
 		r.endRun(runID)
 	}()
 
+	// Connector-downloaded images move into session attachment storage before
+	// anything consumes them. This is file I/O, so it deliberately runs here —
+	// in the run goroutine, outside StartRun's mutation lock — rather than
+	// blocking capability changes (model/config switches) on large copies.
+	input = r.adoptImageAttachments(input)
 	host := runHost{runtime: r, runID: runID, lease: lease, images: input.Images}
 	if !lease.guard(func() {
 		r.events.Publish(Event{RunID: runID, Type: EventRunStarted, Source: SourceRef{Kind: "runtime"}})

@@ -87,7 +87,7 @@ func (e *Executor) ensureWorkspaceAccess(tc core.ToolCallItem, confirmFn protoco
 	req.CallID = tc.ID
 	reply := confirmFn(req)
 	if !reply.Allowed {
-		return tc, "cancelled", false
+		return tc, "workspace access denied by user; do not retry the same request — ask the user how to proceed", false
 	}
 	root, err := e.workspace.AddSessionRoot(rootPath, access)
 	if err != nil {

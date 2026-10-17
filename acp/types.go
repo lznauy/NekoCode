@@ -93,6 +93,9 @@ type contentBlock struct {
 	Name        string `json:"name,omitempty"`
 	URI         string `json:"uri,omitempty"`
 	Description string `json:"description,omitempty"`
+	// Data carries the base64 image payload for "image" blocks (ACP spec).
+	Data     string `json:"data,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
 }
 
 type permissionResponse struct {

@@ -2,7 +2,10 @@
 // the bot foundation and runtime adapters.
 package protocol
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+)
 
 type PhaseFunc func(string)
 
@@ -331,4 +334,12 @@ type CheckpointInfo struct {
 	ID          string `json:"id"`
 	Label       string `json:"label"`
 	Description string `json:"description"`
+}
+
+// FileDeliverer is implemented by connectors that can push a local file to
+// their paired chats (e.g. telegram sendDocument, feishu file messages).
+// It is the delivery sink behind the deliver_file tool.
+type FileDeliverer interface {
+	// DeliverFile sends a local file to the connector's paired chats.
+	DeliverFile(ctx context.Context, path string) error
 }

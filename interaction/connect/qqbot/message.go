@@ -9,11 +9,12 @@ import (
 // inboundMessage 是解析后的平台消息事件（群 @ / C2C 私聊）。
 // 官方平台群聊只投递 @ 消息、私聊全投递，因此入站全部受理。
 type inboundMessage struct {
-	chatKind string // "group" / "c2c"
-	chatID   string // group_openid / user_openid
-	msgID    string // 触发消息 id（被动回复凭证，约 5 分钟有效）
-	authorID string // member_openid / user_openid
-	text     string // 已 trim，附件记为 [附件]
+	chatKind  string   // "group" / "c2c"
+	chatID    string   // group_openid / user_openid
+	msgID     string   // 触发消息 id（被动回复凭证，约 5 分钟有效）
+	authorID  string   // member_openid / user_openid
+	text      string   // 已 trim，附件记为 [附件]
+	imageURLs []string // 图片附件的临时下载 URL（QQ CDN）
 }
 
 // sourceID 返回会话标识："group:<group_openid>" / "c2c:<openid>"。
@@ -32,34 +33,45 @@ func messageFromEvent(eventType string, d json.RawMessage) (inboundMessage, bool
 			MemberOpenID string `json:"member_openid"`
 			UserOpenID   string `json:"user_openid"`
 		} `json:"author"`
-		Attachments []json.RawMessage `json:"attachments"`
+		Attachments []struct {
+			URL string `json:"url"`
+		} `json:"attachments"`
 	}
 	if err := json.Unmarshal(d, &ev); err != nil {
 		return inboundMessage{}, false
 	}
-	text := cleanContent(ev.Content, len(ev.Attachments) > 0)
+	var imageURLs []string
+	for _, att := range ev.Attachments {
+		if att.URL != "" {
+			imageURLs = append(imageURLs, att.URL)
+		}
+	}
+	// 图片附件走专用 marker；[附件] 占位只保留给非图片附件。
+	text := cleanContent(ev.Content, len(ev.Attachments) > len(imageURLs))
 	switch eventType {
 	case "GROUP_AT_MESSAGE_CREATE":
 		if ev.GroupOpenID == "" {
 			return inboundMessage{}, false
 		}
 		return inboundMessage{
-			chatKind: "group",
-			chatID:   ev.GroupOpenID,
-			msgID:    ev.ID,
-			authorID: ev.Author.MemberOpenID,
-			text:     text,
+			chatKind:  "group",
+			chatID:    ev.GroupOpenID,
+			msgID:     ev.ID,
+			authorID:  ev.Author.MemberOpenID,
+			text:      text,
+			imageURLs: imageURLs,
 		}, true
 	case "C2C_MESSAGE_CREATE":
 		if ev.Author.UserOpenID == "" {
 			return inboundMessage{}, false
 		}
 		return inboundMessage{
-			chatKind: "c2c",
-			chatID:   ev.Author.UserOpenID,
-			msgID:    ev.ID,
-			authorID: ev.Author.UserOpenID,
-			text:     text,
+			chatKind:  "c2c",
+			chatID:    ev.Author.UserOpenID,
+			msgID:     ev.ID,
+			authorID:  ev.Author.UserOpenID,
+			text:      text,
+			imageURLs: imageURLs,
 		}, true
 	}
 	return inboundMessage{}, false

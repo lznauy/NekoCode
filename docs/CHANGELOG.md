@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+## v0.4.9 - 2026-10-17
+
+### 全接入面图片支持
+
+- IM 连接器全部支持入站收图：telegram（Photo+getFile）、feishu（image_key+MessageResource）、wecom（回调 image.url）、qqbot（attachments[].url）。下载发生在配对检查之后，失败回复明确提示而非静默丢弃；统一经 `[Image #N]` marker 约定进入运行时附件管线。
+- 出站图片：run 结果文本引用的本地图片路径自动提取为原生图片消息（telegram sendPhoto、feishu 图片消息）；wecom/qqbot 因平台无对应 API 保留文本路径降级。telegram sendPhoto/sendDocument 共享 multipart 实现。
+- headless 协议（NDJSON over stdio）`content` 数组新增 `image` block（路径引用，锚定子进程工作目录）；词法包含 + 符号链接真实路径双重防逃逸，越界以 turn error 拒绝。纯字符串 content 宿主完全向后兼容。
+- ACP `session/prompt` 支持 ACP 规范的 image block（base64 data），解码后直接落盘会话附件目录；解析移至会话激活后执行以保证 session 归属正确。
+- HTTP API `POST /input` 新增可选 `images` 字段，语义与连接器一致（label 必须出现在 text 中）。
+- 新增运行时附件收养机制：run 启动时把连接器下载的任意路径图片自动转存进会话附件存储（session workspace root），`image_understand` 工具即可读取；转存失败时降级保留原路径，vision 原生投递不受影响。收养在 run goroutine 内执行，不阻塞启动锁。
+- envelope 指令改为条件式："模型支持 vision 时原生交付、直接看图；不可见时走 image_understand 工具"——vision 模型不再被引导做冗余工具调用，会话中途切到非 vision 模型也不会被困死，三种历史指令措辞均保持可剥离兼容。
+
+### deliver_file 文件投递工具
+
+- 新增 `deliver_file` 工具：模型把工作区文件（≤50 MiB，对齐平台限制）主动发送到用户 IM。可选 `connector` 参数定向投递（telegram/feishu），缺省广播所有支持文件的运行中连接器；未配置连接器时返回引导性文本而非硬错误。
+- 路由经 `protocol.FileDeliverer` 接口（telegram sendDocument / feishu file 上传），由 runtime 组装层闭包注入——bot 层保持零连接器感知；仅"已运行且实现接口"的连接器参与投递，绝不拉起未配置实例。
+
+### 启动性能与事件录制治理
+
+- 启动事件恢复改为分批：同步恢复最近 10 个 run（`/last` `/status` 立即可用），其余由后台 goroutine 补载；runID 序号推进只用文件名完成（亚毫秒、先于首个新 run）。启动耗时从约 5.3 秒降至约 84 毫秒（事件积累 785MB/1360 文件的实测场景）。
+- 事件录制新增保留策略：30 天未活跃批次启动时后台清理，总量超 500 MiB 时从最老批次继续删；活跃批次受 mtime 与"最新批次不删"双重保护。清理与补载均在后台执行，不占启动时间。
+- 修复恢复补载把最新批次重复 Record 进 runstore 的问题（事件计数翻倍、输出/推理文本重复拼接）；runstore 与事件总线历史现在使用各自正确的集合。
+- 修复小历史（≤10 个 run）场景事件总线历史从不导入的回归；历史导入合并批次后重新排序，消除并行进程批次时间交叠导致的乱序。
+- recording/bot 层的全部诊断日志迁移至 debug 通道：标准库 `log` 直写 stderr 曾把几十条清理日志刷进 TUI 全屏界面。
+
+### 权限与审批交互
+
+- 用户拒绝审批后的工具反馈从单字 "cancelled" 改为明确语义："permission denied by user; do not retry..."——模型不再把拒绝误读为临时中断而重发同一调用，弹框不再重复出现。工作区访问拒绝同样处理。
+- auto 模式下 Jev 已判定安全的命令，其沙箱提权（capability 授予）直接放行，不再弹出第二个冗余审批框；显式 deny 规则仍最优先，`process.host`（完全脱离沙箱的宿主执行）排除在快速通道外、每次必须显式确认，ask 规则命中时 Jev 结论不生效。
+- 修复 GLM 等 thinking 模型偶发的"只有推理、正文为空、finish=stop"响应：此类"成功"调用不产生错误、绕过网络层重试，现由 CallLLMWithRetry 检测并立即带 thinking-disabled 重试一次；仅对声明思考开关的模型生效，kimi/deepseek 等不受影响。
+
+### 修复
+
+- 修复 feishu `DeliverFile` 与管理面 Start/Stop 并发读取共享 client 的数据竞争（telegram 同场景此前已有锁保护）。
+- 修复 telegram 纯图消息下载失败后泄漏内部 "Error: empty input" 的问题，现回复友好提示。
+- 修复 wecom-bot 等 headless 宿主超 20 MiB 图片被静默截断为损坏文件的问题，现于上限处明确拒绝。
+- llmstream thinking-disabled 重试的恢复值改为捕获原状态，嵌套调用窗口语义正确；上下文管理器 prompt 阶段的 base64 图片解析与会话激活顺序对齐。
+
 ## v0.4.8 - 2026-10-07
 
 ### 模型原生多模态图片输入

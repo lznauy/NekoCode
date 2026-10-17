@@ -24,6 +24,10 @@ type Capabilities struct {
 	// RichCards allows structured interactive cards beyond plain text
 	// (e.g. feishu interactive cards).
 	RichCards bool
+	// Images allows delivering image files referenced by outbound text as
+	// native image messages. Without it the plain-text rendering carries
+	// only the file paths — nothing is dropped, just not pictured.
+	Images bool
 }
 
 // IntentKind classifies an outbound message by its semantics, not by how a
@@ -91,6 +95,10 @@ type Intent struct {
 	// Verdict is the canonical outcome text for the resolved kinds
 	// ("已批准", "已拒绝", "已回答", ...).
 	Verdict string
+	// Images lists local image file paths referenced by Text (run results
+	// that mention generated images). Channels with the Images capability
+	// deliver them as native image messages; others just render Text.
+	Images []string
 }
 
 // Sink is the outbound contract a channel implements to plug into the

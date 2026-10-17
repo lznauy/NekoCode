@@ -54,6 +54,10 @@ type callbackMessage struct {
 	Voice struct {
 		Content string `json:"content"`
 	} `json:"voice,omitempty"`
+	Image struct {
+		// URL is a short-lived download link for the image bytes.
+		URL string `json:"url"`
+	} `json:"image,omitempty"`
 }
 
 func (m callbackMessage) chatTarget() string {

@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -32,6 +33,12 @@ type Connector struct {
 	// approvals tracks cards in flight (approval ID → view) so button
 	// callbacks can render the resolved replacement card.
 	approvals sync.Map
+
+	// api holds the SDK client of the running session (set by Start) for
+	// the FileDeliverer path, which bypasses the event sink. apiMu guards it
+	// against concurrent Start/Stop from management surfaces.
+	apiMu sync.Mutex
+	api   *feishuClient
 }
 
 func New(rt controlruntime.ConnectorRuntime) *Connector {
@@ -58,6 +65,9 @@ func (c *Connector) Start(ctx context.Context) error {
 	}
 	runCtx, generation := c.base.Start(ctx)
 	client := newFeishuClient(cfg.AppID, cfg.AppSecret)
+	c.apiMu.Lock()
+	c.api = client
+	c.apiMu.Unlock()
 
 	c.base.PublishStatus("running", "")
 	go c.wsLoop(runCtx, client, generation)
@@ -66,7 +76,36 @@ func (c *Connector) Start(ctx context.Context) error {
 }
 
 func (c *Connector) Stop() error {
+	c.apiMu.Lock()
+	c.api = nil
+	c.apiMu.Unlock()
 	return c.base.Stop()
+}
+
+// DeliverFile implements protocol.FileDeliverer: uploads a local file and
+// sends it as a file message to every paired chat.
+func (c *Connector) DeliverFile(ctx context.Context, path string) error {
+	c.apiMu.Lock()
+	client := c.api
+	c.apiMu.Unlock()
+	if client == nil {
+		return fmt.Errorf("feishu connector is not running")
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	chats := cfg.pairedChatIDs()
+	if len(chats) == 0 {
+		return fmt.Errorf("no paired chat")
+	}
+	var errs []error
+	for _, chatID := range chats {
+		if err := client.sendFile(ctx, chatID, path); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (c *Connector) ConnectorStatusView() controlruntime.ConnectorView {
@@ -115,12 +154,12 @@ func (c *Connector) handleMessage(ctx context.Context, client *feishuClient, ev 
 	if !ok {
 		return
 	}
-	if msgType != "text" {
-		_ = client.sendText(ctx, chatID, fmt.Sprintf("暂不支持的消息类型：%s，请发送文本消息。", msgType))
+	if msgType != "text" && msgType != "image" {
+		_ = client.sendText(ctx, chatID, fmt.Sprintf("暂不支持的消息类型：%s，请发送文本或图片消息。", msgType))
 		return
 	}
 	text = strings.TrimSpace(text)
-	if text == "" {
+	if text == "" && msgType != "image" {
 		return
 	}
 
@@ -145,6 +184,21 @@ func (c *Connector) handleMessage(ctx context.Context, client *feishuClient, ev 
 	}
 	cfg.touchOwner(openID, chatID)
 	_ = saveConfig(cfg)
+
+	// Image messages: download after the pairing gate (no fetches for
+	// strangers) and reference the file via the marker convention shared
+	// with the runtime's attachment envelope.
+	var images []controlruntime.ImageAttachment
+	if msgType == "image" {
+		path, label, err := saveImage(ctx, client, ev)
+		if err != nil {
+			_ = client.sendText(ctx, chatID, "图片下载失败，请重试。")
+			return
+		}
+		text = label
+		images = append(images, controlruntime.ImageAttachment{Label: label, Path: path})
+	}
+
 	menuResult := c.menus.HandleText(ctx, c.rt, openID, text)
 	if menuResult.Handled {
 		c.sendMenuResult(ctx, client, chatID, openID, menuResult)
@@ -169,10 +223,29 @@ func (c *Connector) handleMessage(ctx context.Context, client *feishuClient, ev 
 		Source: controlruntime.SourceRef{Kind: "feishu", ID: chatID},
 		Sender: controlruntime.SenderRef{ID: openID},
 		Text:   text,
+		Images: images,
 	})
 	if err != nil {
 		_ = client.sendText(ctx, chatID, "Error: "+err.Error())
 	}
+}
+
+// saveImage downloads the image of an inbound image message to a temp file
+// (the file outlives the run — the model may re-read it via the
+// image_understand tool) and returns its path plus the text marker that
+// references it.
+func saveImage(ctx context.Context, client *feishuClient, ev *larkim.P2MessageReceiveV1) (path, label string, err error) {
+	messageID, imageKey, ok := messageImage(ev)
+	if !ok {
+		return "", "", fmt.Errorf("image message without image_key")
+	}
+	path, err = connect.DownloadToTemp("nekocode-feishu-*.png", func(dst string) error {
+		return client.downloadImage(ctx, messageID, imageKey, dst)
+	})
+	if err != nil {
+		return "", "", err
+	}
+	return path, fmt.Sprintf("[Image #%s]", messageID), nil
 }
 
 // eventLoop delivers runtime events to the paired owner's chat through the
@@ -186,6 +259,7 @@ func (c *Connector) eventLoop(ctx context.Context, client *feishuClient) {
 type messageSender interface {
 	sendText(ctx context.Context, chatID, text string) error
 	sendCard(ctx context.Context, chatID string, card map[string]any) error
+	sendImage(ctx context.Context, chatID, path string) error
 }
 
 // eventSink is feishu's connect.Sink implementation: cards and buttons are
@@ -199,7 +273,7 @@ type eventSink struct {
 }
 
 func (s eventSink) Caps() connect.Capabilities {
-	return connect.Capabilities{Buttons: true, RichCards: true}
+	return connect.Capabilities{Buttons: true, RichCards: true, Images: true}
 }
 
 func (s eventSink) Post(ctx context.Context, in connect.Intent) error {
@@ -224,6 +298,17 @@ func (s eventSink) Post(ctx context.Context, in connect.Intent) error {
 		// Feishu does not replace cards from events — the resolved card is
 		// rendered in the button callback. Nothing to push.
 	case connect.IntentResult, connect.IntentFailed:
+		if in.Kind == connect.IntentResult && len(in.Images) > 0 {
+			// Generated images referenced by the result go out as native
+			// image messages first; the markdown card still cites the paths.
+			if cfg, err := loadConfig(); err == nil {
+				for _, chatID := range cfg.pairedChatIDs() {
+					for _, path := range in.Images {
+						_ = s.client.sendImage(ctx, chatID, path)
+					}
+				}
+			}
+		}
 		s.sendResult(ctx, in.Text)
 	case connect.IntentSystem:
 		// Command/system reply (e.g. /connect, /model): deliver as a

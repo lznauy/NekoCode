@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
@@ -95,6 +96,102 @@ func (c *feishuClient) create(ctx context.Context, chatID, msgType, content stri
 	return nil
 }
 
+// sendImage uploads a local image file and delivers it as an image message.
+func (c *feishuClient) sendImage(ctx context.Context, chatID, path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	resp, err := c.api.Im.Image.Create(ctx, larkim.NewCreateImageReqBuilder().
+		Body(larkim.NewCreateImageReqBodyBuilder().
+			ImageType("message").
+			Image(f).
+			Build()).
+		Build())
+	if err != nil {
+		return err
+	}
+	if !resp.Success() {
+		return fmt.Errorf("feishu upload image failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	if resp.Data == nil || resp.Data.ImageKey == nil {
+		return fmt.Errorf("feishu upload image returned no image_key")
+	}
+	content, err := json.Marshal(map[string]string{"image_key": *resp.Data.ImageKey})
+	if err != nil {
+		return err
+	}
+	return c.create(ctx, chatID, "image", string(content))
+}
+
+// feishuFileType maps a file extension to feishu's closed file-type set;
+// everything outside it uploads as a generic stream.
+func feishuFileType(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".opus":
+		return "opus"
+	case ".mp4":
+		return "mp4"
+	case ".pdf":
+		return "pdf"
+	case ".doc", ".docx":
+		return "doc"
+	case ".xls", ".xlsx":
+		return "xls"
+	case ".ppt", ".pptx":
+		return "ppt"
+	}
+	return "stream"
+}
+
+// sendFile uploads a local file and delivers it as a file message.
+func (c *feishuClient) sendFile(ctx context.Context, chatID, path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	resp, err := c.api.Im.File.Create(ctx, larkim.NewCreateFileReqBuilder().
+		Body(larkim.NewCreateFileReqBodyBuilder().
+			FileType(feishuFileType(path)).
+			FileName(filepath.Base(path)).
+			File(f).
+			Build()).
+		Build())
+	if err != nil {
+		return err
+	}
+	if !resp.Success() {
+		return fmt.Errorf("feishu upload file failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	if resp.Data == nil || resp.Data.FileKey == nil {
+		return fmt.Errorf("feishu upload file returned no file_key")
+	}
+	content, err := json.Marshal(map[string]string{"file_key": *resp.Data.FileKey})
+	if err != nil {
+		return err
+	}
+	return c.create(ctx, chatID, "file", string(content))
+}
+
+// downloadImage fetches an inbound message image to dst via the
+// message-resource API.
+func (c *feishuClient) downloadImage(ctx context.Context, messageID, imageKey, dst string) error {
+	resp, err := c.api.Im.MessageResource.Get(ctx, larkim.NewGetMessageResourceReqBuilder().
+		MessageId(messageID).
+		FileKey(imageKey).
+		Type("image").
+		Build())
+	if err != nil {
+		return err
+	}
+	if !resp.Success() {
+		return fmt.Errorf("feishu download image failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	return resp.WriteFile(dst)
+}
+
 // serveWS subscribes to im.message.receive_v1 and card.action.trigger over
 // the SDK websocket and blocks until ctx is done or the connection fails.
 func (c *feishuClient) serveWS(ctx context.Context, handler func(context.Context, *larkim.P2MessageReceiveV1) error, cardHandler func(context.Context, *larkcallback.CardActionTriggerEvent) (*larkcallback.CardActionTriggerResponse, error)) error {
@@ -166,6 +263,22 @@ func messageText(ev *larkim.P2MessageReceiveV1) (chatID, openID, msgType, text s
 		return chatID, openID, msgType, "", true
 	}
 	return chatID, openID, msgType, body.Text, true
+}
+
+// messageImage extracts the message_id and image_key of an inbound image
+// message event.
+func messageImage(ev *larkim.P2MessageReceiveV1) (messageID, imageKey string, ok bool) {
+	if ev == nil || ev.Event == nil || ev.Event.Message == nil {
+		return "", "", false
+	}
+	msg := ev.Event.Message
+	var body struct {
+		ImageKey string `json:"image_key"`
+	}
+	if err := json.Unmarshal([]byte(strVal(msg.Content)), &body); err != nil || body.ImageKey == "" {
+		return "", "", false
+	}
+	return strVal(msg.MessageId), body.ImageKey, true
 }
 
 func strVal(s *string) string {

@@ -39,7 +39,7 @@ func Translate(ev controlruntime.Event) []Intent {
 			return nil
 		}
 		if strings.TrimSpace(p.Output) != "" {
-			return []Intent{{Kind: IntentResult, RunID: ev.RunID, Text: p.Output}}
+			return []Intent{{Kind: IntentResult, RunID: ev.RunID, Text: p.Output, Images: LocalImagePaths(p.Output)}}
 		}
 		if p.Error != "" {
 			return []Intent{{Kind: IntentFailed, RunID: ev.RunID, Text: "运行失败: " + p.Error}}

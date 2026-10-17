@@ -58,12 +58,16 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) core.To
 	// If a grant already matches, skip the engine's default "ask" prompt.
 	predictedReq := e.permissionRequestFromEntry(entry, tc.Args)
 	var preApproval *escalationApproval
-	if dec := e.evaluatePermission(ctx, tc, predictedReq); dec.block {
+	dec := e.evaluatePermission(ctx, tc, predictedReq)
+	if dec.block {
 		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: dec.reason}
 	} else if dec.prompt {
 		reply, ok := e.promptConfirm(tc, confirmFn, predictedReq, dec)
 		if !ok {
-			return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: "cancelled"}
+			// The user explicitly declined. A bare "cancelled" reads like a
+			// transient hiccup and invites the model to retry the very same
+			// call — popping the dialog again. Name the decision instead.
+			return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: "permission denied by user; do not retry the same request — change your approach or ask the user how to proceed"}
 		}
 		if reply.Remember {
 			toolName := tc.Name
@@ -100,7 +104,7 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) core.To
 		if preApproval != nil {
 			preApproved = *preApproval
 		}
-		escOut, escOk, escReason, escCause := e.tryPermissionEscalation(ctx, entry.Privileged, tc, execErr, confirmFn, preApproved, preApproval != nil)
+		escOut, escOk, escReason, escCause := e.tryPermissionEscalation(ctx, entry.Privileged, tc, execErr, confirmFn, preApproved, preApproval != nil, dec.jevSafe)
 		if escOk {
 			e.invalidateMutatedPaths(tc.Name, paths)
 			return core.ToolCallResult{ID: tc.ID, Name: resultName, Output: formatOutput(resultName, escOut)}
@@ -149,6 +153,12 @@ type permissionDecision struct {
 	rememberTool string
 	rememberArgs map[string]any
 	approval     *protocol.ApprovalContext
+	// jevSafe records that the auto-mode risk judge vetted this call's
+	// content and no rule prompted — the same verdict that silently passes
+	// the pre-execution check. The privileged escalation consults it so a
+	// judge-approved command does not hit a second, redundant approval
+	// dialog just for its capability grant.
+	jevSafe bool
 }
 
 // evaluatePermission runs the rule engine and either blocks, prompts, or
@@ -177,6 +187,7 @@ func (e *Executor) evaluatePermission(ctx context.Context, tc core.ToolCallItem,
 	dec := engine.EvaluateContext(ctx, tc.Name, callInfo, defaultPermissionEffect(tc.Name))
 	decision := e.applyAutoWebGate(ctx, e.permissionDecisionForRule(dec, tc, predictedReq), tc)
 	e.annotateJevVerdict(ctx, tc, dec.Assessment.Reason, decision)
+	decision.jevSafe = dec.Assessment.Reason == "jev: judged safe" && !decision.prompt && !decision.block
 	return decision
 }
 

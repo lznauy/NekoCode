@@ -3,10 +3,12 @@
 package standard
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
 	"nekocode/bot/core"
+	"nekocode/bot/extension/tool/builtin/deliver"
 	"nekocode/interaction/connect/feishu"
 	"nekocode/interaction/connect/qqbot"
 	"nekocode/interaction/connect/telegram"
@@ -21,6 +23,9 @@ func New() (*controlruntime.Runtime, error) {
 		return nil, fmt.Errorf("standard runtime: %w", err)
 	}
 	rt := FromBot(standardBot)
+	// The deliver_file tool bridges model → IM chats through the runtime's
+	// connector manager; the bot itself stays connector-agnostic.
+	standardBot.RegisterExtraTools(deliver.NewTool(runtimeDeliverer{rt: rt}))
 	if err := rt.EnableDefaultEventRecording(); err != nil {
 		return nil, errors.Join(fmt.Errorf("standard runtime: %w", err), rt.Close())
 	}
@@ -37,6 +42,16 @@ func New() (*controlruntime.Runtime, error) {
 		return wecom.New(runtime)
 	})
 	return rt, nil
+}
+
+// runtimeDeliverer adapts the runtime's connector file delivery into the
+// deliver tool's injection interface.
+type runtimeDeliverer struct {
+	rt *controlruntime.Runtime
+}
+
+func (d runtimeDeliverer) DeliverConnectorFile(ctx context.Context, connector, path string) ([]string, error) {
+	return d.rt.DeliverConnectorFile(ctx, connector, path)
 }
 
 // FromBot creates a runtime around an existing standard bot without enabling

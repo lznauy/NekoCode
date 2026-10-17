@@ -236,6 +236,8 @@ func (c *Client) toAPIMessages(messages []types.Message, reasoning types.Reasoni
 			if parts := imageContentParts(m); parts != nil {
 				wire.Content = parts
 			}
+		} else if !c.Vision && m.Role == "user" && len(m.Images) > 0 {
+			logger.Log("openai vision: model is not vision-capable, %d image(s) stripped from request", len(m.Images))
 		}
 		out = append(out, wire)
 	}
@@ -260,6 +262,9 @@ func imageContentParts(m types.Message) []contentPart {
 			ImageURL: &imageURL{URL: "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(data)},
 		})
 		loaded++
+	}
+	if loaded > 0 {
+		logger.Log("openai vision: encoded %d image(s) as native content parts", loaded)
 	}
 	if loaded == 0 {
 		return nil

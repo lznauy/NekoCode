@@ -129,9 +129,27 @@ func TestVisionEnvelopeIsStrippableAndDistinguished(t *testing.T) {
 	if toolEnvelope == visionEnvelope {
 		t.Fatal("vision and tool envelopes must differ in instruction")
 	}
+	// The vision instruction must be conditional, not an invitation: vision
+	// models see the images and answer directly, non-vision successors
+	// (after a mid-session model switch) fall through to the tool.
+	if !strings.Contains(visionEnvelope, "when the active model supports vision") {
+		t.Fatal("vision envelope must scope native delivery to vision-capable models")
+	}
+	if strings.Contains(visionEnvelope, "closer look") {
+		t.Fatal("vision envelope must not invite proactive image_understand calls")
+	}
 	for name, envelope := range map[string]string{"tool": toolEnvelope, "vision": visionEnvelope} {
 		if restored := VisibleInputText(envelope); restored != visible {
 			t.Fatalf("%s envelope visible text = %q, want %q", name, restored, visible)
+		}
+	}
+
+	// Sessions persisted with legacy vision instructions must keep
+	// stripping cleanly.
+	for _, legacy := range []string{imageAttachmentVisionInstructionLegacy, imageAttachmentVisionInstructionLegacyDirect} {
+		legacyEnvelope := imageAttachmentsStart + `{"kind":"` + imageAttachmentEnvelopeKind + `","version":1,"images":[{"label":"[Image #1]","path":"/tmp/paste.png"}],"instruction":"` + legacy + `"}` + imageAttachmentsEnd
+		if restored := VisibleInputText(visible + legacyEnvelope); restored != visible {
+			t.Fatalf("legacy vision envelope visible text = %q, want %q", restored, visible)
 		}
 	}
 }

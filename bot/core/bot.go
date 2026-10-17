@@ -4,7 +4,6 @@ package core
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -18,6 +17,7 @@ import (
 	"nekocode/bot/decision"
 	"nekocode/bot/extension"
 	"nekocode/bot/extension/tool/builtin/catalog"
+	toolcore "nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/permission"
 	"nekocode/bot/extension/tool/runtime/workspace"
 	"nekocode/bot/policy"
@@ -89,7 +89,7 @@ func New() (*Bot, error) {
 	}
 	b.initSession()
 	if err := attachment.ReconcileSessionImages(b.sess.Exists); err != nil {
-		log.Printf("attachment: reconcile session image storage: %v", err)
+		logger.Log("attachment: reconcile session image storage: %v", err)
 	}
 	if err := b.rebuildRuntime(); err != nil {
 		return nil, err
@@ -221,6 +221,13 @@ func (b *Bot) initToolRegistry() {
 	b.toolbox.RebuildRegistryWithConfig(catalog.ToolboxConfig{
 		ImageGenModels: b.cfg.ImageGenModels, ImageUnderstandModels: b.cfg.ImageUnderstandModels,
 	})
+}
+
+// RegisterExtraTools adds assembly-injected tools that survive registry
+// rebuilds. Call before the bot starts serving requests.
+func (b *Bot) RegisterExtraTools(tools ...toolcore.Tool) {
+	b.initToolRegistry()
+	b.toolbox.SetExtraTools(tools...)
 }
 
 func (b *Bot) initPolicy() {

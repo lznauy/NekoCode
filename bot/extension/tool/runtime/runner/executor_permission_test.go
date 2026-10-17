@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"nekocode/protocol"
+	"strings"
 	"sync"
 	"testing"
 
@@ -127,6 +128,12 @@ func TestPermEngine_AskDeniedCancels(t *testing.T) {
 	})[0]
 	if r.Error == "" {
 		t.Fatal("denied rm should return cancelled error")
+	}
+	// The denial must read as an explicit user decision. A bare "cancelled"
+	// looks transient and made the model retry the same call — re-popping
+	// the approval dialog the user had just dismissed.
+	if !strings.Contains(r.Error, "denied by user") || !strings.Contains(r.Error, "do not retry") {
+		t.Fatalf("denial feedback = %q, want explicit user-decision semantics", r.Error)
 	}
 }
 

@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"log"
+	"nekocode/logger"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -85,7 +85,7 @@ func (r *EventRecorder) Close() error {
 
 func (r *EventRecorder) Record(ev core.Event) {
 	if err := r.RecordError(ev); err != nil {
-		log.Printf("runtime: event recorder: %v", err)
+		logger.Log("runtime: event recorder: %v", err)
 	}
 }
 
@@ -123,7 +123,11 @@ func recordedEventFrom(ev core.Event) recordedEvent {
 }
 
 func LoadRecordedEvents(baseDir string) ([]core.Event, error) {
-	return loadRecordedEvents(baseDir, 0)
+	runs, err := ScanRecordedRuns(baseDir, 0)
+	if err != nil {
+		return nil, err
+	}
+	return LoadRecordedEventFiles(runs), nil
 }
 
 // LoadRecentRecordedEvents restores only the newest run files. Runtime's
@@ -133,10 +137,25 @@ func LoadRecentRecordedEvents(baseDir string, runLimit int) ([]core.Event, error
 	if runLimit <= 0 {
 		return nil, nil
 	}
-	return loadRecordedEvents(baseDir, runLimit)
+	runs, err := ScanRecordedRuns(baseDir, runLimit)
+	if err != nil {
+		return nil, err
+	}
+	return LoadRecordedEventFiles(runs), nil
 }
 
-func loadRecordedEvents(baseDir string, runLimit int) ([]core.Event, error) {
+// RecordedRun locates one recorded run's event file.
+type RecordedRun struct {
+	// Path is the events.jsonl file of the run.
+	Path string
+	// Sequence is the run_<N> number parsed from the directory name.
+	Sequence uint64
+}
+
+// ScanRecordedRuns lists the newest recorded runs without reading any file
+// content. Startup needs run ordering and sequence numbers before the heavy
+// JSON decoding happens — names alone answer both.
+func ScanRecordedRuns(baseDir string, runLimit int) ([]RecordedRun, error) {
 	if strings.TrimSpace(baseDir) == "" {
 		return nil, fmt.Errorf("runtime: empty event recorder base dir")
 	}
@@ -148,9 +167,22 @@ func loadRecordedEvents(baseDir string, runLimit int) ([]core.Event, error) {
 	if runLimit > 0 && len(matches) > runLimit {
 		matches = matches[len(matches)-runLimit:]
 	}
+	runs := make([]RecordedRun, len(matches))
+	for i, path := range matches {
+		_, seq := recordedRunOrder(path)
+		runs[i] = RecordedRun{Path: path, Sequence: seq}
+	}
+	return runs, nil
+}
 
-	loaded := make([][]core.Event, len(matches))
-	workers := min(runtime.GOMAXPROCS(0), len(matches))
+// LoadRecordedEventFiles parses the given recorded runs in parallel and
+// returns their events ordered by time.
+func LoadRecordedEventFiles(runs []RecordedRun) []core.Event {
+	if len(runs) == 0 {
+		return nil
+	}
+	loaded := make([][]core.Event, len(runs))
+	workers := min(runtime.GOMAXPROCS(0), len(runs))
 	var wg sync.WaitGroup
 	jobs := make(chan int)
 	for range workers {
@@ -158,16 +190,16 @@ func loadRecordedEvents(baseDir string, runLimit int) ([]core.Event, error) {
 		go func() {
 			defer wg.Done()
 			for i := range jobs {
-				events, err := loadRecordedEventFile(matches[i])
+				events, err := loadRecordedEventFile(runs[i].Path)
 				if err != nil {
-					log.Printf("runtime: skip recorded events %s: %v", matches[i], err)
+					logger.Log("runtime: skip recorded events %s: %v", runs[i].Path, err)
 					continue
 				}
 				loaded[i] = events
 			}
 		}()
 	}
-	for i := range matches {
+	for i := range runs {
 		jobs <- i
 	}
 	close(jobs)
@@ -180,7 +212,7 @@ func loadRecordedEvents(baseDir string, runLimit int) ([]core.Event, error) {
 	sort.SliceStable(out, func(i, j int) bool {
 		return out[i].Time.Before(out[j].Time)
 	})
-	return out, nil
+	return out
 }
 
 func sortRecordedRunFiles(paths []string) {
@@ -249,12 +281,12 @@ func loadRecordedEventFile(path string) ([]core.Event, error) {
 		}
 		var rec recordedEvent
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			log.Printf("runtime: recorded event %s:%d unmarshal: %v", path, lineNo, err)
+			logger.Log("runtime: recorded event %s:%d unmarshal: %v", path, lineNo, err)
 			continue
 		}
 		ev, err := rec.Event()
 		if err != nil {
-			log.Printf("runtime: recorded event %s:%d decode: %v", path, lineNo, err)
+			logger.Log("runtime: recorded event %s:%d decode: %v", path, lineNo, err)
 			continue
 		}
 		events = append(events, ev)
@@ -409,4 +441,100 @@ func safePathPart(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// Retention defaults for recorded run history: batches whose last activity is
+// older than RetentionAge are deleted at startup, then the oldest batches are
+// trimmed until the total fits RetentionBytes. The restore path only ever
+// replays the newest runs, so far older batches are dead weight.
+const (
+	RetentionAge   = 30 * 24 * time.Hour
+	RetentionBytes = 500 << 20
+)
+
+type recordedBatch struct {
+	name    string
+	mod     time.Time
+	size    int64
+	entries []os.DirEntry
+}
+
+// PruneRecordedRuns enforces the retention policy for recorder batches.
+// A batch's age is its directory mtime — the last time one of its runs was
+// created — so the active recorder's own batch is never selected for
+// deletion. Deletion is best-effort: unreadable batches are skipped, not
+// fatal.
+func PruneRecordedRuns(baseDir string, maxAge time.Duration, maxBytes int64) error {
+	if strings.TrimSpace(baseDir) == "" {
+		return fmt.Errorf("runtime: empty event recorder base dir")
+	}
+	entries, err := os.ReadDir(baseDir)
+	if err != nil {
+		return err
+	}
+	var batches []recordedBatch
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		runDirs, err := os.ReadDir(filepath.Join(baseDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		batches = append(batches, recordedBatch{
+			name:    entry.Name(),
+			mod:     info.ModTime(),
+			entries: runDirs,
+			size:    batchSize(filepath.Join(baseDir, entry.Name()), runDirs),
+		})
+	}
+	sort.Slice(batches, func(i, j int) bool { return batches[i].mod.Before(batches[j].mod) })
+
+	now := time.Now()
+	var kept int64
+	for _, batch := range batches {
+		if now.Sub(batch.mod) > maxAge {
+			_ = os.RemoveAll(filepath.Join(baseDir, batch.name))
+			logger.Log("runtime: pruned recorded batch %s (idle %s)", batch.name, now.Sub(batch.mod).Round(time.Hour))
+			continue
+		}
+		kept += batch.size
+	}
+	if maxBytes > 0 {
+		for i, batch := range batches {
+			if kept <= maxBytes {
+				break
+			}
+			if i == len(batches)-1 {
+				// The newest batch — possibly the active recorder's own — is
+				// never size-pruned; a run exceeding the cap is a data point,
+				// not a reason to delete the session in progress.
+				break
+			}
+			if now.Sub(batch.mod) > maxAge {
+				continue // already removed above
+			}
+			_ = os.RemoveAll(filepath.Join(baseDir, batch.name))
+			kept -= batch.size
+			logger.Log("runtime: pruned recorded batch %s (size cap, %d bytes freed)", batch.name, batch.size)
+		}
+	}
+	return nil
+}
+
+func batchSize(dir string, runDirs []os.DirEntry) int64 {
+	var total int64
+	for _, run := range runDirs {
+		if !run.IsDir() {
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(dir, run.Name(), "events.jsonl")); err == nil {
+			total += info.Size()
+		}
+	}
+	return total
 }

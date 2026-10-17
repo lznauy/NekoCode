@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -53,10 +56,25 @@ type Chat struct {
 }
 
 type Message struct {
-	MessageID int    `json:"message_id"`
-	From      *User  `json:"from"`
-	Chat      Chat   `json:"chat"`
-	Text      string `json:"text"`
+	MessageID int         `json:"message_id"`
+	From      *User       `json:"from"`
+	Chat      Chat        `json:"chat"`
+	Text      string      `json:"text"`
+	Caption   string      `json:"caption"`
+	Photo     []PhotoSize `json:"photo"`
+}
+
+// PhotoSize is one resolution of a photo message; Telegram delivers the same
+// picture in several sizes, the last entry being the largest.
+type PhotoSize struct {
+	FileID   string `json:"file_id"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+	FileSize int    `json:"file_size"`
+}
+
+type File struct {
+	FilePath string `json:"file_path"`
 }
 
 type CallbackQuery struct {
@@ -95,9 +113,117 @@ func (c *apiClient) setCommands(ctx context.Context, commands []botCommand) erro
 	return err
 }
 
+// largestPhoto returns the biggest size of a photo message (Telegram sends
+// the same image in multiple resolutions).
+func largestPhoto(photo []PhotoSize) (PhotoSize, bool) {
+	if len(photo) == 0 {
+		return PhotoSize{}, false
+	}
+	best := photo[0]
+	for _, size := range photo[1:] {
+		if size.Width*size.Height > best.Width*best.Height {
+			best = size
+		}
+	}
+	return best, true
+}
+
+// getFile resolves a file_id into a downloadable file path.
+func (c *apiClient) getFile(ctx context.Context, fileID string) (File, error) {
+	return requestJSON[File](ctx, c, http.MethodPost, "getFile", nil, map[string]any{"file_id": fileID})
+}
+
+// downloadFile fetches a previously resolved file_path to dst.
+func (c *apiClient) downloadFile(ctx context.Context, filePath, dst string) error {
+	u := fmt.Sprintf("%s/file/bot%s/%s", c.base, c.token, filePath)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return sharedhttp.NewHTTPError(resp.StatusCode, string(data))
+	}
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = out.Close() }()
+	_, err = io.Copy(out, resp.Body)
+	return err
+}
+
+// sendMessage sends a plain HTML message.
 func (c *apiClient) sendMessage(ctx context.Context, chatID int64, text string) error {
 	_, err := c.sendHTML(ctx, "sendMessage", messageBody(chatID, text, false))
 	return err
+}
+
+// sendPhoto delivers a local image file as a native photo message.
+func (c *apiClient) sendPhoto(ctx context.Context, chatID int64, path, caption string) error {
+	return c.uploadAttachment(ctx, "sendPhoto", "photo", chatID, path, caption)
+}
+
+// sendDocument delivers a local file as a document message (any file type).
+func (c *apiClient) sendDocument(ctx context.Context, chatID int64, path string) error {
+	return c.uploadAttachment(ctx, "sendDocument", "document", chatID, path, "")
+}
+
+// uploadAttachment posts a multipart message carrying one local file.
+func (c *apiClient) uploadAttachment(ctx context.Context, endpoint, field string, chatID int64, path, caption string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	u := fmt.Sprintf("%s/bot%s/%s", c.base, c.token, endpoint)
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	if err := writer.WriteField("chat_id", strconv.FormatInt(chatID, 10)); err != nil {
+		return err
+	}
+	if caption != "" {
+		if err := writer.WriteField("caption", caption); err != nil {
+			return err
+		}
+	}
+	part, err := writer.CreateFormFile(field, filepath.Base(path))
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(part, f); err != nil {
+		return err
+	}
+	if err := writer.Close(); err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return sharedhttp.NewHTTPError(resp.StatusCode, string(data))
+	}
+	var decoded apiResponse[json.RawMessage]
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if !decoded.OK {
+		return fmt.Errorf("telegram api: %s", decoded.Description)
+	}
+	return nil
 }
 
 // messageBody builds the common sendMessage/editMessageText payload. Plain

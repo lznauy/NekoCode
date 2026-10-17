@@ -2,11 +2,13 @@ package connectors
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
 
+	"nekocode/protocol"
 	"nekocode/runtime/internal/core"
 )
 
@@ -166,6 +168,67 @@ func (m *Manager) connector(ctx context.Context, name string) (Connector, error)
 	// command handlers once configured.
 	m.connectors[name] = conn
 	return conn, nil
+}
+
+// runningFileDeliverers returns the running connectors that support file
+// delivery. Connectors are keyed by name.
+func (m *Manager) runningFileDeliverers() map[string]protocol.FileDeliverer {
+	m.mu.Lock()
+	snapshot := make(map[string]Connector, len(m.connectors))
+	for name, conn := range m.connectors {
+		snapshot[name] = conn
+	}
+	m.mu.Unlock()
+
+	deliverers := make(map[string]protocol.FileDeliverer)
+	for name, conn := range snapshot {
+		deliverer, ok := conn.(protocol.FileDeliverer)
+		if !ok {
+			continue
+		}
+		if viewer, ok := conn.(ConnectorStatusViewer); ok && !viewer.ConnectorStatusView().Running {
+			continue
+		}
+		deliverers[name] = deliverer
+	}
+	return deliverers
+}
+
+// DeliverFile sends a local file to the named connector's paired chats.
+// An empty name delivers to every running connector that supports files.
+// It returns the connector names the file was sent through.
+func (m *Manager) DeliverFile(ctx context.Context, name, path string) ([]string, error) {
+	deliverers := m.runningFileDeliverers()
+	if name != "" {
+		deliverer, ok := deliverers[name]
+		if !ok {
+			m.mu.Lock()
+			_, registered := m.factories[name]
+			m.mu.Unlock()
+			if !registered {
+				return nil, fmt.Errorf("unknown connector %q", name)
+			}
+			return nil, fmt.Errorf("connector %q is not running or does not support file delivery", name)
+		}
+		deliverers = map[string]protocol.FileDeliverer{name: deliverer}
+	}
+	if len(deliverers) == 0 {
+		return nil, errors.New("no running connector supports file delivery (telegram and feishu do when configured)")
+	}
+	var sent []string
+	var errs []error
+	for connectorName, deliverer := range deliverers {
+		if err := deliverer.DeliverFile(ctx, path); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", connectorName, err))
+			continue
+		}
+		sent = append(sent, connectorName)
+	}
+	sort.Strings(sent)
+	if len(sent) == 0 {
+		return nil, errors.Join(errs...)
+	}
+	return sent, nil
 }
 
 func (m *Manager) usageFor(command string) string {

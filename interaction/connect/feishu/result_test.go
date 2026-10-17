@@ -12,7 +12,13 @@ import (
 type fakeSender struct {
 	cards   []map[string]any
 	texts   []string
+	images  []string
 	cardErr error
+}
+
+func (f *fakeSender) sendImage(_ context.Context, _ string, path string) error {
+	f.images = append(f.images, path)
+	return nil
 }
 
 func (f *fakeSender) sendCard(_ context.Context, _ string, card map[string]any) error {
@@ -56,6 +62,42 @@ func TestMarkdownCardStructure(t *testing.T) {
 
 func resultSink(c *Connector, sender *fakeSender) eventSink {
 	return eventSink{c: c, client: sender}
+}
+
+// TestPostResultSendsReferencedImages covers the outbound image path: a
+// result intent referencing local image files must deliver them as native
+// image messages before the markdown card.
+func TestPostResultSendsReferencedImages(t *testing.T) {
+	c := pairedConnector(t, &stubRuntime{})
+	sender := &fakeSender{}
+
+	intent := connect.Intent{
+		Kind:   connect.IntentResult,
+		RunID:  "run_1",
+		Text:   "图表已生成 /tmp/charts/a.png 和 /tmp/charts/b.png",
+		Images: []string{"/tmp/charts/a.png", "/tmp/charts/b.png"},
+	}
+	if err := resultSink(c, sender).Post(context.Background(), intent); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.images) != 2 || sender.images[0] != "/tmp/charts/a.png" || sender.images[1] != "/tmp/charts/b.png" {
+		t.Fatalf("images = %v, want both referenced files in order", sender.images)
+	}
+	if len(sender.cards) != 1 {
+		t.Fatalf("cards = %d, want the markdown card after the images", len(sender.cards))
+	}
+
+	// Failed-run intents never carry images.
+	sender.images = nil
+	if err := resultSink(c, sender).Post(context.Background(), connect.Intent{
+		Kind: connect.IntentFailed, RunID: "run_2", Text: "boom",
+		Images: []string{"/tmp/x.png"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.images) != 0 {
+		t.Fatalf("failed intents must not send images, got %v", sender.images)
+	}
 }
 
 func TestPostResultSendsMarkdownCard(t *testing.T) {

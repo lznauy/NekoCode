@@ -135,3 +135,92 @@ func TestConnectorManagerView(t *testing.T) {
 		t.Fatalf("Disconnect = %q err=%v", msg, err)
 	}
 }
+
+// fileConnector is a running connector that records DeliverFile calls.
+type fileConnector struct {
+	statusConnector
+	delivered []string
+	fail      bool
+}
+
+func (c *fileConnector) DeliverFile(_ context.Context, path string) error {
+	if c.fail {
+		return fmt.Errorf("boom")
+	}
+	c.delivered = append(c.delivered, path)
+	return nil
+}
+
+// stoppedFileConnector reports not-running and supports files.
+type stoppedFileConnector struct {
+	fileConnector
+}
+
+func (c *stoppedFileConnector) ConnectorStatusView() core.ConnectorView {
+	return core.ConnectorView{Name: c.name, Status: "stopped"}
+}
+
+func TestDeliverFileRoutesByConnectorName(t *testing.T) {
+	manager := NewManager(nil)
+	tg := &fileConnector{}
+	tg.name = "telegram"
+	feishuConn := &fileConnector{}
+	feishuConn.name = "feishu"
+	plain := &statusConnector{name: "qqbot"}
+	manager.Register("telegram", func(core.ConnectorRuntime) Connector { return tg })
+	manager.Register("feishu", func(core.ConnectorRuntime) Connector { return feishuConn })
+	manager.Register("qqbot", func(core.ConnectorRuntime) Connector { return plain })
+	// Initialize every connector instance.
+	for _, name := range []string{"telegram", "feishu", "qqbot"} {
+		if _, err := manager.connector(context.Background(), name); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Named delivery hits one connector only.
+	sent, err := manager.DeliverFile(context.Background(), "telegram", "/ws/a.zip")
+	if err != nil || len(sent) != 1 || sent[0] != "telegram" {
+		t.Fatalf("DeliverFile(telegram) = %v err=%v", sent, err)
+	}
+	if len(tg.delivered) != 1 || len(feishuConn.delivered) != 0 {
+		t.Fatalf("delivered: tg=%v feishu=%v", tg.delivered, feishuConn.delivered)
+	}
+
+	// Empty name delivers to every file-capable running connector.
+	sent, err = manager.DeliverFile(context.Background(), "", "/ws/b.zip")
+	if err != nil || len(sent) != 2 {
+		t.Fatalf("DeliverFile(all) = %v err=%v", sent, err)
+	}
+
+	// Unsupported or unknown connector names report clearly.
+	if _, err := manager.DeliverFile(context.Background(), "qqbot", "/ws/c.zip"); err == nil {
+		t.Fatal("qqbot has no file support, want error")
+	}
+	if _, err := manager.DeliverFile(context.Background(), "slack", "/ws/c.zip"); err == nil || !strings.Contains(err.Error(), "unknown connector") {
+		t.Fatalf("unknown connector err = %v", err)
+	}
+
+	// Not-running connectors are skipped by the broadcast path.
+	stopped := &stoppedFileConnector{}
+	stopped.name = "wecom"
+	manager.Register("wecom", func(core.ConnectorRuntime) Connector { return stopped })
+	if _, err := manager.connector(context.Background(), "wecom"); err != nil {
+		t.Fatal(err)
+	}
+	sent, err = manager.DeliverFile(context.Background(), "", "/ws/d.zip")
+	if err != nil {
+		t.Fatalf("broadcast err = %v", err)
+	}
+	if len(sent) != 2 {
+		t.Fatalf("broadcast = %v, want 2 (stopped wecom excluded)", sent)
+	}
+	if strings.Contains(strings.Join(sent, ","), "wecom") {
+		t.Fatalf("stopped connector must be excluded: %v", sent)
+	}
+
+	// When a named target fails, its error surfaces.
+	feishuConn.fail = true
+	if _, err := manager.DeliverFile(context.Background(), "feishu", "/ws/e.zip"); err == nil {
+		t.Fatal("failing connector should surface the error")
+	}
+}

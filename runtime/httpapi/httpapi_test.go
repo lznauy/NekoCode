@@ -24,6 +24,7 @@ type fakeRuntime struct {
 
 	mu              sync.Mutex
 	nextRun         int
+	lastInput       controlruntime.Input
 	approved        string
 	approvalAllowed bool
 	answered        string
@@ -48,6 +49,7 @@ func (f *fakeRuntime) Publish(ev controlruntime.Event) {
 func (f *fakeRuntime) StartRun(_ context.Context, input controlruntime.Input) (controlruntime.RunID, error) {
 	f.mu.Lock()
 	f.nextRun++
+	f.lastInput = input
 	runID := controlruntime.RunID("run_test")
 	if f.nextRun > 1 {
 		runID = controlruntime.RunID("run_test_" + string(rune('0'+f.nextRun)))
@@ -280,6 +282,28 @@ func TestSubmitRequestOmitsOptionalNestedObjects(t *testing.T) {
 	got = string(data)
 	if !strings.Contains(got, `"source"`) || !strings.Contains(got, `"sender"`) {
 		t.Fatalf("populated optional nested objects should be present: %s", got)
+	}
+}
+
+// TestServerInputForwardsImages covers the images passthrough: attachments
+// submitted over HTTP must reach StartRun intact (label + path).
+func TestServerInputForwardsImages(t *testing.T) {
+	rt := newFakeRuntime()
+	handler := New(rt).Handler()
+
+	body := `{"text":"看图 [Image #1]","images":[{"label":"[Image #1]","path":"/tmp/a.png"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/input", bytes.NewBufferString(body))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("input status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rt.mu.Lock()
+	got := rt.lastInput
+	rt.mu.Unlock()
+	if got.Text != "看图 [Image #1]" || len(got.Images) != 1 || got.Images[0].Label != "[Image #1]" || got.Images[0].Path != "/tmp/a.png" {
+		t.Fatalf("input forwarded = %#v", got)
 	}
 }
 

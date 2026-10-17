@@ -126,6 +126,7 @@ NekoCode 仍处于测试阶段，尚未经过大规模生产验证。工具设�
 
 - [ACP.md](docs/ACP.md)：ACP v1 协议、能力协商、方法清单和 NekoCode 实现状态
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md)：整体架构、Agent 循环、工具系统、技术细节
+- [IMAGES.md](docs/IMAGES.md)：各接入面的图片收发能力、marker 约定与模型消费路径
 - [CI_CD.md](docs/CI_CD.md)：持续集成、版本发布、产物校验与失败处理
 - [RUNTIME_APP_GUIDE.md](docs/RUNTIME_APP_GUIDE.md)：基于底座组装上层 AI 应用
 - [RUNTIME_HTTP_API.md](docs/RUNTIME_HTTP_API.md)：Runtime HTTP/SSE 协议

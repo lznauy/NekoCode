@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	rt "nekocode/runtime"
@@ -59,34 +60,56 @@ type frame struct {
 	} `json:"response"`
 }
 
-type userInput struct{ id, text string }
+type userInput struct {
+	id     string
+	text   string
+	images []rt.ImageAttachment
+}
 
+// blockImageMarkerN numbers image markers within one user message starting
+// at 1; the marker must appear in the message text for the runtime's
+// attachment envelope to accept the image.
 func (f frame) user() (userInput, error) {
 	if f.Message.Role != "user" || f.ParentToolUseID != nil || (f.ShouldQuery != nil && !*f.ShouldQuery) || (f.Priority != "" && f.Priority != "next") {
 		return userInput{}, errors.New("only root user messages with shouldQuery=true and FIFO priority are supported")
 	}
 	var text string
-	if json.Unmarshal(f.Message.Content, &text) != nil {
+	var images []rt.ImageAttachment
+	if json.Unmarshal(f.Message.Content, &text) == nil {
+		// Plain string content: no images possible.
+	} else {
 		var blocks []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
+			Path string `json:"path"`
 		}
 		if json.Unmarshal(f.Message.Content, &blocks) != nil {
-			return userInput{}, errors.New("content must be text or text blocks")
+			return userInput{}, errors.New("content must be text or content blocks")
 		}
 		parts := make([]string, 0, len(blocks))
+		imageCount := 0
 		for _, block := range blocks {
-			if block.Type != "text" {
-				return userInput{}, errors.New("only text content blocks are supported")
+			switch block.Type {
+			case "text":
+				parts = append(parts, block.Text)
+			case "image":
+				if strings.TrimSpace(block.Path) == "" {
+					return userInput{}, errors.New("image block requires a path")
+				}
+				imageCount++
+				marker := fmt.Sprintf("[Image #%d]", imageCount)
+				parts = append(parts, marker)
+				images = append(images, rt.ImageAttachment{Label: marker, Path: block.Path})
+			default:
+				return userInput{}, fmt.Errorf("unsupported content block type %q", block.Type)
 			}
-			parts = append(parts, block.Text)
 		}
 		text = strings.Join(parts, "\n\n")
 	}
 	if strings.TrimSpace(text) == "" {
 		return userInput{}, errors.New("empty user message")
 	}
-	return userInput{id: f.UUID, text: text}, nil
+	return userInput{id: f.UUID, text: text, images: images}, nil
 }
 
 // Management is optional for embedded backends. Runtime implements it and

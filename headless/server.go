@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -12,6 +14,40 @@ import (
 	rt "nekocode/runtime"
 	"nekocode/util/version"
 )
+
+// resolveWithinCWD anchors an image block's path at the headless working
+// directory and refuses anything that escapes it. Hosts (e.g. wecom-bot)
+// drop downloads inside the per-chat workspace, so this keeps the file a
+// workspace citizen — readable by image tools, impossible to use as a
+// arbitrary-file exfiltration handle into the model's context.
+func resolveWithinCWD(base, path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", errors.New("image path is empty")
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(base, path)
+	}
+	path = filepath.Clean(path)
+	rel, err := filepath.Rel(base, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", errors.New("image path escapes the working directory")
+	}
+	// Lexical containment can be bypassed by a symlink pointing outside the
+	// base. Resolve the real paths when the file exists and re-check — a
+	// missing file is fine, the later read just fails harmlessly. The base
+	// is resolved too, so a symlinked working directory does not falsely
+	// reject or accept its own children.
+	if resolvedBase, err := filepath.EvalSymlinks(base); err == nil {
+		base = resolvedBase
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		rel, err := filepath.Rel(base, resolved)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			return "", errors.New("image path escapes the working directory")
+		}
+	}
+	return path, nil
+}
 
 type turn struct {
 	input                     userInput
@@ -177,7 +213,24 @@ func (s *server) start(ctx context.Context, input userInput) error {
 		"model": s.backend.CurrentModel().Model, "permissionMode": s.backend.PermissionMode(),
 		"capabilities": s.capabilities(), "server": s.metadata(ctx),
 	}
-	id, err := s.backend.StartRun(turnCtx, rt.Input{Source: rt.SourceRef{Kind: "headless", ID: input.id}, Text: input.text})
+	inputImages := make([]rt.ImageAttachment, 0, len(input.images))
+	for _, image := range input.images {
+		path, err := resolveWithinCWD(s.cwd, image.Path)
+		if err != nil {
+			// Surface as a turn error so the host learns the frame was
+			// rejected instead of silently dropping the image.
+			cancel()
+			if sendErr := s.result(rt.RunResult{Error: err.Error()}, "error_during_execution"); sendErr != nil {
+				return sendErr
+			}
+			s.active = nil
+			return nil
+		}
+		inputImages = append(inputImages, rt.ImageAttachment{Label: image.Label, Path: path})
+	}
+	id, err := s.backend.StartRun(turnCtx, rt.Input{
+		Source: rt.SourceRef{Kind: "headless", ID: input.id}, Text: input.text, Images: inputImages,
+	})
 	t.runID = id
 	if sendErr := s.sendTurn("system", init); sendErr != nil {
 		return sendErr

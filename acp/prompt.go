@@ -13,10 +13,6 @@ func (s *server) prompt(ctx context.Context, params json.RawMessage) (any, *wire
 	if err := json.Unmarshal(params, &request); err != nil || request.SessionID == "" {
 		return nil, rpcError(-32602, "invalid session/prompt params")
 	}
-	input, rpcErr := promptText(request.Prompt)
-	if rpcErr != nil {
-		return nil, rpcErr
-	}
 	s.sessionMu.Lock()
 	if !s.verifySession(request.SessionID) {
 		s.sessionMu.Unlock()
@@ -51,6 +47,13 @@ func (s *server) prompt(ctx context.Context, params json.RawMessage) (any, *wire
 		s.sessionMu.Unlock()
 		return nil, backendError("apply session config", err)
 	}
+	// Parse the prompt after the session is active: image blocks are stored
+	// in the session's attachment directory, so CurrentSessionID must match.
+	input, images, rpcErr := promptContent(request.Prompt, request.SessionID)
+	if rpcErr != nil {
+		s.sessionMu.Unlock()
+		return nil, rpcErr
+	}
 	if s.activeMCPSession != request.SessionID {
 		if err := s.backend.ReplaceMCPServers(turnCtx, mcpSource, cloneMCPServerSpecs(s.sessionMCPConfigs[request.SessionID])); err != nil {
 			s.sessionMu.Unlock()
@@ -76,6 +79,7 @@ func (s *server) prompt(ctx context.Context, params json.RawMessage) (any, *wire
 	runID, err := s.backend.StartRun(turnCtx, controlruntime.Input{
 		Source: controlruntime.SourceRef{Kind: "acp"},
 		Text:   input,
+		Images: images,
 	})
 	if err != nil {
 		s.sessionMu.Unlock()

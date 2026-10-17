@@ -35,7 +35,7 @@ const (
 //     (the raw PermissionError for non-retry failures; the actual
 //     ExecuteWithPermission error for failRetryError so the model isn't told
 //     "permission required" after it already got approval)
-func (e *Executor) tryPermissionEscalation(ctx context.Context, privileged tools.PrivilegedFunc, tc core.ToolCallItem, execErr error, confirmFn protocol.ConfirmFunc, preApproved escalationApproval, hasPreApproval bool) (output string, ok bool, reason escalationFailReason, causeErr error) {
+func (e *Executor) tryPermissionEscalation(ctx context.Context, privileged tools.PrivilegedFunc, tc core.ToolCallItem, execErr error, confirmFn protocol.ConfirmFunc, preApproved escalationApproval, hasPreApproval bool, jevSafe bool) (output string, ok bool, reason escalationFailReason, causeErr error) {
 	var permErr core.PermissionError
 	if !errors.As(execErr, &permErr) {
 		return "", false, failNotPermissionError, execErr
@@ -79,6 +79,19 @@ func (e *Executor) tryPermissionEscalation(ctx context.Context, privileged tools
 		}
 		return "", false, failRetryError, err
 	}
+	if jevSafe && !requiresHostExecution(req) {
+		// The auto-mode risk judge already vetted this call's content when
+		// the pre-execution check passed it silently; granting the capability
+		// it needs follows the same verdict instead of popping a second,
+		// redundant dialog. Explicit deny rules above still block, the
+		// FullAccess branch remains the only other dialog-free path, and
+		// host-sandbox removal is excluded below so it always prompts.
+		out, err := privileged(e.toolContext(ctx), tc.Args, req)
+		if err == nil {
+			return out, true, 0, nil
+		}
+		return "", false, failRetryError, err
+	}
 	confirmReq := protocol.NewApprovalRequest(
 		canonicalPermissionTool(tc.Name),
 		protocol.ApprovalArgs(tc.Args),
@@ -98,6 +111,20 @@ func (e *Executor) tryPermissionEscalation(ctx context.Context, privileged tools
 		return out, true, 0, nil
 	}
 	return "", false, failRetryError, err
+}
+
+// requiresHostExecution reports whether the request includes the capability
+// that removes the sandbox entirely. That one always requires an explicit
+// user prompt — the risk judge vetted the command text, but a command that
+// is safe sandboxed is not automatically safe on the host — mirroring the
+// never-persist rule applied to remembered grants.
+func requiresHostExecution(req core.PermissionRequest) bool {
+	for _, cap := range req.Capabilities {
+		if cap == core.CapProcessHost {
+			return true
+		}
+	}
+	return false
 }
 
 // permissionFailureMessage renders the error string shown to the model when

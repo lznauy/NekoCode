@@ -117,7 +117,7 @@ func (c *Connector) handleMessage(ctx context.Context, client *apiClient, msg in
 	c.rememberChat(msg)
 
 	text := msg.text
-	if text == "" {
+	if text == "" && len(msg.imageURLs) == 0 {
 		return
 	}
 	menuResult := c.menus.HandleText(ctx, c.rt, msg.sourceID(), text)
@@ -154,10 +154,28 @@ func (c *Connector) handleMessage(ctx context.Context, client *apiClient, msg in
 		c.reply(ctx, client, msg, out)
 		return
 	}
+	// 图片附件：下载到本地并通过共享的 [Image #N] marker 约定引用。
+	// 带文本的消息在图片下载失败时保留原文本继续；纯图全部下载失败
+	// 则回复失败提示，而不是静默丢弃。
+	var images []controlruntime.ImageAttachment
+	for i, rawURL := range msg.imageURLs {
+		path, err := connect.DownloadImageToTemp(ctx, rawURL, "nekocode-qqbot-*.jpg")
+		if err != nil {
+			continue
+		}
+		marker := fmt.Sprintf("[Image #%s-%d]", msg.msgID, i)
+		text = connect.AppendMarker(text, marker)
+		images = append(images, controlruntime.ImageAttachment{Label: marker, Path: path})
+	}
+	if text == "" {
+		c.reply(ctx, client, msg, "图片下载失败，请重发。")
+		return
+	}
 	_, err := c.rt.StartRun(context.WithoutCancel(ctx), controlruntime.Input{
 		Source: controlruntime.SourceRef{Kind: "qqbot", ID: msg.sourceID()},
 		Sender: controlruntime.SenderRef{ID: msg.authorID},
 		Text:   text,
+		Images: images,
 	})
 	if err != nil {
 		c.reply(ctx, client, msg, "错误: "+err.Error())

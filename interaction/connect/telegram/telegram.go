@@ -2,7 +2,9 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +34,7 @@ type Connector struct {
 
 	mu          sync.Mutex
 	active      string
+	api         *apiClient
 	taskTracker *taskview.Tracker
 	// pendingMsgs maps approval/question IDs to their interactive messages;
 	// pendingSelect holds multi-select toggle state per question ID.
@@ -107,6 +110,7 @@ func (c *Connector) Start(ctx context.Context) error {
 	runCtx, generation := c.base.Start(ctx)
 	client := newAPIClient(profile.BotToken)
 	c.active = profile.Name
+	c.api = client
 	c.mu.Unlock()
 
 	c.base.PublishStatus("running", "")
@@ -144,6 +148,7 @@ func (c *Connector) syncCommands(ctx context.Context, client *apiClient) {
 func (c *Connector) Stop() error {
 	c.mu.Lock()
 	c.active = ""
+	c.api = nil
 	c.mu.Unlock()
 	return c.base.Stop()
 }
@@ -152,6 +157,7 @@ func (c *Connector) pollLoop(ctx context.Context, client *apiClient, generation 
 	defer func() {
 		c.mu.Lock()
 		c.active = ""
+		c.api = nil
 		c.mu.Unlock()
 		c.base.MarkStopped(generation)
 	}()
@@ -196,7 +202,12 @@ func (c *Connector) handleUpdate(ctx context.Context, client *apiClient, profile
 	msg := update.Message
 	text := strings.TrimSpace(msg.Text)
 	if text == "" {
-		return
+		// Photo messages carry their user prompt in Caption (if any); the
+		// image marker is appended later, right before StartRun.
+		if len(msg.Photo) == 0 {
+			return
+		}
+		text = strings.TrimSpace(msg.Caption)
 	}
 	if nonce, ok := parseStartPayload(text); ok {
 		if profile.Valid(nonce, time.Now().Unix()) {
@@ -251,6 +262,27 @@ func (c *Connector) handleUpdate(ctx context.Context, client *apiClient, profile
 			}
 			return
 		}
+		// Photo messages: download the image and reference it from the text
+		// via the [Image #N] marker convention (see InputWithImageAttachments
+		// — the marker must appear in Text for the attachment to be valid).
+		var images []controlruntime.ImageAttachment
+		if len(msg.Photo) > 0 {
+			label := fmt.Sprintf("[Image #%d]", msg.MessageID)
+			if path, err := savePhoto(ctx, client, msg); err == nil {
+				text = connect.AppendMarker(text, label)
+				images = append(images, controlruntime.ImageAttachment{Label: label, Path: path})
+			} else {
+				c.base.PublishStatus("warning", "photo download failed: "+err.Error())
+				if text == "" {
+					// A bare photo cannot degrade to text: without the image
+					// there is no input at all, and StartRun would reject it
+					// with the internal "empty input" error. Tell the user
+					// what actually happened instead.
+					_ = client.sendMessage(ctx, msg.Chat.ID, "图片下载失败，请重发。")
+					return
+				}
+			}
+		}
 		_, err := c.rt.StartRun(context.WithoutCancel(ctx), controlruntime.Input{
 			Source: controlruntime.SourceRef{Kind: "telegram", ID: strconv.FormatInt(msg.Chat.ID, 10)},
 			Sender: controlruntime.SenderRef{
@@ -258,12 +290,34 @@ func (c *Connector) handleUpdate(ctx context.Context, client *apiClient, profile
 				Username: msg.From.Username,
 				Display:  msg.From.FirstName,
 			},
-			Text: text,
+			Text:   text,
+			Images: images,
 		})
 		if err != nil {
 			_ = client.sendMessage(ctx, msg.Chat.ID, taskview.HTMLEscape("Error: "+err.Error()))
 		}
 	}
+}
+
+// savePhoto downloads the largest resolution of a photo message to a
+// temp file and returns its path. The file outlives the run — the model may
+// re-read it later via the image_understand tool.
+func savePhoto(ctx context.Context, client *apiClient, msg *Message) (string, error) {
+	size, ok := largestPhoto(msg.Photo)
+	if !ok {
+		return "", fmt.Errorf("empty photo array")
+	}
+	file, err := client.getFile(ctx, size.FileID)
+	if err != nil {
+		return "", err
+	}
+	ext := strings.ToLower(filepath.Ext(file.FilePath))
+	if ext == "" {
+		ext = ".jpg"
+	}
+	return connect.DownloadToTemp("nekocode-telegram-*"+ext, func(dst string) error {
+		return client.downloadFile(ctx, file.FilePath, dst)
+	})
 }
 
 func parseStartPayload(text string) (payload string, ok bool) {
@@ -565,7 +619,7 @@ func newEventSink(c *Connector, client *apiClient) *eventSink {
 }
 
 func (s *eventSink) Caps() connect.Capabilities {
-	return connect.Capabilities{EditMessages: true, Buttons: true}
+	return connect.Capabilities{EditMessages: true, Buttons: true, Images: true}
 }
 
 // FlushInterval/Flush 实现 connect.Flusher:Dispatch 的 ticker 以此间隔
@@ -585,6 +639,13 @@ func (s *eventSink) Post(ctx context.Context, in connect.Intent) error {
 	case connect.IntentPreview:
 		s.preview.addDelta(ctx, in.RunID, in.Text)
 	case connect.IntentResult:
+		// Referenced local images go out as native photos first; the text
+		// (which still cites the paths) follows as the run's done-reply.
+		for _, path := range in.Images {
+			for _, chatID := range s.c.pairedChats() {
+				_ = s.client.sendPhoto(ctx, chatID, path, "")
+			}
+		}
 		// A settled preview already shows the final text; the done-reply
 		// would duplicate it.
 		if s.preview.finalize(ctx, in.RunID) {
@@ -737,6 +798,28 @@ func (c *Connector) terminalize(ctx context.Context, client *apiClient, id, stat
 	}
 	body := ref.text + "\n\n<b>✅ " + taskview.HTMLEscape(status) + "</b>"
 	_ = client.editMessage(ctx, ref.chatID, ref.messageID, body, &emptyKeyboard)
+}
+
+// DeliverFile implements protocol.FileDeliverer: sends a local file as a
+// document message to every paired chat.
+func (c *Connector) DeliverFile(ctx context.Context, path string) error {
+	c.mu.Lock()
+	client := c.api
+	c.mu.Unlock()
+	if client == nil {
+		return fmt.Errorf("telegram connector is not running")
+	}
+	chats := c.pairedChats()
+	if len(chats) == 0 {
+		return fmt.Errorf("no paired chat")
+	}
+	var errs []error
+	for _, chatID := range chats {
+		if err := client.sendDocument(ctx, chatID, path); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (c *Connector) tracker() *taskview.Tracker {

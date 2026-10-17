@@ -160,7 +160,49 @@ func CallLLMWithRetry(ctx context.Context, client provider.LLM, buildOptions fun
 		result, err = CallLLM(client, buildOptions())
 		return err
 	})
-	return result, err
+	if err != nil {
+		return result, err
+	}
+	// Reasoning-only retry: GLM-style thinking models occasionally end a
+	// stream with reasoning but no content and finish=stop — a "successful"
+	// call, so the network-level retry never fires, and the turn collapses
+	// into an empty answer. One immediate retry with thinking disabled gets
+	// a straight answer. Only models declaring a thinking switch take this
+	// path; without the profile the disabled request carries no switch and
+	// the retry would be a pointless duplicate call.
+	if retryEmptyContent(client, result) {
+		logger.Log("llmstream: reasoning-only empty response, retrying once with thinking disabled")
+		// Restore the captured state rather than a hard-coded false, so the
+		// window is correct even under nesting. Concurrency note: this mutates
+		// client-global state, so two concurrent CallLLMWithRetry calls on one
+		// client could observe each other's flag. The current architecture
+		// serializes model calls per client (the main run loop is single
+		// goroutine and subagents own separate clients), so the window stays
+		// safe; revisit if callers ever parallelize.
+		previous := client.GetDisableThinking()
+		client.SetDisableThinking(true)
+		retry, retryErr := CallLLM(client, buildOptions())
+		client.SetDisableThinking(previous)
+		if retryErr == nil && retry != nil {
+			return retry, nil
+		}
+		logger.Log("llmstream: thinking-disabled retry failed (err=%v), keeping the original result", retryErr)
+	}
+	return result, nil
+}
+
+// retryEmptyContent reports whether result is a completed reasoning-only
+// response worth one thinking-disabled retry.
+func retryEmptyContent(client provider.LLM, result *LLMCallResult) bool {
+	if result == nil || client == nil || client.GetDisableThinking() {
+		return false
+	}
+	if provider.ReasoningSettingsFor(client).ThinkingMode == "" {
+		return false
+	}
+	return strings.TrimSpace(result.Text) == "" &&
+		strings.TrimSpace(result.Reasoning) != "" &&
+		len(result.ToolCalls) == 0
 }
 
 // WithRetry runs fn under the provider-default retry policy, logging each

@@ -43,8 +43,31 @@ func TestMessageFromGroupEventWithAttachment(t *testing.T) {
 	if !ok {
 		t.Fatal("messageFromEvent() ok = false")
 	}
-	if msg.text != "看图 [附件]" {
+	// 图片附件走专用 marker，不再补 [附件] 占位。
+	if msg.text != "看图" {
+		t.Fatalf("text = %q, want no 附件 placeholder for image", msg.text)
+	}
+	if len(msg.imageURLs) != 1 || msg.imageURLs[0] != "https://example.com/a.png" {
+		t.Fatalf("imageURLs = %v, want the CDN url", msg.imageURLs)
+	}
+
+	// 无 URL 的附件（非图片）仍保留 [附件] 占位。
+	d = `{
+		"id": "msg-004",
+		"content": "文件",
+		"group_openid": "G-123",
+		"author": {"member_openid": "M-456"},
+		"attachments": [{"content_type": "file"}]
+	}`
+	msg, ok = messageFromEvent("GROUP_AT_MESSAGE_CREATE", []byte(d))
+	if !ok {
+		t.Fatal("messageFromEvent() ok = false")
+	}
+	if msg.text != "文件 [附件]" {
 		t.Fatalf("text = %q, want 附件占位", msg.text)
+	}
+	if len(msg.imageURLs) != 0 {
+		t.Fatalf("imageURLs = %v, want empty", msg.imageURLs)
 	}
 }
 
