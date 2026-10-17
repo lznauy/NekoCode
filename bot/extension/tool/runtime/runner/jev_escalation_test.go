@@ -75,28 +75,29 @@ func TestJevVerdictMissingStillPrompts(t *testing.T) {
 	}
 }
 
-func TestJevSafeDoesNotBypassHostExecutionPrompt(t *testing.T) {
+func TestJevSafeGrantsHostExecutionWithoutDialog(t *testing.T) {
 	e, confirmCalls := escFixture(t)
-	// A request for CapProcessHost removes the sandbox entirely — even a
-	// jev-safe verdict must not grant it silently; the dialog always fires
-	// (mirroring the never-persist rule for remembered grants).
+	// Host execution (full sandbox removal) follows the same jev-safe fast
+	// path: the owner opted into auto mode, and the judge's verdict is about
+	// the command itself, not the execution environment. Deny rules and
+	// ask-rule hits still keep the dialog mandatory.
 	hostErr := core.RequiredPermissionError{Request: core.PermissionRequest{
 		Reason:       "test needs host execution",
 		Capabilities: []string{core.CapProcessHost},
 	}}
 	tc := core.ToolCallItem{ID: "1", Name: "shell", Args: map[string]any{"command": "echo hi"}}
 
-	_, ok, reason, _ := e.tryPermissionEscalation(
+	out, ok, _, cause := e.tryPermissionEscalation(
 		context.Background(), privilegedOK, tc, hostErr,
 		e.ConfirmFn(), escalationApproval{}, false, true)
-	if ok {
-		t.Fatal("host execution must always require the explicit dialog")
+	if !ok {
+		t.Fatalf("jev-safe host execution should be granted, cause=%v", cause)
 	}
-	if reason != failUserDenied {
-		t.Fatalf("reason = %v, want failUserDenied (fixture denies)", reason)
+	if out != "escalated-ok" {
+		t.Fatalf("out = %q", out)
 	}
-	if *confirmCalls != 1 {
-		t.Fatalf("dialog should fire for host execution, got %d calls", *confirmCalls)
+	if *confirmCalls != 0 {
+		t.Fatalf("dialog must not fire for a jev-safe host grant, got %d calls", *confirmCalls)
 	}
 }
 
