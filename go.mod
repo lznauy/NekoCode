@@ -1,6 +1,8 @@
 module nekocode
 
-go 1.25.13
+go 1.26.0
+
+toolchain go1.26.9
 
 require (
 	charm.land/bubbles/v2 v2.1.0
@@ -21,9 +23,9 @@ require (
 	github.com/wailsapp/wails/v2 v2.13.0
 	golang.design/x/clipboard v0.9.0
 	golang.org/x/image v0.45.0
-	golang.org/x/net v0.55.0
+	golang.org/x/net v0.60.0
 	golang.org/x/oauth2 v0.35.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/sys v0.48.0
 	gopkg.in/yaml.v3 v3.0.1
 	mvdan.cc/sh/v3 v3.7.0
 	zombiezen.com/go/sqlite v1.4.2
@@ -84,12 +86,12 @@ require (
 	github.com/yuin/goldmark v1.7.17 // indirect
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
 	golang.design/x/x11 v0.2.0 // indirect
-	golang.org/x/crypto v0.51.0 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/exp v0.0.0-20250408133849-7e4ce0ab07d0 // indirect
 	golang.org/x/exp/shiny v0.0.0-20250606033433-dcc06ee1d476 // indirect
 	golang.org/x/mobile v0.0.0-20250606033058-a2a15c67f36f // indirect
-	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	modernc.org/libc v1.65.7 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
