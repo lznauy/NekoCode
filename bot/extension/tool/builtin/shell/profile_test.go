@@ -27,7 +27,10 @@ func TestPermissionPlanUsesShellSandboxSchema(t *testing.T) {
 	}
 }
 
-func TestPermissionPlanHostIsOnceScoped(t *testing.T) {
+func TestPermissionPlanHostIsRememberableScoped(t *testing.T) {
+	// Host grants are rememberable like any other capability: jev-safe can
+	// grant them automatically, so an explicit user "always allow" must be
+	// offerable in the approval UI (scope "project", not "once").
 	tool := &ShellTool{}
 	request := tool.PermissionPlan(map[string]any{
 		"sandbox_mode":   "host",
@@ -37,8 +40,8 @@ func TestPermissionPlanHostIsOnceScoped(t *testing.T) {
 	if request == nil || !slices.Equal(request.Capabilities, []string{core.CapProcessHost}) {
 		t.Fatalf("request = %+v", request)
 	}
-	if request.Scope != "once" {
-		t.Fatalf("scope = %q", request.Scope)
+	if request.Scope != "project" {
+		t.Fatalf("scope = %q, want project (rememberable)", request.Scope)
 	}
 }
 

@@ -29,9 +29,8 @@ func (t *ShellTool) PermissionPlan(args map[string]any, workspace string) *core.
 		return nil
 	}
 	scope := "project"
-	if hasCapability(capabilities, core.CapProcessHost) {
-		scope = "once"
-	}
+	// Note: no CapProcessHost special case — host grants are rememberable
+	// like any other capability (see tool_shell.go).
 	permission := &core.PermissionRequest{
 		Reason:       fmt.Sprintf("shell command requests sandbox profile: %s", strings.Join(capabilities, ", ")),
 		Capabilities: capabilities,
@@ -149,7 +148,7 @@ func hostPermission(reason string, workspace string, writePaths []string) core.R
 	err := permissionRequired(
 		fmt.Sprintf("%s; unsandboxed host execution is required", reason),
 		[]string{core.CapProcessHost},
-		"once",
+		"project",
 		workspace,
 		writePaths,
 	)

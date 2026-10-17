@@ -114,7 +114,10 @@ func (t *ShellTool) run(ctx context.Context, args map[string]any, grant core.Per
 	if hasCapability(requestedCaps, core.CapProcessHost) && !hasCapability(grant.Capabilities, core.CapProcessHost) {
 		return "", permissionRequired(
 			"shell command requests unsandboxed host execution",
-			[]string{core.CapProcessHost}, "once", workspace, reqProfile.WritableRoots,
+			// "project" (not "once"): host grants are rememberable — jev-safe
+			// can grant them automatically, so an explicit user "always allow"
+			// must persist with the same durability.
+			[]string{core.CapProcessHost}, "project", workspace, reqProfile.WritableRoots,
 		)
 	}
 	if len(requestedCaps) > 0 && !containsAllCapabilities(grant.Capabilities, requestedCaps) {
