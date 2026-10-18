@@ -50,19 +50,17 @@ func TestRecordErrorNilOrEmpty(t *testing.T) {
 
 func TestRecordErrorReportsFailures(t *testing.T) {
 	base := t.TempDir()
-	r := &EventRecorder{
-		sessionID: "test",
-		runDir:    filepath.Join(base, "test"),
+	r, err := newTestRecorder(t, base)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// Make the run directory unwritable so MkdirAll fails.
-	if err := os.MkdirAll(r.runDir, 0o700); err != nil {
+	// A regular file obstructing the run directory also fails under root.
+	if err := os.MkdirAll(filepath.Dir(r.RunDir("run_1")), 0o700); err != nil {
 		t.Fatalf("setup run dir: %v", err)
 	}
-	if err := os.Chmod(r.runDir, 0o500); err != nil {
-		t.Fatalf("chmod run dir: %v", err)
+	if err := os.WriteFile(r.RunDir("run_1"), nil, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	defer os.Chmod(r.runDir, 0o700)
 
 	if err := r.RecordError(core.Event{RunID: "run_1"}); err == nil {
 		t.Fatal("expected error for unwritable run dir")
@@ -74,28 +72,28 @@ func TestRecordErrorReportsFailures(t *testing.T) {
 
 func TestNewEventRecorderCreatesRunDirectoryLazily(t *testing.T) {
 	base := t.TempDir()
-	recorder, err := NewEventRecorder(base)
+	recorder, err := newTestRecorder(t, base)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(recorder.runDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(recorder.RunDir("run_1")); !os.IsNotExist(err) {
 		t.Fatalf("run batch should not exist before its first event: %v", err)
 	}
 	if err := recorder.RecordError(core.Event{RunID: "run_1"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(recorder.runDir, "run_1", "events.jsonl")); err != nil {
+	if _, err := os.Stat(filepath.Join(recorder.RunDir("run_1"), "events.jsonl")); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestPruneEmptyBatches(t *testing.T) {
 	base := t.TempDir()
-	emptyBatch := filepath.Join(base, "0000")
-	if err := os.MkdirAll(emptyBatch, 0o700); err != nil {
+	emptyRuns := filepath.Join(base, "0000", runsSubdir)
+	if err := os.MkdirAll(emptyRuns, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	retained := filepath.Join(base, "0001", "run_1", "events.jsonl")
+	retained := filepath.Join(base, "0001", runsSubdir, "run_1", "events.jsonl")
 	if err := os.MkdirAll(filepath.Dir(retained), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -105,10 +103,14 @@ func TestPruneEmptyBatches(t *testing.T) {
 
 	pruneEmptyBatches(base)
 
-	if _, err := os.Stat(emptyBatch); !os.IsNotExist(err) {
-		t.Fatalf("empty batch was not removed: %v", err)
+	if _, err := os.Stat(emptyRuns); !os.IsNotExist(err) {
+		t.Fatalf("empty runs dir was not removed: %v", err)
 	}
 	if _, err := os.Stat(retained); err != nil {
-		t.Fatalf("recorded batch was removed: %v", err)
+		t.Fatalf("recorded run was removed: %v", err)
+	}
+	// Only the recordings are cleaned up; the session directory stays.
+	if _, err := os.Stat(filepath.Join(base, "0000")); err != nil {
+		t.Fatalf("empty session directory was removed: %v", err)
 	}
 }

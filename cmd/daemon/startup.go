@@ -6,7 +6,7 @@ import (
 )
 
 // printStartup prints the daemon's listen URLs and auth hints.
-func printStartup(addr string, hasToken bool) {
+func printStartup(addr string, hasToken, hasCORS bool) {
 	fmt.Println("NekoCode daemon listening")
 	for _, u := range accessURLs(addr) {
 		fmt.Println("  " + u)
@@ -21,6 +21,10 @@ func printStartup(addr string, hasToken bool) {
 		}
 		fmt.Println(`Example: curl -X POST http://127.0.0.1:8765/input -d '{"text":"hello"}'`)
 	}
+	if hasCORS {
+		fmt.Println("CORS: enabled for configured origins")
+	}
+	fmt.Println("Observe: /observe/overview, /observe/runs, /observe/metrics (Prometheus)")
 	fmt.Println("SSE: /events")
 }
 

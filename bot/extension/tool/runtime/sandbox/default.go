@@ -24,4 +24,8 @@ func StartHost(ctx context.Context, command string) (*Process, error) {
 	return impl.StartHost(ctx, command)
 }
 
+func StartHostIn(ctx context.Context, command, directory string) (*Process, error) {
+	return impl.StartHostIn(ctx, command, directory)
+}
+
 func IsAvailable() bool { return impl.IsAvailable() }

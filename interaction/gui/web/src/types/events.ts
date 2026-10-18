@@ -74,6 +74,7 @@ export interface DeltaEvent {
   id: number
   delta: string
   done: boolean
+  reset?: boolean
 }
 
 export interface ReasoningEvent {

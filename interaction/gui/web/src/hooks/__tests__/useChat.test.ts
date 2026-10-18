@@ -367,6 +367,23 @@ describe('useChat', () => {
     await waitFor(() => expect(result.current.msgs[1].streaming).toBe(false))
   })
 
+  it('retracts rendered and buffered response text without losing earlier tool preambles', async () => {
+    const { result } = renderHook(() => useChat())
+    act(() => { result.current.setText('hello') })
+    act(() => { result.current.send() })
+    await waitFor(() => expect(result.current.msgs).toHaveLength(2))
+    act(() => { emit('agent:delta', { id: 1, delta: 'keep', done: false }) })
+    await waitFor(() => expect(result.current.msgs[1].streamText).toBe('keep'))
+    act(() => { emit('agent:tool_start', { id: 'c', toolName: 'read', args: '', preview: '' }) })
+    act(() => { emit('agent:delta', { id: 1, delta: 'injected', done: false }) })
+    await waitFor(() => expect(result.current.msgs[1].streamText).toContain('injected'))
+    act(() => {
+      emit('agent:delta', { id: 1, delta: ' tail', done: false })
+      emit('agent:delta', { id: 1, delta: '', done: false, reset: true })
+    })
+    await waitFor(() => expect(result.current.msgs[1].streamText?.trim()).toBe('keep'))
+  })
+
   it('keeps adjacent stream chunks on the same line', async () => {
     const { result } = renderHook(() => useChat())
 

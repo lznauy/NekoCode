@@ -27,25 +27,14 @@ func (b *Bot) getAgent() *agentcore.Agent {
 }
 
 func (b *Bot) Run(ctx context.Context, input string, images []types.MessageImage, host RunHost) (string, error) {
+	if !b.operationMu.TryLock() {
+		return "", errors.New("bot: another operation is running")
+	}
+	defer b.operationMu.Unlock()
 	b.ensureSessionIdentity()
 	release := b.bindHost(host)
 	defer release()
 
-	ag := b.getAgent()
-	finished := make(chan struct{})
-	watchDone := make(chan struct{})
-	go func() {
-		defer close(watchDone)
-		select {
-		case <-ctx.Done():
-			ag.Abort()
-		case <-finished:
-		}
-	}()
-	defer func() {
-		close(finished)
-		<-watchDone
-	}()
 	output, err := b.runAgent(ctx, input, images, host.Step)
 	return output, err
 }
@@ -62,7 +51,7 @@ func (b *Bot) runAgent(ctx context.Context, input string, images []types.Message
 			return "", err
 		}
 	}
-	result := ag.Run(input, images, onStep)
+	result := ag.RunContext(ctx, input, images, onStep)
 	var checkpointErr error
 	if b.checkpoints != nil {
 		checkpointErr = b.checkpoints.Finish(sessionID)
@@ -111,6 +100,17 @@ func (b *Bot) stream(delta string) {
 func (b *Bot) reasoning(delta string) {
 	if host := b.currentHost(); host != nil {
 		host.Reason(delta)
+	}
+}
+
+// resetStream forwards a discard signal to hosts that can retract streamed
+// text. Hosts without the extension simply keep the text, which is the old
+// behavior.
+func (b *Bot) resetStream() {
+	if host := b.currentHost(); host != nil {
+		if resetter, ok := host.(RunTextResetter); ok {
+			resetter.ResetText()
+		}
 	}
 }
 
@@ -198,6 +198,10 @@ func (b *Bot) CommandMenu(ctx context.Context, input string) (protocol.CommandMe
 }
 
 func (b *Bot) ExecuteCommand(ctx context.Context, input string, host RunHost) (protocol.CommandResult, error) {
+	if !b.operationMu.TryLock() {
+		return protocol.CommandResult{}, errors.New("bot: another operation is running")
+	}
+	defer b.operationMu.Unlock()
 	release := b.bindHost(host)
 	defer release()
 

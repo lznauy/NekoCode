@@ -140,6 +140,17 @@ func (h runHost) Text(delta string) {
 	})
 }
 
+// ResetText implements RunTextResetter: the runner reports that the text it
+// already streamed this turn was not an answer. Hosts drop what they rendered
+// instead of committing it as a thought block.
+func (h runHost) ResetText() {
+	h.lease.emit(func() {
+		h.runtime.events.Publish(Event{
+			RunID: h.runID, Type: EventAssistantReset, Source: SourceRef{Kind: "bot"},
+		})
+	})
+}
+
 func (h runHost) Reason(delta string) {
 	h.lease.emit(func() {
 		h.runtime.events.Publish(Event{
@@ -227,13 +238,17 @@ func (h runHost) Ask(request QuestionRequest) QuestionReply {
 	return reply
 }
 
-func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runLease, execution *runExecution) {
+func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runLease, execution *runExecution, bindLazySession bool) {
 	stopMetricsUpdates := func() {}
 	withMetrics := false
 	defer func() {
 		stopMetricsUpdates()
+		r.invalidateContext()
 		if recovered := recover(); recovered != nil {
 			r.finishRun(runID, "", fmt.Errorf("runtime: run %s panicked: %v", runID, recovered), withMetrics)
+		}
+		if bindLazySession {
+			r.bindRecordedRun(runID)
 		}
 		execution.settle(withMetrics)
 		r.endRun(runID)
@@ -245,8 +260,12 @@ func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runL
 	// blocking capability changes (model/config switches) on large copies.
 	input = r.adoptImageAttachments(input)
 	host := runHost{runtime: r, runID: runID, lease: lease, images: input.Images}
+	source := input.Source
+	if source.Kind == "" {
+		source = SourceRef{Kind: "runtime"}
+	}
 	if !lease.guard(func() {
-		r.events.Publish(Event{RunID: runID, Type: EventRunStarted, Source: SourceRef{Kind: "runtime"}})
+		r.events.Publish(Event{RunID: runID, Type: EventRunStarted, Source: source})
 	}) {
 		return
 	}
@@ -284,14 +303,14 @@ func (r *Runtime) publishAcceptedInput(runID RunID, input Input) {
 }
 
 func (r *Runtime) handleBotCommand(ctx context.Context, runID RunID, input string, host runHost) (string, bool) {
-	if r.services.ExecuteCommand == nil {
+	if r.services.Commands.ExecuteCommand == nil {
 		return input, true
 	}
 	sessionID := ""
-	if r.services.CurrentSessionID != nil {
-		sessionID = r.services.CurrentSessionID()
+	if r.services.Sessions.CurrentSessionID != nil {
+		sessionID = r.services.Sessions.CurrentSessionID()
 	}
-	result, err := r.services.ExecuteCommand(ctx, input, host)
+	result, err := r.services.Commands.ExecuteCommand(ctx, input, host)
 	if err != nil {
 		r.finishRun(runID, "", err, false)
 		return "", false
@@ -299,8 +318,8 @@ func (r *Runtime) handleBotCommand(ctx context.Context, runID RunID, input strin
 	if result.Output != "" {
 		host.system(result.Output, SourceRef{Kind: "bot"})
 	}
-	if r.services.CurrentSessionID != nil {
-		nextSessionID := r.services.CurrentSessionID()
+	if r.services.Sessions.CurrentSessionID != nil {
+		nextSessionID := r.services.Sessions.CurrentSessionID()
 		// Only announce a real switch to another non-empty session (e.g.
 		// /sessions <id>). Commands like /model leave the session empty via
 		// saveSession's no-message cleanup; announcing that would wipe the
@@ -393,6 +412,8 @@ func (r *Runtime) finishRun(runID RunID, output string, err error, withMetrics b
 	r.approvals.RejectAll()
 	r.questions.RejectAll()
 	if withMetrics {
+		r.invalidateContext()
+		r.publishContext(runID)
 		r.publishMetrics(runID)
 	}
 	r.events.Publish(Event{RunID: runID, Type: eventType, Source: SourceRef{Kind: "bot"}, Payload: payload})
@@ -412,6 +433,7 @@ func (r *Runtime) endRun(runID RunID) {
 	if status == RunCancelled && cancelDone != nil {
 		<-cancelDone
 	}
+	r.releaseRecordedRun(runID)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()

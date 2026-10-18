@@ -124,6 +124,35 @@ func TestExecutorUsesRegistryWorkspaceAndPlanPolicy(t *testing.T) {
 	}
 }
 
+func TestImageGenOutputDirectoryUsesNarrowWorkspaceApproval(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	registry := tools.New()
+	registry.SetWorkspace(workspace.New(root, nil))
+	e := NewExecutor(registry)
+	requested := filepath.Join(outside, "generated")
+	var approval protocol.ConfirmRequest
+	call := core.ToolCallItem{Name: "image_gen", Args: map[string]any{"output_dir": requested}}
+	got, message, ok := e.ensureWorkspaceAccess(call, func(request protocol.ConfirmRequest) protocol.ConfirmReply {
+		approval = request
+		return protocol.AllowOnce()
+	})
+	if !ok {
+		t.Fatalf("access denied: %s", message)
+	}
+	if got.Args["output_dir"] != requested || got.Args["path"] != nil {
+		t.Fatalf("rewritten args = %#v", got.Args)
+	}
+	if approval.Approval == nil || approval.Approval.Workspace != requested {
+		t.Fatalf("approval widened output directory: %+v", approval.Approval)
+	}
+	if _, _, allowed, err := e.workspace.CheckWrite(filepath.Join(requested, "image.png")); err != nil || !allowed {
+		t.Fatalf("approved directory not writable: allowed=%v err=%v", allowed, err)
+	}
+	if _, _, allowed, err := e.workspace.CheckWrite(filepath.Join(outside, "sibling", "image.png")); err != nil || allowed {
+		t.Fatalf("approval extended to sibling: allowed=%v err=%v", allowed, err)
+	}
+}
+
 func TestExecutorUsesRegisteredPreviews(t *testing.T) {
 	r := tools.New()
 	r.RegisterWithOptions(fakeTool{name: "first"}, tools.RegistrationOptions{

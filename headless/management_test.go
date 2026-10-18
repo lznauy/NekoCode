@@ -304,6 +304,125 @@ func TestManagementCapabilitiesMatchIndividualServices(t *testing.T) {
 	}
 }
 
+func TestContextSnapshotExposesComposition(t *testing.T) {
+	contexts := rt.Services{
+		MemoryView: func(rt.MemoryScope) rt.MemoryView { return rt.MemoryView{} },
+		ContextSnapshot: func() rt.ContextSnapshot {
+			return rt.ContextSnapshot{
+				Budget: 128_000, Used: 62_400, Free: 65_600,
+				SystemPrompt: 11_200, ToolDefTokens: 4_000, MessageTokens: 47_200,
+				CompactCount: 1, CacheHitTokens: 20_500, CacheMissTokens: 1_300,
+				Segments: []rt.ContextSegment{{Key: "system", Label: "系统提示", Tokens: 11_200, Tone: "muted"}},
+			}
+		},
+	}
+	h := newHarnessWithServices(t, func(context.Context, string, rt.RunHost) (string, error) { return "", nil }, Options{}, contexts)
+
+	info := rpc(t, h, "server.info", nil)["response"].(map[string]any)
+	var methods []string
+	for _, value := range info["capabilities"].([]any) {
+		methods = append(methods, value.(string))
+	}
+	if !slices.Contains(methods, "context.snapshot") {
+		t.Fatalf("capabilities = %v", methods)
+	}
+
+	body := rpc(t, h, "context.snapshot", nil)["response"].(map[string]any)
+	if body["session_id"] != "session-test" {
+		t.Fatalf("session_id = %v", body["session_id"])
+	}
+	snapshot := body["context"].(map[string]any)
+	if snapshot["budget"].(float64) != 128_000 || snapshot["used"].(float64) != 62_400 {
+		t.Fatalf("context = %v", snapshot)
+	}
+	if segments := snapshot["segments"].([]any); len(segments) != 1 || segments[0].(map[string]any)["label"] != "系统提示" {
+		t.Fatalf("segments = %v", segments)
+	}
+	// No active turn yet, so the snapshot must not claim one.
+	if _, ok := body["run_id"]; ok {
+		t.Fatalf("idle snapshot must omit run_id: %v", body)
+	}
+
+	// Without the service the method is not advertised and must be rejected.
+	bare := newHarness(t, func(context.Context, string, rt.RunHost) (string, error) { return "", nil }, Options{})
+	if f := rpc(t, bare, "context.snapshot", nil); f["subtype"] != "error" {
+		t.Fatalf("unsupported context.snapshot reported success: %v", f)
+	}
+	bare.finish(t)
+	h.finish(t)
+}
+
+func TestObserveControlMethods(t *testing.T) {
+	h := newHarnessWithServices(t, func(context.Context, string, rt.RunHost) (string, error) { return "ok", nil }, Options{}, rt.Services{
+		ContextSnapshot: func() rt.ContextSnapshot { return rt.ContextSnapshot{} },
+		MemoryView:      func(rt.MemoryScope) rt.MemoryView { return rt.MemoryView{} },
+	})
+	info := rpc(t, h, "server.info", nil)["response"].(map[string]any)
+	var methods []string
+	for _, value := range info["capabilities"].([]any) {
+		methods = append(methods, value.(string))
+	}
+	for _, method := range []string{"observe.overview", "observe.runs", "observe.run"} {
+		if !slices.Contains(methods, method) {
+			t.Fatalf("capability %s missing from %v", method, methods)
+		}
+	}
+
+	// Publish a run into the runtime's store through its public events path.
+	h.send(t, map[string]any{"type": "user", "uuid": "u-obs", "message": map[string]any{"role": "user", "content": "hi"}})
+	h.until(t, "result")
+
+	overview := rpc(t, h, "observe.overview", nil)["response"].(map[string]any)
+	if overview["window"] == "" || overview["capabilities"] == nil {
+		t.Fatalf("overview = %v", overview)
+	}
+	runs := rpc(t, h, "observe.runs", map[string]any{"limit": 10})["response"].(map[string]any)["runs"].([]any)
+	if len(runs) == 0 {
+		t.Fatal("observe.runs returned no runs")
+	}
+	first := runs[0].(map[string]any)
+	runID, _ := first["id"].(string)
+	if runID == "" || first["state"] == "" {
+		t.Fatalf("run summary = %v", first)
+	}
+	detail := rpc(t, h, "observe.run", map[string]any{"run_id": runID})["response"].(map[string]any)
+	if detail["run"] == nil {
+		t.Fatalf("run detail = %v", detail)
+	}
+	if _, ok := detail["tools"]; !ok {
+		t.Fatalf("run detail must carry tools: %v", detail)
+	}
+	// Privacy: no prompt or output text in the observation payloads.
+	raw, _ := json.Marshal([]any{overview, runs, detail})
+	if strings.Contains(string(raw), `"input"`) || strings.Contains(string(raw), `"output"`) {
+		t.Fatalf("observation leaked run content: %s", raw)
+	}
+
+	if f := rpc(t, h, "observe.run", nil); f["subtype"] != "error" {
+		t.Fatalf("missing run_id reported success: %v", f)
+	}
+	if f := rpc(t, h, "observe.run", map[string]any{"run_id": "run_missing"}); f["subtype"] != "error" {
+		t.Fatalf("unknown run reported success: %v", f)
+	}
+	h.finish(t)
+}
+
+func TestObserveUnavailableWithoutContext(t *testing.T) {
+	// Management is only available when the runtime exposes Context; without
+	// it the observation methods must not be advertised either.
+	bare := newHarness(t, func(context.Context, string, rt.RunHost) (string, error) { return "", nil }, Options{})
+	info := rpc(t, bare, "server.info", nil)["response"].(map[string]any)
+	for _, value := range info["capabilities"].([]any) {
+		if value == "observe.overview" {
+			t.Fatal("observe capability advertised without Context")
+		}
+	}
+	if f := rpc(t, bare, "observe.overview", nil); f["subtype"] != "error" {
+		t.Fatalf("observe.overview without capability = %v", f)
+	}
+	bare.finish(t)
+}
+
 func TestCheckpointsUnavailableReturnsError(t *testing.T) {
 	h := newHarnessWithServices(t, func(context.Context, string, rt.RunHost) (string, error) { return "", nil }, Options{}, rt.Services{
 		Rewind: func(string) (string, error) { return "ok", nil },

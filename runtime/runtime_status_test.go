@@ -36,6 +36,54 @@ func TestManagerUsesExplicitRunnerCapabilities(t *testing.T) {
 	}
 }
 
+func TestContextSamplesAreCachedClonedAndOnlyPublishedOnChange(t *testing.T) {
+	calls := 0
+	snapshot := ContextSnapshot{Budget: 100, Used: 10, Segments: []ContextSegment{{Key: "system", Tokens: 10}}}
+	rt := New(&testBot{}, Services{
+		ContextSnapshot: func() ContextSnapshot { calls++; return snapshot },
+		MemoryView:      func(MemoryScope) MemoryView { return MemoryView{} },
+	})
+	first := rt.ContextSnapshot()
+	first.Segments[0].Tokens = 999
+	if got := rt.ContextSnapshot(); got.Segments[0].Tokens != 10 || calls != 1 {
+		t.Fatalf("cached snapshot=%+v calls=%d", got, calls)
+	}
+	rt.publishContext("run_1")
+	rt.publishContext("run_1")
+	if events := rt.events.History(EventFilter{Types: []EventType{EventContextUpdated}}); len(events) != 1 {
+		t.Fatalf("unchanged events = %d", len(events))
+	}
+	snapshot.Used = 20
+	rt.invalidateContext()
+	rt.publishContext("run_1")
+	if events := rt.events.History(EventFilter{Types: []EventType{EventContextUpdated}}); len(events) != 2 {
+		t.Fatalf("changed events = %d", len(events))
+	}
+	if calls != 2 {
+		t.Fatalf("samples = %d", calls)
+	}
+}
+
+func TestContextCallbackCanInvalidateWithoutDeadlocking(t *testing.T) {
+	var rt *Runtime
+	services := ServiceGroups{
+		Context: ContextServices{
+			ContextSnapshot: func() ContextSnapshot {
+				rt.invalidateContext()
+				return ContextSnapshot{Budget: 12}
+			},
+			MemoryView: func(MemoryScope) MemoryView { return MemoryView{} },
+		},
+	}
+	rt = NewWithServices(&testBot{}, services)
+	if got := rt.ContextSnapshot(); got.Budget != 12 {
+		t.Fatalf("ContextSnapshot = %+v", got)
+	}
+	if !rt.contextView.sampledAt.IsZero() {
+		t.Fatal("sample invalidated during callback was cached")
+	}
+}
+
 func TestManagerReportsUnsupportedOptionalCapabilities(t *testing.T) {
 	rt := New(RunnerFunc(func(_ context.Context, _ string, _ RunHost) (string, error) {
 		return "", nil

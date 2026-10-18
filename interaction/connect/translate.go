@@ -22,6 +22,8 @@ func Translate(ev controlruntime.Event) []Intent {
 			return nil
 		}
 		return []Intent{{Kind: IntentPreview, RunID: ev.RunID, Text: p.Delta}}
+	case controlruntime.EventAssistantReset:
+		return []Intent{{Kind: IntentPreviewReset, RunID: ev.RunID}}
 
 	case controlruntime.EventSystemMessage:
 		// Command output (e.g. /connect, /model) is a terminal result, not

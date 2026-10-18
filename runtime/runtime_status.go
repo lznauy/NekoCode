@@ -2,12 +2,37 @@ package runtime
 
 import (
 	"context"
+	"reflect"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 const metricsPublishInterval = 100 * time.Millisecond
+const contextSampleInterval = time.Second
+
+type contextView struct {
+	mu           sync.Mutex
+	snapshot     ContextSnapshot
+	sampledAt    time.Time
+	generation   uint64
+	published    ContextSnapshot
+	publishedRun RunID
+}
+
+func cloneContext(snapshot ContextSnapshot) ContextSnapshot {
+	snapshot.Segments = slices.Clone(snapshot.Segments)
+	return snapshot
+}
+
+func (r *Runtime) invalidateContext() {
+	r.contextView.mu.Lock()
+	r.contextView.sampledAt = time.Time{}
+	r.contextView.generation++
+	r.contextView.mu.Unlock()
+}
 
 // CapabilityManifest lets an interaction surface discover optional features
 // without probing methods or depending on a concrete bot.
@@ -51,20 +76,20 @@ type RuntimeStatus struct {
 
 func (r *Runtime) Capabilities() CapabilityManifest {
 	r.mu.Lock()
-	hasCommands := r.services.ExecuteCommand != nil || len(r.runtimeCommands) > 0
+	hasCommands := r.services.Commands.ExecuteCommand != nil || len(r.runtimeCommands) > 0
 	r.mu.Unlock()
 	return CapabilityManifest{
-		Checkpoints:   r.services.Checkpoints != nil,
-		ModelCatalog:  r.services.ModelOptions != nil,
-		SessionCreate: r.services.NewSession != nil,
-		SessionResume: r.services.ResumeSession != nil,
-		SessionDelete: r.services.DeleteSession != nil,
-		ToolCatalog:   r.services.ToolNames != nil, Rewind: r.services.Rewind != nil, ModelSelection: r.services.SwitchSessionModel != nil, PermissionControl: r.services.SetFullAccess != nil,
-		Protocol: ProtocolVersion, Steering: r.services.Steer != nil,
+		Checkpoints:   r.services.Tools.Checkpoints != nil,
+		ModelCatalog:  r.services.Models.ModelOptions != nil,
+		SessionCreate: r.services.Sessions.NewSession != nil,
+		SessionResume: r.services.Sessions.ResumeSession != nil,
+		SessionDelete: r.services.Sessions.DeleteSession != nil,
+		ToolCatalog:   r.services.Tools.ToolNames != nil, Rewind: r.services.Tools.Rewind != nil, ModelSelection: r.services.Models.SwitchSessionModel != nil, PermissionControl: r.services.Permissions.SetFullAccess != nil,
+		Protocol: ProtocolVersion, Steering: r.services.Commands.Steer != nil,
 		Commands: hasCommands,
-		Metrics:  r.services.Metrics != nil, Models: r.services.CurrentModel != nil,
-		Context: r.services.ContextSnapshot != nil, Extensions: r.services.SkillManagementView != nil,
-		Configuration: r.services.ConfigView != nil, Sessions: r.services.ListSessions != nil,
+		Metrics:  r.services.Lifecycle.Metrics != nil, Models: r.services.Models.CurrentModel != nil,
+		Context: r.services.Context.ContextSnapshot != nil, Extensions: r.services.Skills.SkillManagementView != nil,
+		Configuration: r.services.Config.ConfigView != nil, Sessions: r.services.Sessions.ListSessions != nil,
 		Connectors: len(r.connectors.View().Connectors) > 0,
 	}
 }
@@ -94,7 +119,7 @@ func (r *Runtime) Status() RuntimeStatus {
 // return their zero value.
 func (r *Runtime) CurrentModel() ModelSelection {
 	r.mu.Lock()
-	service, closed := r.services.CurrentModel, r.closed
+	service, closed := r.services.Models.CurrentModel, r.closed
 	r.mu.Unlock()
 	if closed || service == nil {
 		return ModelSelection{}
@@ -105,7 +130,7 @@ func (r *Runtime) CurrentModel() ModelSelection {
 // ToolNames reports the configured tool catalog without configuration secrets.
 func (r *Runtime) ToolNames() []string {
 	r.mu.Lock()
-	service, closed := r.services.ToolNames, r.closed
+	service, closed := r.services.Tools.ToolNames, r.closed
 	r.mu.Unlock()
 	if closed || service == nil {
 		return nil
@@ -117,7 +142,7 @@ func (r *Runtime) ToolNames() []string {
 // runtime provides no permission service or is closed.
 func (r *Runtime) PermissionMode() string {
 	r.mu.Lock()
-	service, closed := r.services.PermissionMode, r.closed
+	service, closed := r.services.Permissions.PermissionMode, r.closed
 	r.mu.Unlock()
 	if closed || service == nil {
 		return ""
@@ -130,7 +155,7 @@ func (r *Runtime) PermissionMode() string {
 // do not touch run state by definition.
 func (r *Runtime) ExecuteLocalCommand(ctx context.Context, input string) (string, LocalCommandResult) {
 	r.mu.Lock()
-	service, closed := r.services.ExecuteLocalCommand, r.closed
+	service, closed := r.services.Commands.ExecuteLocalCommand, r.closed
 	r.mu.Unlock()
 	if closed || service == nil {
 		return "", LocalCommandNotCommand
@@ -140,17 +165,39 @@ func (r *Runtime) ExecuteLocalCommand(ctx context.Context, input string) (string
 
 func (r *Runtime) ContextSnapshot() ContextSnapshot {
 	r.mu.Lock()
-	service, closed := r.services.ContextSnapshot, r.closed
+	service, closed := r.services.Context.ContextSnapshot, r.closed
 	r.mu.Unlock()
 	if closed || service == nil {
 		return ContextSnapshot{}
 	}
-	return service()
+	r.contextView.mu.Lock()
+	if !r.contextView.sampledAt.IsZero() && time.Since(r.contextView.sampledAt) < contextSampleInterval {
+		snapshot := cloneContext(r.contextView.snapshot)
+		r.contextView.mu.Unlock()
+		return snapshot
+	}
+	generation := r.contextView.generation
+	r.contextView.mu.Unlock()
+
+	// Service callbacks may call back into Runtime. Never hold a Runtime-owned
+	// lock across them; an invalidation during sampling prevents caching the
+	// potentially stale result.
+	fresh := cloneContext(service())
+	r.contextView.mu.Lock()
+	if r.contextView.generation == generation {
+		if r.contextView.sampledAt.IsZero() || time.Since(r.contextView.sampledAt) >= contextSampleInterval {
+			r.contextView.snapshot = fresh
+			r.contextView.sampledAt = time.Now()
+		}
+		fresh = cloneContext(r.contextView.snapshot)
+	}
+	r.contextView.mu.Unlock()
+	return fresh
 }
 
 func (r *Runtime) WorkspaceChanges() WorkspaceChanges {
 	r.mu.Lock()
-	service, closed := r.services.WorkspaceChanges, r.closed
+	service, closed := r.services.Context.WorkspaceChanges, r.closed
 	r.mu.Unlock()
 	if closed || service == nil {
 		return WorkspaceChanges{}
@@ -160,7 +207,7 @@ func (r *Runtime) WorkspaceChanges() WorkspaceChanges {
 
 func (r *Runtime) MemoryView(scope MemoryScope) MemoryView {
 	r.mu.Lock()
-	service, closed := r.services.MemoryView, r.closed
+	service, closed := r.services.Context.MemoryView, r.closed
 	r.mu.Unlock()
 	if closed || service == nil {
 		return MemoryView{}
@@ -170,7 +217,7 @@ func (r *Runtime) MemoryView(scope MemoryScope) MemoryView {
 
 func (r *Runtime) SkillManagementView() SkillManagementView {
 	r.mu.Lock()
-	service, closed := r.services.SkillManagementView, r.closed
+	service, closed := r.services.Skills.SkillManagementView, r.closed
 	r.mu.Unlock()
 	if closed || service == nil {
 		return SkillManagementView{}
@@ -180,7 +227,7 @@ func (r *Runtime) SkillManagementView() SkillManagementView {
 
 func (r *Runtime) ConfigView() ConfigView {
 	r.mu.Lock()
-	service, closed := r.services.ConfigView, r.closed
+	service, closed := r.services.Config.ConfigView, r.closed
 	r.mu.Unlock()
 	if closed || service == nil {
 		return ConfigView{}
@@ -190,7 +237,7 @@ func (r *Runtime) ConfigView() ConfigView {
 
 func (r *Runtime) ResolveModelProfile(model ModelSpec) ModelProfile {
 	r.mu.Lock()
-	service, closed := r.services.ResolveModelProfile, r.closed
+	service, closed := r.services.Config.ResolveModelProfile, r.closed
 	r.mu.Unlock()
 	if closed || service == nil {
 		return ModelProfile{}
@@ -200,7 +247,7 @@ func (r *Runtime) ResolveModelProfile(model ModelSpec) ModelProfile {
 
 func (r *Runtime) CurrentSessionID() string {
 	r.mu.Lock()
-	service, closed := r.services.CurrentSessionID, r.closed
+	service, closed := r.services.Sessions.CurrentSessionID, r.closed
 	r.mu.Unlock()
 	if closed || service == nil {
 		return ""
@@ -210,7 +257,7 @@ func (r *Runtime) CurrentSessionID() string {
 
 func (r *Runtime) ListSessions() []SessionMeta {
 	r.mu.Lock()
-	service, closed := r.services.ListSessions, r.closed
+	service, closed := r.services.Sessions.ListSessions, r.closed
 	r.mu.Unlock()
 	if closed || service == nil {
 		return nil
@@ -220,7 +267,7 @@ func (r *Runtime) ListSessions() []SessionMeta {
 
 func (r *Runtime) SessionMessages() []DisplayMessage {
 	r.mu.Lock()
-	service, closed := r.services.SessionMessages, r.closed
+	service, closed := r.services.Sessions.SessionMessages, r.closed
 	r.mu.Unlock()
 	if closed || service == nil {
 		return nil
@@ -229,10 +276,10 @@ func (r *Runtime) SessionMessages() []DisplayMessage {
 }
 
 func (r *Runtime) publishMetrics(runID RunID) {
-	if r.services.Metrics == nil {
+	if r.services.Lifecycle.Metrics == nil {
 		return
 	}
-	metrics := r.services.Metrics()
+	metrics := r.services.Lifecycle.Metrics()
 	r.events.Publish(Event{
 		RunID: runID, Type: EventMetricsUpdated, Source: SourceRef{Kind: "bot"},
 		Payload: metrics,
@@ -240,19 +287,28 @@ func (r *Runtime) publishMetrics(runID RunID) {
 }
 
 func (r *Runtime) startMetricsUpdates(runID RunID, lease *runLease) func() {
-	if r.services.Metrics == nil {
+	if r.services.Lifecycle.Metrics == nil && r.services.Context.ContextSnapshot == nil {
 		return func() {}
 	}
 	stop := make(chan struct{})
 	done := make(chan struct{})
+	lease.guard(func() { r.publishContext(runID) })
 	go func() {
 		defer close(done)
 		ticker := time.NewTicker(metricsPublishInterval)
 		defer ticker.Stop()
+		contextTicker := time.NewTicker(contextSampleInterval)
+		defer contextTicker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				if !lease.guard(func() { r.publishMetrics(runID) }) {
+				if !lease.guard(func() {
+					r.publishMetrics(runID)
+				}) {
+					return
+				}
+			case <-contextTicker.C:
+				if !lease.guard(func() { r.publishContext(runID) }) {
 					return
 				}
 			case <-stop:
@@ -264,6 +320,27 @@ func (r *Runtime) startMetricsUpdates(runID RunID, lease *runLease) func() {
 		close(stop)
 		<-done
 	}
+}
+
+// publishContext reports the context window composition for live observation.
+// It is separate from Metrics because it is the one place segment breakdown
+// (system/tools/memory/... ) is available.
+func (r *Runtime) publishContext(runID RunID) {
+	if r.services.Context.ContextSnapshot == nil {
+		return
+	}
+	snapshot := r.ContextSnapshot()
+	r.contextView.mu.Lock()
+	if r.contextView.publishedRun == runID && reflect.DeepEqual(r.contextView.published, snapshot) {
+		r.contextView.mu.Unlock()
+		return
+	}
+	r.contextView.publishedRun, r.contextView.published = runID, cloneContext(snapshot)
+	r.contextView.mu.Unlock()
+	r.events.Publish(Event{
+		RunID: runID, Type: EventContextUpdated, Source: SourceRef{Kind: "bot"},
+		Payload: snapshot,
+	})
 }
 
 func (r *Runtime) recordMetrics(event Event) {
@@ -297,7 +374,7 @@ func (r *Runtime) Runs(limit int) []RunSnapshot {
 // the previous session's usage after session/load).
 func (r *Runtime) Metrics() MetricsSnapshot {
 	r.mu.Lock()
-	service, cached, closed := r.services.Metrics, r.latestMetrics, r.closed
+	service, cached, closed := r.services.Lifecycle.Metrics, r.latestMetrics, r.closed
 	r.mu.Unlock()
 	if closed || service == nil {
 		return cached
@@ -330,7 +407,7 @@ func (r *Runtime) CommandMenu(ctx context.Context, input string) (CommandMenu, b
 		return CommandMenu{}, false
 	}
 	r.mu.Lock()
-	service, closed := r.services.CommandMenu, r.closed
+	service, closed := r.services.Commands.CommandMenu, r.closed
 	r.mu.Unlock()
 	if closed {
 		return CommandMenu{}, false
@@ -413,7 +490,7 @@ func mergeCommandMenus(menus ...CommandMenu) CommandMenu {
 // Checkpoints returns structured rewind points and preserves lookup failures.
 func (r *Runtime) Checkpoints() ([]CheckpointInfo, error) {
 	r.mu.Lock()
-	service, closed := r.services.Checkpoints, r.closed
+	service, closed := r.services.Tools.Checkpoints, r.closed
 	r.mu.Unlock()
 	if closed {
 		return nil, protocolError(ErrorClosed, "checkpoints", "closed")

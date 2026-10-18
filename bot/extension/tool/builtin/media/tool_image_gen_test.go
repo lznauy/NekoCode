@@ -2,10 +2,13 @@ package media
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"nekocode/bot/config"
+	"nekocode/bot/extension/tool/runtime/workspace"
 )
 
 func TestImageGenTool_MissingPrompt(t *testing.T) {
@@ -80,5 +83,23 @@ func TestImageGenTool_UnsupportedProvider(t *testing.T) {
 	_, err := tool.Execute(context.Background(), map[string]any{"prompt": "test"})
 	if err == nil || !strings.Contains(err.Error(), "unsupported image gen provider") {
 		t.Errorf("expected unsupported provider error, got: %v", err)
+	}
+}
+
+func TestResolveOutputDirRequiresWorkspaceWriteAccess(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	ctx := workspace.WithManager(context.Background(), workspace.New(root, nil))
+	if _, err := resolveOutputDir(ctx, map[string]any{"output_dir": filepath.Join(outside, "generated")}); err == nil {
+		t.Fatal("outside output directory was accepted")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "generated")); !os.IsNotExist(err) {
+		t.Fatalf("unauthorized output directory was created: %v", err)
+	}
+	got, err := resolveOutputDir(ctx, map[string]any{"output_dir": "generated"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != filepath.Join(root, "generated") {
+		t.Fatalf("relative output directory = %q", got)
 	}
 }

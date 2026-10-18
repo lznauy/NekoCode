@@ -38,7 +38,7 @@ func (f *fakeBackend) StartRun(_ context.Context, input controlruntime.Input) (c
 	f.input = input
 	if f.events != nil {
 		f.events <- controlruntime.Event{RunID: "run-1", Type: controlruntime.EventAssistantDelta, Payload: controlruntime.DeltaPayload{Delta: "done"}}
-		f.events <- controlruntime.Event{RunID: "run-1", Type: controlruntime.EventRunDone}
+		f.events <- controlruntime.Event{RunID: "run-1", Type: controlruntime.EventRunDone, Payload: controlruntime.RunResult{Output: "done"}}
 	}
 	return "run-1", nil
 }
@@ -130,6 +130,18 @@ func (f *fakeBackend) PermissionMode() string {
 	return "manual"
 }
 func (f *fakeBackend) Metrics() controlruntime.MetricsSnapshot { return f.metrics }
+
+func (f *fakeBackend) ApplySessionSettings(settings controlruntime.SessionSettings) error {
+	if settings.Model != "" {
+		if _, err := f.SwitchSessionModel(settings.Model); err != nil {
+			return err
+		}
+	}
+	if err := f.SetSessionReasoning(settings.ReasoningEffort); err != nil {
+		return err
+	}
+	return f.SetFullAccess(settings.FullAccess)
+}
 
 func TestServeRejectsNilBackend(t *testing.T) {
 	err := Serve(context.Background(), strings.NewReader(""), io.Discard, nil, "/workspace")

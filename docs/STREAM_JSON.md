@@ -156,6 +156,7 @@ runtime 的运行统计，Context 字段表示上下文占用。它不是 Anthro
 | `Checkpoints` | `workspace.checkpoints` |
 | `Rewind` | `workspace.rewind` |
 | `Steering` | `run.steer` |
+| `Context` | `context.snapshot` |
 
 标准 runtime 根据已配置服务填充这些标志；自定义 Management 后端须如实声明。
 检查点查询直接读取结构化数据，不解析命令菜单；读取失败返回 control error，
@@ -166,6 +167,10 @@ runtime 的运行统计，Context 字段表示上下文占用。它不是 Anthro
 | 方法 | 请求字段 | 成功数据 / 约束 |
 |---|---|---|
 | `server.info` | 无 | 当前元数据与能力 |
+| `context.snapshot` | 无 | session_id、context（`ContextSnapshot`）；运行中也可用，并附带 run_id / user_message_uuid |
+| `observe.overview` | 无 | 与 `/observe/overview` 相同的聚合 |
+| `observe.runs` | 可选 limit、state、source | 轻量 run 投影，不含 prompt/输出 |
+| `observe.run` | run_id | 单 run + 工具名称/状态/耗时 + 待办 + 子代理 |
 | `models.list` | 无 | models、active |
 | `model.set` | model | 当前会话模型选择；空闲时，不写全局默认配置 |
 | `permissions.set` | full_access: boolean | permission_mode；空闲时 |

@@ -86,6 +86,9 @@ func pathRememberSpec(p, workspace, home string) string {
 	if p == "" {
 		return ""
 	}
+	if !filepath.IsAbs(p) && workspace != "" {
+		p = filepath.Join(workspace, p)
+	}
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		return p

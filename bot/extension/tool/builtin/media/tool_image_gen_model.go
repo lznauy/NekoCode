@@ -1,6 +1,7 @@
 package media
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,12 +25,19 @@ func (t *ImageGenTool) resolveModel(args map[string]any) config.ImageGenConfig {
 	return config.ImageGenConfig{}
 }
 
-func resolveOutputDir(args map[string]any) (string, error) {
+func resolveOutputDir(ctx context.Context, args map[string]any) (string, error) {
 	outputDir := toolutil.OptStringArg(args, "output_dir", "")
+	explicit := outputDir != ""
 	if outputDir == "" {
 		outputDir = filepath.Join(fs.NekocodeHome(), "images")
 	}
-	safeOutputDir, err := toolutil.ValidatePath(outputDir)
+	var safeOutputDir string
+	var err error
+	if explicit {
+		safeOutputDir, err = toolutil.ValidatePathWritableContext(ctx, outputDir)
+	} else {
+		safeOutputDir, err = toolutil.ValidatePath(outputDir)
+	}
 	if err != nil {
 		return "", fmt.Errorf("invalid output_dir: %w", err)
 	}

@@ -24,11 +24,12 @@ func (b *Bot) wireTaskTool(fm config.ModelConfig, compactionModel provider.LLM, 
 		if err != nil {
 			return nil, err
 		}
+		reasoning := resolvedReasoning(fm)
+		reasoning.Disabled = true
 		subLLM := provider.New(provider.Config{
 			APIKey: fm.APIKey, BaseURL: fm.BaseURL, Model: fm.Model, Protocol: fm.Protocol,
-			Reasoning: resolvedReasoning(fm),
+			Reasoning: reasoning,
 		})
-		subLLM.SetDisableThinking(true)
 		engine := subagent.New(subagent.Config{
 			LLM: subLLM, Tools: registry, CompactionModel: compactionModel,
 		})

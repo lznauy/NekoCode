@@ -289,6 +289,27 @@ type BaseClient struct {
 	maxTokensMu sync.RWMutex // protects MaxTokens (merge/summarize mutates concurrently)
 }
 
+// RequestOptions override defaults for one call. Pointer fields distinguish
+// unset values from explicit false; providers snapshot them before streaming.
+type RequestOptions struct {
+	MaxTokens       *int
+	DisableThinking *bool
+}
+
+// ForRequest constructs a fresh client configuration, never copies mutexes.
+// Endpoint, model, temperature and vision are initialization-only defaults.
+func (c *BaseClient) ForRequest(options RequestOptions) BaseClient {
+	maxTokens, settings := c.GetMaxTokens(), c.ReasoningSettings()
+	if options.MaxTokens != nil {
+		maxTokens = *options.MaxTokens
+	}
+	if options.DisableThinking != nil {
+		settings.Disabled = *options.DisableThinking
+	}
+	return BaseClient{APIKey: c.APIKey, BaseURL: c.BaseURL, Model: c.Model, MaxTokens: maxTokens,
+		Temperature: c.Temperature, Vision: c.Vision, reasoning: settings}
+}
+
 // SetVision toggles native image input for this client.
 func (b *BaseClient) SetVision(vision bool) {
 	b.Vision = vision

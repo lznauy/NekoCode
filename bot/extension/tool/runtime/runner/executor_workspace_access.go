@@ -3,6 +3,7 @@ package runner
 import (
 	"fmt"
 	"nekocode/protocol"
+	"path/filepath"
 
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/permission"
@@ -35,7 +36,7 @@ func (e *Executor) ensureWorkspaceAccess(tc core.ToolCallItem, confirmFn protoco
 		if !allowed {
 			return tc, fmt.Sprintf("image path is outside configured workspaces: %s", safePath), false
 		}
-		tc.Args = setToolPath(tc.Args, safePath)
+		tc.Args = setToolPath(tc.Name, tc.Args, safePath)
 		return tc, "", true
 	}
 	if access == workspace.AccessReadWrite {
@@ -47,27 +48,27 @@ func (e *Executor) ensureWorkspaceAccess(tc core.ToolCallItem, confirmFn protoco
 		return tc, err.Error(), false
 	}
 	if allowed {
-		tc.Args = setToolPath(tc.Args, safePath)
+		tc.Args = setToolPath(tc.Name, tc.Args, safePath)
 		return tc, "", true
 	}
 	// Full-takeover mode: grant session-scoped workspace access without the
 	// prompt, consistent with bypassing every other approval.
 	if e.FullAccess() {
-		rootPath, err := workspace.CandidateRoot(path)
+		rootPath, err := candidateWorkspaceRoot(tc.Name, safePath)
 		if err != nil {
 			return tc, err.Error(), false
 		}
 		if _, err := e.workspace.AddSessionRoot(rootPath, access); err != nil {
 			return tc, err.Error(), false
 		}
-		tc.Args = setToolPath(tc.Args, safePath)
+		tc.Args = setToolPath(tc.Name, tc.Args, safePath)
 		return tc, "", true
 	}
 	if confirmFn == nil {
 		return tc, fmt.Sprintf("workspace access required for %s: %s", access, safePath), false
 	}
 
-	rootPath, err := workspace.CandidateRoot(path)
+	rootPath, err := candidateWorkspaceRoot(tc.Name, safePath)
 	if err != nil {
 		return tc, err.Error(), false
 	}
@@ -104,7 +105,7 @@ func (e *Executor) ensureWorkspaceAccess(tc core.ToolCallItem, confirmFn protoco
 			})
 		}
 	}
-	tc.Args = setToolPath(tc.Args, safePath)
+	tc.Args = setToolPath(tc.Name, tc.Args, safePath)
 	return tc, "", true
 }
 
@@ -112,7 +113,7 @@ func fileToolAccess(toolName string) (workspace.Access, bool) {
 	switch toolName {
 	case "read", "list", "tree", "grep", "glob", "diff", "image_understand":
 		return workspace.AccessReadOnly, true
-	case "write", "edit":
+	case "write", "edit", "image_gen":
 		return workspace.AccessReadWrite, true
 	default:
 		return "", false
@@ -120,6 +121,14 @@ func fileToolAccess(toolName string) (workspace.Access, bool) {
 }
 
 func fileToolPath(tc core.ToolCallItem) string {
+	if tc.Name == "image_gen" {
+		// The omitted output_dir uses the application's managed image directory;
+		// an explicit model-selected destination must pass workspace approval.
+		if p, ok := tc.Args["output_dir"].(string); ok && p != "" {
+			return p
+		}
+		return ""
+	}
 	if p, ok := tc.Args["path"].(string); ok && p != "" {
 		return p
 	}
@@ -130,11 +139,22 @@ func fileToolPath(tc core.ToolCallItem) string {
 	return ""
 }
 
-func setToolPath(args map[string]any, path string) map[string]any {
+func setToolPath(toolName string, args map[string]any, path string) map[string]any {
 	next := make(map[string]any, len(args)+1)
 	for k, v := range args {
 		next[k] = v
 	}
-	next["path"] = path
+	key := "path"
+	if toolName == "image_gen" {
+		key = "output_dir"
+	}
+	next[key] = path
 	return next
+}
+
+func candidateWorkspaceRoot(toolName, safePath string) (string, error) {
+	if toolName == "image_gen" {
+		return filepath.Abs(safePath)
+	}
+	return workspace.CandidateRoot(safePath)
 }

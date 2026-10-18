@@ -12,9 +12,23 @@ import (
 // reasoning only (empty content) and whose retry returns a real answer.
 type glmFakeClient struct {
 	fakeStreamClient
-	calls       int
-	thinkingOff bool
-	responses   [][]types.StreamToken
+	calls           int
+	thinkingOff     bool
+	responses       [][]types.StreamToken
+	requestDisabled []bool
+}
+
+func (f *glmFakeClient) ChatWithOptions(ctx context.Context, messages []types.Message, tools []types.ToolDef, _ types.RequestOptions) (*types.Response, error) {
+	return f.Chat(ctx, messages, tools)
+}
+
+func (f *glmFakeClient) ChatStreamWithOptions(ctx context.Context, messages []types.Message, tools []types.ToolDef, options types.RequestOptions) (<-chan types.StreamToken, <-chan error) {
+	disabled := f.thinkingOff
+	if options.DisableThinking != nil {
+		disabled = *options.DisableThinking
+	}
+	f.requestDisabled = append(f.requestDisabled, disabled)
+	return f.ChatStream(ctx, messages, tools)
 }
 
 func (f *glmFakeClient) ChatStream(context.Context, []types.Message, []types.ToolDef) (<-chan types.StreamToken, <-chan error) {
@@ -35,7 +49,7 @@ func (f *glmFakeClient) GetDisableThinking() bool        { return f.thinkingOff 
 // thinkingMode satisfies the optional ReasoningSettings probe like the real
 // openai client does for GLM profiles.
 func (f *glmFakeClient) ReasoningSettings() types.ReasoningSettings {
-	return types.ReasoningSettings{ThinkingMode: "enabled"}
+	return types.ReasoningSettings{ThinkingMode: "enabled", Disabled: f.thinkingOff}
 }
 
 // TestCallLLMWithRetryRecoversReasoningOnlyEmptyResponse covers the GLM
@@ -67,6 +81,9 @@ func TestCallLLMWithRetryRecoversReasoningOnlyEmptyResponse(t *testing.T) {
 	}
 	if client.thinkingOff {
 		t.Fatal("thinking must be restored after the retry")
+	}
+	if len(client.requestDisabled) != 2 || client.requestDisabled[0] || !client.requestDisabled[1] {
+		t.Fatalf("request flags=%v", client.requestDisabled)
 	}
 }
 

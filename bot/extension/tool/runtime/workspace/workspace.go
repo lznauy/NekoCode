@@ -26,6 +26,7 @@ type Root struct {
 // isolated by session and never shared across Bot instances.
 type Manager struct {
 	mu         sync.RWMutex
+	primary    string
 	configured []Root
 	sessions   map[string][]Root
 	sessionID  string
@@ -39,17 +40,56 @@ func New(primary string, extra []Root) *Manager {
 
 func (m *Manager) Configure(primary string, extra []Root) {
 	if strings.TrimSpace(primary) == "" {
-		roots := append(fallbackRoots(), extra...)
+		primary = defaultPrimary()
+		extra = slices.Clone(extra)
+		for _, path := range filepath.SplitList(os.Getenv("NEKOCODE_EXTRA_DIRS")) {
+			if path != "" {
+				extra = append(extra, Root{Path: path, Access: AccessReadWrite})
+			}
+		}
+	}
+	root, err := normalizeRoot(Root{Path: primary, Access: AccessReadWrite})
+	if err != nil {
 		m.mu.Lock()
-		m.configured = normalizeRoots(roots)
+		m.primary = ""
+		m.configured = nil
+		m.sessions = make(map[string][]Root)
 		m.mu.Unlock()
 		return
 	}
-	roots := []Root{{Path: primary, Access: AccessReadWrite}}
-	roots = append(roots, extra...)
+	roots := []Root{root}
+	for _, extraRoot := range extra {
+		if !filepath.IsAbs(expandHome(extraRoot.Path)) {
+			extraRoot.Path = filepath.Join(root.Path, extraRoot.Path)
+		}
+		roots = append(roots, extraRoot)
+	}
 	m.mu.Lock()
+	if m.primary != root.Path {
+		m.sessions = make(map[string][]Root)
+	}
+	m.primary = root.Path
 	m.configured = normalizeRoots(roots)
 	m.mu.Unlock()
+}
+
+// Primary is the execution root, independent of the sorted authority roots.
+func (m *Manager) Primary() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.primary
+}
+
+// WorkingDirectory resolves an injected tool workspace before consulting
+// process state. The fallback supports tools used without an executor.
+func WorkingDirectory(ctx context.Context) (string, error) {
+	if m, ok := FromContext(ctx); ok {
+		if root := m.Primary(); root != "" {
+			return root, nil
+		}
+		return "", fmt.Errorf("workspace has no primary directory")
+	}
+	return os.Getwd()
 }
 
 func (m *Manager) SetSession(id string) {
@@ -71,7 +111,7 @@ func (m *Manager) DropSession(id string) {
 }
 
 func (m *Manager) AddSessionRoot(path string, access Access) (Root, error) {
-	root, err := normalizeRoot(Root{Path: path, Access: access})
+	root, err := normalizeRoot(Root{Path: m.anchor(path), Access: access})
 	if err != nil {
 		return Root{}, err
 	}
@@ -91,10 +131,7 @@ func (m *Manager) Snapshot() []Root {
 		roots = upsertRoot(roots, r)
 	}
 	m.mu.RUnlock()
-	if len(roots) > 0 {
-		return roots
-	}
-	return fallbackRoots()
+	return roots
 }
 
 func (m *Manager) CheckRead(path string) (string, Root, bool, error) {
@@ -104,7 +141,7 @@ func (m *Manager) CheckRead(path string) (string, Root, bool, error) {
 // CheckReadLexical checks an already configured root without resolving links
 // or touching the filesystem. Callers must subsequently use a no-follow open.
 func (m *Manager) CheckReadLexical(path string) (string, Root, bool, error) {
-	abs, err := filepath.Abs(expandHome(path))
+	abs, err := filepath.Abs(m.anchor(path))
 	if err != nil {
 		return "", Root{}, false, fmt.Errorf("path resolution failed: %w", err)
 	}
@@ -122,7 +159,7 @@ func (m *Manager) CheckWrite(path string) (string, Root, bool, error) {
 }
 
 func (m *Manager) check(path string, need Access) (string, Root, bool, error) {
-	resolved, err := Resolve(path)
+	resolved, err := Resolve(m.anchor(path))
 	if err != nil {
 		return "", Root{}, false, err
 	}
@@ -135,6 +172,14 @@ func (m *Manager) check(path string, need Access) (string, Root, bool, error) {
 		}
 	}
 	return resolved, Root{}, false, nil
+}
+
+func (m *Manager) anchor(path string) string {
+	path = expandHome(path)
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(m.Primary(), path)
 }
 
 type managerContextKey struct{}
@@ -247,16 +292,10 @@ func insideRoot(path, root string) bool {
 	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
 }
 
-func fallbackRoots() []Root {
-	cwd := os.Getenv("NEKOCODE_WORKSPACE")
-	if cwd == "" {
-		cwd, _ = os.Getwd()
+func defaultPrimary() string {
+	if root := os.Getenv("NEKOCODE_WORKSPACE"); root != "" {
+		return root
 	}
-	roots := []Root{{Path: cwd, Access: AccessReadWrite}}
-	if extra := os.Getenv("NEKOCODE_EXTRA_DIRS"); extra != "" {
-		for _, p := range filepath.SplitList(extra) {
-			roots = append(roots, Root{Path: p, Access: AccessReadWrite})
-		}
-	}
-	return normalizeRoots(roots)
+	root, _ := os.Getwd()
+	return root
 }

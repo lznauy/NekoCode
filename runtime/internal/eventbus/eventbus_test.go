@@ -26,6 +26,20 @@ func TestCompactionBacklogDropsDeltasButKeepsFullSummary(t *testing.T) {
 	}
 }
 
+func TestAssistantResetSurvivesBacklog(t *testing.T) {
+	s := &subscriber{wake: make(chan struct{}, 1)}
+	for i := 0; i < defaultSubscriberQueueLimit; i++ {
+		s.enqueue(core.Event{Type: core.EventAssistantDelta})
+	}
+	s.enqueue(core.Event{Type: core.EventAssistantReset})
+	for _, ev := range s.queue {
+		if ev.Type == core.EventAssistantReset {
+			return
+		}
+	}
+	t.Fatal("assistant_reset dropped from saturated subscriber queue")
+}
+
 func TestEventBusFiltersByRunAndType(t *testing.T) {
 	bus := NewEventBus()
 	ctx, cancel := context.WithCancel(context.Background())

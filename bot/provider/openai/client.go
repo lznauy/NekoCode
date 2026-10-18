@@ -97,6 +97,15 @@ func (c *Client) newStreamRequest(ctx context.Context, jsonBody []byte) (*http.R
 }
 
 func (c *Client) Chat(ctx context.Context, messages []types.Message, tools []types.ToolDef) (*types.Response, error) {
+	return c.ChatWithOptions(ctx, messages, tools, types.RequestOptions{})
+}
+
+func (c *Client) ChatWithOptions(ctx context.Context, messages []types.Message, tools []types.ToolDef, options types.RequestOptions) (*types.Response, error) {
+	scoped := &Client{BaseClient: c.BaseClient.ForRequest(options)}
+	return scoped.chat(ctx, messages, tools)
+}
+
+func (c *Client) chat(ctx context.Context, messages []types.Message, tools []types.ToolDef) (*types.Response, error) {
 	body := c.buildBody(messages, tools, false)
 	data, err := types.DoJSONRequest(ctx, c.endpoint("chat/completions"), c.headers(), body)
 	if err != nil {
@@ -111,6 +120,15 @@ func (c *Client) Chat(ctx context.Context, messages []types.Message, tools []typ
 }
 
 func (c *Client) ChatStream(ctx context.Context, messages []types.Message, tools []types.ToolDef) (<-chan types.StreamToken, <-chan error) {
+	return c.ChatStreamWithOptions(ctx, messages, tools, types.RequestOptions{})
+}
+
+func (c *Client) ChatStreamWithOptions(ctx context.Context, messages []types.Message, tools []types.ToolDef, options types.RequestOptions) (<-chan types.StreamToken, <-chan error) {
+	scoped := &Client{BaseClient: c.BaseClient.ForRequest(options)}
+	return scoped.chatStream(ctx, messages, tools)
+}
+
+func (c *Client) chatStream(ctx context.Context, messages []types.Message, tools []types.ToolDef) (<-chan types.StreamToken, <-chan error) {
 	tokenCh := make(chan types.StreamToken)
 	errCh := make(chan error, 1)
 

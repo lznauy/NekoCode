@@ -688,6 +688,8 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) tea.Cmd {
 		if p, ok := ev.Payload.(controlruntime.DeltaPayload); ok {
 			m.Messages.ProcessStreamText(p.Delta)
 		}
+	case controlruntime.EventAssistantReset:
+		m.Messages.DiscardStreamText()
 	case controlruntime.EventReasoningDelta:
 		if p, ok := ev.Payload.(controlruntime.DeltaPayload); ok {
 			m.Messages.ProcessThinkingText(p.Delta)

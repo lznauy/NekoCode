@@ -200,6 +200,7 @@ func mustDeliverEvent(ev core.Event) bool {
 	}
 	switch ev.Type {
 	case core.EventApprovalRequested,
+		core.EventAssistantReset,
 		core.EventApprovalResolved,
 		core.EventQuestionRequested,
 		core.EventQuestionResolved,

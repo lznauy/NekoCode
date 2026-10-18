@@ -59,13 +59,25 @@ func (s *RunStore) Record(ev core.Event) {
 		}
 		if p, ok := ev.Payload.(core.MessagePayload); ok {
 			rec.snapshot.Input = p.Content
-			rec.snapshot.Source = p.Source
-			rec.snapshot.Sender = p.Sender
+			// Keep the first concrete source: later frames may carry an empty
+			// SourceRef and must not erase who started the run.
+			if p.Source.Kind != "" {
+				rec.snapshot.Source = p.Source
+			}
+			if p.Sender.ID != "" || p.Sender.Username != "" || p.Sender.Display != "" {
+				rec.snapshot.Sender = p.Sender
+			}
 		}
 	case core.EventRunStarted:
 		rec.snapshot.Status = core.RunRunning
 		if rec.snapshot.StartedAt.IsZero() {
 			rec.snapshot.StartedAt = ev.Time
+		}
+		// The runtime tags this frame with "runtime", which is the transport
+		// that emitted it, not who started the run. Only a concrete caller
+		// source overrides the later input_accepted payload.
+		if ev.Source.Kind != "" && ev.Source.Kind != "runtime" {
+			rec.snapshot.Source = ev.Source
 		}
 	case core.EventSystemMessage:
 		if p, ok := ev.Payload.(core.MessagePayload); ok && p.Content != "" {
@@ -82,6 +94,8 @@ func (s *RunStore) Record(ev core.Event) {
 		if p, ok := ev.Payload.(core.MessagePayload); ok {
 			rec.completeMessage(p.Content)
 		}
+	case core.EventAssistantReset:
+		rec.completeMessage("")
 	case core.EventReasoningDelta:
 		if p, ok := ev.Payload.(core.DeltaPayload); ok {
 			rec.snapshot.Reasoning += p.Delta
@@ -98,6 +112,9 @@ func (s *RunStore) Record(ev core.Event) {
 		if p, ok := ev.Payload.(core.PhasePayload); ok {
 			rec.snapshot.Phase = p.Phase
 		}
+	case core.EventContextUpdated:
+		// Live context composition is observation-only; it must not mutate the
+		// run snapshot that replay and session restore depend on.
 	case core.EventToolStarted:
 		if p, ok := ev.Payload.(core.ToolPayload); ok {
 			if p.SubAgentID == "" {

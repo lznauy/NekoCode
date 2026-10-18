@@ -44,6 +44,12 @@ func (s *server) capabilities() []string {
 		if c.Steering {
 			capabilities = append(capabilities, "run.steer")
 		}
+		// Observation is backed by the runtime's run store, which every
+		// Runtime instance provides, so it follows the Context capability.
+		if c.Context {
+			capabilities = append(capabilities, "context.snapshot",
+				"observe.overview", "observe.runs", "observe.run")
+		}
 	}
 	return capabilities
 }

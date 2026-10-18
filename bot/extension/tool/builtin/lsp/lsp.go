@@ -8,7 +8,6 @@ package lsp
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sync"
 
@@ -27,6 +26,7 @@ type LSPTool struct {
 	mu    sync.Mutex
 	specs map[string]lspcore.ServerSpec
 	mgr   *lspcore.Manager
+	root  string
 }
 
 // NewLSPTool creates an LSP tool family with default language server specs.
@@ -42,13 +42,21 @@ func NewLSPToolWithSpecs(specs map[string]lspcore.ServerSpec) *LSPTool {
 
 // ensureManager returns the shared manager, creating it with the primary
 // workspace root on first use.
-func (t *LSPTool) ensureManager(ctx context.Context) *lspcore.Manager {
+func (t *LSPTool) ensureManager(ctx context.Context) (*lspcore.Manager, error) {
+	root, err := workspace.WorkingDirectory(ctx)
+	if err != nil {
+		return nil, err
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.mgr == nil {
-		t.mgr = lspcore.NewManager(workspaceRoot(ctx), t.specs)
+	if t.mgr != nil && t.root != root {
+		return nil, fmt.Errorf("LSP tool belongs to workspace %q, not %q", t.root, root)
 	}
-	return t.mgr
+	if t.mgr == nil {
+		t.root = root
+		t.mgr = lspcore.NewManager(root, t.specs)
+	}
+	return t.mgr, nil
 }
 
 // Tools returns the four LSP tools backed by this manager.
@@ -85,17 +93,9 @@ func resolveFile(ctx context.Context, file string) string {
 }
 
 // workspaceRoot resolves the workspace root the language server should index:
-// the first read-write root of the session's workspace manager, falling back to
-// the process working directory.
+// the injected primary, falling back to cwd only for standalone tools.
 func workspaceRoot(ctx context.Context) string {
-	if wm, ok := workspace.FromContext(ctx); ok {
-		for _, r := range wm.Snapshot() {
-			if r.Access == workspace.AccessReadWrite {
-				return r.Path
-			}
-		}
-	}
-	cwd, _ := os.Getwd()
+	cwd, _ := workspace.WorkingDirectory(ctx)
 	return cwd
 }
 
@@ -137,7 +137,10 @@ func (t *posTool) Execute(ctx context.Context, args map[string]any) (string, err
 	if err != nil {
 		return "", err
 	}
-	mgr := t.owner.ensureManager(ctx)
+	mgr, err := t.owner.ensureManager(ctx)
+	if err != nil {
+		return "", err
+	}
 	return t.query(mgr, ctx, resolveFile(ctx, file), line, symbol)
 }
 
@@ -163,6 +166,9 @@ func (t *diagTool) Execute(ctx context.Context, args map[string]any) (string, er
 	if err != nil {
 		return "", err
 	}
-	mgr := t.owner.ensureManager(ctx)
+	mgr, err := t.owner.ensureManager(ctx)
+	if err != nil {
+		return "", err
+	}
 	return mgr.Diagnostics(ctx, resolveFile(ctx, file))
 }

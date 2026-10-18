@@ -105,6 +105,69 @@ func (r *Runtime) EnableDefaultEventRecording() error {
 // cost ~5s of startup on histories of a few hundred runs.
 const immediateRestoredRuns = 10
 
+// BindRecordedSession moves provisional recordings into the real session, or
+// selects a new session for future events. A failed bind preserves its source.
+func (r *Runtime) BindRecordedSession(sessionID string) {
+	if r == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	r.mu.Lock()
+	recorder := r.recorder
+	r.mu.Unlock()
+	if recorder == nil {
+		return
+	}
+	if err := recorder.BindSession(sessionID); err != nil {
+		logger.Log("runtime: bind recorded session %s: %v", sessionID, err)
+	}
+}
+
+func (r *Runtime) beginRecordedRun(runID RunID) (bool, error) {
+	r.mu.Lock()
+	recorder := r.recorder
+	r.mu.Unlock()
+	if recorder == nil {
+		return false, nil
+	}
+	id := recorder.SessionID()
+	if r.services.Sessions.CurrentSessionID != nil {
+		var err error
+		id, err = r.recordingSessionID()
+		if err != nil {
+			return false, err
+		}
+	}
+	return id == "", recorder.BeginRun(runID, id)
+}
+
+func (r *Runtime) recordingSessionID() (id string, err error) {
+	defer func() {
+		if v := recover(); v != nil {
+			err = fmt.Errorf("runtime: read recording session: %v", v)
+		}
+	}()
+	return r.services.Sessions.CurrentSessionID(), nil
+}
+
+func (r *Runtime) bindRecordedRun(runID RunID) {
+	id, err := r.recordingSessionID()
+	if err == nil && id != "" {
+		err = r.recorder.BindRunSession(runID, id)
+	}
+	if err != nil {
+		logger.Log("runtime: bind recorded run %s: %v", runID, err)
+	}
+}
+
+func (r *Runtime) releaseRecordedRun(runID RunID) {
+	r.mu.Lock()
+	recorder := r.recorder
+	r.mu.Unlock()
+	if recorder != nil {
+		recorder.EndRun(runID)
+	}
+}
+
 // EnableEventRecording persists run events under baseDir and restores
 // previously recorded run history.
 func (r *Runtime) EnableEventRecording(baseDir string) error {
@@ -173,13 +236,7 @@ func (r *Runtime) EnableEventRecording(baseDir string) error {
 	if len(runs) > 0 {
 		tail, immediateRuns := runs, immediate
 		go func() {
-			// Enforce retention before the tail restore — pruning stale
-			// batches is disk work that must never block startup, and doing
-			// it first frees the space the restore would otherwise compete
-			// with. The active batch's fresh mtime keeps it safe.
-			if err := recording.PruneRecordedRuns(baseDir, recording.RetentionAge, recording.RetentionBytes); err != nil {
-				logger.Log("runtime: prune recorded runs: %v", err)
-			}
+			defer r.pruneRecordedRuns(baseDir)
 			// Two distinct sets: the run store only needs the tail — the
 			// immediate slice was already Recorded synchronously, and Record
 			// accumulates without dedup, so replaying it would double every
@@ -206,8 +263,25 @@ func (r *Runtime) EnableEventRecording(baseDir string) error {
 			sort.SliceStable(events, func(i, j int) bool { return events[i].Time.Before(events[j].Time) })
 			r.events.ImportHistory(events)
 		}()
+	} else {
+		go r.pruneRecordedRuns(baseDir)
 	}
 	return nil
+}
+
+func (r *Runtime) pruneRecordedRuns(baseDir string) {
+	r.recordingMu.Lock()
+	defer r.recordingMu.Unlock()
+	r.mu.Lock()
+	closed := r.closed
+	r.mu.Unlock()
+	if closed {
+		return
+	}
+	if err := recording.PruneRecordedRuns(baseDir, recording.RetentionAge, recording.RetentionBytes); err != nil {
+		logger.Log("runtime: prune recorded runs: %v", err)
+	}
+	r.recorder.StartRetention()
 }
 
 // advanceRunSequenceForRuns pushes the next run counter past every recorded

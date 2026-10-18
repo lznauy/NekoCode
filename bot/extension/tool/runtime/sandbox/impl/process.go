@@ -143,7 +143,15 @@ func startCommand(ctx context.Context, name string, args []string, env []string,
 
 // StartHost launches command on the host with NO sandbox isolation.
 func StartHost(ctx context.Context, command string) (*Process, error) {
-	dir, _ := os.Getwd()
+	dir, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	return StartHostIn(ctx, command, dir)
+}
+
+// StartHostIn executes in an explicitly owned workspace without process chdir.
+func StartHostIn(ctx context.Context, command, dir string) (*Process, error) {
 	sysproc := &syscall.SysProcAttr{}
 	if runtime.GOOS != "windows" {
 		sysproc.Setpgid = true

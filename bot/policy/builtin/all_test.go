@@ -52,6 +52,25 @@ func TestGarbledCircuitBreaker(t *testing.T) {
 	}
 }
 
+func TestGarbledCircuitBreakerHintsReformat(t *testing.T) {
+	hook := GarbledCircuitBreaker()
+	state := newState()
+	state.facts.Response.GarbledCount = 1
+	state.facts.Response.Intent = policy.FinalIntentFormatError
+	result := hook.On(state)
+	if result == nil || result.Hint == nil || result.Hint.Type == "" || result.Hint.Content == "" {
+		t.Fatalf("format error should ask the model to redo the call: %+v", result)
+	}
+	if result.Stop != nil {
+		t.Fatalf("a single format error must not stop the run: %+v", result)
+	}
+
+	state.facts.Response.Intent = policy.FinalIntentFinal
+	if result := hook.On(state); result != nil {
+		t.Fatalf("clean final answer should not be hinted: %+v", result)
+	}
+}
+
 func TestReadBeforeWriteHook(t *testing.T) {
 	hook := ReadBeforeWriteHook()
 	state := newState()

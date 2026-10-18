@@ -50,6 +50,7 @@ type startRequest struct {
 	name       string
 	owner      string
 	command    string
+	directory  string
 	profile    sandbox.Profile
 	host       bool
 	timeout    time.Duration
@@ -71,7 +72,7 @@ func (r *taskRegistry) start(ctx context.Context, req startRequest) (*shellTask,
 	procCtx, cancel := context.WithCancel(r.lifecycle)
 	var proc processHandle
 	if req.host {
-		proc, err = sandbox.StartHost(procCtx, req.command)
+		proc, err = sandbox.StartHostIn(procCtx, req.command, req.directory)
 	} else {
 		proc, err = sandbox.Start(procCtx, req.command, req.profile)
 	}

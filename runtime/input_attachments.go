@@ -92,10 +92,10 @@ func ValidImageAttachments(text string, images []ImageAttachment) []ImageAttachm
 // root. Attachments already inside storage (GUI/TUI paste path) and
 // unreadable sources pass through untouched.
 func (r *Runtime) adoptImageAttachments(input Input) Input {
-	if len(input.Images) == 0 || r.services.CurrentSessionID == nil {
+	if len(input.Images) == 0 || r.services.Sessions.CurrentSessionID == nil {
 		return input
 	}
-	sessionID := r.services.CurrentSessionID()
+	sessionID := r.services.Sessions.CurrentSessionID()
 	dir, err := attachment.ImageDir(sessionID)
 	if sessionID == "" || err != nil {
 		return input

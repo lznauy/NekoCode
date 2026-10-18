@@ -3,6 +3,7 @@ package catalog
 import (
 	"nekocode/bot/config"
 	"nekocode/bot/extension/tool"
+	"nekocode/bot/extension/tool/builtin/index"
 	"nekocode/bot/extension/tool/builtin/lsp"
 	"nekocode/bot/extension/tool/builtin/question"
 	"nekocode/bot/extension/tool/builtin/shell"
@@ -21,6 +22,7 @@ type Toolbox struct {
 	Registry  *tools.Registry
 	shell     *shell.ShellTool
 	lsp       *lsp.LSPTool
+	index     *index.IndexTool
 	task      *task.TaskTool
 	question  *question.Tool
 	todo      *todo.TodoWriteTool
@@ -33,6 +35,7 @@ type Toolbox struct {
 // ToolboxConfig groups configuration-dependent builtins without making the
 // constructor signature grow for every optional tool.
 type ToolboxConfig struct {
+	Workspace             *workspace.Manager
 	ImageGenModels        []config.ImageGenConfig
 	ImageUnderstandModels []config.ImageUnderstandConfig
 	// ExtraTools are appended on every registry rebuild; the assembly layer
@@ -48,7 +51,11 @@ func NewToolbox(imageGenModels []config.ImageGenConfig) *Toolbox {
 
 // NewToolboxWithConfig assembles a fresh registry with the full catalog.
 func NewToolboxWithConfig(cfg ToolboxConfig) *Toolbox {
-	e := &Toolbox{workspace: workspace.New("", nil)}
+	manager := cfg.Workspace
+	if manager == nil {
+		manager = workspace.New("", nil)
+	}
+	e := &Toolbox{workspace: manager}
 	e.RebuildRegistryWithConfig(cfg)
 	return e
 }
@@ -67,6 +74,9 @@ func (e *Toolbox) RebuildRegistryWithConfig(cfg ToolboxConfig) {
 	if e.lsp == nil {
 		e.lsp = lsp.NewLSPTool()
 	}
+	if e.index == nil {
+		e.index = index.NewIndexTool()
+	}
 	if e.task == nil {
 		e.task = task.NewTaskTool()
 	}
@@ -81,7 +91,7 @@ func (e *Toolbox) RebuildRegistryWithConfig(cfg ToolboxConfig) {
 	}
 	e.Registry = tools.New()
 	e.Registry.SetWorkspace(e.workspace)
-	registerAll(e.Registry, cfg.ImageGenModels, cfg.ImageUnderstandModels, e.shell, e.lsp, e.task, e.question, e.todo)
+	registerAll(e.Registry, cfg.ImageGenModels, cfg.ImageUnderstandModels, e.shell, e.lsp, e.index, e.task, e.question, e.todo)
 	for _, t := range cfg.ExtraTools {
 		e.Registry.Register(t)
 	}
@@ -146,6 +156,12 @@ func (e *Toolbox) Close() error {
 	if e.lsp != nil {
 		e.lsp.Close()
 		e.lsp = nil
+	}
+	if e.index != nil {
+		if err := e.index.Close(); err != nil {
+			return err
+		}
+		e.index = nil
 	}
 	return nil
 }

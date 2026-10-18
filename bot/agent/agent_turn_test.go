@@ -61,12 +61,22 @@ func TestHandleText_GarbledToolCall_NotRecorded(t *testing.T) {
 	msgCountBefore := a.deps.ctxMgr.Len()
 	finished := a.turnRunner.handleText(rr, nil)
 
-	if !finished {
-		t.Error("expected finished=true for GarbledToolCall without hook hints")
+	// The built-in garbled_circuit_breaker turns a format error into a hint so
+	// the model redoes the call with the native tool channel, so the turn must
+	// keep going rather than end silently.
+	if finished {
+		t.Error("expected finished=false: the format-error hint should schedule a retry")
 	}
 	if a.deps.ctxMgr.Len() != msgCountBefore {
 		t.Errorf("expected no messages added to context, got %d (was %d)",
 			a.deps.ctxMgr.Len(), msgCountBefore)
+	}
+	pending := a.run.pendingHints
+	if len(pending) != 1 {
+		t.Fatalf("pending hints = %+v, want one format-correction hint", pending)
+	}
+	if pending[0].Type != "garbled_tool_call" {
+		t.Errorf("hint type = %q", pending[0].Type)
 	}
 }
 

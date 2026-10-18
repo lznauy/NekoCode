@@ -75,6 +75,7 @@ export function useChat(): UseChatReturn {
   const sendingRef = useRef(false)
   const abortedRef = useRef(false)
   const textBufferRef = useRef('')
+  const responseTextRef = useRef({ sid: '', length: 0 })
   const reasoningBufferRef = useRef('')
   const textDoneRef = useRef(false)
   const reasoningDoneRef = useRef(false)
@@ -200,8 +201,24 @@ export function useChat(): UseChatReturn {
     setMsgs((prev) => upsert(prev, sidRef.current, (m) => ({ ...m, phase: e.phase })))
   }, [])
 
-  const onDelta = useCallback((e: { id: number; delta: string; done: boolean }) => {
+  const onDelta = useCallback((e: { id: number; delta: string; done: boolean; reset?: boolean }) => {
     if (!sidRef.current) return
+    const sid = sidRef.current
+    if (responseTextRef.current.sid !== sid) responseTextRef.current = { sid, length: 0 }
+    if (e.reset) {
+      const pending = Math.min(textBufferRef.current.length, responseTextRef.current.length)
+      const rendered = responseTextRef.current.length - pending
+      textBufferRef.current = textBufferRef.current.slice(0, textBufferRef.current.length - pending)
+      responseTextRef.current.length = 0
+      streamBreakPendingRef.current = false
+      setMsgs((prev) => upsert(prev, sid, (m) => {
+        const streamText = (m.streamText ?? '').slice(0, Math.max(0, (m.streamText ?? '').length - rendered))
+        hasStreamTextRef.current = Boolean(streamText.trim() || textBufferRef.current.trim())
+        return { ...m, streamText }
+      }))
+      return
+    }
+    responseTextRef.current.length += e.delta.length
     textBufferRef.current += e.delta
     if (e.delta.trim()) {
       hasStreamTextRef.current = true
@@ -228,6 +245,7 @@ export function useChat(): UseChatReturn {
   }) => {
     const sid = sidRef.current
     if (!sid) return
+    responseTextRef.current.length = 0
     if (interactiveTool(e.toolName)) return
     markToolBoundary(textBufferRef, hasStreamTextRef, streamBreakPendingRef)
     if (compactTool(e.toolName) && !e.blocked) {

@@ -29,19 +29,17 @@ type runtimeCommand struct {
 // UIs, HTTP adapters, and connectors. CommandMenu belongs here because command
 // discovery and execution are two halves of the same interaction protocol.
 type Interaction interface {
-	StartRun(context.Context, Input) (RunID, error)
-	CancelRun(context.Context, RunID) error
-	DecideApproval(context.Context, string, ApprovalDecision) error
-	AnswerQuestion(context.Context, string, QuestionReply) error
+	RunControl
+	HumanInteraction
+	RunEvents
 	CommandMenu(context.Context, string) (CommandMenu, bool)
-	Events(context.Context, EventFilter) (<-chan Event, error)
 }
 
 // Runtime is the interaction kernel. Applications should keep this
 // single instance and route every interaction surface through it.
 type Runtime struct {
 	runner          Runner
-	services        Services
+	services        ServiceGroups
 	events          *eventbus.EventBus
 	approvals       *broker.ApprovalBroker
 	questions       *broker.QuestionBroker
@@ -68,6 +66,7 @@ type Runtime struct {
 	closed        bool
 	closeOnce     sync.Once
 	closeErr      error
+	contextView   contextView
 }
 
 var (
@@ -78,6 +77,11 @@ var (
 // New constructs the interaction runtime with explicitly supplied optional
 // application services. Pass Services{} for a core-only runtime.
 func New(runner Runner, services Services) *Runtime {
+	return NewWithServices(runner, services.Grouped())
+}
+
+// NewWithServices constructs a runtime from domain-grouped capabilities.
+func NewWithServices(runner Runner, services ServiceGroups) *Runtime {
 	if runner == nil {
 		panic("runtime: nil runner")
 	}
@@ -99,11 +103,11 @@ func New(runner Runner, services Services) *Runtime {
 	return rt
 }
 
-func validateServices(services Services) {
-	requireCompleteService("commands", services.ExecuteCommand != nil, services.CommandMenu != nil)
-	requireCompleteService("context", services.ContextSnapshot != nil, services.MemoryView != nil)
-	requireCompleteService("config", services.ConfigView != nil, services.ResolveModelProfile != nil, services.ApplyConfig != nil)
-	requireCompleteService("sessions", services.CurrentSessionID != nil, services.ListSessions != nil, services.SessionMessages != nil)
+func validateServices(services ServiceGroups) {
+	requireCompleteService("commands", services.Commands.ExecuteCommand != nil, services.Commands.CommandMenu != nil)
+	requireCompleteService("context", services.Context.ContextSnapshot != nil, services.Context.MemoryView != nil)
+	requireCompleteService("config", services.Config.ConfigView != nil, services.Config.ResolveModelProfile != nil, services.Config.ApplyConfig != nil)
+	requireCompleteService("sessions", services.Sessions.CurrentSessionID != nil, services.Sessions.ListSessions != nil, services.Sessions.SessionMessages != nil)
 }
 
 func requireCompleteService(name string, present ...bool) {

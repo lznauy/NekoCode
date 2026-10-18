@@ -31,6 +31,9 @@ func (s *server) manage(ctx context.Context, f frame, method string) error {
 		Offset       int    `json:"offset"`
 		Limit        int    `json:"limit"`
 		Mode         string `json:"mode"`
+		State        string `json:"state"`
+		Source       string `json:"source"`
+		RunID        string `json:"run_id"`
 	}
 	if err := json.Unmarshal(f.Request, &request); err != nil {
 		return s.respond(f.RequestID, nil, errors.New("invalid request fields"))
@@ -64,6 +67,37 @@ func (s *server) manage(ctx context.Context, f frame, method string) error {
 	}
 	if !slices.Contains(s.capabilities(), method) {
 		return s.respond(f.RequestID, nil, fmt.Errorf("unsupported method %q", method))
+	}
+	// Observation and context reads are read-only and safe during an active run:
+	// hosts poll them to render live state without waiting for the turn to end.
+	// They also carry the run binding, which is why they answer here rather
+	// than through the state-mutating commands below.
+	switch method {
+	case "context.snapshot":
+		body := map[string]any{"session_id": s.sessionID, "context": m.ContextSnapshot()}
+		if s.active != nil {
+			body["run_id"] = s.active.runID
+			body["user_message_uuid"] = s.active.input.id
+		}
+		return s.respond(f.RequestID, body, nil)
+	case "observe.overview":
+		return s.respond(f.RequestID, m.ObservedOverview(), nil)
+	case "observe.runs":
+		return s.respond(f.RequestID, map[string]any{
+			"runs": m.ObservedRuns(rt.ObservedRunFilter{
+				Limit: request.Limit, State: rt.ObservedRunState(request.State),
+				Source: request.Source,
+			}),
+		}, nil)
+	case "observe.run":
+		if request.RunID == "" {
+			return s.respond(f.RequestID, nil, errors.New("run_id is required"))
+		}
+		detail, ok := m.ObservedRun(rt.RunID(request.RunID))
+		if !ok {
+			return s.respond(f.RequestID, nil, errors.New("run not found"))
+		}
+		return s.respond(f.RequestID, detail, nil)
 	}
 	var result any
 	var err error

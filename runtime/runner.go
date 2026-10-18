@@ -42,6 +42,14 @@ type RunImageSource interface {
 	RunImages() []ImageAttachment
 }
 
+// RunTextResetter is an optional RunHost extension. A runner calls it when
+// text it already streamed for the current turn turned out to be
+// provider-injected (for example the prefix of a retried stream) and must not
+// be committed as part of the answer.
+type RunTextResetter interface {
+	ResetText()
+}
+
 // CommandAction describes what runtime should do after a bot command.
 type CommandAction = protocol.CommandAction
 

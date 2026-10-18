@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 const redactedSecret = "[redacted]"
@@ -77,7 +79,21 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 		return runID, protocolError(ErrorBusy, "start_run", fmt.Sprintf("run %s is %s", runID, status))
 	}
 	r.nextRun++
-	runID := RunID(fmt.Sprintf("run_%d", r.nextRun))
+	runID := RunID(fmt.Sprintf("run_%d_%s", r.nextRun, uuid.NewString()))
+	r.mu.Unlock()
+	// Registration precedes Running: steering must not publish into the
+	// previous run's recording destination while this run is starting.
+	bindLazySession, err := r.beginRecordedRun(runID)
+	if err != nil {
+		return "", err
+	}
+	r.invalidateContext()
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		r.releaseRecordedRun(runID)
+		return "", protocolError(ErrorClosed, "start_run", "closed")
+	}
 	r.currentRun = runID
 	r.status = RunRunning
 	delete(r.cancelled, runID)
@@ -92,7 +108,7 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 	r.runExecution = execution
 	r.mu.Unlock()
 
-	go r.run(runCtx, runID, input, lease, execution)
+	go r.run(runCtx, runID, input, lease, execution, bindLazySession)
 	return runID, nil
 }
 
@@ -132,7 +148,7 @@ func (r *Runtime) SteerRun(ctx context.Context, runID RunID, input Input) error 
 		r.mu.Unlock()
 		return protocolError(ErrorConflict, "steer_run", fmt.Sprintf("run %s is cancelled", runID))
 	}
-	steer := r.services.Steer
+	steer := r.services.Commands.Steer
 	lease := r.runLease
 	runCtx := r.runContext
 	r.mu.Unlock()
@@ -312,8 +328,8 @@ func (r *Runtime) Close() error {
 				errs = append(errs, err)
 			}
 		}
-		if r.services.Close != nil {
-			if err := r.services.Close(); err != nil {
+		if r.services.Lifecycle.Close != nil {
+			if err := r.services.Lifecycle.Close(); err != nil {
 				errs = append(errs, err)
 			}
 		}

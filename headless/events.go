@@ -132,6 +132,9 @@ func (s *server) boundary() error {
 }
 
 func (s *server) event(ctx context.Context, event rt.Event) error {
+	if err := rt.ValidateEventPayload(event); err != nil {
+		return err
+	}
 	switch event.Type {
 	case rt.EventRunSummary:
 		if p, ok := event.Payload.(rt.RunSummary); ok {
@@ -166,6 +169,13 @@ func (s *server) event(ctx context.Context, event rt.Event) error {
 			return errors.New("invalid message payload")
 		}
 		return s.canonical(p.Content)
+	case rt.EventAssistantReset:
+		// Complete the preview using the same message ID and empty text, so
+		// clients can retract partial output without committing its content.
+		if s.active.kind == "text" {
+			s.active.text.Reset()
+		}
+		return s.canonical("")
 	case rt.EventSystemMessage:
 		p, ok := event.Payload.(rt.MessagePayload)
 		if !ok {
@@ -242,6 +252,14 @@ func (s *server) event(ctx context.Context, event rt.Event) error {
 		}
 	case rt.EventSubAgentStarted, rt.EventSubAgentEnded, rt.EventTodosUpdated, rt.EventPhaseChanged, rt.EventToolPreview:
 		return s.sendTurn("system", map[string]any{"subtype": "nekocode_event", "event_type": event.Type, "payload": event.Payload})
+	case rt.EventContextUpdated:
+		// Forward the sampled event, rather than recomputing a later snapshot.
+		if p, ok := event.Payload.(rt.ContextSnapshot); ok {
+			return s.sendTurn("system", map[string]any{
+				"subtype": "nekocode_event", "event_type": event.Type,
+				"payload": map[string]any{"context": p},
+			})
+		}
 	case rt.EventSessionChanged:
 		return errors.New("session switching inside a stream-json turn is unsupported; use --resume on a new connection")
 	case rt.EventRunDone, rt.EventRunFailed, rt.EventRunCancelled:

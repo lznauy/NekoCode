@@ -72,10 +72,12 @@ func New(cwd string) *Manager {
 	return &Manager{cwd: cwd, sess: newSnapshot(cwd)}
 }
 
+// Current returns a detached snapshot. Changes become visible only through
+// Save or Activate, never by mutating state after the manager lock is released.
 func (m *Manager) Current() *Snapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.sess
+	return m.sess.Clone()
 }
 
 func (m *Manager) CurrentID() string {
@@ -89,7 +91,7 @@ func (m *Manager) CurrentID() string {
 
 func (m *Manager) set(sess *Snapshot) {
 	m.mu.Lock()
-	m.sess = sess
+	m.sess = sess.Clone()
 	m.mu.Unlock()
 }
 

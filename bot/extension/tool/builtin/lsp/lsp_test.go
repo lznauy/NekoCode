@@ -18,6 +18,28 @@ var missingSpecs = map[string]lspcore.ServerSpec{
 	"go": {Command: "no-such-gopls-xyz", LanguageID: "go", Extensions: []string{".go"}, InstallHint: "go install golang.org/x/tools/gopls@latest"},
 }
 
+func TestWorkspaceRootUsesPrimaryRatherThanSortedAuthority(t *testing.T) {
+	base := t.TempDir()
+	primary := filepath.Join(base, "z-project")
+	manager := workspace.New(primary, []workspace.Root{{Path: filepath.Join(base, "a-extra"), Access: workspace.AccessReadWrite}})
+	if got := workspaceRoot(workspace.WithManager(t.Context(), manager)); got != primary {
+		t.Fatalf("root=%q want=%q", got, primary)
+	}
+}
+
+func TestLSPRejectsCrossProjectReuse(t *testing.T) {
+	tool := NewLSPToolWithSpecs(missingSpecs)
+	defer tool.Close()
+	one := workspace.WithManager(t.Context(), workspace.New(t.TempDir(), nil))
+	two := workspace.WithManager(t.Context(), workspace.New(t.TempDir(), nil))
+	if _, err := tool.ensureManager(one); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tool.ensureManager(two); err == nil {
+		t.Fatal("cross-project LSP reuse accepted")
+	}
+}
+
 func testCtx(t *testing.T) (context.Context, string) {
 	t.Helper()
 	root := t.TempDir()

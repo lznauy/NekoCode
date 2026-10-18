@@ -67,6 +67,16 @@ func TestTranslatePreviewAndResult(t *testing.T) {
 	}
 }
 
+func TestTranslatePreviewReset(t *testing.T) {
+	intents := Translate(controlruntime.Event{Type: controlruntime.EventAssistantReset, RunID: "r1"})
+	if len(intents) != 1 || intents[0].Kind != "preview_reset" || intents[0].RunID != "r1" {
+		t.Fatalf("reset intents = %+v", intents)
+	}
+	if deliverable(intents[0], Capabilities{}) {
+		t.Fatal("preview reset delivered to a channel without editable previews")
+	}
+}
+
 func TestTranslateSystemMessage(t *testing.T) {
 	// Command output (e.g. /connect, /model) must reach the chat as a
 	// distinct IntentSystem, not be dropped as a progress event.

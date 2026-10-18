@@ -38,9 +38,13 @@ func (r *modelRunner) reason(input string) *reasoningResult {
 
 	result, err := r.callLLMForTool()
 	if err != nil {
+		a.stream.discardText()
 		return fromLLM(nil, "", err)
 	}
 	reasoning := fromLLM(result.ToolCalls, result.Text, nil)
+	if reasoning.GarbledToolCall {
+		a.stream.discardText()
+	}
 	reasoning.ReasoningContent = result.Reasoning
 	reasoning.ReasoningSignature = result.ReasoningSignature
 	return reasoning
@@ -69,6 +73,10 @@ func (r *modelRunner) callLLMForTool() (*llmstream.LLMCallResult, error) {
 	}
 
 	if len(result.ToolCalls) > 0 {
+		if isGarbledToolCall(result.Text) || garbledPrefix(result.Text) {
+			result.Text = ""
+			a.stream.discardText()
+		}
 		a.deps.ctxMgr.AddAssistant(types.Message{Role: "assistant", Content: result.Text,
 			ReasoningContent: result.Reasoning, ReasoningSignature: result.ReasoningSignature,
 			ToolCalls: llmstream.ToLLMToolCalls(result.ToolCalls)})
@@ -87,6 +95,7 @@ func (r *modelRunner) synthesize() string {
 	a := r.agent
 	text, err := r.streamSynthesize(a.getCtx())
 	if err != nil || !usableFinalText(text) {
+		a.stream.discardText()
 		logger.Log("synthesize: LLM summary failed (err=%v), using fallback", err)
 		return fallbackSynthesize
 	}
@@ -136,6 +145,9 @@ func (r *modelRunner) streamCallbacks() llmstream.StreamCallbacks {
 		OnText: func(delta string) {
 			a.stream.emitText(delta)
 		},
+		OnTextReset: func() {
+			a.stream.discardText()
+		},
 		OnReasoning: func(delta string) {
 			a.stream.emitReasoning(delta)
 		},
@@ -183,7 +195,7 @@ func fromLLM(toolCalls []core.ToolCallItem, textContent string, err error) *reas
 		if errors.Is(err, context.Canceled) {
 			return &reasoningResult{Thought: "User interrupted", Action: actionChat, Interrupted: true}
 		}
-		if textContent != "" && !isGarbledToolCall(textContent) {
+		if textContent != "" && !isGarbledToolCall(textContent) && !garbledPrefix(textContent) {
 			return &reasoningResult{Thought: "Truncated reply", Action: actionChat, ActionInput: textContent}
 		}
 		return &reasoningResult{Thought: "LLM call failed", Action: actionChat, ActionInput: fmt.Sprintf("LLM call failed: %v", err), IsError: true}
@@ -221,17 +233,4 @@ func fromLLM(toolCalls []core.ToolCallItem, textContent string, err error) *reas
 		ToolCalls:   toolCalls,
 		TextContent: textContent,
 	}
-}
-
-func isGarbledToolCall(text string) bool {
-	t := strings.TrimSpace(text)
-	if t == "" {
-		return false
-	}
-	if strings.Contains(t, "<invoke") || strings.Contains(t, "</invoke") ||
-		strings.Contains(t, "<parameter") || strings.Contains(t, "</parameter") ||
-		strings.Contains(t, "<tool_call") || strings.Contains(t, "</tool_call") {
-		return true
-	}
-	return strings.Contains(t, `"tool_calls"`) || strings.Contains(t, `"tool_use"`)
 }

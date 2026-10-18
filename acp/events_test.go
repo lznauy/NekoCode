@@ -13,7 +13,7 @@ func TestEventUpdate(t *testing.T) {
 		kinds []string
 	}{
 		{"system", controlruntime.Event{Type: controlruntime.EventSystemMessage, Payload: controlruntime.MessagePayload{Content: "ready"}}, []string{"agent_message_chunk"}},
-		{"text", controlruntime.Event{Type: controlruntime.EventAssistantDelta, Payload: controlruntime.DeltaPayload{Delta: "hi"}}, []string{"agent_message_chunk"}},
+		{"speculative text skipped", controlruntime.Event{Type: controlruntime.EventAssistantDelta, Payload: controlruntime.DeltaPayload{Delta: "hi"}}, nil},
 		{"thought", controlruntime.Event{Type: controlruntime.EventReasoningDelta, Payload: controlruntime.DeltaPayload{Delta: "hmm"}}, []string{"agent_thought_chunk"}},
 		{"tool", controlruntime.Event{ID: "event-1", Type: controlruntime.EventToolStarted, Payload: controlruntime.ToolPayload{CallID: "call-1", ToolName: "read_file", Args: `{"path":"a.go"}`}}, []string{"tool_call"}},
 		{"preview", controlruntime.Event{ID: "event-2", Type: controlruntime.EventToolPreview, Payload: controlruntime.ToolPayload{CallID: "call-1", ToolName: "read_file", Preview: "reading"}}, []string{"tool_call_update"}},

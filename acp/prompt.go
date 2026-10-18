@@ -63,7 +63,7 @@ func (s *server) prompt(ctx context.Context, params json.RawMessage) (any, *wire
 	}
 	eventCtx, cancelEvents := context.WithCancel(ctx)
 	defer cancelEvents()
-	events, err := s.backend.Events(eventCtx, controlruntime.EventFilter{})
+	events, err := s.backend.Events(eventCtx, controlruntime.EventFilter{Reliable: true})
 	if err != nil {
 		s.sessionMu.Unlock()
 		return nil, backendError("subscribe to run", err)
@@ -97,6 +97,7 @@ func (s *server) prompt(ctx context.Context, params json.RawMessage) (any, *wire
 	}
 	s.sessionMu.Unlock()
 
+	var updatesForTurn turnUpdates
 	for {
 		select {
 		case <-ctx.Done():
@@ -109,7 +110,10 @@ func (s *server) prompt(ctx context.Context, params json.RawMessage) (any, *wire
 			if event.RunID != runID {
 				continue
 			}
-			if updates, ok := eventUpdate(event); ok {
+			if err := controlruntime.ValidateEventPayload(event); err != nil {
+				return nil, backendError("invalid runtime event", err)
+			}
+			if updates, ok := updatesForTurn.update(event); ok {
 				for _, update := range updates {
 					if err := s.notifySession(request.SessionID, update); err != nil {
 						return nil, backendError("send session update", err)

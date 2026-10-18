@@ -13,6 +13,19 @@ func TestStreamStateNilCallbacksAreNoOps(t *testing.T) {
 	s.emitPhase("Thinking")
 	s.emitText("hello")
 	s.emitReasoning("hmm")
+	s.discardText()
+}
+
+func TestStreamStateDiscardText(t *testing.T) {
+	var s streamState
+	called := false
+	s.resetText = func() { called = true }
+
+	s.discardText()
+
+	if !called {
+		t.Fatal("discardText did not reach the host")
+	}
 }
 
 func TestStreamStateEmitPhase(t *testing.T) {

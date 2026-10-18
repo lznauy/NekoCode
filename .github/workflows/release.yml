@@ -96,6 +96,45 @@ jobs:
         run: |
           go build -trimpath -ldflags="$LD_FLAGS" -o "dist/nekocode-tui-linux-${GOARCH}" ./cmd/tui
 
+      - name: Install UPX
+        env:
+          UPX_VERSION: 5.0.2
+          UPX_SHA256: ddc2654063fe4dc80d95b420788494e4db078ebb01a650692d623b5a9906e61e
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/upx-${UPX_VERSION}-amd64_linux.tar.xz"
+          curl --fail --silent --show-error --location \
+            --output "$archive" \
+            "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/upx-${UPX_VERSION}-amd64_linux.tar.xz"
+          echo "${UPX_SHA256}  ${archive}" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/upx"
+          tar -xJf "$archive" -C "$RUNNER_TEMP/upx" --strip-components=1
+
+      - name: Compress binary
+        run: |
+          set -euo pipefail
+          binary="dist/nekocode-tui-linux-${GOARCH}"
+          "$RUNNER_TEMP/upx/upx" --best --lzma "$binary"
+          "$RUNNER_TEMP/upx/upx" -t "$binary"
+
+      - name: Smoke test compressed binary
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          binary="dist/nekocode-tui-linux-${GOARCH}"
+          if [[ "$GOARCH" != "amd64" ]]; then
+            # arm64 release binary needs an aarch64 sysroot to run under
+            # qemu-user; UPX -t in the previous step covers compression integrity.
+            echo "Skipping execution smoke test for $GOARCH"
+            exit 0
+          fi
+          printf '{"type":"result"}\n' | timeout 60 "./$binary" --headless --input-format stream-json --output-format stream-json > smoke.json
+          grep -q '"type":"system"' smoke.json
+          # UPX-packed binaries re-exec themselves for sandbox helpers; exercise that path.
+          out="$(__SANDBOX_HELPER=1 __SANDBOX_CONFIG='{"w":[]}' timeout 60 "./$binary" __sandbox__ -- sh -c 'echo sandbox-ok')"
+          [[ "$out" == *sandbox-ok* ]] || { printf '%s\n' "$out"; exit 1; }
+
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

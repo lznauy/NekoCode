@@ -129,6 +129,14 @@ type Management interface {
 	WorkspaceChanges() rt.WorkspaceChanges
 	Rewind(string) (string, error)
 	SteerRun(context.Context, rt.RunID, rt.Input) error
+	// ContextSnapshot reports the active context window's composition. It is
+	// read-only, so hosts may poll it while the turn is running.
+	ContextSnapshot() rt.ContextSnapshot
+	// Observation projections shared with the HTTP /observe/* surface. They
+	// are read-only and safe during an active run.
+	ObservedOverview() rt.ObserveOverview
+	ObservedRuns(rt.ObservedRunFilter) []rt.ObservedRunSummary
+	ObservedRun(rt.RunID) (rt.ObservedRunDetail, bool)
 }
 
 var _ Management = (*rt.Runtime)(nil)

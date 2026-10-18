@@ -311,7 +311,7 @@ system prompt / JSON Schema / prompt suggestions（带非空值时 `initialize` 
 
 ## v2 管理能力
 
-新增控制方法：`server.info`、`models.list`、`model.set`、`permissions.set`、
+新增控制方法：`server.info`、`context.snapshot`、`models.list`、`model.set`、`permissions.set`、
 `sessions.list`、`session.history`、`session.new/resume/delete`、`extensions.list`、
 `workspace.checkpoints/rewind`、`run.steer` 和 `shutdown`。
 嵌入式后端的能力声明按实际服务区分：`ModelCatalog` 控制模型列表，
@@ -327,6 +327,40 @@ system prompt / JSON Schema / prompt suggestions（带非空值时 `initialize` 
 增量由 partial messages 开关控制。
 结果增加 `stop_reason`、可选真实 `step_count` 和 `permission_denials`。
 `shutdown` 支持排空或取消，不必关闭 stdin 即可退出。
+
+### 上下文观测
+
+`context.snapshot` 返回活动上下文窗口的构成，供只读观测使用（`ContextSnapshot`）：
+
+```json
+{"session_id":"...","run_id":"run_1","user_message_uuid":"u-1",
+ "context":{"budget":128000,"used":62400,"free":65600,"percentUsed":0.4875,
+            "systemPrompt":11200,"toolDefTokens":4000,"messageTokens":47200,
+            "compactCount":1,"cacheHitTokens":20500,"cacheMissTokens":1300,
+            "segments":[{"key":"system","label":"系统提示","tokens":11200,"tone":"muted"}]}}
+```
+
+- **运行中也可调用**：该方法是只读的，宿主可在 turn 进行中轮询刷新面板。
+- 运行中额外返回 `run_id` / `user_message_uuid`；空闲时省略。
+- 需要后端声明 `Context` 能力，否则不进入 capabilities 集合且调用返回 control error。
+- 同样的快照也在运行中以 `system/nekocode_event`（`event_type: "context_updated"`，
+  `payload.context`）推送：约每秒采样，仅变化时发布，运行开始/正常结束时也检查一次。
+  查询与事件共享短期缓存；该实时观测事件不写入运行录制。
+
+### 运行观测
+
+`observe.*` 与 HTTP `/observe/*` 返回同一套聚合（实现位于 runtime 包），宿主无需自己累计：
+
+| 方法 | 请求字段 | 成功数据 |
+|---|---|---|
+| `observe.overview` | 无 | 运行时状态、能力、模型、最近一轮指标、上下文、run 聚合、来源分布 |
+| `observe.runs` | 可选 `limit`、`state`、`source` | `runs`：轻量 run 投影（状态、来源、耗时、工具数/错误数） |
+| `observe.run` | `run_id` | `run` + `tools`（名称/状态/耗时）+ `todos` 数量 + `subagents`；不含任务正文或原始错误文本 |
+
+- 三者都是**只读**，运行中也可调用；需要后端声明 `Context` 能力，因此与 `context.snapshot` 一起出现。
+- 隐私边界：不含 prompt、工具参数、工具输出、模型输出。
+- run 窗口受 runtime 内存存储限制（默认 100），不是无界历史。
+- 终态数据以 `result` 帧到达后为准；若紧接着调用 `observe.run` 仍为 `running`，宿主应短暂重试。
 
 ## 版本与兼容
 

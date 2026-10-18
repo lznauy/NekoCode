@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -104,8 +106,8 @@ func TestManagerEventRecordingAdvancesRunSequence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	if runID != "run_42" {
-		t.Fatalf("run id = %q, want run_42", runID)
+	if !strings.HasPrefix(string(runID), "run_42_") {
+		t.Fatalf("run id = %q, want run_42_<unique suffix>", runID)
 	}
 	waitForRun(t, rt, runID)
 
@@ -205,4 +207,181 @@ func TestManagerSteerRedactsSensitiveInputEvents(t *testing.T) {
 	}
 	close(release)
 	waitForRun(t, rt, runID)
+}
+
+// Binding the recorder to the session a process serves keeps every turn in one
+// directory. Without it each resume — a fresh process per turn for the bot
+// front-end — would leave an orphan batch behind.
+func TestBindRecordedSessionNamesTheBatch(t *testing.T) {
+	baseDir := t.TempDir()
+	rt := newTestRuntime(&testBot{})
+	if err := rt.EnableEventRecording(baseDir); err != nil {
+		t.Fatalf("EnableEventRecording: %v", err)
+	}
+	const sessionID = "20261018T100000-111111111"
+	rt.BindRecordedSession(sessionID)
+
+	runID, err := rt.StartRun(context.Background(), Input{Source: SourceRef{Kind: "test"}, Text: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, rt, runID)
+
+	entries, err := os.ReadDir(baseDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dirs []string
+	for _, e := range entries {
+		if e.IsDir() {
+			dirs = append(dirs, e.Name())
+		}
+	}
+	if len(dirs) != 1 || dirs[0] != sessionID {
+		t.Fatalf("batches = %v, want only %s", dirs, sessionID)
+	}
+	recorded := filepath.Join(baseDir, sessionID, "runs", string(runID), "events.jsonl")
+	if _, err := os.Stat(recorded); err != nil {
+		t.Fatalf("recorded run not under <session>/runs: %v", err)
+	}
+}
+
+func TestRunIDsAcrossRuntimesAreUnique(t *testing.T) {
+	a, b := newTestRuntime(&testBot{}), newTestRuntime(&testBot{})
+	base := t.TempDir()
+	// Both processes scan the same empty history before either starts a run.
+	for _, rt := range []*Runtime{a, b} {
+		if err := rt.EnableEventRecording(base); err != nil {
+			t.Fatal(err)
+		}
+		rt.BindRecordedSession("shared_session")
+	}
+	first, err := a.StartRun(context.Background(), Input{Text: "one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := b.StartRun(context.Background(), Input{Text: "two"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, a, first)
+	waitForRun(t, b, second)
+	if first == second {
+		t.Fatalf("independent runtimes share run ID %s", first)
+	}
+	events, err := recording.LoadRecordedEvents(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[RunID]bool{}
+	for _, ev := range events {
+		seen[ev.RunID] = true
+	}
+	if !seen[first] || !seen[second] || len(seen) != 2 {
+		t.Fatalf("restored identities = %v", seen)
+	}
+}
+
+func TestSteeringCannotPrecedeRecordingRegistration(t *testing.T) {
+	entered, release, finish := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	bot := &testBot{run: func(string, RunHost) (string, error) { <-finish; return "done", nil }}
+	services := testBotServices(bot)
+	services.ListSessions = func() []SessionMeta { return nil }
+	services.SessionMessages = func() []DisplayMessage { return nil }
+	services.CurrentSessionID = func() string { once.Do(func() { close(entered); <-release }); return "session_b" }
+	rt := New(bot, services)
+	base := t.TempDir()
+	if err := rt.EnableEventRecording(base); err != nil {
+		t.Fatal(err)
+	}
+	rt.BindRecordedSession("session_a")
+	ids := make(chan RunID, 1)
+	go func() {
+		id, err := rt.StartRun(context.Background(), Input{Text: "initial"})
+		if err != nil {
+			t.Error(err)
+		}
+		ids <- id
+	}()
+	<-entered
+	// It may reject this steer until registration is complete, but must never
+	// accept it into the previous session's directory.
+	_ = rt.SteerRun(context.Background(), "", Input{Text: "early steer"})
+	close(release)
+	id := <-ids
+	close(finish)
+	if err := rt.WaitRun(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "session_a", "runs", string(id), "events.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("run spilled into previous session: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "session_b", "runs", string(id), "events.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecordingFollowsLazyAndSwitchedSessions(t *testing.T) {
+	base := t.TempDir()
+	sessionID := ""
+	bot := &testBot{run: func(input string, _ RunHost) (string, error) { sessionID = input; return "done", nil }}
+	services := testBotServices(bot)
+	services.CurrentSessionID = func() string { return sessionID }
+	services.ListSessions = func() []SessionMeta { return nil }
+	services.SessionMessages = func() []DisplayMessage { return nil }
+	rt := New(bot, services)
+	if err := rt.EnableEventRecording(base); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"session_a", "session_b"} {
+		// Empty identity models a fresh conversation created lazily by Bot.Run.
+		sessionID = ""
+		runID, err := rt.StartRun(context.Background(), Input{Text: id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rt.WaitRun(context.Background(), runID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(base, id, "runs", string(runID), "events.jsonl")); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A second process resuming the same session appends to the same directory.
+func TestBindRecordedSessionAppendsToExistingBatch(t *testing.T) {
+	baseDir := t.TempDir()
+	const sessionID = "20261018T100000-111111111"
+
+	for i := 0; i < 2; i++ {
+		rt := newTestRuntime(&testBot{})
+		if err := rt.EnableEventRecording(baseDir); err != nil {
+			t.Fatalf("EnableEventRecording: %v", err)
+		}
+		rt.BindRecordedSession(sessionID)
+		runID, err := rt.StartRun(context.Background(), Input{Source: SourceRef{Kind: "test"}, Text: "hi"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitForRun(t, rt, runID)
+		if err := rt.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}
+
+	entries, err := os.ReadDir(baseDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dirs []string
+	for _, e := range entries {
+		if e.IsDir() {
+			dirs = append(dirs, e.Name())
+		}
+	}
+	if len(dirs) != 1 || dirs[0] != sessionID {
+		t.Fatalf("batches = %v, want a single session dir", dirs)
+	}
 }

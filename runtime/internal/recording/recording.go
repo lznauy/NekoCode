@@ -14,16 +14,24 @@ import (
 	"sync"
 	"time"
 
-	"nekocode/protocol"
 	"nekocode/runtime/internal/core"
 	"nekocode/util/fs"
 )
 
 type EventRecorder struct {
-	mu        sync.Mutex
-	sessionID string
-	runDir    string
-	writeErr  error
+	mu            sync.Mutex
+	baseDir       string
+	sessionID     string
+	provisionalID string
+	runs          map[core.RunID]*runRecording
+	writeErr      error
+	lastPrune     time.Time
+}
+
+type runRecording struct {
+	dir         string
+	provisional bool
+	lock        *os.File
 }
 
 type recordedEvent struct {
@@ -38,32 +46,202 @@ type recordedEvent struct {
 	Payload     json.RawMessage `json:"payload,omitempty"`
 }
 
+// runsSubdir is where a session's recorded batches live, relative to the
+// session directory. Keeping them inside the session makes one conversation's
+// data self-contained: deleting the session deletes its recordings, and the
+// session id is part of the path instead of being inferred from a directory
+// name.
+const runsSubdir = "runs"
+
+// DefaultBaseDir returns the directory that holds every session, including its
+// recorded batches at <session>/runs/.
 func DefaultBaseDir() string {
-	return fs.NekocodeDataDir("runs")
+	return fs.NekocodeDataDir("sessions")
 }
 
-func NewEventRecorder(baseDir string) (*EventRecorder, error) {
-	if strings.TrimSpace(baseDir) == "" {
+// NewEventRecorder writes registered runs under <sessionsRoot>/<session>/runs/.
+// Direct Record callers without a known session use a provisional timestamp;
+// runtime registers each run explicitly before allowing its first event.
+func NewEventRecorder(sessionsRoot string) (*EventRecorder, error) {
+	if strings.TrimSpace(sessionsRoot) == "" {
 		return nil, fmt.Errorf("runtime: empty event recorder base dir")
 	}
-	if err := os.MkdirAll(baseDir, 0o700); err != nil {
+	if err := os.MkdirAll(sessionsRoot, 0o700); err != nil {
 		return nil, err
 	}
-	pruneEmptyBatches(baseDir)
+	pruneEmptyBatches(sessionsRoot)
 
 	sessionID := time.Now().UTC().Format("20060102T150405.000000000Z")
 	sessionID = strings.NewReplacer(":", "", ".", "-").Replace(sessionID)
-	runDir := filepath.Join(baseDir, sessionID)
 	return &EventRecorder{
-		sessionID: sessionID,
-		runDir:    runDir,
+		baseDir:       sessionsRoot,
+		sessionID:     sessionID,
+		provisionalID: sessionID,
+		runs:          make(map[core.RunID]*runRecording),
 	}, nil
+}
+
+// BindSession sets the default for direct Record callers and binds any
+// provisional runs. Runtime uses BeginRun/BindRunSession instead, so changing
+// the default never redirects events belonging to an already registered run.
+func (r *EventRecorder) BindSession(sessionID string) error {
+	if r == nil {
+		return nil
+	}
+	if err := validateSessionID(sessionID); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id, run := range r.runs {
+		if err := r.bindRunLocked(id, run, sessionID); err != nil {
+			return err
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(r.baseDir, sessionID, runsSubdir), 0o700); err != nil {
+		return err
+	}
+	r.sessionID = sessionID
+	return nil
+}
+
+// BeginRun fixes this run's destination before any of its events can arrive.
+// An empty session is provisional until BindRunSession supplies its identity.
+func (r *EventRecorder) BeginRun(id core.RunID, sessionID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.beginRunLocked(id, sessionID)
+}
+
+func (r *EventRecorder) beginRunLocked(id core.RunID, sessionID string) error {
+	if id == "" {
+		return fmt.Errorf("runtime: empty recorded run id")
+	}
+	if _, ok := r.runs[id]; ok {
+		return nil
+	}
+	provisional := sessionID == "" || sessionID == r.provisionalID
+	if sessionID == "" {
+		sessionID = r.provisionalID + "_" + safePathPart(string(id))
+	}
+	if err := validateSessionID(sessionID); err != nil {
+		return err
+	}
+	dir := filepath.Join(r.baseDir, sessionID, runsSubdir, safePathPart(string(id)))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	lock, acquired, err := lockRun(dir)
+	if err != nil {
+		return err
+	}
+	if !acquired {
+		return fmt.Errorf("runtime: recorded run is active: %s", id)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "events.jsonl")); !os.IsNotExist(err) {
+		_ = lock.Close()
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("runtime: recorded run identity collision: %s", id)
+	}
+	r.runs[id] = &runRecording{dir: dir, provisional: provisional, lock: lock}
+	return nil
+}
+
+// BindRunSession only moves a provisional run; a known session is immutable.
+func (r *EventRecorder) BindRunSession(id core.RunID, sessionID string) error {
+	if err := validateSessionID(sessionID); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.bindRunLocked(id, r.runs[id], sessionID)
+}
+
+func (r *EventRecorder) bindRunLocked(id core.RunID, run *runRecording, sessionID string) error {
+	if run == nil || !run.provisional {
+		return nil
+	}
+	target := filepath.Join(r.baseDir, sessionID, runsSubdir, safePathPart(string(id)))
+	if run.dir == target {
+		run.provisional = false
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(target); !os.IsNotExist(err) {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("runtime: recorded run identity collision: %s", id)
+	}
+	if err := os.Rename(run.dir, target); err != nil {
+		return err
+	}
+	oldRuns := filepath.Dir(run.dir)
+	run.dir, run.provisional = target, false
+	_ = os.Remove(oldRuns)
+	_ = os.Remove(filepath.Dir(oldRuns))
+	return nil
+}
+
+// EndRun releases retention protection after every terminal event is recorded.
+func (r *EventRecorder) EndRun(id core.RunID) {
+	r.mu.Lock()
+	if run := r.runs[id]; run != nil {
+		_ = run.lock.Close()
+		delete(r.runs, id)
+	}
+	prune := !r.lastPrune.IsZero() && time.Since(r.lastPrune) >= time.Minute
+	if prune {
+		r.lastPrune = time.Now()
+	}
+	r.mu.Unlock()
+	if prune {
+		if err := PruneRecordedRuns(r.baseDir, RetentionAge, RetentionBytes); err != nil {
+			logger.Log("runtime: prune recorded runs: %v", err)
+		}
+	}
+}
+
+// StartRetention enables periodic cleanup after startup restore has finished.
+// Until then, EndRun must not delete files still queued for restore.
+func (r *EventRecorder) StartRetention() {
+	r.mu.Lock()
+	r.lastPrune = time.Now()
+	r.mu.Unlock()
+}
+
+// validateSessionID rejects anything that would escape the base directory.
+func validateSessionID(id string) error {
+	if strings.TrimSpace(id) == "" || id == "." || id == ".." ||
+		id != filepath.Base(id) || strings.ContainsAny(id, `/\`) {
+		return fmt.Errorf("invalid session id: %q", id)
+	}
+	return nil
+}
+
+// runNumber parses the numeric part of a run_<N> directory name.
+func runNumber(name string) (uint64, bool) {
+	if !strings.HasPrefix(name, "run_") {
+		return 0, false
+	}
+	number, _, _ := strings.Cut(strings.TrimPrefix(name, "run_"), "_")
+	n, err := strconv.ParseUint(number, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 func (r *EventRecorder) SessionID() string {
 	if r == nil {
 		return ""
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.sessionID
 }
 
@@ -71,7 +249,12 @@ func (r *EventRecorder) RunDir(runID core.RunID) string {
 	if r == nil {
 		return ""
 	}
-	return filepath.Join(r.runDir, safePathPart(string(runID)))
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if run := r.runs[runID]; run != nil {
+		return run.dir
+	}
+	return filepath.Join(r.baseDir, r.sessionID, runsSubdir, safePathPart(string(runID)))
 }
 
 func (r *EventRecorder) Close() error {
@@ -80,6 +263,10 @@ func (r *EventRecorder) Close() error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	for id, run := range r.runs {
+		_ = run.lock.Close()
+		delete(r.runs, id)
+	}
 	return r.writeErr
 }
 
@@ -89,20 +276,24 @@ func (r *EventRecorder) Record(ev core.Event) {
 	}
 }
 
-func (r *EventRecorder) RecordError(ev core.Event) error {
-	if r == nil || ev.RunID == "" {
+func (r *EventRecorder) RecordError(ev core.Event) (err error) {
+	if r == nil || ev.RunID == "" || ev.Type == core.EventContextUpdated {
 		return nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	runDir := r.RunDir(ev.RunID)
-	if err := appendJSONLine(filepath.Join(runDir, "events.jsonl"), recordedEventFrom(ev)); err != nil {
-		err = fmt.Errorf("append event: %w", err)
-		if r.writeErr == nil {
+	defer func() {
+		if err != nil && r.writeErr == nil {
 			r.writeErr = err
 		}
+	}()
+
+	if err := r.beginRunLocked(ev.RunID, r.sessionID); err != nil {
 		return err
+	}
+	runDir := r.runs[ev.RunID].dir
+	if err := appendJSONLine(filepath.Join(runDir, "events.jsonl"), recordedEventFrom(ev)); err != nil {
+		return fmt.Errorf("append event: %w", err)
 	}
 	return nil
 }
@@ -155,11 +346,14 @@ type RecordedRun struct {
 // ScanRecordedRuns lists the newest recorded runs without reading any file
 // content. Startup needs run ordering and sequence numbers before the heavy
 // JSON decoding happens — names alone answer both.
-func ScanRecordedRuns(baseDir string, runLimit int) ([]RecordedRun, error) {
-	if strings.TrimSpace(baseDir) == "" {
+//
+// sessionsRoot holds one directory per session, each with its recordings at
+// <session>/runs/<run>/events.jsonl.
+func ScanRecordedRuns(sessionsRoot string, runLimit int) ([]RecordedRun, error) {
+	if strings.TrimSpace(sessionsRoot) == "" {
 		return nil, fmt.Errorf("runtime: empty event recorder base dir")
 	}
-	matches, err := filepath.Glob(filepath.Join(baseDir, "*", "*", "events.jsonl"))
+	matches, err := filepath.Glob(filepath.Join(sessionsRoot, "*", runsSubdir, "*", "events.jsonl"))
 	if err != nil {
 		return nil, err
 	}
@@ -240,24 +434,29 @@ func sortRecordedRunFiles(paths []string) {
 
 func recordedRunOrder(path string) (string, uint64) {
 	runDir := filepath.Base(filepath.Dir(path))
-	batch := filepath.Base(filepath.Dir(filepath.Dir(path)))
-	run, _ := strconv.ParseUint(strings.TrimPrefix(runDir, "run_"), 10, 64)
-	return batch, run
+	// <session>/runs/<run>/events.jsonl: skip the runs/ level to reach the session.
+	session := filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(path))))
+	run, _ := runNumber(runDir)
+	return session, run
 }
 
-func pruneEmptyBatches(baseDir string) {
-	batches, err := os.ReadDir(baseDir)
+// pruneEmptyBatches removes empty recordings directories left behind by
+// interrupted writes. It only ever looks at <session>/runs/, never the session
+// itself: a session directory is owned by the session store, and an empty one
+// may simply be a session that has not written its snapshot yet.
+func pruneEmptyBatches(sessionsRoot string) {
+	sessions, err := os.ReadDir(sessionsRoot)
 	if err != nil {
 		return
 	}
-	for _, batch := range batches {
-		if !batch.IsDir() {
+	for _, session := range sessions {
+		if !session.IsDir() {
 			continue
 		}
-		path := filepath.Join(baseDir, batch.Name())
-		entries, err := os.ReadDir(path)
+		dir := filepath.Join(sessionsRoot, session.Name(), runsSubdir)
+		entries, err := os.ReadDir(dir)
 		if err == nil && len(entries) == 0 {
-			_ = os.Remove(path)
+			_ = os.Remove(dir)
 		}
 	}
 }
@@ -318,71 +517,15 @@ func decodeRecordedPayload(version string, typ core.EventType, data json.RawMess
 	if len(data) == 0 {
 		return nil, nil
 	}
-	switch typ {
-	case core.EventRunSummary:
-		var p protocol.RunSummary
-		return p, json.Unmarshal(data, &p)
-	case core.EventSubAgentOutput:
-		var p protocol.SubAgentOutput
-		return p, json.Unmarshal(data, &p)
-
-	case core.EventCompaction:
-		var p protocol.CompactionEvent
-		if err := json.Unmarshal(data, &p); err != nil {
+	if (version == "" || version == "1.0") && (typ == core.EventSubAgentStarted || typ == core.EventSubAgentEnded) {
+		var legacy core.ToolPayload
+		if err := json.Unmarshal(data, &legacy); err != nil {
 			return nil, err
 		}
-		if !p.Status.Valid() || !p.Trigger.Valid() {
-			return nil, fmt.Errorf("invalid compaction event status %q or trigger %q", p.Status, p.Trigger)
-		}
-		return p, nil
-	case core.EventInputAccepted, core.EventSystemMessage, core.EventAssistantMessage:
-		var p core.MessagePayload
-		return p, json.Unmarshal(data, &p)
-	case core.EventAssistantDelta, core.EventReasoningDelta:
-		var p core.DeltaPayload
-		return p, json.Unmarshal(data, &p)
-	case core.EventPhaseChanged:
-		var p core.PhasePayload
-		return p, json.Unmarshal(data, &p)
-	case core.EventToolStarted, core.EventToolBlocked, core.EventToolPreview, core.EventToolCompleted:
-		var p core.ToolPayload
-		return p, json.Unmarshal(data, &p)
-	case core.EventSubAgentStarted, core.EventSubAgentEnded:
-		if version == "" || version == "1.0" {
-			var legacy core.ToolPayload
-			if err := json.Unmarshal(data, &legacy); err != nil {
-				return nil, err
-			}
-			color, _ := strconv.Atoi(legacy.Output)
-			return core.SubAgentPayload{ID: legacy.Args, Type: legacy.ToolName, Color: color}, nil
-		}
-		var p core.SubAgentPayload
-		return p, json.Unmarshal(data, &p)
-	case core.EventSessionChanged:
-		var p core.SessionPayload
-		return p, json.Unmarshal(data, &p)
-	case core.EventTodosUpdated:
-		var p []protocol.TodoItem
-		return p, json.Unmarshal(data, &p)
-	case core.EventApprovalRequested, core.EventApprovalResolved:
-		var p core.ApprovalView
-		return p, json.Unmarshal(data, &p)
-	case core.EventQuestionRequested, core.EventQuestionResolved:
-		var p core.QuestionView
-		return p, json.Unmarshal(data, &p)
-	case core.EventRunDone, core.EventRunFailed, core.EventRunCancelled:
-		var p core.RunResult
-		return p, json.Unmarshal(data, &p)
-	case core.EventConnectorStatus:
-		var p core.ConnectorStatusPayload
-		return p, json.Unmarshal(data, &p)
-	case core.EventMetricsUpdated:
-		var p protocol.Metrics
-		return p, json.Unmarshal(data, &p)
-	default:
-		var p map[string]any
-		return p, json.Unmarshal(data, &p)
+		color, _ := strconv.Atoi(legacy.Output)
+		return core.SubAgentPayload{ID: legacy.Args, Type: legacy.ToolName, Color: color}, nil
 	}
+	return core.DecodeEventPayload(typ, data)
 }
 
 func marshalPayload(payload any) (json.RawMessage, string) {
@@ -443,98 +586,86 @@ func safePathPart(s string) string {
 	return b.String()
 }
 
-// Retention defaults for recorded run history: batches whose last activity is
-// older than RetentionAge are deleted at startup, then the oldest batches are
-// trimmed until the total fits RetentionBytes. The restore path only ever
-// replays the newest runs, so far older batches are dead weight.
+// Retention limits apply to individual runs. Active runs are protected by an
+// OS file lock, including runs owned by another process.
 const (
 	RetentionAge   = 30 * 24 * time.Hour
 	RetentionBytes = 500 << 20
 )
 
-type recordedBatch struct {
-	name    string
-	mod     time.Time
-	size    int64
-	entries []os.DirEntry
-}
-
-// PruneRecordedRuns enforces the retention policy for recorder batches.
-// A batch's age is its directory mtime — the last time one of its runs was
-// created — so the active recorder's own batch is never selected for
-// deletion. Deletion is best-effort: unreadable batches are skipped, not
-// fatal.
-func PruneRecordedRuns(baseDir string, maxAge time.Duration, maxBytes int64) error {
-	if strings.TrimSpace(baseDir) == "" {
+// PruneRecordedRuns removes expired runs, then oldest inactive runs until the
+// byte budget is met. Session snapshots and active runs are never removed.
+func PruneRecordedRuns(sessionsRoot string, maxAge time.Duration, maxBytes int64) error {
+	if strings.TrimSpace(sessionsRoot) == "" {
 		return fmt.Errorf("runtime: empty event recorder base dir")
 	}
-	entries, err := os.ReadDir(baseDir)
+	files, err := filepath.Glob(filepath.Join(sessionsRoot, "*", runsSubdir, "*", "events.jsonl"))
 	if err != nil {
 		return err
 	}
-	var batches []recordedBatch
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		info, err := entry.Info()
+	type candidate struct {
+		path string
+		mod  time.Time
+		size int64
+	}
+	var runs []candidate
+	var total int64
+	for _, path := range files {
+		info, err := os.Stat(path)
 		if err != nil {
 			continue
 		}
-		runDirs, err := os.ReadDir(filepath.Join(baseDir, entry.Name()))
+		runs = append(runs, candidate{path, info.ModTime(), info.Size()})
+		total += info.Size()
+	}
+	sort.Slice(runs, func(i, j int) bool {
+		if runs[i].mod.Equal(runs[j].mod) {
+			return runs[i].path < runs[j].path
+		}
+		return runs[i].mod.Before(runs[j].mod)
+	})
+	for _, run := range runs {
+		expired := maxAge > 0 && time.Since(run.mod) > maxAge
+		if !expired && (maxBytes <= 0 || total <= maxBytes) {
+			continue
+		}
+		dir := filepath.Dir(run.path)
+		lock, acquired, err := lockRun(dir)
+		if os.IsNotExist(err) {
+			total -= run.size
+			continue
+		}
 		if err != nil {
+			return err
+		}
+		if !acquired {
 			continue
 		}
-		batches = append(batches, recordedBatch{
-			name:    entry.Name(),
-			mod:     info.ModTime(),
-			entries: runDirs,
-			size:    batchSize(filepath.Join(baseDir, entry.Name()), runDirs),
-		})
-	}
-	sort.Slice(batches, func(i, j int) bool { return batches[i].mod.Before(batches[j].mod) })
-
-	now := time.Now()
-	var kept int64
-	for _, batch := range batches {
-		if now.Sub(batch.mod) > maxAge {
-			_ = os.RemoveAll(filepath.Join(baseDir, batch.name))
-			logger.Log("runtime: pruned recorded batch %s (idle %s)", batch.name, now.Sub(batch.mod).Round(time.Hour))
+		// A writer may have finished between the scan and lock acquisition.
+		info, err := os.Stat(run.path)
+		if err != nil {
+			_ = lock.Close()
+			if os.IsNotExist(err) {
+				total -= run.size
+				continue
+			}
+			return err
+		}
+		total += info.Size() - run.size
+		expired = maxAge > 0 && time.Since(info.ModTime()) > maxAge
+		if !expired && (maxBytes <= 0 || total <= maxBytes) {
+			_ = lock.Close()
 			continue
 		}
-		kept += batch.size
-	}
-	if maxBytes > 0 {
-		for i, batch := range batches {
-			if kept <= maxBytes {
-				break
-			}
-			if i == len(batches)-1 {
-				// The newest batch — possibly the active recorder's own — is
-				// never size-pruned; a run exceeding the cap is a data point,
-				// not a reason to delete the session in progress.
-				break
-			}
-			if now.Sub(batch.mod) > maxAge {
-				continue // already removed above
-			}
-			_ = os.RemoveAll(filepath.Join(baseDir, batch.name))
-			kept -= batch.size
-			logger.Log("runtime: pruned recorded batch %s (size cap, %d bytes freed)", batch.name, batch.size)
+		// IDs are never reused. Once the lock is free, a completed run has no
+		// future writer; closing also permits directory removal on Windows.
+		_ = lock.Close()
+		if err := os.RemoveAll(dir); err != nil {
+			return err
 		}
+		total -= info.Size()
+		logger.Log("runtime: pruned recorded run %s", dir)
+		_ = os.Remove(filepath.Dir(dir)) // only succeeds if runs/ is empty
 	}
 	return nil
-}
-
-func batchSize(dir string, runDirs []os.DirEntry) int64 {
-	var total int64
-	for _, run := range runDirs {
-		if !run.IsDir() {
-			continue
-		}
-		if info, err := os.Stat(filepath.Join(dir, run.Name(), "events.jsonl")); err == nil {
-			total += info.Size()
-		}
-	}
-	return total
 }

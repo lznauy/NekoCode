@@ -21,6 +21,8 @@ type StreamCallbacks struct {
 	OnPhase     func(phase string)
 	AddTokens   func(prompt, completion int)
 	OnUsage     func(usage types.StreamUsage)
+	// OnTextReset retracts the current response when an attempt is replaced.
+	OnTextReset func()
 }
 
 // StreamResult accumulates the output of consuming a ChatStream.
@@ -51,6 +53,7 @@ type LLMCallResult struct {
 
 // LLMCallOptions configures a single LLM call.
 type LLMCallOptions struct {
+	Request   types.RequestOptions
 	Ctx       context.Context
 	Messages  []types.Message
 	ToolDefs  []types.ToolDef
@@ -70,7 +73,7 @@ var ansiRegex = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")
 // log (calllog.Write).
 func CallLLM(client provider.LLM, opts LLMCallOptions) (*LLMCallResult, error) {
 	start := time.Now()
-	tokenCh, errCh := client.ChatStream(opts.Ctx, opts.Messages, opts.ToolDefs)
+	tokenCh, errCh := provider.ChatStream(client, opts.Ctx, opts.Messages, opts.ToolDefs, opts.Request)
 	if tokenCh == nil {
 		err := fmt.Errorf("chat stream failed")
 		select {
@@ -83,28 +86,26 @@ func CallLLM(client provider.LLM, opts LLMCallOptions) (*LLMCallResult, error) {
 	}
 
 	stream := StreamResult{}
-	result, err := func() (*LLMCallResult, error) {
+	err := func() error {
 		if err := ConsumeStream(tokenCh, &stream, opts.Callbacks, opts.CheckDone); err != nil {
 			go func() { <-errCh }()
-			return nil, err
+			return err
 		}
 
 		if opts.CheckDone != nil && opts.CheckDone() {
 			go func() { <-errCh }()
-			return nil, context.Canceled
+			return context.Canceled
 		}
 
-		if err := <-errCh; err != nil {
-			return nil, err
-		}
-
-		return &LLMCallResult{
-			Text:               ansiRegex.ReplaceAllString(stream.TextBuf.String(), ""),
-			Reasoning:          stream.ReasoningBuf.String(),
-			ReasoningSignature: stream.ReasoningSignature,
-			ToolCalls:          stream.CollectToolCalls(),
-		}, nil
+		return <-errCh
 	}()
+	// Preserve partial output so a replacement attempt can retract its preview.
+	result := &LLMCallResult{
+		Text:               ansiRegex.ReplaceAllString(stream.TextBuf.String(), ""),
+		Reasoning:          stream.ReasoningBuf.String(),
+		ReasoningSignature: stream.ReasoningSignature,
+		ToolCalls:          stream.CollectToolCalls(),
+	}
 	if opts.Callbacks.OnUsage != nil && stream.Usage.HasTokens() {
 		opts.Callbacks.OnUsage(stream.Usage)
 	}
@@ -155,9 +156,15 @@ func writeCallRecord(opts LLMCallOptions, stream *StreamResult, start time.Time,
 // retryable failure via buildOptions.
 func CallLLMWithRetry(ctx context.Context, client provider.LLM, buildOptions func() LLMCallOptions) (*LLMCallResult, error) {
 	var result *LLMCallResult
+	var lastOptions LLMCallOptions
 	err := WithRetry(ctx, func() error {
+		opts := buildOptions()
+		lastOptions = opts
+		if result != nil && result.Text != "" && opts.Callbacks.OnTextReset != nil {
+			opts.Callbacks.OnTextReset()
+		}
 		var err error
-		result, err = CallLLM(client, buildOptions())
+		result, err = CallLLM(client, opts)
 		return err
 	})
 	if err != nil {
@@ -170,21 +177,17 @@ func CallLLMWithRetry(ctx context.Context, client provider.LLM, buildOptions fun
 	// a straight answer. Only models declaring a thinking switch take this
 	// path; without the profile the disabled request carries no switch and
 	// the retry would be a pointless duplicate call.
-	if retryEmptyContent(client, result) {
+	if retryEmptyContent(client, result) && (lastOptions.Request.DisableThinking == nil || !*lastOptions.Request.DisableThinking) {
 		logger.Log("llmstream: reasoning-only empty response, retrying once with thinking disabled")
-		// Restore the captured state rather than a hard-coded false, so the
-		// window is correct even under nesting. Concurrency note: this mutates
-		// client-global state, so two concurrent CallLLMWithRetry calls on one
-		// client could observe each other's flag. The current architecture
-		// serializes model calls per client (the main run loop is single
-		// goroutine and subagents own separate clients), so the window stays
-		// safe; revisit if callers ever parallelize.
-		previous := client.GetDisableThinking()
-		client.SetDisableThinking(true)
-		retry, retryErr := CallLLM(client, buildOptions())
-		client.SetDisableThinking(previous)
+		retryOpts := buildOptions()
+		disabled := true
+		retryOpts.Request.DisableThinking = &disabled
+		retry, retryErr := CallLLM(client, retryOpts)
 		if retryErr == nil && retry != nil {
 			return retry, nil
+		}
+		if retry != nil && retry.Text != "" && retryOpts.Callbacks.OnTextReset != nil {
+			retryOpts.Callbacks.OnTextReset()
 		}
 		logger.Log("llmstream: thinking-disabled retry failed (err=%v), keeping the original result", retryErr)
 	}
@@ -194,10 +197,11 @@ func CallLLMWithRetry(ctx context.Context, client provider.LLM, buildOptions fun
 // retryEmptyContent reports whether result is a completed reasoning-only
 // response worth one thinking-disabled retry.
 func retryEmptyContent(client provider.LLM, result *LLMCallResult) bool {
-	if result == nil || client == nil || client.GetDisableThinking() {
+	if result == nil || client == nil || !provider.SupportsRequestOptions(client) {
 		return false
 	}
-	if provider.ReasoningSettingsFor(client).ThinkingMode == "" {
+	settings := provider.ReasoningSettingsFor(client)
+	if settings.ThinkingMode == "" || settings.Disabled {
 		return false
 	}
 	return strings.TrimSpace(result.Text) == "" &&

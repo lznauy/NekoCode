@@ -15,6 +15,8 @@ import (
 
 type Runtime interface {
 	controlruntime.Interaction
+	controlruntime.ModelReader
+	controlruntime.ObservationReader
 	CurrentRun() (controlruntime.RunSnapshot, bool)
 	LookupRun(controlruntime.RunID) (controlruntime.RunSnapshot, bool)
 	Runs(limit int) []controlruntime.RunSnapshot
@@ -28,7 +30,6 @@ type Runtime interface {
 	MemoryView(controlruntime.MemoryScope) controlruntime.MemoryView
 	ListSessions() []controlruntime.SessionMeta
 	SessionMessages() []controlruntime.DisplayMessage
-	CurrentModel() controlruntime.ModelSelection
 	CommandCatalog() []string
 	ReplayEvents(context.Context, controlruntime.EventFilter) (<-chan controlruntime.Event, error)
 }
@@ -46,6 +47,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /status", s.handleStatus)
 	mux.HandleFunc("GET /capabilities", s.handleCapabilities)
+	// Transport-neutral observation surface for external applications.
+	mux.HandleFunc("GET /observe/overview", s.handleObserveOverview)
+	mux.HandleFunc("GET /observe/runs", s.handleObserveRuns)
+	mux.HandleFunc("GET /observe/runs/{runID}", s.handleObserveRun)
+	mux.HandleFunc("GET /observe/metrics", s.handleObservePrometheus)
+	mux.HandleFunc("GET /observe/models", s.handleObserveModels)
+	mux.HandleFunc("GET /observe/tools", s.handleObserveTools)
+	mux.HandleFunc("GET /observe/sources", s.handleObserveSources)
 	mux.HandleFunc("GET /runs", s.handleRuns)
 	mux.HandleFunc("GET /runs/current", s.handleCurrentRun)
 	mux.HandleFunc("GET /connect", s.handleConnect)

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	controlruntime "nekocode/runtime"
 	"nekocode/runtime/internal/eventbus"
@@ -151,6 +152,14 @@ func (f *fakeRuntime) Metrics() controlruntime.MetricsSnapshot {
 	return controlruntime.MetricsSnapshot{PromptTokens: 10, CompletionTokens: 5}
 }
 
+func (f *fakeRuntime) ModelOptions() ([]controlruntime.ModelOption, string) {
+	return []controlruntime.ModelOption{{Name: "default", Model: "m1"}}, "default"
+}
+
+func (f *fakeRuntime) ToolNames() []string {
+	return []string{"read", "shell"}
+}
+
 func (f *fakeRuntime) Status() controlruntime.RuntimeStatus {
 	return controlruntime.RuntimeStatus{State: controlruntime.RuntimeReady}
 }
@@ -159,6 +168,7 @@ func (f *fakeRuntime) Capabilities() controlruntime.CapabilityManifest {
 	return controlruntime.CapabilityManifest{
 		Protocol: controlruntime.ProtocolVersion,
 		Commands: true, Metrics: true, Models: true,
+		ModelCatalog: true, ToolCatalog: true,
 		Context: true, Sessions: true, Connectors: true,
 	}
 }
@@ -213,6 +223,110 @@ func (f *fakeRuntime) CommandMenu(_ context.Context, input string) (controlrunti
 
 func (f *fakeRuntime) CurrentModel() controlruntime.ModelSelection {
 	return controlruntime.ModelSelection{Provider: "openai", Model: "gpt-test"}
+}
+
+func (f *fakeRuntime) ObservedRuns(filter controlruntime.ObservedRunFilter) []controlruntime.ObservedRunSummary {
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 200
+	}
+	out := []controlruntime.ObservedRunSummary{}
+	for _, run := range f.store.List(limit) {
+		summary := controlruntime.SummarizeObservedRun(run)
+		if filter.State != "" && summary.State != filter.State {
+			continue
+		}
+		if filter.Source != "" && summary.Source.Kind != filter.Source {
+			continue
+		}
+		out = append(out, summary)
+	}
+	return out
+}
+
+func (f *fakeRuntime) ObservedOverview() controlruntime.ObserveOverview {
+	overview := controlruntime.ObserveOverview{
+		GeneratedAt: time.Now(), Window: controlruntime.ObserveWindow,
+		Runtime: f.Status(), Capabilities: f.Capabilities(),
+		Metrics: f.Metrics(), Context: f.ContextSnapshot(), Model: f.CurrentModel(),
+		Sources: map[string]int{},
+	}
+	for _, run := range f.ObservedRuns(controlruntime.ObservedRunFilter{Limit: 500}) {
+		switch run.State {
+		case controlruntime.ObservedRunning, controlruntime.ObservedWaiting:
+			overview.Runs.Active++
+		case controlruntime.ObservedDone:
+			overview.Runs.Done++
+		case controlruntime.ObservedFailed:
+			overview.Runs.Failed++
+		case controlruntime.ObservedCancelled:
+			overview.Runs.Cancelled++
+		}
+		overview.Runs.Total++
+		overview.Runs.Tools += run.Tools
+		overview.Runs.ToolErrors += run.ToolErrors
+		if run.Source.Kind != "" {
+			overview.Sources[run.Source.Kind]++
+		}
+	}
+	return overview
+}
+
+func (f *fakeRuntime) ObservedRun(runID controlruntime.RunID) (controlruntime.ObservedRunDetail, bool) {
+	run, ok := f.store.Lookup(runID)
+	if !ok {
+		return controlruntime.ObservedRunDetail{}, false
+	}
+	detail := controlruntime.ObservedRunDetail{Run: controlruntime.SummarizeObservedRun(run)}
+	for _, tool := range run.Tools {
+		item := controlruntime.ToolActivity{
+			CallID: tool.CallID, Name: tool.Name, Status: tool.Status,
+			IsError: tool.IsError, SubAgentID: tool.SubAgentID,
+			StartedAt: tool.StartedAt, FinishedAt: tool.FinishedAt,
+		}
+		detail.Tools = append(detail.Tools, item)
+	}
+	return detail, true
+}
+
+func (f *fakeRuntime) ObservedSourceKinds() []string { return []string{"test"} }
+
+func (f *fakeRuntime) ObservedToolCatalog() []string { return f.ToolNames() }
+
+func (f *fakeRuntime) Prometheus() string {
+	overview := f.ObservedOverview()
+	var b strings.Builder
+	metric := func(name, typ, value string) {
+		b.WriteString("# TYPE ")
+		b.WriteString(name)
+		b.WriteByte(' ')
+		b.WriteString(typ)
+		b.WriteByte('\n')
+
+		b.WriteString(name)
+		b.WriteByte(' ')
+		b.WriteString(value)
+		b.WriteByte('\n')
+	}
+	metric("nekocode_runtime_state", "gauge", "0")
+	metric("nekocode_runs_done_window", "gauge", itoa(overview.Runs.Done))
+	metric("nekocode_runs_failed_window", "gauge", itoa(overview.Runs.Failed))
+	metric("nekocode_tool_errors_window", "gauge", itoa(overview.Runs.ToolErrors))
+	metric("nekocode_turn_input_tokens", "gauge", itoa(overview.Metrics.TurnInput))
+	metric("nekocode_compactions_session", "gauge", itoa(overview.Metrics.CompactCount))
+	return b.String()
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	out := ""
+	for n > 0 {
+		out = string(rune('0'+n%10)) + out
+		n /= 10
+	}
+	return out
 }
 
 func (f *fakeRuntime) SwitchModel(string) (controlruntime.ModelSelection, error) {

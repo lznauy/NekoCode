@@ -8,7 +8,8 @@ import (
 	"nekocode/protocol"
 )
 
-// ConsumeStream reads tokens from tokenCh and populates s.
+// ConsumeStream reads provider tokens without interpreting answer text. Retry
+// replacement and leaked protocol detection belong to the calling layers.
 func ConsumeStream(tokenCh <-chan types.StreamToken, s *StreamResult, cb StreamCallbacks, checkDone func() bool) error {
 	const idleTimeout = 3 * time.Minute
 	timer := time.NewTimer(idleTimeout)

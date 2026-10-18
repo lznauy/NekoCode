@@ -632,12 +632,21 @@ func (s *eventSink) Flush(ctx context.Context) { s.preview.flush(ctx) }
 // 记账到 run 卡片(/last /diff /status 与 DoneReply 的数据源),保证渲染
 // DoneReply 时卡片已存在——另起并行订阅会与 Dispatch 竞态,结果消息会
 // 因卡片缺失而被静默丢弃。
-func (s *eventSink) Track(ev controlruntime.Event) { s.c.tracker().Track(ev) }
+func (s *eventSink) Track(ev controlruntime.Event) {
+	s.c.tracker().Track(ev)
+	if ev.Type == controlruntime.EventToolStarted && s.preview.runID == ev.RunID {
+		if p, ok := ev.Payload.(controlruntime.ToolPayload); ok && p.SubAgentID == "" {
+			s.preview.responseStart = len(s.preview.buf)
+		}
+	}
+}
 
 func (s *eventSink) Post(ctx context.Context, in connect.Intent) error {
 	switch in.Kind {
 	case connect.IntentPreview:
 		s.preview.addDelta(ctx, in.RunID, in.Text)
+	case connect.IntentPreviewReset:
+		s.preview.retract(ctx, in.RunID)
 	case connect.IntentResult:
 		// Referenced local images go out as native photos first; the text
 		// (which still cites the paths) follows as the run's done-reply.
@@ -648,6 +657,9 @@ func (s *eventSink) Post(ctx context.Context, in connect.Intent) error {
 		}
 		// A settled preview already shows the final text; the done-reply
 		// would duplicate it.
+		if s.preview.runID == in.RunID {
+			s.preview.buf = []rune(in.Text)
+		}
 		if s.preview.finalize(ctx, in.RunID) {
 			return nil
 		}

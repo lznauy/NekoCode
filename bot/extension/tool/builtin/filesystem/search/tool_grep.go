@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/toolutil"
-	"os"
+	"nekocode/bot/extension/tool/runtime/workspace"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -71,7 +71,10 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) (string, er
 	grepArgs = append(grepArgs, "--", pattern, safeBasePath)
 
 	cmd := exec.CommandContext(ctx, bin, grepArgs...)
-	cmd.Dir, _ = os.Getwd()
+	cmd.Dir, err = workspace.WorkingDirectory(ctx)
+	if err != nil {
+		return "", err
+	}
 	output, err := cmd.CombinedOutput()
 
 	if err != nil {

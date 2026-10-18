@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,7 +86,7 @@ func TestEventRecordingRestoresTailInBackground(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "run_" + itoa(totalRuns+1); string(runID) != want {
+	if want := "run_" + itoa(totalRuns+1) + "_"; !strings.HasPrefix(string(runID), want) {
 		t.Fatalf("run id = %q, want %q", runID, want)
 	}
 	waitForRun(t, rt, runID)

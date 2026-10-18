@@ -66,10 +66,20 @@ func GarbledCircuitBreaker() policy.Hook {
 				stop := policy.StopFormatError
 				return &policy.Result{Stop: &stop}
 			}
+			if s.Facts().Response.Intent == policy.FinalIntentFormatError {
+				// A format error is normally the run's final state, so nothing
+				// would ever ask the model to redo the call. Pointing it back at
+				// the native tool schema is what actually prevents a repeat.
+				return &policy.Result{Hint: &policy.Hint{
+					Type: "garbled_tool_call", Severity: "critical",
+					Content: "你上一条回复没有形成可执行的调用，内容被当作纯文本丢弃了。调用工具必须使用提供的原生工具调用通道，参数按工具 schema 传递；不要用文本写出调用标记（如 DSML / invoke / parameter）或 JSON 文本。请重新发起这次调用。",
+				}}
+			}
 			return nil
 		},
 		DescribeTrigger: func(s policy.State) string {
-			return fmt.Sprintf("garbled_count=%d", s.Facts().Response.GarbledCount)
+			return fmt.Sprintf("garbled_count=%d intent=%s",
+				s.Facts().Response.GarbledCount, dashIfEmpty(string(s.Facts().Response.Intent)))
 		},
 	}
 }

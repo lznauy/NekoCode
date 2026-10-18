@@ -62,6 +62,7 @@ type streamState struct {
 	phase     protocol.PhaseFunc
 	text      func(string)
 	reasoning func(string)
+	resetText func()
 }
 
 func (s *streamState) emitPhase(phase string) {
@@ -73,6 +74,13 @@ func (s *streamState) emitPhase(phase string) {
 func (s *streamState) emitText(delta string) {
 	if s.text != nil {
 		s.text(delta)
+	}
+}
+
+// discardText clears the host's streamed answer text for the current turn.
+func (s *streamState) discardText() {
+	if s.resetText != nil {
+		s.resetText()
 	}
 }
 

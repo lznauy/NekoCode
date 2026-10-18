@@ -33,7 +33,7 @@ func (t *ImageGenTool) Description() string {
 func (t *ImageGenTool) Parameters() []core.Parameter {
 	return []core.Parameter{
 		{Name: "prompt", Type: "string", Required: true, Description: "Chinese or English text prompt for image generation, recommended ≤120 chars, max 800"},
-		{Name: "output_dir", Type: "string", Required: false, Description: "Directory to save generated images. Defaults to current working directory."},
+		{Name: "output_dir", Type: "string", Required: false, Description: "Directory to save generated images. An explicit directory must be workspace-authorized. Defaults to ~/.nekocode/images."},
 		{Name: "width", Type: "integer", Required: false, Description: "Image width, default 1328. Must also set height."},
 		{Name: "height", Type: "integer", Required: false, Description: "Image height, default 1328. Must also set width."},
 		{Name: "seed", Type: "integer", Required: false, Description: "Random seed, -1 for random (default)"},
@@ -51,7 +51,7 @@ func (t *ImageGenTool) Execute(ctx context.Context, args map[string]any) (string
 	if cfg.Name == "" {
 		return "", fmt.Errorf("no image gen models configured — add image_gen_models in ~/.nekocode/config.json")
 	}
-	outputDir, err := resolveOutputDir(args)
+	outputDir, err := resolveOutputDir(ctx, args)
 	if err != nil {
 		return "", err
 	}

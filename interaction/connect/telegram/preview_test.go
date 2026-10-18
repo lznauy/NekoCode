@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"nekocode/interaction/connect"
 	"strings"
 	"testing"
 	"time"
@@ -71,6 +72,29 @@ func TestPreviewCreatedAfterThreshold(t *testing.T) {
 	}
 	if len(sender.sent) != 1 {
 		t.Fatalf("sent = %d, want 1 preview message", len(sender.sent))
+	}
+}
+
+func TestPreviewResetRetractsOnlyCurrentResponseAndUsesCanonicalResult(t *testing.T) {
+	sender := &stubSender{}
+	now := time.Now()
+	p := newTestPreview(sender, &now)
+	p.addDelta(context.Background(), "run1", "keep")
+	p.responseStart = len(p.buf) // native tool boundary
+	p.addDelta(context.Background(), "run1", strings.Repeat("injected", 100))
+	p.retract(context.Background(), "run1")
+	if got := string(p.buf); got != "keep" {
+		t.Fatalf("remaining text = %q", got)
+	}
+	if got := sender.edits[len(sender.edits)-1].text; got != "keep" {
+		t.Fatalf("preview not retracted: %q", got)
+	}
+	sink := &eventSink{preview: p}
+	if err := sink.Post(context.Background(), connect.Intent{Kind: connect.IntentResult, RunID: "run1", Text: "canonical answer"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := sender.edits[len(sender.edits)-1].text; got != "canonical answer" {
+		t.Fatalf("final preview = %q", got)
 	}
 }
 

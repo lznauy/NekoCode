@@ -9,6 +9,7 @@ import (
 // Services explicitly describes the optional application functions attached
 // to a Runner. The composition root supplies this value once; Runtime and
 // transports do not discover capabilities through type assertions.
+// Deprecated: use ServiceGroups and NewWithServices for new compositions.
 type Services struct {
 	MCPAuthorizationAction  func(string, string) error
 	Checkpoints             func() ([]CheckpointInfo, error)
@@ -55,7 +56,7 @@ type Services struct {
 // image-understanding tool.
 func (r *Runtime) ImageAttachmentsEnabled() bool {
 	r.mu.Lock()
-	service, closed := r.services.ImageAttachmentsEnabled, r.closed
+	service, closed := r.services.Models.ImageAttachmentsEnabled, r.closed
 	r.mu.Unlock()
 	return !closed && service != nil && service()
 }
@@ -65,7 +66,7 @@ func (r *Runtime) ImageAttachmentsEnabled() bool {
 // only being reachable through the image_understand tool.
 func (r *Runtime) VisionEnabled() bool {
 	r.mu.Lock()
-	service, closed := r.services.VisionEnabled, r.closed
+	service, closed := r.services.Models.VisionEnabled, r.closed
 	r.mu.Unlock()
 	return !closed && service != nil && service()
 }
@@ -90,6 +91,7 @@ func (r *Runtime) mutation(op string, supported bool, fn func() error) error {
 	r.mutating = true
 	r.mu.Unlock()
 	defer func() {
+		r.invalidateContext()
 		r.mu.Lock()
 		r.mutating = false
 		r.mu.Unlock()
@@ -98,8 +100,8 @@ func (r *Runtime) mutation(op string, supported bool, fn func() error) error {
 }
 
 func (r *Runtime) SwitchModel(name string) (selection ModelSelection, err error) {
-	err = r.mutation("switch_model", r.services.SwitchModel != nil, func() error {
-		selection, err = r.services.SwitchModel(name)
+	err = r.mutation("switch_model", r.services.Models.SwitchModel != nil, func() error {
+		selection, err = r.services.Models.SwitchModel(name)
 		return err
 	})
 	return selection, err
@@ -108,8 +110,8 @@ func (r *Runtime) SwitchModel(name string) (selection ModelSelection, err error)
 // SwitchSessionModel changes the active model without persisting a global
 // preference. Session-aware transports own restoring it at session switches.
 func (r *Runtime) SwitchSessionModel(name string) (selection ModelSelection, err error) {
-	err = r.mutation("switch_session_model", r.services.SwitchSessionModel != nil, func() error {
-		selection, err = r.services.SwitchSessionModel(name)
+	err = r.mutation("switch_session_model", r.services.Models.SwitchSessionModel != nil, func() error {
+		selection, err = r.services.Models.SwitchSessionModel(name)
 		return err
 	})
 	return selection, err
@@ -119,7 +121,7 @@ func (r *Runtime) SwitchSessionModel(name string) (selection ModelSelection, err
 // the active one. It is a read-only projection for session config surfaces.
 func (r *Runtime) ModelOptions() ([]ModelOption, string) {
 	r.mu.Lock()
-	service, closed := r.services.ModelOptions, r.closed
+	service, closed := r.services.Models.ModelOptions, r.closed
 	r.mu.Unlock()
 	if closed || service == nil {
 		return nil, ""
@@ -130,67 +132,67 @@ func (r *Runtime) ModelOptions() ([]ModelOption, string) {
 // SetReasoningEffort changes the active model's reasoning effort. It is
 // rejected while a run is active.
 func (r *Runtime) SetReasoningEffort(effort string) error {
-	return r.mutation("set_reasoning_effort", r.services.SetReasoningEffort != nil, func() error {
-		return r.services.SetReasoningEffort(effort)
+	return r.mutation("set_reasoning_effort", r.services.Models.SetReasoningEffort != nil, func() error {
+		return r.services.Models.SetReasoningEffort(effort)
 	})
 }
 
 // SetSessionReasoning changes reasoning depth without persisting it globally.
 func (r *Runtime) SetSessionReasoning(effort string) error {
-	return r.mutation("set_session_reasoning", r.services.SetSessionReasoning != nil, func() error {
-		return r.services.SetSessionReasoning(effort)
+	return r.mutation("set_session_reasoning", r.services.Models.SetSessionReasoning != nil, func() error {
+		return r.services.Models.SetSessionReasoning(effort)
 	})
 }
 
 // SetFullAccess toggles the full-takeover permission mode. It is rejected
 // while a run is active.
 func (r *Runtime) SetFullAccess(on bool) error {
-	return r.mutation("set_full_access", r.services.SetFullAccess != nil, func() error {
-		r.services.SetFullAccess(on)
+	return r.mutation("set_full_access", r.services.Permissions.SetFullAccess != nil, func() error {
+		r.services.Permissions.SetFullAccess(on)
 		return nil
 	})
 }
 
 func (r *Runtime) SelectSkill(name string) error {
-	return r.mutation("select_skill", r.services.SelectSkill != nil, func() error {
-		return r.services.SelectSkill(name)
+	return r.mutation("select_skill", r.services.Skills.SelectSkill != nil, func() error {
+		return r.services.Skills.SelectSkill(name)
 	})
 }
 
 func (r *Runtime) ClearSelectedSkill() error {
-	return r.mutation("clear_selected_skill", r.services.ClearSelectedSkill != nil, func() error {
-		r.services.ClearSelectedSkill()
+	return r.mutation("clear_selected_skill", r.services.Skills.ClearSelectedSkill != nil, func() error {
+		r.services.Skills.ClearSelectedSkill()
 		return nil
 	})
 }
 
 func (r *Runtime) RefreshSkillManagement() (view SkillManagementView, err error) {
-	err = r.mutation("refresh_extensions", r.services.RefreshSkillManagement != nil, func() error {
-		view = r.services.RefreshSkillManagement()
+	err = r.mutation("refresh_extensions", r.services.Skills.RefreshSkillManagement != nil, func() error {
+		view = r.services.Skills.RefreshSkillManagement()
 		return nil
 	})
 	return view, err
 }
 
 func (r *Runtime) SetPluginEnabled(name string, enabled bool) (view SkillManagementView, err error) {
-	err = r.mutation("set_plugin_enabled", r.services.SetPluginEnabled != nil, func() error {
-		view, err = r.services.SetPluginEnabled(name, enabled)
+	err = r.mutation("set_plugin_enabled", r.services.Skills.SetPluginEnabled != nil, func() error {
+		view, err = r.services.Skills.SetPluginEnabled(name, enabled)
 		return err
 	})
 	return view, err
 }
 
 func (r *Runtime) ApplyConfig(config ConfigView) (view ConfigView, err error) {
-	err = r.mutation("apply_config", r.services.ApplyConfig != nil, func() error {
-		view, err = r.services.ApplyConfig(config)
+	err = r.mutation("apply_config", r.services.Config.ApplyConfig != nil, func() error {
+		view, err = r.services.Config.ApplyConfig(config)
 		return err
 	})
 	return view, err
 }
 
 func (r *Runtime) ResumeSession(id string) error {
-	err := r.mutation("resume_session", r.services.ResumeSession != nil, func() error {
-		return r.services.ResumeSession(id)
+	err := r.mutation("resume_session", r.services.Sessions.ResumeSession != nil, func() error {
+		return r.services.Sessions.ResumeSession(id)
 	})
 	if err == nil {
 		r.publishSessionChanged("resume", id, true)
@@ -199,8 +201,8 @@ func (r *Runtime) ResumeSession(id string) error {
 }
 
 func (r *Runtime) NewSession() (session SessionMeta, err error) {
-	err = r.mutation("new_session", r.services.NewSession != nil, func() error {
-		session, err = r.services.NewSession()
+	err = r.mutation("new_session", r.services.Sessions.NewSession != nil, func() error {
+		session, err = r.services.Sessions.NewSession()
 		return err
 	})
 	if err == nil {
@@ -211,11 +213,11 @@ func (r *Runtime) NewSession() (session SessionMeta, err error) {
 
 func (r *Runtime) DeleteSession(id string) error {
 	previousID := ""
-	err := r.mutation("delete_session", r.services.DeleteSession != nil, func() error {
-		if r.services.CurrentSessionID != nil {
-			previousID = r.services.CurrentSessionID()
+	err := r.mutation("delete_session", r.services.Sessions.DeleteSession != nil, func() error {
+		if r.services.Sessions.CurrentSessionID != nil {
+			previousID = r.services.Sessions.CurrentSessionID()
 		}
-		return r.services.DeleteSession(id)
+		return r.services.Sessions.DeleteSession(id)
 	})
 	if err == nil || mutationCommitted(err) {
 		r.publishSessionChanged("delete", id, previousID == id)
@@ -226,8 +228,8 @@ func (r *Runtime) DeleteSession(id string) error {
 // ReplaceMCPServers atomically replaces transport-supplied MCP servers owned
 // by source. The request context cancels process startup and discovery.
 func (r *Runtime) ReplaceMCPServers(ctx context.Context, source string, servers []MCPServerSpec) error {
-	return r.mutation("replace_mcp_servers", r.services.ReplaceMCPServers != nil, func() error {
-		return r.services.ReplaceMCPServers(ctx, source, servers)
+	return r.mutation("replace_mcp_servers", r.services.MCP.ReplaceMCPServers != nil, func() error {
+		return r.services.MCP.ReplaceMCPServers(ctx, source, servers)
 	})
 }
 
@@ -240,8 +242,8 @@ func (r *Runtime) publishSessionChanged(reason, changedID string, currentChanged
 
 func (r *Runtime) sessionChangedPayload(reason, changedID string, currentChanged bool) SessionPayload {
 	sessionID := ""
-	if r.services.CurrentSessionID != nil {
-		sessionID = r.services.CurrentSessionID()
+	if r.services.Sessions.CurrentSessionID != nil {
+		sessionID = r.services.Sessions.CurrentSessionID()
 	}
 	return SessionPayload{ID: sessionID, Reason: reason, ChangedID: changedID, CurrentChanged: currentChanged}
 }
@@ -254,7 +256,7 @@ func mutationCommitted(err error) bool {
 
 // Rewind restores checkpointed workspace files while the runtime is idle.
 func (r *Runtime) Rewind(id string) (message string, err error) {
-	err = r.mutation("rewind", r.services.Rewind != nil, func() error { message, err = r.services.Rewind(id); return err })
+	err = r.mutation("rewind", r.services.Tools.Rewind != nil, func() error { message, err = r.services.Tools.Rewind(id); return err })
 	return
 }
 
@@ -263,7 +265,7 @@ func (r *Runtime) MCPAuthorizationAction(name, action string) error {
 	// background browser flow that touches no run state, and the 5-minute
 	// authorization window regularly overlaps a running task.
 	r.mu.Lock()
-	closed, supported := r.closed, r.services.MCPAuthorizationAction != nil
+	closed, supported := r.closed, r.services.MCP.MCPAuthorizationAction != nil
 	r.mu.Unlock()
 	if closed {
 		return protocolError(ErrorClosed, "mcp_authorization", "closed")
@@ -271,5 +273,5 @@ func (r *Runtime) MCPAuthorizationAction(name, action string) error {
 	if !supported {
 		return protocolError(ErrorUnsupported, "mcp_authorization", "capability unavailable")
 	}
-	return r.services.MCPAuthorizationAction(name, action)
+	return r.services.MCP.MCPAuthorizationAction(name, action)
 }

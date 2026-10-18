@@ -194,7 +194,7 @@ func (p *ProcessingItem) renderActivitySection(sepW int) string {
 		}
 		sb.WriteString("\n")
 		if b.JevNote != "" {
-			sb.WriteString("    " + p.sty.Subtle.MaxWidth(max(10, sepW-4)).Render(b.JevNote) + "\n")
+			fmt.Fprintf(&sb, "    %s\n", p.sty.Subtle.MaxWidth(max(10, sepW-4)).Render(b.JevNote))
 		}
 	}
 

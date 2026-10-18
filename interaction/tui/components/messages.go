@@ -96,6 +96,12 @@ func (m *Messages) ProcessThinkingText(delta string) {
 	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.AppendThinkingText(delta) })
 }
 
+// DiscardStreamText drops streamed text that was not an answer, so it never
+// reaches the committed blocks.
+func (m *Messages) DiscardStreamText() {
+	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.DiscardStreamText() })
+}
+
 func (m *Messages) ProcessToolBlock(b block.ContentBlock) {
 	m.UpdateProcessing(func(p *processing.ProcessingItem) { p.AddToolBlock(b) })
 }

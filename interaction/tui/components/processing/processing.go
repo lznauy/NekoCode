@@ -96,6 +96,14 @@ func (p *ProcessingItem) AppendStreamText(delta string) {
 	p.outputText.WriteString(delta)
 	p.invalidateLight()
 }
+
+// DiscardStreamText drops text streamed for the current turn that turned out
+// to be provider-injected rather than an answer. It only clears text that has
+// not been flushed into a block yet.
+func (p *ProcessingItem) DiscardStreamText() {
+	p.outputText.Reset()
+	p.invalidateLight()
+}
 func (p *ProcessingItem) AddToolBlock(b block.ContentBlock) {
 	// Flush any accumulated stream text into a thought block before the
 	// tool block. Without this, LLM text that arrives between tool calls

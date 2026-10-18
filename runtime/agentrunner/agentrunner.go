@@ -24,35 +24,23 @@ func New(agent *agentcore.Agent) *Runner {
 }
 
 func (r *Runner) Run(ctx context.Context, input string, host controlruntime.RunHost) (string, error) {
-	releaseOutput := r.agent.BindOutput(agentcore.Output{
+	output := agentcore.Output{
 		Text:   host.Text,
 		Reason: host.Reason,
 		Phase:  host.Phase,
-	})
-	defer releaseOutput()
-	releaseInteraction := r.agent.BindInteraction(agentcore.Interaction{
+		ResetText: func() {
+			if resetter, ok := host.(controlruntime.RunTextResetter); ok {
+				resetter.ResetText()
+			}
+		},
+	}
+	interaction := agentcore.Interaction{
 		Confirm: host.Confirm,
 		Ask:     host.Ask,
 		Todos:   host.Todos,
-	})
-	defer releaseInteraction()
+	}
 
-	finished := make(chan struct{})
-	watchDone := make(chan struct{})
-	go func() {
-		defer close(watchDone)
-		select {
-		case <-ctx.Done():
-			r.agent.Abort()
-		case <-finished:
-		}
-	}()
-	defer func() {
-		close(finished)
-		<-watchDone
-	}()
-
-	result := r.agent.Run(input, nil, host.Step)
+	result := r.agent.RunWithCallbacks(ctx, input, nil, host.Step, output, interaction)
 	return result.FinalOutput, result.Error
 }
 
@@ -68,6 +56,13 @@ func (r *Runner) Close() error {
 // Services returns the optional runtime functions implemented by Runner.
 func (r *Runner) Services() controlruntime.Services {
 	return controlruntime.Services{Metrics: r.Metrics, Close: r.Close}
+}
+
+// ServiceGroups returns the preferred domain-grouped capability set.
+func (r *Runner) ServiceGroups() controlruntime.ServiceGroups {
+	return controlruntime.ServiceGroups{
+		Lifecycle: controlruntime.LifecycleServices{Metrics: r.Metrics, Close: r.Close},
+	}
 }
 
 var _ controlruntime.Runner = (*Runner)(nil)

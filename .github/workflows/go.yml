@@ -35,6 +35,8 @@ jobs:
           test -z "$unformatted" || { printf '%s\n' "$unformatted"; exit 1; }
       - name: Build
         run: CC=/tmp/zigcc-linux-amd64 go build ./...
+      - name: Architecture boundaries
+        run: go test ./internal/architecture
       - name: Test
         run: CC=/tmp/zigcc-linux-amd64 go test ./...
       - name: Vet

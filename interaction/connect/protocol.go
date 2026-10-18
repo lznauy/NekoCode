@@ -38,6 +38,8 @@ const (
 	// IntentPreview is a fragment of in-progress assistant text. Delivered
 	// only to channels with EditMessages.
 	IntentPreview IntentKind = "preview"
+	// IntentPreviewReset retracts the current model response from a preview.
+	IntentPreviewReset IntentKind = "preview_reset"
 	// IntentResult is the final output of a finished run.
 	IntentResult IntentKind = "result"
 	// IntentSystem is a command/system reply (e.g. /connect, /model) that
@@ -195,7 +197,7 @@ func dispatch(ctx context.Context, rt controlruntime.ConnectorRuntime, sink Sink
 // edits, streaming degrades into a flood of standalone messages, which is
 // strictly worse than receiving just the final result.
 func deliverable(in Intent, caps Capabilities) bool {
-	if in.Kind == IntentPreview {
+	if in.Kind == IntentPreview || in.Kind == IntentPreviewReset {
 		return caps.EditMessages
 	}
 	return true

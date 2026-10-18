@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 
 	"nekocode/bot/agent/internal/kernel"
@@ -47,12 +48,36 @@ func newLoopRunner(agent *Agent) *loopRunner {
 }
 
 func (r *loopRunner) run(input string, images []types.MessageImage, callback RunCallback) *RunResult {
+	return r.runContext(context.Background(), input, images, callback)
+}
+
+func (r *loopRunner) runContext(ctx context.Context, input string, images []types.MessageImage, callback RunCallback) *RunResult {
+	if err := ctx.Err(); err != nil {
+		return &RunResult{Error: err, Interrupted: true}
+	}
 	a := r.agent
 	r.stepLimitHit = false
 	beforeRun := a.deps.ctxMgr.Snapshot()
 	r.startRun(input, images)
+	// Reset in startRun replaces canceled lifecycle contexts. Install the
+	// watcher afterwards so startup can never erase this run's cancellation.
+	finished, watchDone := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		select {
+		case <-ctx.Done():
+			a.Abort()
+		case <-finished:
+		}
+	}()
+	defer func() { close(finished); <-watchDone }()
+	if ctx.Err() != nil {
+		a.Abort()
+	}
 	defer r.logGovernanceSummary()
-	r.applyUserSubmitHooks()
+	if ctx.Err() == nil {
+		r.applyUserSubmitHooks()
+	}
 
 	kernel.RunLoop(kernel.Loop{
 		Done:             func() bool { return a.life.Finished().Load() },

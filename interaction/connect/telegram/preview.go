@@ -34,12 +34,13 @@ type previewTracker struct {
 	chatIDs func() []int64
 	now     func() time.Time
 
-	runID      controlruntime.RunID
-	buf        []rune
-	msgIDs     map[int64]int
-	hasPreview bool
-	lastFlush  time.Time
-	sentLen    int
+	runID         controlruntime.RunID
+	buf           []rune
+	msgIDs        map[int64]int
+	hasPreview    bool
+	lastFlush     time.Time
+	sentLen       int
+	responseStart int
 }
 
 func newPreviewTracker(sender previewSender, chatIDs func() []int64) *previewTracker {
@@ -53,6 +54,24 @@ func (p *previewTracker) addDelta(ctx context.Context, runID controlruntime.RunI
 	}
 	p.buf = append(p.buf, []rune(delta)...)
 	p.flush(ctx)
+}
+
+func (p *previewTracker) retract(ctx context.Context, runID controlruntime.RunID) {
+	if p.runID != runID {
+		return
+	}
+	p.buf = p.buf[:min(p.responseStart, len(p.buf))]
+	if !p.hasPreview {
+		return
+	}
+	text := taskview.MarkdownToHTML(string(p.buf))
+	if text == "" {
+		text = "正在处理…"
+	}
+	for chatID, id := range p.msgIDs {
+		_ = p.sender.editMessageText(ctx, chatID, id, text)
+	}
+	p.sentLen, p.lastFlush = len(p.buf), p.now()
 }
 
 // flush creates the preview once the buffer is big enough, then edits it in
@@ -117,6 +136,7 @@ func (p *previewTracker) reset(runID controlruntime.RunID) {
 	p.msgIDs = nil
 	p.hasPreview = false
 	p.sentLen = 0
+	p.responseStart = 0
 	p.lastFlush = time.Time{}
 }
 

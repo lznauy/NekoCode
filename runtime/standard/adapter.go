@@ -247,44 +247,66 @@ func (a *adapter) Close() error {
 	return a.bot.Close()
 }
 
-func (a *adapter) services() controlruntime.Services {
-	return controlruntime.Services{
-		ToolNames: a.bot.ToolNames, Rewind: a.bot.Rewind, Checkpoints: a.bot.Checkpoints,
-		ExecuteCommand:          a.ExecuteCommand,
-		ExecuteLocalCommand:     a.ExecuteLocalCommand,
-		CommandMenu:             a.CommandMenu,
-		Steer:                   a.Steer,
-		Metrics:                 a.Metrics,
-		CurrentModel:            a.CurrentModel,
-		PermissionMode:          a.PermissionMode,
-		SwitchModel:             a.SwitchModel,
-		SwitchSessionModel:      a.SwitchSessionModel,
-		ModelOptions:            a.ModelOptions,
-		SetReasoningEffort:      a.SetReasoningEffort,
-		SetSessionReasoning:     a.SetSessionReasoning,
-		SetFullAccess:           a.SetFullAccess,
-		ContextSnapshot:         a.ContextSnapshot,
-		WorkspaceChanges:        a.WorkspaceChanges,
-		ImageAttachmentsEnabled: a.ImageAttachmentsEnabled,
-		VisionEnabled:           a.VisionEnabled,
-		MemoryView:              a.MemoryView,
-		SkillManagementView:     a.SkillManagementView,
-		SelectSkill:             a.SelectSkill,
-		ClearSelectedSkill:      a.ClearSelectedSkill,
-		RefreshSkillManagement:  a.RefreshSkillManagement,
-		SetPluginEnabled:        a.SetPluginEnabled,
-		ConfigView:              a.ConfigView,
-		ResolveModelProfile:     a.ResolveModelProfile,
-		ApplyConfig:             a.ApplyConfig,
-		CurrentSessionID:        a.CurrentSessionID,
-		ListSessions:            a.ListSessions,
-		SessionMessages:         a.SessionMessages,
-		ResumeSession:           a.ResumeSession,
-		NewSession:              a.NewSession,
-		DeleteSession:           a.DeleteSession,
-		ReplaceMCPServers:       a.ReplaceMCPServers,
-		MCPAuthorizationAction:  a.bot.MCPAuthorizationAction,
-		Close:                   a.Close,
+func (a *adapter) services() controlruntime.ServiceGroups {
+	return controlruntime.ServiceGroups{
+		Commands: controlruntime.CommandsServices{
+			ExecuteCommand:      a.ExecuteCommand,
+			ExecuteLocalCommand: a.ExecuteLocalCommand,
+			CommandMenu:         a.CommandMenu,
+			Steer:               a.Steer,
+		},
+		Models: controlruntime.ModelsServices{
+			CurrentModel:            a.CurrentModel,
+			SwitchModel:             a.SwitchModel,
+			SwitchSessionModel:      a.SwitchSessionModel,
+			ModelOptions:            a.ModelOptions,
+			SetReasoningEffort:      a.SetReasoningEffort,
+			SetSessionReasoning:     a.SetSessionReasoning,
+			ImageAttachmentsEnabled: a.ImageAttachmentsEnabled,
+			VisionEnabled:           a.VisionEnabled,
+		},
+		Permissions: controlruntime.PermissionsServices{
+			PermissionMode: a.PermissionMode,
+			SetFullAccess:  a.SetFullAccess,
+		},
+		Context: controlruntime.ContextServices{
+			ContextSnapshot:  a.ContextSnapshot,
+			WorkspaceChanges: a.WorkspaceChanges,
+			MemoryView:       a.MemoryView,
+		},
+		Skills: controlruntime.SkillsServices{
+			SkillManagementView:    a.SkillManagementView,
+			SelectSkill:            a.SelectSkill,
+			ClearSelectedSkill:     a.ClearSelectedSkill,
+			RefreshSkillManagement: a.RefreshSkillManagement,
+			SetPluginEnabled:       a.SetPluginEnabled,
+		},
+		Config: controlruntime.ConfigServices{
+			ConfigView:          a.ConfigView,
+			ResolveModelProfile: a.ResolveModelProfile,
+			ApplyConfig:         a.ApplyConfig,
+		},
+		Sessions: controlruntime.SessionsServices{
+			CurrentSessionID: a.CurrentSessionID,
+			ListSessions:     a.ListSessions,
+			SessionMessages:  a.SessionMessages,
+			ResumeSession:    a.ResumeSession,
+			NewSession:       a.NewSession,
+			DeleteSession:    a.DeleteSession,
+		},
+		Tools: controlruntime.ToolsServices{
+			Checkpoints: a.bot.Checkpoints,
+			ToolNames:   a.bot.ToolNames,
+			Rewind:      a.bot.Rewind,
+		},
+		MCP: controlruntime.MCPServices{
+			MCPAuthorizationAction: a.bot.MCPAuthorizationAction,
+			ReplaceMCPServers:      a.ReplaceMCPServers,
+		},
+		Lifecycle: controlruntime.LifecycleServices{
+			Metrics: a.Metrics,
+			Close:   a.Close,
+		},
 	}
 }
 

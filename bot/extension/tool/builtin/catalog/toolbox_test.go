@@ -47,3 +47,20 @@ func TestToolboxScopesTemporaryRootsBySession(t *testing.T) {
 		t.Fatalf("closed session retained temporary root: ok=%v err=%v", ok, err)
 	}
 }
+
+func TestToolboxPreservesOwnedIndexOnRegistryRebuild(t *testing.T) {
+	manager := workspace.New(t.TempDir(), nil)
+	box := NewToolboxWithConfig(ToolboxConfig{Workspace: manager})
+	defer box.Close()
+	index := box.index
+	box.RebuildRegistryWithConfig(ToolboxConfig{})
+	if box.index != index || box.Workspace() != manager {
+		t.Fatal("registry rebuild replaced owned resources")
+	}
+	if err := box.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if box.index != nil {
+		t.Fatal("toolbox retained closed index")
+	}
+}

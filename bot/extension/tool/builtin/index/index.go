@@ -3,44 +3,68 @@ package index
 import (
 	"context"
 	"fmt"
-	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 
 	indexcore "nekocode/bot/extension/tool/builtin/index/core"
 	"nekocode/bot/extension/tool/runtime/core"
+	"nekocode/bot/extension/tool/runtime/workspace"
 )
 
 // IndexTool exposes the code graph to the agent via the tool system.
 // It lazily initializes its own Manager on first use, so registration
 // requires no external setup.
 type IndexTool struct {
-	mgrOnce sync.Once
-	mgr     *indexcore.Manager
-	mgrErr  error
+	mu     sync.Mutex
+	root   string
+	closed bool
+	mgr    *indexcore.Manager
+	mgrErr error
 }
 
 // NewIndexTool creates a new index tool. The Manager is built lazily on
-// first Execute using the process working directory.
+// first Execute using the injected workspace, or cwd for standalone use.
 func NewIndexTool() *IndexTool {
 	return &IndexTool{}
 }
 
-func (t *IndexTool) ensureInit() (*indexcore.Manager, error) {
-	t.mgrOnce.Do(func() {
-		cwd, err := os.Getwd()
-		if err != nil {
-			t.mgrErr = fmt.Errorf("resolve working directory: %w", err)
-			return
-		}
+func (t *IndexTool) ensureInit(ctx context.Context) (*indexcore.Manager, error) {
+	cwd, err := workspace.WorkingDirectory(ctx)
+	if err != nil {
+		return nil, err
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return nil, fmt.Errorf("index tool is closed")
+	}
+	if t.root != "" && t.root != cwd {
+		return nil, fmt.Errorf("index tool belongs to workspace %q, not %q", t.root, cwd)
+	}
+	if t.root == "" {
+		t.root = cwd
 		t.mgr, t.mgrErr = indexcore.NewManager(cwd)
-		if t.mgrErr != nil {
-			return
+		if t.mgrErr == nil {
+			t.mgrErr = t.mgr.Init()
 		}
-		t.mgrErr = t.mgr.Init()
-	})
+	}
 	return t.mgr, t.mgrErr
+}
+
+// Close releases the index watcher and database owned by this tool instance.
+func (t *IndexTool) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return nil
+	}
+	t.closed = true
+	if t.mgr != nil {
+		return t.mgr.Close()
+	}
+	return nil
 }
 
 func (t *IndexTool) Name() string { return "index" }
@@ -64,7 +88,7 @@ func (t *IndexTool) Parameters() []core.Parameter {
 }
 
 func (t *IndexTool) Execute(ctx context.Context, args map[string]any) (string, error) {
-	mgr, err := t.ensureInit()
+	mgr, err := t.ensureInit(ctx)
 	if err != nil {
 		return fmt.Sprintf("Index initialization failed: %v", err), nil
 	}
@@ -192,18 +216,8 @@ func querySearch(mgr *indexcore.Manager, term string) string {
 	return b.String()
 }
 
-var (
-	homeDir     string
-	homeDirOnce sync.Once
-)
-
 func shortenPath(path string) string {
-	homeDirOnce.Do(func() {
-		homeDir, _ = os.UserHomeDir()
-	})
-	if homeDir != "" && strings.HasPrefix(path, homeDir) {
-		return "~" + path[len(homeDir):]
-	}
+	path = filepath.ToSlash(path)
 	parts := strings.Split(path, "/")
 	if len(parts) > 3 {
 		parts = parts[len(parts)-3:]

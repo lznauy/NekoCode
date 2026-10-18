@@ -111,9 +111,7 @@ func (s *server) setConfigOption(params json.RawMessage) (any, *wireError) {
 		config := s.configForSession(request.SessionID)
 		config.Model = name
 		config.ReasoningEffort = s.defaultEffortFor(models, name)
-		previous := s.currentSessionConfig()
 		if err := s.applyBackendConfig(config); err != nil {
-			_ = s.applyBackendConfig(previous)
 			return nil, backendError("switch model", err)
 		}
 		s.sessionConfigs[request.SessionID] = config
@@ -171,9 +169,7 @@ func (s *server) applySessionConfig(sessionID string) error {
 		s.sessionConfigs = make(map[string]sessionConfig)
 	}
 	config := s.configForSession(sessionID)
-	previous := s.currentSessionConfig()
 	if err := s.applyBackendConfig(config); err != nil {
-		_ = s.applyBackendConfig(previous)
 		return err
 	}
 	s.sessionConfigs[sessionID] = config
@@ -181,18 +177,9 @@ func (s *server) applySessionConfig(sessionID string) error {
 }
 
 func (s *server) applyBackendConfig(config sessionConfig) error {
-	if config.Model != "" {
-		if _, err := s.backend.SwitchSessionModel(config.Model); err != nil {
-			return fmt.Errorf("switch model: %w", err)
-		}
-	}
-	if err := s.backend.SetSessionReasoning(config.ReasoningEffort); err != nil {
-		return fmt.Errorf("set reasoning effort: %w", err)
-	}
-	if err := s.backend.SetFullAccess(config.FullAccess); err != nil {
-		return fmt.Errorf("set full access: %w", err)
-	}
-	return nil
+	return s.backend.ApplySessionSettings(controlruntime.SessionSettings{
+		Model: config.Model, ReasoningEffort: config.ReasoningEffort, FullAccess: config.FullAccess,
+	})
 }
 
 func (s *server) cleanup() error {

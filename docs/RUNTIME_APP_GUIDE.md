@@ -6,8 +6,10 @@
 先记住三个边界：
 
 1. `runtime.Runtime` 是上层交互的唯一实例入口。
-2. AI 应用只必须实现 `runtime.Runner`，其他能力通过 `runtime.Services` 显式装配。
+2. AI 应用只必须实现 `runtime.Runner`，新代码用 `runtime.ServiceGroups` 显式装配可选能力；旧 `Services` API 仍可使用。
 3. UI 只依赖 `nekocode/runtime`，不依赖 `bot` 或 `runtime/internal`。
+
+模块职责、状态所有权及事件契约见 [架构协作约定](ARCHITECTURE_BOUNDARIES.md)。
 
 ## 1. 先选择入口
 
@@ -15,8 +17,8 @@
 | --- | --- | --- |
 | 使用完整 NekoCode | `standard.New()` | UI 或启动代码 |
 | 使用完整 Bot，但不启用默认录制和 Connector | `standard.FromBot(bot)` | 启动代码 |
-| 自定义提示词和工具 | `runtime.New(runner, runner.Services())` | Agent 组装 |
-| 接入其他推理引擎 | `runtime.New(runner, services)` | `Runner.Run` 和 Services |
+| 自定义提示词和工具 | `runtime.NewWithServices(runner, runner.ServiceGroups())` | Agent 组装 |
+| 接入其他推理引擎 | `runtime.NewWithServices(runner, serviceGroups)` | `Runner.Run` 和 ServiceGroups |
 | 新增进程内 UI | 接收同一个 `*runtime.Runtime` | 事件投影 |
 | 新增远程 UI | `httpapi.New(manager)` | HTTP/SSE 客户端 |
 | 通过子进程接入 | `nekocode-tui --headless` | [NDJSON 客户端](../headless/README.md) |
@@ -24,6 +26,8 @@
 
 不需要完整 NekoCode 能力时，不要先创建 `bot.Bot` 再关闭功能。应从模型、提示词和
 工具白名单开始组装独立应用。
+
+`runtime.New(runner, services)` 是保留的兼容入口，会在组装时把扁平 `Services` 转成分组能力；新应用优先构造 `ServiceGroups` 并调用 `NewWithServices`。
 
 ## 2. 分层
 
@@ -399,7 +403,7 @@ type Event struct {
 
 | 分组 | EventType | Payload |
 | --- | --- | --- |
-| 输入与输出 | `input_accepted`、`system_message`、`assistant_delta`、`assistant_message`、`reasoning_delta` | `MessagePayload` / `DeltaPayload` |
+| 输入与输出 | `input_accepted`、`system_message`、`assistant_delta`、`assistant_reset`、`assistant_message`、`reasoning_delta` | `MessagePayload` / `DeltaPayload` / 无 |
 | 执行过程 | `phase_changed`、`todos_updated` | `PhasePayload` / `[]TodoItem` |
 | 工具与子 Agent | `tool_started`、`tool_blocked`、`tool_preview`、`tool_completed`、`subagent_started`、`subagent_ended`、`subagent_output` | `ToolPayload` / `SubAgentPayload` / `SubAgentOutput` |
 | 人机交互 | `approval_requested`、`approval_resolved`、`question_requested`、`question_resolved` | `ApprovalView` / `QuestionView` |

@@ -54,9 +54,12 @@ const (
 type EventType string
 
 const (
-	EventInputAccepted     EventType = "input_accepted"
-	EventSystemMessage     EventType = "system_message"
-	EventAssistantDelta    EventType = "assistant_delta"
+	EventInputAccepted  EventType = "input_accepted"
+	EventSystemMessage  EventType = "system_message"
+	EventAssistantDelta EventType = "assistant_delta"
+	// EventAssistantReset tells hosts that text already delivered through
+	// assistant_delta for this run was provider-injected and must be dropped.
+	EventAssistantReset    EventType = "assistant_reset"
 	EventAssistantMessage  EventType = "assistant_message"
 	EventReasoningDelta    EventType = "reasoning_delta"
 	EventPhaseChanged      EventType = "phase_changed"
@@ -81,6 +84,9 @@ const (
 	EventSessionChanged    EventType = "session_changed"
 	EventConnectorStatus   EventType = "connector_status"
 	EventMetricsUpdated    EventType = "metrics_updated"
+	// EventContextUpdated carries the active context window's composition so
+	// hosts can render it live; it is read-only observation, never state.
+	EventContextUpdated EventType = "context_updated"
 )
 
 type Event struct {

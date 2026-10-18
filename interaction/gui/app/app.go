@@ -362,6 +362,10 @@ func (a *App) dispatchRuntimeEvent(ev controlruntime.Event) {
 				"done":  false,
 			})
 		}
+	case controlruntime.EventAssistantReset:
+		wailsruntime.EventsEmit(a.ctx, "agent:delta", map[string]any{
+			"id": a.runNumber(), "delta": "", "done": false, "reset": true,
+		})
 	case controlruntime.EventPhaseChanged:
 		if p, ok := ev.Payload.(controlruntime.PhasePayload); ok {
 			// Frontend AgentPhase keys are lowercase; the runtime constants are

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 
@@ -34,6 +35,13 @@ import (
 // RunHost is the synchronous boundary used by one bot run. Runtime and other
 // application layers adapt this port without leaking their view models into
 // the bot.
+// RunTextResetter is an optional RunHost extension. The agent calls it when
+// text it already streamed for the current turn turned out to be
+// provider-injected (for example a retry prefix) and must be discarded.
+type RunTextResetter interface {
+	ResetText()
+}
+
 type RunHost interface {
 	Text(string)
 	Reason(string)
@@ -63,6 +71,7 @@ type Bot struct {
 	projectReloadMu sync.Mutex
 	reloadView      *extension.Snapshot // Previous complete view while extensions reload.
 	hostMu          sync.RWMutex
+	operationMu     sync.Mutex // A Bot owns one mutable agent and callback scope.
 	runHost         RunHost
 	// Lock-free snapshot for menu/status reads that already hold b.mu.
 	permissionMode atomic.Int32
@@ -73,11 +82,20 @@ type Bot struct {
 // New assembles the standard bot and loads its persisted configuration,
 // memory, and current session.
 func New() (*Bot, error) {
-	b := &Bot{}
-	var err error
-	if b.cwd, err = os.Getwd(); err != nil {
+	cwd, err := os.Getwd()
+	if err != nil {
 		return nil, fmt.Errorf("bot: resolve working directory: %w", err)
 	}
+	return NewAt(cwd)
+}
+
+// NewAt constructs an instance pinned to a project without changing process cwd.
+func NewAt(cwd string) (*Bot, error) {
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		return nil, fmt.Errorf("bot: resolve working directory: %w", err)
+	}
+	b := &Bot{cwd: abs}
 	if b.home, err = os.UserHomeDir(); err != nil {
 		return nil, fmt.Errorf("bot: resolve home directory: %w", err)
 	}
@@ -214,6 +232,7 @@ func (b *Bot) configuredWorkspaceRoots() []workspace.Root {
 func (b *Bot) initToolRegistry() {
 	if b.toolbox == nil {
 		b.toolbox = catalog.NewToolboxWithConfig(catalog.ToolboxConfig{
+			Workspace:      workspace.New(b.cwd, b.configuredWorkspaceRoots()),
 			ImageGenModels: b.cfg.ImageGenModels, ImageUnderstandModels: b.cfg.ImageUnderstandModels,
 		})
 		return
@@ -260,12 +279,12 @@ func (b *Bot) initAgent() {
 	// The compaction client never receives native image input: summaries are
 	// text-only and the flash model may not be multimodal, so Vision stays
 	// false and image-bearing history is stripped at its wire boundary.
+	compactionReasoning := resolvedReasoning(fm)
+	compactionReasoning.Disabled = true
 	compactionModel := provider.New(provider.Config{
 		APIKey: fm.APIKey, BaseURL: fm.BaseURL, Model: fm.Model, Protocol: fm.Protocol,
-		Reasoning: resolvedReasoning(fm),
+		Reasoning: compactionReasoning, MaxTokens: 2000,
 	})
-	compactionModel.SetDisableThinking(true)
-	compactionModel.SetMaxTokens(2000)
 	b.ctxMgr.ConfigureModel(ctxmgr.ModelContext{
 		Window: b.cfg.EffectiveContextWindow(), AutoCompactPercent: b.cfg.EffectiveAutoCompactPercent(),
 		CompactionModel: compactionModel, Reasoning: resolvedReasoning(am), Vision: am.EffectiveVision(),
@@ -280,9 +299,10 @@ func (b *Bot) initAgent() {
 		Checkpoints: b.checkpoints,
 		SessionID:   b.sess.CurrentID,
 		Output: agent.Output{
-			Text:   b.stream,
-			Reason: b.reasoning,
-			Phase:  b.phase,
+			Text:      b.stream,
+			Reason:    b.reasoning,
+			Phase:     b.phase,
+			ResetText: b.resetStream,
 		},
 		Interaction: agent.Interaction{
 			Confirm: b.confirm,

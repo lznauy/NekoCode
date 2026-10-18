@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"nekocode/bot/extension/tool/runtime/permission"
 	"nekocode/bot/extension/tool/runtime/sandbox"
 	"nekocode/bot/extension/tool/runtime/toolutil"
+	workspacectx "nekocode/bot/extension/tool/runtime/workspace"
 )
 
 const (
@@ -108,7 +108,10 @@ func (t *ShellTool) run(ctx context.Context, args map[string]any, grant core.Per
 		return "", fmt.Errorf("command is required")
 	}
 
-	workspace, _ := os.Getwd()
+	workspace, err := workspacectx.WorkingDirectory(ctx)
+	if err != nil {
+		return "", err
+	}
 	reqProfile := sandboxRequestFromArgs(args)
 	requestedCaps := reqProfile.permissionCapabilities()
 	if hasCapability(requestedCaps, core.CapProcessHost) && !hasCapability(grant.Capabilities, core.CapProcessHost) {
@@ -152,6 +155,7 @@ func (t *ShellTool) run(ctx context.Context, args map[string]any, grant core.Per
 		name:       optStringArg(args, "name"),
 		owner:      t.CurrentSessionID(),
 		command:    command,
+		directory:  workspace,
 		profile:    profile,
 		host:       host,
 		timeout:    timeout,

@@ -19,6 +19,7 @@ import (
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8765", "HTTP listen address")
 	token := flag.String("token", os.Getenv("NEKOCODE_DAEMON_TOKEN"), "optional bearer token for HTTP API")
+	cors := flag.String("cors", os.Getenv("NEKOCODE_DAEMON_CORS"), "optional allowed CORS origins for browser dashboards (comma separated, * for any)")
 	flag.Parse()
 
 	rt, err := standard.New()
@@ -36,11 +37,11 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           httpapi.WithBearerAuth(httpapi.New(rt).Handler(), *token),
+		Handler:           httpapi.WithOptions(httpapi.New(rt).Handler(), httpapi.Options{Token: *token, AllowOrigin: *cors}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
-		printStartup(*addr, strings.TrimSpace(*token) != "")
+		printStartup(*addr, strings.TrimSpace(*token) != "", strings.TrimSpace(*cors) != "")
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("daemon failed: %v", err)
 		}

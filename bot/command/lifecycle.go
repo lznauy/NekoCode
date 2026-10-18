@@ -245,24 +245,24 @@ func formatTurnCache(turn ctxmgr.PrefixTurnStats) string {
 		// accumulates when the provider reports cache detail. Showing an
 		// unknown as "0% hit · Hit 0 · Miss 0" would misreport it as a miss.
 		if turn.HitTokens == 0 && turn.MissTokens == 0 {
-			out.WriteString(fmt.Sprintf("\n  %s %-12s %s calls · cache usage not reported",
-				barChars["cache"], "Last turn", formatCount(turn.Requests)))
+			fmt.Fprintf(&out, "\n  %s %-12s %s calls · cache usage not reported",
+				barChars["cache"], "Last turn", formatCount(turn.Requests))
 		} else {
 			ratio := float64(turn.HitTokens) / float64(turn.HitTokens+turn.MissTokens) * 100
-			out.WriteString(fmt.Sprintf("\n  %s %-12s %3.0f%% hit · %s calls · Hit %s · Miss %s",
+			fmt.Fprintf(&out, "\n  %s %-12s %3.0f%% hit · %s calls · Hit %s · Miss %s",
 				barChars["cache"], "Last turn", ratio, formatCount(turn.Requests),
-				text.FormatTokens(turn.HitTokens), text.FormatTokens(turn.MissTokens)))
+				text.FormatTokens(turn.HitTokens), text.FormatTokens(turn.MissTokens))
 		}
 	}
 	if call := turn.LowestHit; call.Request > 0 {
-		out.WriteString(fmt.Sprintf("\n  %s %-12s %.0f%% hit · Hit %s · Miss %s",
+		fmt.Fprintf(&out, "\n  %s %-12s %.0f%% hit · Hit %s · Miss %s",
 			barChars["sub"], "Lowest hit", cacheHitRatio(call)*100,
-			text.FormatTokens(call.HitTokens), text.FormatTokens(call.MissTokens)))
+			text.FormatTokens(call.HitTokens), text.FormatTokens(call.MissTokens))
 	}
 	if call := turn.PeakMiss; call.MissTokens > 0 {
-		out.WriteString(fmt.Sprintf("\n  %s %-12s %s · %s",
+		fmt.Fprintf(&out, "\n  %s %-12s %s · %s",
 			barChars["sub"], "Biggest miss", text.FormatTokens(call.MissTokens),
-			formatPrefixMissParts(call.Parts)))
+			formatPrefixMissParts(call.Parts))
 	}
 	return out.String()
 }

@@ -14,26 +14,19 @@ import (
 
 // Backend is the transport-neutral runtime surface used by the ACP adapter.
 type Backend interface {
-	StartRun(context.Context, controlruntime.Input) (controlruntime.RunID, error)
+	controlruntime.RunControl
+	controlruntime.RunEvents
+	controlruntime.HumanInteraction
+	controlruntime.SessionManagement
+	controlruntime.ModelReader
 	WaitRun(context.Context, controlruntime.RunID) error
-	CancelRun(context.Context, controlruntime.RunID) error
-	DecideApproval(context.Context, string, controlruntime.ApprovalDecision) error
-	AnswerQuestion(context.Context, string, controlruntime.QuestionReply) error
-	Events(context.Context, controlruntime.EventFilter) (<-chan controlruntime.Event, error)
-	CurrentSessionID() string
-	ListSessions() []controlruntime.SessionMeta
-	SessionMessages() []controlruntime.DisplayMessage
-	NewSession() (controlruntime.SessionMeta, error)
-	ResumeSession(string) error
-	DeleteSession(string) error
 	ReplaceMCPServers(context.Context, string, []controlruntime.MCPServerSpec) error
 	// Session config surface: model selection, reasoning effort and the
 	// full-takeover permission mode.
-	ModelOptions() ([]controlruntime.ModelOption, string)
-	CurrentModel() controlruntime.ModelSelection
 	SwitchSessionModel(string) (controlruntime.ModelSelection, error)
 	SetSessionReasoning(string) error
 	SetFullAccess(bool) error
+	ApplySessionSettings(controlruntime.SessionSettings) error
 	PermissionMode() string
 	// Metrics reports the current context usage snapshot for usage updates.
 	Metrics() controlruntime.MetricsSnapshot

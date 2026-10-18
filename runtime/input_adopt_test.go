@@ -17,7 +17,7 @@ func TestAdoptImageAttachments(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	sessionID := "20261015T000000-000000001"
 	r := &Runtime{}
-	r.services.CurrentSessionID = func() string { return sessionID }
+	r.services.Sessions.CurrentSessionID = func() string { return sessionID }
 	dir, err := attachment.ImageDir(sessionID)
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +72,7 @@ func TestAdoptImageAttachments(t *testing.T) {
 
 	// Without a session nothing is adopted (vision-native delivery still
 	// reads the original path).
-	r.services.CurrentSessionID = func() string { return "" }
+	r.services.Sessions.CurrentSessionID = func() string { return "" }
 	got = r.adoptImageAttachments(Input{
 		Text:   "[Image #7]",
 		Images: []ImageAttachment{{Label: "[Image #7]", Path: "/tmp/whatever.png"}},

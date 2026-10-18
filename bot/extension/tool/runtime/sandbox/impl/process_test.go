@@ -2,10 +2,37 @@ package impl
 
 import (
 	"context"
+	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestStartHostInUsesExplicitDirectory(t *testing.T) {
+	directory := t.TempDir()
+	process, err := StartHostIn(t.Context(), "pwd", directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- process.Wait() }()
+	output, err := io.ReadAll(process.Stdout())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-waited; err != nil {
+		t.Fatal(err)
+	}
+	got, err := filepath.EvalSymlinks(strings.TrimSpace(string(output)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(directory)
+	if err != nil || got != want {
+		t.Fatalf("directory=%q want=%q err=%v", got, want, err)
+	}
+}
 
 func TestRunHost_SimpleEcho(t *testing.T) {
 	out, err := RunHost(t.Context(), "echo hello_host", 10*time.Second)

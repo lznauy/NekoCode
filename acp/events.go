@@ -7,6 +7,44 @@ import (
 	controlruntime "nekocode/runtime"
 )
 
+// ACP text chunks are append-only. Speculative deltas cannot be forwarded:
+// retries may reset them, and ACP has no corresponding retraction operation.
+// Canonical messages preserve tool preambles; the terminal result covers
+// runners that return text without emitting canonical message events.
+type turnUpdates struct {
+	lastMessage string
+}
+
+func (t *turnUpdates) update(event controlruntime.Event) ([]map[string]any, bool) {
+	switch event.Type {
+	case controlruntime.EventAssistantDelta, controlruntime.EventAssistantReset:
+		return nil, false
+	case controlruntime.EventAssistantMessage:
+		payload, ok := event.Payload.(controlruntime.MessagePayload)
+		if !ok {
+			return nil, false
+		}
+		t.lastMessage = payload.Content
+		return assistantText(payload.Content)
+	case controlruntime.EventRunDone:
+		result, ok := event.Payload.(controlruntime.RunResult)
+		if !ok || result.Output == t.lastMessage {
+			return nil, false
+		}
+		return assistantText(result.Output)
+	default:
+		return eventUpdate(event)
+	}
+}
+
+func assistantText(text string) ([]map[string]any, bool) {
+	if text == "" {
+		return nil, false
+	}
+	return []map[string]any{{"sessionUpdate": "agent_message_chunk",
+		"content": map[string]any{"type": "text", "text": text}}}, true
+}
+
 func eventUpdate(event controlruntime.Event) ([]map[string]any, bool) {
 	switch event.Type {
 	case controlruntime.EventSystemMessage:
@@ -18,17 +56,13 @@ func eventUpdate(event controlruntime.Event) ([]map[string]any, bool) {
 			"sessionUpdate": "agent_message_chunk",
 			"content":       map[string]any{"type": "text", "text": payload.Content},
 		}}, true
-	case controlruntime.EventAssistantDelta, controlruntime.EventReasoningDelta:
+	case controlruntime.EventReasoningDelta:
 		payload, ok := event.Payload.(controlruntime.DeltaPayload)
 		if !ok || payload.Delta == "" {
 			return nil, false
 		}
-		kind := "agent_message_chunk"
-		if event.Type == controlruntime.EventReasoningDelta {
-			kind = "agent_thought_chunk"
-		}
 		return []map[string]any{{
-			"sessionUpdate": kind,
+			"sessionUpdate": "agent_thought_chunk",
 			"content":       map[string]any{"type": "text", "text": payload.Delta},
 		}}, true
 	case controlruntime.EventToolStarted:

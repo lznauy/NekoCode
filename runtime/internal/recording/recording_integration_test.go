@@ -15,7 +15,7 @@ import (
 
 func TestEventRecorderWritesAndRestoresEvents(t *testing.T) {
 	baseDir := t.TempDir()
-	recorder, err := NewEventRecorder(baseDir)
+	recorder, err := newTestRecorder(t, baseDir)
 	if err != nil {
 		t.Fatalf("NewEventRecorder: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestEventRecorderWritesAndRestoresEvents(t *testing.T) {
 
 func TestLoadRecentRecordedEventsLimitsRunFiles(t *testing.T) {
 	baseDir := t.TempDir()
-	recorder, err := NewEventRecorder(baseDir)
+	recorder, err := newTestRecorder(t, baseDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,8 +129,8 @@ func TestLoadRecentRecordedEventsLimitsRunFiles(t *testing.T) {
 
 func TestLoadRecentRecordedEventsUsesFileRecencyAcrossRecorderBatches(t *testing.T) {
 	baseDir := t.TempDir()
-	olderBatch := filepath.Join(baseDir, "20260101", "run_1")
-	newerBatch := filepath.Join(baseDir, "20260102", "run_1")
+	olderBatch := filepath.Join(baseDir, "20260101", runsSubdir, "run_1")
+	newerBatch := filepath.Join(baseDir, "20260102", runsSubdir, "run_1")
 	for _, dir := range []string{olderBatch, newerBatch} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)

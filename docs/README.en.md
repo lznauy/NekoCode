@@ -128,6 +128,7 @@ The developer documents cover tool design, prefix caching, context compaction, a
 
 - [ACP.md](ACP.md): ACP v1 methods, capability negotiation, and NekoCode implementation status (Chinese)
 - [ARCHITECTURE.md](ARCHITECTURE.md): overall architecture, agent loop, tool system, and technical details
+- [DATA_DIRECTORY.md](DATA_DIRECTORY.md): on-disk layout under `~/.nekocode`, data flow, and what is safe to delete (Chinese)
 - [CI_CD.md](CI_CD.md): CI, release gates, artifact verification, and failure handling (Chinese)
 - [RUNTIME_APP_GUIDE.md](RUNTIME_APP_GUIDE.md): build your own AI application on top of the runtime
 - [RUNTIME_HTTP_API.md](RUNTIME_HTTP_API.md): Runtime HTTP/SSE protocol

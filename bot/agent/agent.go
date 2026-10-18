@@ -41,6 +41,9 @@ type Output struct {
 	Text   func(string)
 	Reason func(string)
 	Phase  protocol.PhaseFunc
+	// ResetText tells the host that text already delivered through Text for
+	// the current turn was not an answer and must be discarded.
+	ResetText func()
 }
 
 // Interaction contains optional application callbacks used by agent tools.
@@ -62,6 +65,7 @@ type agentDeps struct {
 }
 
 type Agent struct {
+	runMu sync.Mutex
 	// Lifecycle.
 	life *kernel.Lifecycle
 
@@ -130,7 +134,30 @@ func (a *Agent) sessionID() string {
 }
 
 func (a *Agent) Run(input string, images []types.MessageImage, callback RunCallback) *RunResult {
-	return a.loopRunner.run(input, images, callback)
+	return a.RunContext(context.Background(), input, images, callback)
+}
+
+// RunContext binds cancellation only after the run lifecycle is initialized.
+func (a *Agent) RunContext(ctx context.Context, input string, images []types.MessageImage, callback RunCallback) *RunResult {
+	if !a.runMu.TryLock() {
+		return &RunResult{Error: fmt.Errorf("agent: another run is active")}
+	}
+	defer a.runMu.Unlock()
+	return a.loopRunner.runContext(ctx, input, images, callback)
+}
+
+// RunWithCallbacks acquires run ownership before binding per-run callbacks.
+// This also protects an Agent shared by multiple runtime adapters.
+func (a *Agent) RunWithCallbacks(ctx context.Context, input string, images []types.MessageImage, callback RunCallback, output Output, interaction Interaction) *RunResult {
+	if !a.runMu.TryLock() {
+		return &RunResult{Error: fmt.Errorf("agent: another run is active")}
+	}
+	defer a.runMu.Unlock()
+	restoreOutput := a.BindOutput(output)
+	defer restoreOutput()
+	restoreInteraction := a.BindInteraction(interaction)
+	defer restoreInteraction()
+	return a.loopRunner.runContext(ctx, input, images, callback)
 }
 
 func (a *Agent) getCtx() context.Context {
@@ -285,9 +312,10 @@ func (a *Agent) BindInteraction(next Interaction) func() {
 // previous callbacks afterward.
 func (a *Agent) BindOutput(next Output) func() {
 	previous := Output{
-		Text:   a.stream.text,
-		Reason: a.stream.reasoning,
-		Phase:  a.stream.phase,
+		Text:      a.stream.text,
+		Reason:    a.stream.reasoning,
+		Phase:     a.stream.phase,
+		ResetText: a.stream.resetText,
 	}
 	a.setOutput(next)
 	return func() { a.setOutput(previous) }
@@ -297,6 +325,7 @@ func (a *Agent) setOutput(output Output) {
 	a.stream.text = output.Text
 	a.stream.reasoning = output.Reason
 	a.stream.phase = output.Phase
+	a.stream.resetText = output.ResetText
 	a.deps.toolExecutor.SetPhaseFn(output.Phase)
 }
 

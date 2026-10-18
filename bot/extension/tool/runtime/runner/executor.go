@@ -53,11 +53,13 @@ type Executor struct {
 }
 
 func NewExecutor(r *tools.Registry) *Executor {
-	root, _ := os.Getwd()
-	manager := workspace.New(root, nil)
+	var manager *workspace.Manager
 	if r != nil && r.Workspace() != nil {
 		manager = r.Workspace()
+	} else {
+		manager = workspace.New("", nil)
 	}
+	root := manager.Primary()
 	e := &Executor{
 		registry:      r,
 		workspace:     manager,
