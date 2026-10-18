@@ -111,6 +111,8 @@ jobs:
           tar -xJf "$archive" -C "$RUNNER_TEMP/upx" --strip-components=1
 
       - name: Compress binary
+        env:
+          GOARCH: ${{ matrix.goarch }}
         run: |
           set -euo pipefail
           binary="dist/nekocode-tui-linux-${GOARCH}"
