@@ -134,7 +134,7 @@ jobs:
           printf '{"type":"result"}\n' | timeout 60 "./$binary" --headless --input-format stream-json --output-format stream-json > smoke.json
           grep -q '"type":"system"' smoke.json
           # UPX-packed binaries re-exec themselves for sandbox helpers; exercise that path.
-          out="$(__SANDBOX_HELPER=1 __SANDBOX_CONFIG='{"w":[]}' timeout 60 "./$binary" __sandbox__ -- sh -c 'echo sandbox-ok')"
+          out="$(setpriv --no-new-privs env __SANDBOX_HELPER=1 __SANDBOX_CONFIG='{"w":[]}' timeout 60 "./$binary" __sandbox__ -- sh -c 'echo sandbox-ok')"
           [[ "$out" == *sandbox-ok* ]] || { printf '%s\n' "$out"; exit 1; }
 
       - name: Upload artifact
