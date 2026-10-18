@@ -96,30 +96,8 @@ jobs:
         run: |
           go build -trimpath -ldflags="$LD_FLAGS" -o "dist/nekocode-tui-linux-${GOARCH}" ./cmd/tui
 
-      - name: Install UPX
-        env:
-          UPX_VERSION: 5.0.2
-          UPX_SHA256: ddc2654063fe4dc80d95b420788494e4db078ebb01a650692d623b5a9906e61e
-        run: |
-          set -euo pipefail
-          archive="$RUNNER_TEMP/upx-${UPX_VERSION}-amd64_linux.tar.xz"
-          curl --fail --silent --show-error --location \
-            --output "$archive" \
-            "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/upx-${UPX_VERSION}-amd64_linux.tar.xz"
-          echo "${UPX_SHA256}  ${archive}" | sha256sum --check --strict
-          mkdir -p "$RUNNER_TEMP/upx"
-          tar -xJf "$archive" -C "$RUNNER_TEMP/upx" --strip-components=1
-
-      - name: Compress binary
-        env:
-          GOARCH: ${{ matrix.goarch }}
-        run: |
-          set -euo pipefail
-          binary="dist/nekocode-tui-linux-${GOARCH}"
-          "$RUNNER_TEMP/upx/upx" --best --lzma "$binary"
-          "$RUNNER_TEMP/upx/upx" -t "$binary"
-
-      - name: Smoke test compressed binary
+      # Ship the original ELF: UPX-packed releases have crashed on user systems.
+      - name: Smoke test release binary
         env:
           GOARCH: ${{ matrix.goarch }}
         run: |
@@ -127,13 +105,24 @@ jobs:
           binary="dist/nekocode-tui-linux-${GOARCH}"
           if [[ "$GOARCH" != "amd64" ]]; then
             # arm64 release binary needs an aarch64 sysroot to run under
-            # qemu-user; UPX -t in the previous step covers compression integrity.
+            # qemu-user; execution is only checked on the native amd64 runner.
             echo "Skipping execution smoke test for $GOARCH"
             exit 0
           fi
-          printf '{"type":"result"}\n' | timeout 60 "./$binary" --headless --input-format stream-json --output-format stream-json > smoke.json
-          grep -q '"type":"system"' smoke.json
-          # UPX-packed binaries re-exec themselves for sandbox helpers; exercise that path.
+          printf '{"type":"control_request","request_id":"smoke-init","request":{"subtype":"initialize"}}\n' | timeout 60 "./$binary" --headless --input-format stream-json --output-format stream-json > smoke.json
+          python3 - <<'PYTHON'
+          import json
+          from pathlib import Path
+
+          frames = [json.loads(line) for line in Path("smoke.json").read_text().splitlines()]
+          assert any(
+              frame.get("type") == "control_response"
+              and frame.get("response", {}).get("request_id") == "smoke-init"
+              and frame.get("response", {}).get("subtype") == "success"
+              for frame in frames
+          ), frames
+          PYTHON
+          # Exercise the sandbox helper's re-exec path too.
           out="$(setpriv --no-new-privs env __SANDBOX_HELPER=1 __SANDBOX_CONFIG='{"w":[]}' timeout 60 "./$binary" __sandbox__ -- sh -c 'echo sandbox-ok')"
           [[ "$out" == *sandbox-ok* ]] || { printf '%s\n' "$out"; exit 1; }
 
@@ -214,6 +203,37 @@ jobs:
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: release/*
+
+      - name: Withdraw previous release for this tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          import os
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          base = f"{os.environ['GITHUB_API_URL']}/repos/{os.environ['GITHUB_REPOSITORY']}/releases"
+          headers = {
+              "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          tag = urllib.parse.quote(os.environ["RELEASE_TAG"], safe="")
+          try:
+              with urllib.request.urlopen(urllib.request.Request(f"{base}/tags/{tag}", headers=headers)) as response:
+                  release = json.load(response)
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise
+          else:
+              request = urllib.request.Request(f"{base}/{release['id']}", headers=headers, method="DELETE")
+              with urllib.request.urlopen(request):
+                  print(f"Withdrew release {release['id']} before publishing replacement assets")
+          PYTHON
 
       - name: Create Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
