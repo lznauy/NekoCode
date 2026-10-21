@@ -53,17 +53,21 @@ type RunHost interface {
 }
 
 type Bot struct {
-	cwd             string
-	home            string
-	cfg             *config.Config
-	promptBuilder   *prompt.Builder
-	project         *project.Project
-	ctxMgr          *ctxmgr.Manager
-	policy          *policy.Policy
-	ag              *agent.Agent
-	toolbox         *catalog.Toolbox
-	cmd             *command.Handler
-	ext             *extension.Manager
+	cwd           string
+	home          string
+	cfg           *config.Config
+	promptBuilder *prompt.Builder
+	project       *project.Project
+	ctxMgr        *ctxmgr.Manager
+	policy        *policy.Policy
+	ag            *agent.Agent
+	toolbox       *catalog.Toolbox
+	cmd           *command.Handler
+	ext           *extension.Manager
+	sessionOutput struct {
+		id    string
+		store *toolcore.OutputStore
+	}
 	sess            *session.Manager
 	checkpoints     *checkpoint.Manager
 	mcpAuthNotifier func(message string)
@@ -109,9 +113,7 @@ func NewAt(cwd string) (*Bot, error) {
 	if err := attachment.ReconcileSessionImages(b.sess.Exists); err != nil {
 		logger.Log("attachment: reconcile session image storage: %v", err)
 	}
-	if err := b.rebuildRuntime(); err != nil {
-		return nil, err
-	}
+	b.rebuildRuntime()
 	return b, nil
 }
 
@@ -185,7 +187,7 @@ func (b *Bot) initCtxMgr() error {
 // rebuildRuntime recreates components affected by configuration changes.
 // Keep this order: tools and policy are dependencies of extensions and agent;
 // commands consume all of them.
-func (b *Bot) rebuildRuntime() error {
+func (b *Bot) rebuildRuntime() {
 	if b.ext != nil {
 		b.ext.Close()
 	}
@@ -203,13 +205,12 @@ func (b *Bot) rebuildRuntime() error {
 	b.toolbox.Workspace().Configure(b.cwd, b.configuredWorkspaceRoots())
 	b.initExtensions()
 	b.initAgent()
-	// A fresh agent means a fresh executor: the full-takeover mode does not
-	// carry over (e.g. after a model switch), so reset the lock-free mirror.
+	// Full configuration rebuilds revoke full access; model-only rebuilds
+	// preserve it.
 	if b.FullAccess() {
 		b.setPermissionModeLocked(permission.ModeManual)
 	}
 	b.initCommands()
-	return nil
 }
 
 func (b *Bot) configuredWorkspaceRoots() []workspace.Root {
@@ -251,7 +252,6 @@ func (b *Bot) RegisterExtraTools(tools ...toolcore.Tool) {
 
 func (b *Bot) initPolicy() {
 	b.policy = policy.New()
-	b.syncPolicySessionID()
 	builtin.Register(b.policy)
 }
 
@@ -316,6 +316,7 @@ func (b *Bot) initAgent() {
 	ask, todos := b.ag.ToolInteraction()
 	b.toolbox.WireInteraction(ask, todos)
 	b.configureAgent(b.ag)
+	b.bindSessionResources()
 
 	// Auto permission mode: re-apply the risk judge and mode flag to the
 	// fresh executor (agents are rebuilt on config changes).

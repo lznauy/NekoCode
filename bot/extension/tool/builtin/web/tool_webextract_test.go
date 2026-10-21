@@ -18,8 +18,8 @@ func TestWebExtractPrefersExtractor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(got, "main content only") {
-		t.Fatalf("result did not come from the extractor: %q", got)
+	if !strings.Contains(got.Render(), "main content only") {
+		t.Fatalf("result did not come from the extractor: %q", got.Render())
 	}
 	if stub.hit("93.184.216.34") {
 		t.Fatalf("origin was fetched even though the extractor succeeded: %v", stub.requested())
@@ -54,8 +54,8 @@ func TestWebExtractFallsBackWhenExtractorFails(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(got, "origin body") {
-				t.Fatalf("fallback did not use the direct fetch: %q", got)
+			if !strings.Contains(got.Render(), "origin body") {
+				t.Fatalf("fallback did not use the direct fetch: %q", got.Render())
 			}
 			if !stub.hit(testExtractorHost) || !stub.hit("93.184.216.34") {
 				t.Fatalf("expected both hops to be attempted, got %v", stub.requested())

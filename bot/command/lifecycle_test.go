@@ -265,8 +265,8 @@ func (fakePlanTool) Name() string                                    { return "w
 func (fakePlanTool) Description() string                             { return "test" }
 func (fakePlanTool) Parameters() []core.Parameter                    { return nil }
 func (fakePlanTool) ExecutionMode(map[string]any) core.ExecutionMode { return core.ModeSequential }
-func (fakePlanTool) Execute(context.Context, map[string]any) (string, error) {
-	return "unexpected", nil
+func (fakePlanTool) Execute(context.Context, map[string]any) (core.ToolOutput, error) {
+	return core.ToolOutput{Text: "unexpected"}, nil
 }
 
 func TestSkillState(t *testing.T) {

@@ -53,15 +53,13 @@ func (r *Runner) Close() error {
 	return nil
 }
 
-// Services returns the optional runtime functions implemented by Runner.
-func (r *Runner) Services() controlruntime.Services {
-	return controlruntime.Services{Metrics: r.Metrics, Close: r.Close}
-}
-
-// ServiceGroups returns the preferred domain-grouped capability set.
+// ServiceGroups returns the domain-grouped capability set.
 func (r *Runner) ServiceGroups() controlruntime.ServiceGroups {
 	return controlruntime.ServiceGroups{
-		Lifecycle: controlruntime.LifecycleServices{Metrics: r.Metrics, Close: r.Close},
+		Lifecycle: controlruntime.LifecycleServices{
+			Metrics: r.Metrics,
+			Close:   r.Close,
+		},
 	}
 }
 

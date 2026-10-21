@@ -24,20 +24,20 @@ func (t *ListTool) Parameters() []core.Parameter {
 	}
 }
 
-func (t *ListTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *ListTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	path, err := toolutil.RequireStringArg(args, "path")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 
 	safePath, err := toolutil.ValidatePathReadableContext(ctx, path)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 
 	entries, err := os.ReadDir(safePath)
 	if err != nil {
-		return "", fmt.Errorf("failed to read directory: %w", err)
+		return core.ToolOutput{}, fmt.Errorf("failed to read directory: %w", err)
 	}
 
 	var sb strings.Builder
@@ -57,7 +57,7 @@ func (t *ListTool) Execute(ctx context.Context, args map[string]any) (string, er
 	if result == "" {
 		result = "(empty)"
 	}
-	return result, nil
+	return core.ToolOutput{Text: result}, nil
 }
 
 func humanSize(n int64) string {

@@ -8,12 +8,16 @@ import (
 	"testing"
 
 	"nekocode/bot/checkpoint"
+	"nekocode/bot/contextmgr"
 	"nekocode/bot/extension/tool"
+	"nekocode/bot/extension/tool/builtin/filesystem/search"
 	writebuiltin "nekocode/bot/extension/tool/builtin/filesystem/write"
 	"nekocode/bot/extension/tool/builtin/shell"
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/permission"
 	"nekocode/bot/extension/tool/runtime/runner"
+	"nekocode/bot/provider/types"
+	"nekocode/bot/session"
 	"nekocode/protocol"
 )
 
@@ -23,8 +27,60 @@ func (t *testTool) Name() string                                    { return t.n
 func (t *testTool) Description() string                             { return "test" }
 func (t *testTool) Parameters() []core.Parameter                    { return nil }
 func (t *testTool) ExecutionMode(map[string]any) core.ExecutionMode { return core.ModeParallel }
-func (t *testTool) Execute(context.Context, map[string]any) (string, error) {
-	return "ok", nil
+func (t *testTool) Execute(context.Context, map[string]any) (core.ToolOutput, error) {
+	return core.ToolOutput{Text: "ok"}, nil
+}
+
+func TestGrepArtifactSurvivesContextBudgetAndSessionReload(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cwd := t.TempDir()
+	source := filepath.Join(cwd, "evidence.txt")
+	if err := os.WriteFile(source, []byte(strings.Repeat("needle evidence\n", 4000)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	sessions := session.New(cwd)
+	dir, err := session.ToolOutputDir(sessions.CurrentID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := core.NewOutputStore(dir)
+	registry := tools.New(&search.GrepTool{})
+	registry.Workspace().Configure(cwd, nil)
+	executor := runner.NewExecutor(registry)
+	executor.ExecutionState().OutputStore = store
+	result := executor.ExecuteBatch(context.Background(), []core.ToolCallItem{{ID: "grep", Name: "grep", Args: map[string]any{"pattern": "needle", "path": source}}})[0]
+	if result.Error != "" || result.Artifact.Path == "" || result.Artifact.Incomplete {
+		t.Fatalf("grep failed: %+v", result)
+	}
+	manager := contextmgr.New(contextmgr.Config{ContextWindow: 10000, SystemPrompt: strings.Repeat("x", 28000)})
+	manager.SetOutputStore(store)
+	manager.AddToolResultsBatch([]contextmgr.ToolResultMsg{{ToolName: "grep", AllowOutputFile: executor.AllowOutputFile, Message: types.Message{
+		Content: result.TextOutput().Text, ToolOutput: result.Artifact, ToolCallID: result.ID,
+	}}})
+	snapshot := sessions.Current()
+	snapshot.CaptureContext(manager.Snapshot(), 0, 0, nil)
+	if err := sessions.Save(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := sessions.Load(snapshot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := contextmgr.New(contextmgr.Config{ContextWindow: 10000})
+	restored.SetOutputStore(core.NewOutputStore(dir))
+	restored.Restore(loaded.ContextSnapshot())
+	msg := restored.Snapshot().Messages[0]
+	if msg.ToolOutput != result.Artifact || len(msg.Content) >= len(result.EffectiveOutput()) {
+		t.Fatal("context rebudgeting lost the original artifact")
+	}
+	files, err := filepath.Glob(filepath.Join(dir, "result-*.txt"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("preview was saved again: %v %v", files, err)
+	}
+	raw, err := os.ReadFile(msg.ToolOutput.Path)
+	if err != nil || !strings.Contains(string(raw), "2000:needle evidence") || !strings.Contains(string(raw), "4000:needle evidence") || strings.Contains(string(raw), "Tool output truncated") {
+		t.Fatalf("saved result lost middle/tail evidence: %v", err)
+	}
 }
 
 type fileMutationTool struct{ testTool }
@@ -33,10 +89,10 @@ func (t *fileMutationTool) ExecutionMode(map[string]any) core.ExecutionMode {
 	return core.ModeSequential
 }
 
-func (t *fileMutationTool) Execute(_ context.Context, args map[string]any) (string, error) {
+func (t *fileMutationTool) Execute(_ context.Context, args map[string]any) (core.ToolOutput, error) {
 	path, _ := args["path"].(string)
 	content, _ := args["content"].(string)
-	return "changed", os.WriteFile(path, []byte(content), 0o644)
+	return core.ToolOutput{Text: "changed"}, os.WriteFile(path, []byte(content), 0o644)
 }
 
 func TestExecutorCheckpointsWriteBeforeMutation(t *testing.T) {

@@ -2,11 +2,9 @@ package contextmgr
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"nekocode/bot/provider/types"
-	"nekocode/logger"
 	"nekocode/util/text"
 )
 
@@ -15,8 +13,6 @@ type Summarizer func([]types.Message, string) (string, error)
 const (
 	defaultBudget = 64000
 	clearedMarker = "[Old tool result cleared]"
-	grepHeadLines = 50
-	grepTailLines = 50
 )
 
 const summarySystemPrompt = `You summarize coding-agent context for a later continuation.
@@ -84,22 +80,4 @@ func extractXMLBlock(raw, tag string) string {
 		return strings.TrimSpace(raw[start:])
 	}
 	return strings.TrimSpace(raw[start : start+end])
-}
-
-func budgetToolResult(content, toolName string) (string, bool) {
-	if toolName != "grep" {
-		return content, false
-	}
-	lines := strings.Split(content, "\n")
-	if len(lines) <= grepHeadLines+grepTailLines {
-		return content, false
-	}
-	head := lines[:grepHeadLines]
-	tail := lines[len(lines)-grepTailLines:]
-	truncated := strings.Join(head, "\n") + "\n... [" +
-		strconv.Itoa(len(lines)-grepHeadLines-grepTailLines) + " lines truncated] ...\n" +
-		strings.Join(tail, "\n")
-	logger.Log("budget_result: truncated grep from %d lines (%d chars) to head=%d tail=%d",
-		len(lines), len(content), grepHeadLines, grepTailLines)
-	return truncated, true
 }

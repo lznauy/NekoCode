@@ -42,7 +42,7 @@ func TestManagerCancelsCompletedRunContext(t *testing.T) {
 			close(contextDone)
 		}()
 		return "done", nil
-	}), Services{})
+	}), ServiceGroups{})
 
 	runID, err := rt.StartRun(context.Background(), Input{
 		Source: SourceRef{Kind: "test"}, Text: "run",
@@ -64,7 +64,11 @@ func TestSteerCallbackDoesNotDeadlockWithCancel(t *testing.T) {
 		steerStarted: make(chan struct{}),
 		invoke:       make(chan struct{}),
 	}
-	rt := New(runner, Services{Steer: runner.Steer})
+	rt := New(runner, ServiceGroups{
+		Commands: CommandsServices{
+			Steer: runner.Steer,
+		},
+	})
 	runID, err := rt.StartRun(context.Background(), Input{
 		Source: SourceRef{Kind: "test"}, Text: "run",
 	})
@@ -122,10 +126,14 @@ func TestSteerEnvelopeNeverClaimsNativeDelivery(t *testing.T) {
 	// already visible when they are not.
 	steered := make(chan string, 1)
 	runner := &steerCaptureRunner{started: make(chan struct{}), steered: steered}
-	rt := New(runner, Services{
-		Steer:                   func(_ context.Context, message string) error { steered <- message; return nil },
-		ImageAttachmentsEnabled: func() bool { return true },
-		VisionEnabled:           func() bool { return true },
+	rt := New(runner, ServiceGroups{
+		Commands: CommandsServices{
+			Steer: func(_ context.Context, message string) error { steered <- message; return nil },
+		},
+		Models: ModelsServices{
+			ImageAttachmentsEnabled: func() bool { return true },
+			VisionEnabled:           func() bool { return true },
+		},
 	})
 	runID, err := rt.StartRun(context.Background(), Input{Source: SourceRef{Kind: "test"}, Text: "run"})
 	if err != nil {
@@ -177,7 +185,11 @@ func TestCancelInterruptsBlockingSteerer(t *testing.T) {
 		started:      make(chan struct{}),
 		steerStarted: make(chan struct{}),
 	}
-	rt := New(runner, Services{Steer: runner.Steer})
+	rt := New(runner, ServiceGroups{
+		Commands: CommandsServices{
+			Steer: runner.Steer,
+		},
+	})
 	runID, err := rt.StartRun(context.Background(), Input{
 		Source: SourceRef{Kind: "test"}, Text: "run",
 	})
@@ -213,7 +225,11 @@ func TestCancelDeadlineDefersTerminalUntilLeaseDrains(t *testing.T) {
 		steerStarted: make(chan struct{}),
 		invoke:       make(chan struct{}),
 	}
-	rt := New(runner, Services{Steer: runner.Steer})
+	rt := New(runner, ServiceGroups{
+		Commands: CommandsServices{
+			Steer: runner.Steer,
+		},
+	})
 	runID, err := rt.StartRun(context.Background(), Input{
 		Source: SourceRef{Kind: "test"}, Text: "run",
 	})
@@ -598,7 +614,11 @@ func TestCancelAndClosePreserveCancellationTerminal(t *testing.T) {
 		release: make(chan struct{}),
 		closed:  make(chan struct{}),
 	}
-	rt := New(runner, Services{Close: runner.Close})
+	rt := New(runner, ServiceGroups{
+		Lifecycle: LifecycleServices{
+			Close: runner.Close,
+		},
+	})
 	runID, err := rt.StartRun(context.Background(), Input{Source: SourceRef{Kind: "test"}, Text: "run"})
 	if err != nil {
 		t.Fatal(err)

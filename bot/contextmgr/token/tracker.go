@@ -134,8 +134,8 @@ func (t *Tracker) AddNew(charCount int) {
 	t.AddEstimated((charCount + 3) / 4)
 }
 
-// AddEstimated records an already tokenized estimate for provider-visible
-// messages appended since the last API response.
+// AddEstimated records a token estimate change since the last API response.
+// Replacing existing content can supply a negative delta.
 func (t *Tracker) AddEstimated(tokens int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

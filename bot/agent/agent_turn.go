@@ -1,9 +1,6 @@
 package agent
 
 import (
-	"context"
-	"errors"
-
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/policy"
 	"nekocode/bot/provider/types"
@@ -25,21 +22,6 @@ const policyBlockFinal = "final answer blocked by policy"
 // newTurnRunner creates the per-agent turn orchestrator.
 func newTurnRunner(agent *Agent) *turnRunner {
 	return &turnRunner{agent: agent}
-}
-
-// prepareTurn auto-compacts the context and stages hints left by the previous
-// lifecycle event.
-func (r *turnRunner) prepareTurn(_ string) error {
-	a := r.agent
-	// A canceled context means the turn was steered or aborted while
-	// auto-compaction was streaming. Treat it as an interrupt so the normal
-	// lifecycle paths handle it (steer retry or StopInterrupted) instead of
-	// failing the whole run.
-	if _, err := a.deps.ctxMgr.AutoCompactIfNeeded(a.getCtx()); err != nil && !errors.Is(err, context.Canceled) {
-		return err
-	}
-	a.applyTurnHints(nil)
-	return nil
 }
 
 // interruptedBeforeReasoning reports whether the run was interrupted before

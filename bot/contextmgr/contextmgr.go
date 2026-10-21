@@ -3,6 +3,7 @@ package contextmgr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"nekocode/bot/contextmgr/memory"
 	"nekocode/bot/contextmgr/token"
 	"nekocode/bot/decision"
+	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/provider"
 	"nekocode/bot/provider/types"
 	"nekocode/protocol"
@@ -27,18 +29,20 @@ type Manager struct {
 	// runtimePrompt is evaluated for every Build and excluded from snapshots.
 	runtimePrompt func() string
 
-	usageMu            sync.RWMutex
-	usageRecorder      func(types.StreamUsage)
-	compactionObserver func(protocol.CompactionEvent)
-	sessionIDProvider  func() string
-	beforeCompaction   func(string) error
-	afterCompaction    func()
-	toolPruner         decision.ToolPruner
+	usageMu             sync.RWMutex
+	usageRecorder       func(types.StreamUsage)
+	skillLoadedRecorder func(string)
+	compactionObserver  func(protocol.CompactionEvent)
+	sessionIDProvider   func() string
+	beforeCompaction    func(string) error
+	afterCompaction     func()
+	toolPruner          decision.ToolPruner
 }
 
 type managerState struct {
 	mu sync.RWMutex
 
+	outputStore   *core.OutputStore
 	ctx           contextContent
 	contextWindow int
 	tracker       *token.Tracker
@@ -121,7 +125,8 @@ func (m *Manager) streamingSummarizer(ctx context.Context, client provider.LLM, 
 			// to the UI, so a retry would duplicate them. Only a fully empty
 			// response (provider closed the stream without content — often
 			// transient) is retried once. A cancelled context ends the loop.
-			if strings.TrimSpace(summary) != "" || ctx.Err() != nil {
+			var budgetErr *RequestBudgetError
+			if strings.TrimSpace(summary) != "" || ctx.Err() != nil || errors.As(err, &budgetErr) {
 				return summary, err
 			}
 		}
@@ -139,10 +144,19 @@ func (m *Manager) streamingSummarizer(ctx context.Context, client provider.LLM, 
 
 func (m *Manager) summarizeStreamOnce(ctx context.Context, client provider.LLM, msgs []types.Message, prevSummary string, delta func(string)) (string, error) {
 	start := time.Now()
-	tokens, errs := client.ChatStream(ctx, buildSummaryMessages(msgs, prevSummary), nil)
+	m.state.mu.RLock()
+	window := 0
+	if m.state.compressor != nil {
+		window = m.state.compressor.modelWindow
+	}
+	m.state.mu.RUnlock()
+	requestMessages, err := prepareSummaryRequest(msgs, prevSummary, window, client)
+	if err != nil {
+		return "", err
+	}
+	tokens, errs := client.ChatStream(ctx, requestMessages, nil)
 	var summary strings.Builder
 	var usage types.StreamUsage
-	var err error
 	cancelled := ctx.Done()
 	for tokens != nil || errs != nil {
 		select {
@@ -242,6 +256,7 @@ func New(cfg Config) *Manager {
 	}
 	m := &Manager{state: &managerState{
 		ctx:           ctx,
+		outputStore:   core.NewOutputStore(""),
 		tracker:       &token.Tracker{},
 		contextWindow: cfg.ContextWindow,
 		reasoning:     cfg.Reasoning,
@@ -268,4 +283,35 @@ func normalizeAutoCompactPercent(percent int) int {
 
 func (m *Manager) initCompressor(summarizer Summarizer, autoCompactPercent int) {
 	m.state.compressor = newReplacementCompactor(summarizer, autoCompactPercent)
+}
+
+// SetOutputStore binds result artifacts to the active session and actor.
+func (m *Manager) SetOutputStore(store *core.OutputStore) {
+	if store == nil {
+		return
+	}
+	m.state.mu.Lock()
+	defer m.state.mu.Unlock()
+	m.state.outputStore = store
+}
+
+// SetSkillLoadedRecorder connects successful context delivery to skill tracking.
+func (m *Manager) SetSkillLoadedRecorder(recorder func(string)) {
+	m.usageMu.Lock()
+	m.skillLoadedRecorder = recorder
+	m.usageMu.Unlock()
+}
+
+func (m *Manager) recordSkillsLoaded(names []string) {
+	if len(names) == 0 {
+		return
+	}
+	m.usageMu.RLock()
+	recorder := m.skillLoadedRecorder
+	m.usageMu.RUnlock()
+	if recorder != nil {
+		for _, name := range names {
+			recorder(name)
+		}
+	}
 }

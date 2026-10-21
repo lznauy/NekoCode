@@ -111,32 +111,32 @@ func (t *ImageUnderstandTool) PermissionPlan(args map[string]any, workspaceRoot 
 	}
 }
 
-func (t *ImageUnderstandTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *ImageUnderstandTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	path, err := toolutil.RequireStringArg(args, "path")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	mode, err := parseImageUnderstandMode(args)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	cfg, err := t.resolveUnderstandModel(args, mode)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	if approved, planned := args[approvedImageDigestArg].(string); planned && approved == unavailableImageDigest {
-		return "", fmt.Errorf("image was unavailable during approval; choose a regular local file and approve it again")
+		return core.ToolOutput{}, fmt.Errorf("image was unavailable during approval; choose a regular local file and approve it again")
 	}
 	imageData, mediaType, err := readImageForUnderstanding(ctx, path)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	if approved, planned := args[approvedImageDigestArg].(string); planned && approved != imageDigest(imageData) {
-		return "", fmt.Errorf("image changed or became unavailable after approval; review and approve it again")
+		return core.ToolOutput{}, fmt.Errorf("image changed or became unavailable after approval; review and approve it again")
 	}
 	imageData, mediaType, err = prepareImageForUnderstanding(imageData, mediaType, mode)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	prompt := toolutil.OptStringArg(args, "prompt", defaultImagePrompt(mode))
 	maxTokens := imageUnderstandMaxTokens(mode)
@@ -151,11 +151,13 @@ func (t *ImageUnderstandTool) Execute(ctx context.Context, args map[string]any) 
 
 	switch protocol {
 	case "openai":
-		return t.executeOpenAIUnderstanding(ctx, cfg, prompt, mediaType, imageData, maxTokens)
+		toolText, toolErr := t.executeOpenAIUnderstanding(ctx, cfg, prompt, mediaType, imageData, maxTokens)
+		return core.ToolOutput{Text: toolText}, toolErr
 	case "anthropic":
-		return t.executeAnthropicUnderstanding(ctx, cfg, prompt, mediaType, imageData, maxTokens)
+		toolText, toolErr := t.executeAnthropicUnderstanding(ctx, cfg, prompt, mediaType, imageData, maxTokens)
+		return core.ToolOutput{Text: toolText}, toolErr
 	default:
-		return "", fmt.Errorf("unsupported image understand protocol: %s", protocol)
+		return core.ToolOutput{}, fmt.Errorf("unsupported image understand protocol: %s", protocol)
 	}
 }
 

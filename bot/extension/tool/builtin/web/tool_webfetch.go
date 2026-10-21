@@ -101,23 +101,23 @@ func (t *WebFetchTool) Parameters() []core.Parameter {
 	}
 }
 
-func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	rawURL, err := toolutil.RequireStringArg(args, "url")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 
 	if err := validateURL(rawURL); err != nil {
-		return "", fmt.Errorf("URL validation failed: %w", err)
+		return core.ToolOutput{}, fmt.Errorf("URL validation failed: %w", err)
 	}
 
 	prompt := toolutil.OptStringArg(args, "prompt", "")
 
 	content, err := fetchPageDirect(ctx, t.client, rawURL)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
-	return finalizeContent(content, prompt), nil
+	return core.ToolOutput{Text: finalizeContent(content, prompt)}, nil
 }
 
 // fetchPageDirect fetches rawURL straight from the origin and converts HTML to

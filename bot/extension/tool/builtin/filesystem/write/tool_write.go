@@ -52,29 +52,29 @@ func (t *WriteTool) PreviewContext(ctx context.Context, args map[string]any) str
 	return formatWriteDiff(path, existingContent(safePath), content)
 }
 
-func (t *WriteTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *WriteTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	path, err := toolutil.RequireStringArg(args, "path")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	content, err := toolutil.RequireStringArg(args, "content")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 
 	safePath, err := toolutil.ValidatePathWritableContext(ctx, path)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 
 	existing := existingContent(safePath)
 
 	if err := os.MkdirAll(filepath.Dir(safePath), 0755); err != nil {
-		return "", fmt.Errorf("failed to create directory: %w", err)
+		return core.ToolOutput{}, fmt.Errorf("failed to create directory: %w", err)
 	}
 	mode := toolutil.GetFileMode(safePath)
 	if err := os.WriteFile(safePath, []byte(content), mode); err != nil {
-		return "", fmt.Errorf("failed to write file: %w", err)
+		return core.ToolOutput{}, fmt.Errorf("failed to write file: %w", err)
 	}
 	// Record snapshot for read/edit continuity within the session.
 	tag := execution.RecordSnapshot(safePath, content)
@@ -82,15 +82,15 @@ func (t *WriteTool) Execute(ctx context.Context, args map[string]any) (string, e
 	diffOutput := formatWriteDiff(safePath, existing, content)
 	if diffOutput == "" {
 		if tag != "" {
-			return fmt.Sprintf("[%s#%s] Written (%d chars)", safePath, tag, len(content)), nil
+			return core.ToolOutput{Text: fmt.Sprintf("[%s#%s] Written (%d chars)", safePath, tag, len(content))}, nil
 		}
-		return fmt.Sprintf("Written: %s (%d chars)", safePath, len(content)), nil
+		return core.ToolOutput{Text: fmt.Sprintf("Written: %s (%d chars)", safePath, len(content))}, nil
 	}
 
 	if tag != "" {
-		return fmt.Sprintf("[%s#%s]\n%s", safePath, tag, diffOutput), nil
+		return core.ToolOutput{Text: fmt.Sprintf("[%s#%s]\n%s", safePath, tag, diffOutput)}, nil
 	}
-	return diffOutput, nil
+	return core.ToolOutput{Text: diffOutput}, nil
 }
 
 func formatWriteDiff(path, existing, content string) string {

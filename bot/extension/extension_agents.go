@@ -107,9 +107,9 @@ func (*agentCatalogTool) Description() string {
 	return "List available sub-agent profile IDs, descriptions, exact tool ceilings, default skills, step limits and plugin load errors. Consult this catalog before choosing a custom profile for task."
 }
 func (*agentCatalogTool) Parameters() []core.Parameter { return nil }
-func (t *agentCatalogTool) Execute(ctx context.Context, _ map[string]any) (string, error) {
+func (t *agentCatalogTool) Execute(ctx context.Context, _ map[string]any) (core.ToolOutput, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	t.manager.mu.Lock()
 	defer t.manager.mu.Unlock()
@@ -117,5 +117,5 @@ func (t *agentCatalogTool) Execute(ctx context.Context, _ map[string]any) (strin
 		Profiles []AgentInfo       `json:"profiles"`
 		Errors   map[string]string `json:"errors,omitempty"`
 	}{t.manager.agentInfosLocked(), t.manager.agentErrorsLocked()})
-	return string(data), err
+	return core.ToolOutput{Text: string(data)}, err
 }

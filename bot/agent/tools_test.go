@@ -1,6 +1,10 @@
 package agent
 
 import (
+	"context"
+	"encoding/json"
+	ctxmgr "nekocode/bot/contextmgr"
+	"nekocode/bot/extension/skill"
 	"os"
 	"path/filepath"
 	"strings"
@@ -331,5 +335,69 @@ func TestEmitStartCallbacksUsesEffectiveDelegatedIdentity(t *testing.T) {
 	}}, nil, func(ev protocol.StepEvent) { got = ev })
 	if got.ToolName != "mcp__github__create_issue" || !strings.Contains(got.ToolArgs, "demo") {
 		t.Fatalf("start callback identity = %+v", got)
+	}
+}
+
+func TestSkillLoadedStateFollowsContextDelivery(t *testing.T) {
+	for _, deferred := range []bool{false, true} {
+		name := "immediate"
+		if deferred {
+			name = "deferred_reload"
+		}
+		t.Run(name, func(t *testing.T) {
+			a := newTestAgent()
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: delivery-test\ndescription: test\n---\nComplete instructions."), 0600); err != nil {
+				t.Fatal(err)
+			}
+			mgr := skill.NewWithDirs(a.deps.ctxMgr, a.deps.toolRegistry, 128000, []string{dir})
+			mgr.Load(nil)
+			if deferred {
+				a.deps.ctxMgr.SetSystemPrompt(strings.Repeat("x", 512000))
+			}
+			a.toolRunner.executeAndFeedback([]core.ToolCallItem{{ID: "skill-call", Name: "skill", Args: map[string]any{"name": "delivery-test"}}}, "", nil)
+			snap := a.deps.ctxMgr.Snapshot()
+			var delivered bool
+			for _, msg := range snap.Messages {
+				if msg.ToolCallID == "skill-call" {
+					if msg.IsError {
+						t.Fatalf("skill failed: %s", msg.Content)
+					}
+					delivered = msg.Source != core.DeferredOutputSource
+				}
+			}
+			if delivered == deferred {
+				t.Fatal("fixture delivery status is wrong")
+			}
+			if !deferred {
+				if !mgr.LoadedSet()["delivery-test"] {
+					t.Fatal("successfully delivered skill was not marked loaded")
+				}
+				return
+			}
+			if mgr.LoadedSet()["delivery-test"] {
+				t.Fatal("deferred skill marked loaded before delivery")
+			}
+			data, err := json.Marshal(snap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var loaded ctxmgr.ManagerSnapshot
+			if err := json.Unmarshal(data, &loaded); err != nil {
+				t.Fatal(err)
+			}
+			restored := ctxmgr.New(ctxmgr.Config{ContextWindow: 128000})
+			restored.SetOutputStore(a.deps.toolExecutor.ExecutionState().OutputStore)
+			restoredMgr := skill.NewWithDirs(restored, a.deps.toolRegistry, 128000, []string{dir})
+			restoredMgr.Load(nil)
+			restored.Restore(loaded)
+			restored.SetSystemPrompt("small")
+			if _, err := restored.Summarize(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if !restoredMgr.LoadedSet()["delivery-test"] {
+				t.Fatal("restored delivery was not marked loaded")
+			}
+		})
 	}
 }

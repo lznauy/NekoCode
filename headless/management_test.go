@@ -26,25 +26,36 @@ func rpc(t *testing.T, h *harness, method string, fields map[string]any) map[str
 func TestManagementModelPermissionsAndDiscovery(t *testing.T) {
 	model := "first"
 	full := false
-	h := newHarnessWithServices(t, func(context.Context, string, rt.RunHost) (string, error) { return "done", nil }, Options{}, rt.Services{
-		CurrentModel:       func() rt.ModelSelection { return rt.ModelSelection{Model: model} },
-		ModelOptions:       func() ([]rt.ModelOption, string) { return []rt.ModelOption{{Name: "first"}, {Name: "second"}}, model },
-		SwitchSessionModel: func(name string) (rt.ModelSelection, error) { model = name; return rt.ModelSelection{Model: name}, nil },
-		SetFullAccess:      func(on bool) { full = on }, PermissionMode: func() string {
-			if full {
-				return "full"
-			}
-			return "manual"
+	h := newHarnessWithServices(t, func(context.Context, string, rt.RunHost) (string, error) { return "done", nil }, Options{}, rt.ServiceGroups{
+		Commands: rt.CommandsServices{
+			ExecuteCommand: func(context.Context, string, rt.RunHost) (rt.CommandResult, error) {
+				return rt.CommandResult{Action: rt.CommandIgnored}, nil
+			},
+			CommandMenu: func(context.Context, string) (rt.CommandMenu, bool) {
+				return rt.CommandMenu{Items: []rt.CommandMenuItem{{Value: "/help", Label: "Help"}}}, true
+			},
 		},
-		ToolNames: func() []string { return []string{"read", "shell"} },
-		ExecuteCommand: func(context.Context, string, rt.RunHost) (rt.CommandResult, error) {
-			return rt.CommandResult{Action: rt.CommandIgnored}, nil
+		Models: rt.ModelsServices{
+			CurrentModel:       func() rt.ModelSelection { return rt.ModelSelection{Model: model} },
+			ModelOptions:       func() ([]rt.ModelOption, string) { return []rt.ModelOption{{Name: "first"}, {Name: "second"}}, model },
+			SwitchSessionModel: func(name string) (rt.ModelSelection, error) { model = name; return rt.ModelSelection{Model: name}, nil },
 		},
-		CommandMenu: func(context.Context, string) (rt.CommandMenu, bool) {
-			return rt.CommandMenu{Items: []rt.CommandMenuItem{{Value: "/help", Label: "Help"}}}, true
+		Permissions: rt.PermissionsServices{
+			SetFullAccess: func(on bool) { full = on },
+			PermissionMode: func() string {
+				if full {
+					return "full"
+				}
+				return "manual"
+			},
 		},
-		SkillManagementView: func() rt.SkillManagementView {
-			return rt.SkillManagementView{MCP: []rt.MCPServerView{{Name: "test", Args: []string{"secret-token"}, Command: "private-command"}}}
+		Skills: rt.SkillsServices{
+			SkillManagementView: func() rt.SkillManagementView {
+				return rt.SkillManagementView{MCP: []rt.MCPServerView{{Name: "test", Args: []string{"secret-token"}, Command: "private-command"}}}
+			},
+		},
+		Tools: rt.ToolsServices{
+			ToolNames: func() []string { return []string{"read", "shell"} },
 		},
 	})
 	info := rpc(t, h, "server.info", nil)["response"].(map[string]any)
@@ -70,12 +81,16 @@ func TestManagementModelPermissionsAndDiscovery(t *testing.T) {
 
 func TestManagementBusySteerAndShutdown(t *testing.T) {
 	steered := make(chan string, 1)
-	h := newHarnessWithServices(t, func(ctx context.Context, _ string, _ rt.RunHost) (string, error) { <-ctx.Done(); return "", ctx.Err() }, Options{}, rt.Services{
-		SwitchSessionModel: func(string) (rt.ModelSelection, error) {
-			t.Error("model switched during run")
-			return rt.ModelSelection{}, nil
+	h := newHarnessWithServices(t, func(ctx context.Context, _ string, _ rt.RunHost) (string, error) { <-ctx.Done(); return "", ctx.Err() }, Options{}, rt.ServiceGroups{
+		Commands: rt.CommandsServices{
+			Steer: func(_ context.Context, text string) error { steered <- text; return nil },
 		},
-		Steer: func(_ context.Context, text string) error { steered <- text; return nil },
+		Models: rt.ModelsServices{
+			SwitchSessionModel: func(string) (rt.ModelSelection, error) {
+				t.Error("model switched during run")
+				return rt.ModelSelection{}, nil
+			},
+		},
 	})
 	h.send(t, user("one", "run"))
 	h.until(t, "system")
@@ -102,20 +117,28 @@ func TestManagementBusySteerAndShutdown(t *testing.T) {
 func TestManagementSessionsAndRewind(t *testing.T) {
 	session := ""
 	rewound := ""
-	h := newHarnessWithServices(t, func(context.Context, string, rt.RunHost) (string, error) { return "done", nil }, Options{}, rt.Services{
-		NewSession:       func() (rt.SessionMeta, error) { session = "new-session"; return rt.SessionMeta{ID: session}, nil },
-		CurrentSessionID: func() string { return session }, ResumeSession: func(id string) error { session = id; return nil },
-		ListSessions:    func() []rt.SessionMeta { return []rt.SessionMeta{{ID: session}} },
-		SessionMessages: func() []rt.DisplayMessage { return []rt.DisplayMessage{{Role: "user", Content: session}} },
-		Checkpoints: func() ([]rt.CheckpointInfo, error) {
-			return []rt.CheckpointInfo{{ID: "checkpoint-1", Label: "First"}}, nil
+	h := newHarnessWithServices(t, func(context.Context, string, rt.RunHost) (string, error) { return "done", nil }, Options{}, rt.ServiceGroups{
+		Commands: rt.CommandsServices{
+			ExecuteCommand: func(context.Context, string, rt.RunHost) (rt.CommandResult, error) {
+				return rt.CommandResult{Action: rt.CommandIgnored}, nil
+			},
+			CommandMenu: func(context.Context, string) (rt.CommandMenu, bool) {
+				return rt.CommandMenu{Items: []rt.CommandMenuItem{{Value: "/rewind checkpoint-1", Label: "First"}}}, true
+			},
 		},
-		DeleteSession: func(string) error { return nil }, Rewind: func(id string) (string, error) { rewound = id; return "restored", nil },
-		ExecuteCommand: func(context.Context, string, rt.RunHost) (rt.CommandResult, error) {
-			return rt.CommandResult{Action: rt.CommandIgnored}, nil
+		Sessions: rt.SessionsServices{
+			NewSession:       func() (rt.SessionMeta, error) { session = "new-session"; return rt.SessionMeta{ID: session}, nil },
+			CurrentSessionID: func() string { return session },
+			ResumeSession:    func(id string) error { session = id; return nil },
+			ListSessions:     func() []rt.SessionMeta { return []rt.SessionMeta{{ID: session}} },
+			SessionMessages:  func() []rt.DisplayMessage { return []rt.DisplayMessage{{Role: "user", Content: session}} },
+			DeleteSession:    func(string) error { return nil },
 		},
-		CommandMenu: func(context.Context, string) (rt.CommandMenu, bool) {
-			return rt.CommandMenu{Items: []rt.CommandMenuItem{{Value: "/rewind checkpoint-1", Label: "First"}}}, true
+		Tools: rt.ToolsServices{
+			Checkpoints: func() ([]rt.CheckpointInfo, error) {
+				return []rt.CheckpointInfo{{ID: "checkpoint-1", Label: "First"}}, nil
+			},
+			Rewind: func(id string) (string, error) { rewound = id; return "restored", nil },
 		},
 	})
 	for _, method := range []string{"sessions.list", "session.history", "workspace.checkpoints"} {
@@ -196,12 +219,14 @@ func TestSummaryTerminalPrecedence(t *testing.T) {
 
 func TestHistoryLimitsAndFailedResumeBinding(t *testing.T) {
 	session := ""
-	h := newHarnessWithServices(t, func(context.Context, string, rt.RunHost) (string, error) { return "ok", nil }, Options{}, rt.Services{
-		NewSession:       func() (rt.SessionMeta, error) { session = "initial"; return rt.SessionMeta{ID: session}, nil },
-		CurrentSessionID: func() string { return session },
-		ResumeSession:    func(id string) error { session = id; return errors.New("checkpoint recovery failed") },
-		SessionMessages: func() []rt.DisplayMessage {
-			return []rt.DisplayMessage{{Content: strings.Repeat("x", 5<<20)}, {Content: strings.Repeat("y", 5<<20)}}
+	h := newHarnessWithServices(t, func(context.Context, string, rt.RunHost) (string, error) { return "ok", nil }, Options{}, rt.ServiceGroups{
+		Sessions: rt.SessionsServices{
+			NewSession:       func() (rt.SessionMeta, error) { session = "initial"; return rt.SessionMeta{ID: session}, nil },
+			CurrentSessionID: func() string { return session },
+			ResumeSession:    func(id string) error { session = id; return errors.New("checkpoint recovery failed") },
+			SessionMessages: func() []rt.DisplayMessage {
+				return []rt.DisplayMessage{{Content: strings.Repeat("x", 5<<20)}, {Content: strings.Repeat("y", 5<<20)}}
+			},
 		},
 	})
 	if f := rpc(t, h, "session.resume", map[string]any{"session_id": "restored"}); f["subtype"] != "error" {
@@ -275,19 +300,41 @@ func TestCapabilitiesAreNotControlMethods(t *testing.T) {
 func TestManagementCapabilitiesMatchIndividualServices(t *testing.T) {
 	cases := []struct {
 		name     string
-		services rt.Services
+		services rt.ServiceGroups
 		want     []string
 	}{
-		{"current_model_only", rt.Services{CurrentModel: func() rt.ModelSelection { return rt.ModelSelection{Model: "x"} }}, nil},
-		{"model_catalog_only", rt.Services{ModelOptions: func() ([]rt.ModelOption, string) { return nil, "" }}, []string{"models.list"}},
-		{"read_only_sessions", rt.Services{
-			CurrentSessionID: func() string { return "current" },
-			ListSessions:     func() []rt.SessionMeta { return nil },
-			SessionMessages:  func() []rt.DisplayMessage { return nil },
+		{"current_model_only", rt.ServiceGroups{
+			Models: rt.ModelsServices{
+				CurrentModel: func() rt.ModelSelection { return rt.ModelSelection{Model: "x"} },
+			},
+		}, nil},
+		{"model_catalog_only", rt.ServiceGroups{
+			Models: rt.ModelsServices{
+				ModelOptions: func() ([]rt.ModelOption, string) { return nil, "" },
+			},
+		}, []string{"models.list"}},
+		{"read_only_sessions", rt.ServiceGroups{
+			Sessions: rt.SessionsServices{
+				CurrentSessionID: func() string { return "current" },
+				ListSessions:     func() []rt.SessionMeta { return nil },
+				SessionMessages:  func() []rt.DisplayMessage { return nil },
+			},
 		}, []string{"sessions.list", "session.history"}},
-		{"session_create_only", rt.Services{NewSession: func() (rt.SessionMeta, error) { return rt.SessionMeta{}, nil }}, []string{"session.new"}},
-		{"session_resume_only", rt.Services{ResumeSession: func(string) error { return nil }}, []string{"session.resume"}},
-		{"session_delete_only", rt.Services{DeleteSession: func(string) error { return nil }}, []string{"session.delete"}},
+		{"session_create_only", rt.ServiceGroups{
+			Sessions: rt.SessionsServices{
+				NewSession: func() (rt.SessionMeta, error) { return rt.SessionMeta{}, nil },
+			},
+		}, []string{"session.new"}},
+		{"session_resume_only", rt.ServiceGroups{
+			Sessions: rt.SessionsServices{
+				ResumeSession: func(string) error { return nil },
+			},
+		}, []string{"session.resume"}},
+		{"session_delete_only", rt.ServiceGroups{
+			Sessions: rt.SessionsServices{
+				DeleteSession: func(string) error { return nil },
+			},
+		}, []string{"session.delete"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -305,15 +352,17 @@ func TestManagementCapabilitiesMatchIndividualServices(t *testing.T) {
 }
 
 func TestContextSnapshotExposesComposition(t *testing.T) {
-	contexts := rt.Services{
-		MemoryView: func(rt.MemoryScope) rt.MemoryView { return rt.MemoryView{} },
-		ContextSnapshot: func() rt.ContextSnapshot {
-			return rt.ContextSnapshot{
-				Budget: 128_000, Used: 62_400, Free: 65_600,
-				SystemPrompt: 11_200, ToolDefTokens: 4_000, MessageTokens: 47_200,
-				CompactCount: 1, CacheHitTokens: 20_500, CacheMissTokens: 1_300,
-				Segments: []rt.ContextSegment{{Key: "system", Label: "系统提示", Tokens: 11_200, Tone: "muted"}},
-			}
+	contexts := rt.ServiceGroups{
+		Context: rt.ContextServices{
+			MemoryView: func(rt.MemoryScope) rt.MemoryView { return rt.MemoryView{} },
+			ContextSnapshot: func() rt.ContextSnapshot {
+				return rt.ContextSnapshot{
+					Budget: 128_000, Used: 62_400, Free: 65_600,
+					SystemPrompt: 11_200, ToolDefTokens: 4_000, MessageTokens: 47_200,
+					CompactCount: 1, CacheHitTokens: 20_500, CacheMissTokens: 1_300,
+					Segments: []rt.ContextSegment{{Key: "system", Label: "系统提示", Tokens: 11_200, Tone: "muted"}},
+				}
+			},
 		},
 	}
 	h := newHarnessWithServices(t, func(context.Context, string, rt.RunHost) (string, error) { return "", nil }, Options{}, contexts)
@@ -353,9 +402,11 @@ func TestContextSnapshotExposesComposition(t *testing.T) {
 }
 
 func TestObserveControlMethods(t *testing.T) {
-	h := newHarnessWithServices(t, func(context.Context, string, rt.RunHost) (string, error) { return "ok", nil }, Options{}, rt.Services{
-		ContextSnapshot: func() rt.ContextSnapshot { return rt.ContextSnapshot{} },
-		MemoryView:      func(rt.MemoryScope) rt.MemoryView { return rt.MemoryView{} },
+	h := newHarnessWithServices(t, func(context.Context, string, rt.RunHost) (string, error) { return "ok", nil }, Options{}, rt.ServiceGroups{
+		Context: rt.ContextServices{
+			ContextSnapshot: func() rt.ContextSnapshot { return rt.ContextSnapshot{} },
+			MemoryView:      func(rt.MemoryScope) rt.MemoryView { return rt.MemoryView{} },
+		},
 	})
 	info := rpc(t, h, "server.info", nil)["response"].(map[string]any)
 	var methods []string
@@ -424,8 +475,10 @@ func TestObserveUnavailableWithoutContext(t *testing.T) {
 }
 
 func TestCheckpointsUnavailableReturnsError(t *testing.T) {
-	h := newHarnessWithServices(t, func(context.Context, string, rt.RunHost) (string, error) { return "", nil }, Options{}, rt.Services{
-		Rewind: func(string) (string, error) { return "ok", nil },
+	h := newHarnessWithServices(t, func(context.Context, string, rt.RunHost) (string, error) { return "", nil }, Options{}, rt.ServiceGroups{
+		Tools: rt.ToolsServices{
+			Rewind: func(string) (string, error) { return "ok", nil },
+		},
 	})
 	if f := rpc(t, h, "workspace.checkpoints", nil); f["subtype"] != "error" {
 		t.Fatalf("missing checkpoint query reported success: %v", f)
@@ -434,8 +487,10 @@ func TestCheckpointsUnavailableReturnsError(t *testing.T) {
 }
 
 func TestCheckpointLookupFailureIsControlError(t *testing.T) {
-	h := newHarnessWithServices(t, func(context.Context, string, rt.RunHost) (string, error) { return "", nil }, Options{}, rt.Services{
-		Checkpoints: func() ([]rt.CheckpointInfo, error) { return nil, errors.New("checkpoint manifest unreadable") },
+	h := newHarnessWithServices(t, func(context.Context, string, rt.RunHost) (string, error) { return "", nil }, Options{}, rt.ServiceGroups{
+		Tools: rt.ToolsServices{
+			Checkpoints: func() ([]rt.CheckpointInfo, error) { return nil, errors.New("checkpoint manifest unreadable") },
+		},
 	})
 	info := rpc(t, h, "server.info", nil)["response"].(map[string]any)
 	var methods []string

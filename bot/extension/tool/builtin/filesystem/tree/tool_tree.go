@@ -29,14 +29,14 @@ func (t *TreeTool) Parameters() []core.Parameter {
 	}
 }
 
-func (t *TreeTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *TreeTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	path, err := toolutil.RequireStringArg(args, "path")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	safePath, err := toolutil.ValidatePathReadableContext(ctx, path)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 
 	depth := toolutil.ClampIntArg(args, "depth", 3, 1, 6)
@@ -47,7 +47,7 @@ func (t *TreeTool) Execute(ctx context.Context, args map[string]any) (string, er
 
 	count, err := walkTree(safePath, "", depth, limit, &b)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	if count == 0 {
 		b.WriteString("(empty)")
@@ -55,7 +55,7 @@ func (t *TreeTool) Execute(ctx context.Context, args map[string]any) (string, er
 	if count >= limit {
 		fmt.Fprintf(&b, "\n... [reached limit of %d entries]", limit)
 	}
-	return b.String(), nil
+	return core.ToolOutput{Text: b.String()}, nil
 }
 
 func walkTree(dir, prefix string, depth, limit int, b *strings.Builder) (int, error) {

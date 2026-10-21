@@ -4,6 +4,7 @@ package core
 
 import (
 	"context"
+	"nekocode/protocol"
 )
 
 // ExecutionMode controls whether a tool can run concurrently.
@@ -35,19 +36,23 @@ func (c ToolCallItem) Effective() (string, map[string]any) {
 }
 
 type ToolCallResult struct {
-	ID     string
-	Name   string
-	Output string
-	Error  string
+	Artifact protocol.ToolOutputArtifact
+	ID       string
+	Name     string
+	Output   string
+	Error    string
 }
 
 // EffectiveOutput returns Error if non-empty, otherwise Output.
-func (r ToolCallResult) EffectiveOutput() string {
+func (r ToolCallResult) TextOutput() ToolOutput {
+	text := r.Output
 	if r.Error != "" {
-		return r.Error
+		text = r.Error
 	}
-	return r.Output
+	return ToolOutput{Text: text, Artifact: r.Artifact}
 }
+
+func (r ToolCallResult) EffectiveOutput() string { return r.TextOutput().Render() }
 
 // Tool is the interface all tools implement.
 type Tool interface {
@@ -55,7 +60,7 @@ type Tool interface {
 	Description() string
 	Parameters() []Parameter
 	ExecutionMode(args map[string]any) ExecutionMode
-	Execute(ctx context.Context, args map[string]any) (string, error)
+	Execute(ctx context.Context, args map[string]any) (ToolOutput, error)
 }
 
 type Parameter struct {

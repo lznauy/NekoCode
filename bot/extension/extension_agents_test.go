@@ -61,8 +61,8 @@ func TestAgentSkillToolAvailableAcrossStartupAndReload(t *testing.T) {
 				t.Fatal(err)
 			}
 			out, err := entry.Tool.Execute(t.Context(), map[string]any{"name": "check"})
-			if err != nil || !strings.Contains(out, "skill_content") {
-				t.Fatalf("skill tool after load: %q, %v", out, err)
+			if err != nil || !strings.Contains(out.Render(), "skill_content") {
+				t.Fatalf("skill tool after load: %q, %v", out.Render(), err)
 			}
 		}
 	}
@@ -123,10 +123,10 @@ func TestAgentOwnershipDiscoveryAndReload(t *testing.T) {
 	var catalog struct {
 		Profiles []AgentInfo `json:"profiles"`
 	}
-	if err = json.Unmarshal([]byte(text), &catalog); err != nil || len(catalog.Profiles) != 4 {
-		t.Fatalf("catalog: %s %v", text, err)
+	if err = json.Unmarshal([]byte(text.Render()), &catalog); err != nil || len(catalog.Profiles) != 4 {
+		t.Fatalf("catalog: %s %v", text.Render(), err)
 	}
-	if strings.Contains(text, "Review carefully.") {
+	if strings.Contains(text.Render(), "Review carefully.") {
 		t.Fatal("catalog exposed system prompt")
 	}
 	var readers sync.WaitGroup

@@ -49,7 +49,7 @@ func main() {
 	}
 
 	runner := newAssistant()
-	rt := controlruntime.New(runner, runner.Services())
+	rt := controlruntime.New(runner, runner.ServiceGroups())
 	defer func() {
 		if err := rt.Close(); err != nil {
 			fmt.Fprintf(os.Stderr, "close runtime: %v\n", err)

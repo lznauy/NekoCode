@@ -17,6 +17,12 @@ import (
 type ModelRequest struct {
 	Tools       []types.ToolDef
 	PolicyHints string
+	// ExtraMessages are transient request-only instructions, e.g. synthesis
+	// prompts and delegated workflows. They are included in the final budget.
+	ExtraMessages []types.Message
+	// OutputTokens is the provider's configured maximum completion length.
+	// Zero uses a bounded fallback for providers without this metadata.
+	OutputTokens int
 }
 
 // Build assembles the persisted context without mutating it:
@@ -38,20 +44,31 @@ func (m *Manager) Build() []types.Message {
 // shape in the same state snapshot. Model callers should use this instead of
 // pairing Build and prefix observation manually.
 func (m *Manager) BuildRequest(request ModelRequest) []types.Message {
+	messages, _ := m.projectRequest(request, true)
+	return messages
+}
+
+// projectRequest allows preflight drafts to remain invisible to request/cache
+// accounting. PrepareRequest records only its accepted final projection.
+func (m *Manager) projectRequest(request ModelRequest, observe bool) ([]types.Message, prefixShape) {
 	runtimePrompt := m.renderRuntimeEnvironment()
 	m.state.mu.Lock()
 	defer m.state.mu.Unlock()
 	m.appendRuntimeContextLocked(runtimePrompt)
 	m.appendHintsLocked(m.state.ctx.Hints, request.PolicyHints)
-	out := m.buildLocked(true)
+	out := append(m.buildLocked(true), request.ExtraMessages...)
 	system := m.state.ctx.BuildLayer0()
 	system = append(system, m.state.ctx.BuildLayer1()...)
 	history := m.state.ctx.BuildLayer2()
 	history = append(history, m.visibleHistory()...)
+	history = append(history, request.ExtraMessages...)
 	out = types.ProjectReasoning(out, m.state.reasoning)
 	history = types.ProjectReasoning(history, m.state.reasoning)
-	m.state.prefix.Observe(buildPrefixShape(system, history, request.Tools))
-	return out
+	shape := buildPrefixShape(system, history, request.Tools)
+	if observe {
+		m.state.prefix.Observe(shape)
+	}
+	return out, shape
 }
 
 func (m *Manager) buildLocked(preserveSource bool) []types.Message {

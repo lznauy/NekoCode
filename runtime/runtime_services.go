@@ -6,51 +6,6 @@ import (
 	"fmt"
 )
 
-// Services explicitly describes the optional application functions attached
-// to a Runner. The composition root supplies this value once; Runtime and
-// transports do not discover capabilities through type assertions.
-// Deprecated: use ServiceGroups and NewWithServices for new compositions.
-type Services struct {
-	MCPAuthorizationAction  func(string, string) error
-	Checkpoints             func() ([]CheckpointInfo, error)
-	ToolNames               func() []string
-	Rewind                  func(string) (string, error)
-	ExecuteCommand          func(ctx context.Context, input string, host RunHost) (CommandResult, error)
-	ExecuteLocalCommand     func(context.Context, string) (string, LocalCommandResult)
-	CommandMenu             func(context.Context, string) (CommandMenu, bool)
-	Steer                   func(ctx context.Context, message string) error
-	Metrics                 func() MetricsSnapshot
-	CurrentModel            func() ModelSelection
-	PermissionMode          func() string
-	SwitchModel             func(string) (ModelSelection, error)
-	SwitchSessionModel      func(string) (ModelSelection, error)
-	ModelOptions            func() ([]ModelOption, string)
-	SetReasoningEffort      func(string) error
-	SetSessionReasoning     func(string) error
-	SetFullAccess           func(bool)
-	ContextSnapshot         func() ContextSnapshot
-	WorkspaceChanges        func() WorkspaceChanges
-	ImageAttachmentsEnabled func() bool
-	VisionEnabled           func() bool
-	MemoryView              func(MemoryScope) MemoryView
-	SkillManagementView     func() SkillManagementView
-	SelectSkill             func(string) error
-	ClearSelectedSkill      func()
-	RefreshSkillManagement  func() SkillManagementView
-	SetPluginEnabled        func(string, bool) (SkillManagementView, error)
-	ConfigView              func() ConfigView
-	ResolveModelProfile     func(ModelSpec) ModelProfile
-	ApplyConfig             func(ConfigView) (ConfigView, error)
-	CurrentSessionID        func() string
-	ListSessions            func() []SessionMeta
-	SessionMessages         func() []DisplayMessage
-	ResumeSession           func(string) error
-	NewSession              func() (SessionMeta, error)
-	DeleteSession           func(string) error
-	ReplaceMCPServers       func(context.Context, string, []MCPServerSpec) error
-	Close                   func() error
-}
-
 // ImageAttachmentsEnabled reports whether the active runtime can consume
 // pasted image attachments: natively (vision model) or through a configured
 // image-understanding tool.
@@ -194,7 +149,7 @@ func (r *Runtime) ResumeSession(id string) error {
 	err := r.mutation("resume_session", r.services.Sessions.ResumeSession != nil, func() error {
 		return r.services.Sessions.ResumeSession(id)
 	})
-	if err == nil {
+	if err == nil || mutationCommitted(err) {
 		r.publishSessionChanged("resume", id, true)
 	}
 	return err
@@ -205,7 +160,7 @@ func (r *Runtime) NewSession() (session SessionMeta, err error) {
 		session, err = r.services.Sessions.NewSession()
 		return err
 	})
-	if err == nil {
+	if err == nil || mutationCommitted(err) {
 		r.publishSessionChanged("new", session.ID, true)
 	}
 	return session, err

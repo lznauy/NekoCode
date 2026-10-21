@@ -39,8 +39,8 @@ func TestQuestionToolExecutesWithAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
 	}
-	if !strings.Contains(out, "Pick a mode: Fast") {
-		t.Fatalf("unexpected output: %s", out)
+	if !strings.Contains(out.Render(), "Pick a mode: Fast") {
+		t.Fatalf("unexpected output: %s", out.Render())
 	}
 }
 

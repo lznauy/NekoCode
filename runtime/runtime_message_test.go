@@ -13,7 +13,7 @@ func TestCompletedMessageAndStructuredToolInput(t *testing.T) {
 		host.Step(protocol.StepEvent{Action: protocol.StepActionThink, Output: "canonical"})
 		host.Step(protocol.StepEvent{Action: protocol.StepActionToolStart, CallID: "tool", ToolArgs: "n=3", ToolInput: []byte(`{"n":3}`)})
 		return "done", nil
-	}), Services{})
+	}), ServiceGroups{})
 	defer r.Close()
 	id, err := r.StartRun(context.Background(), Input{Text: "run"})
 	if err != nil {

@@ -15,7 +15,7 @@ func TestTreeTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tree: %v", err)
 	}
-	if out == "" {
+	if out.Render() == "" {
 		t.Error("expected tree output")
 	}
 

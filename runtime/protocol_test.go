@@ -21,7 +21,7 @@ func (r *blockingRunner) Run(context.Context, string, RunHost) (string, error) {
 
 func TestProtocolManifestAndBusyError(t *testing.T) {
 	runner := &blockingRunner{started: make(chan struct{}), release: make(chan struct{})}
-	rt := New(runner, Services{})
+	rt := New(runner, ServiceGroups{})
 	t.Cleanup(func() {
 		if err := rt.Close(); err != nil {
 			t.Error(err)
@@ -50,7 +50,7 @@ func TestProtocolManifestAndBusyError(t *testing.T) {
 func TestEventsCarryVersionSequenceAndCursor(t *testing.T) {
 	rt := New(RunnerFunc(func(context.Context, string, RunHost) (string, error) {
 		return "done", nil
-	}), Services{})
+	}), ServiceGroups{})
 	t.Cleanup(func() {
 		if err := rt.Close(); err != nil {
 			t.Error(err)

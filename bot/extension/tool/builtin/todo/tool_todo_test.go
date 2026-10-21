@@ -18,7 +18,7 @@ func TestTodoWriteTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("todo_write: %v", err)
 	}
-	if out == "" {
+	if out.Render() == "" {
 		t.Error("empty output")
 	}
 

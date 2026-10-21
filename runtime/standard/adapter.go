@@ -6,7 +6,6 @@ import (
 
 	"nekocode/bot/config"
 	"nekocode/bot/core"
-	"nekocode/bot/extension"
 	"nekocode/bot/extension/mcp"
 	"nekocode/bot/provider/types"
 	"nekocode/logger"
@@ -58,22 +57,6 @@ func messageImages(host controlruntime.RunHost) []types.MessageImage {
 
 func (a *adapter) ExecuteCommand(ctx context.Context, input string, host controlruntime.RunHost) (controlruntime.CommandResult, error) {
 	return a.bot.ExecuteCommand(ctx, input, host)
-}
-
-func (a *adapter) ExecuteLocalCommand(ctx context.Context, input string) (string, controlruntime.LocalCommandResult) {
-	return a.bot.ExecuteLocalCommand(ctx, input)
-}
-
-func (a *adapter) CommandMenu(ctx context.Context, input string) (controlruntime.CommandMenu, bool) {
-	return a.bot.CommandMenu(ctx, input)
-}
-
-func (a *adapter) Steer(ctx context.Context, message string) error {
-	return a.bot.Steer(ctx, message)
-}
-
-func (a *adapter) Metrics() controlruntime.MetricsSnapshot {
-	return a.bot.Metrics()
 }
 
 func (a *adapter) CurrentModel() controlruntime.ModelSelection {
@@ -141,24 +124,8 @@ func (a *adapter) ModelOptions() ([]controlruntime.ModelOption, string) {
 	return options, configuration.Active
 }
 
-func (a *adapter) SetReasoningEffort(effort string) error {
-	return a.bot.SetReasoningEffort(effort)
-}
-
-func (a *adapter) SetSessionReasoning(effort string) error {
-	return a.bot.SetReasoningEffortRuntime(effort)
-}
-
-func (a *adapter) SetFullAccess(on bool) {
-	a.bot.SetFullAccess(on)
-}
-
 func (a *adapter) ContextSnapshot() controlruntime.ContextSnapshot {
 	return viewmodel.ContextSnapshot(a.bot.ContextReport())
-}
-
-func (a *adapter) WorkspaceChanges() controlruntime.WorkspaceChanges {
-	return a.bot.WorkspaceChanges()
 }
 
 func (a *adapter) MemoryView(scope controlruntime.MemoryScope) controlruntime.MemoryView {
@@ -167,15 +134,7 @@ func (a *adapter) MemoryView(scope controlruntime.MemoryScope) controlruntime.Me
 }
 
 func (a *adapter) SkillManagementView() controlruntime.SkillManagementView {
-	return a.extensionView(a.bot.Extensions())
-}
-
-func (a *adapter) SelectSkill(name string) error {
-	return a.bot.SelectSkill(name)
-}
-
-func (a *adapter) ClearSelectedSkill() {
-	a.bot.ClearSelectedSkill()
+	return viewmodel.Extension(a.bot.Extensions())
 }
 
 func (a *adapter) RefreshSkillManagement() controlruntime.SkillManagementView {
@@ -190,16 +149,8 @@ func (a *adapter) SetPluginEnabled(name string, enabled bool) (controlruntime.Sk
 	return a.SkillManagementView(), nil
 }
 
-func (a *adapter) extensionView(snapshot extension.Snapshot) controlruntime.SkillManagementView {
-	return viewmodel.Extension(snapshot)
-}
-
 func (a *adapter) ConfigView() controlruntime.ConfigView {
 	return viewmodel.Config(a.bot.Configuration())
-}
-
-func (a *adapter) ResolveModelProfile(model controlruntime.ModelSpec) controlruntime.ModelProfile {
-	return viewmodel.ModelProfileFromSpec(model)
 }
 
 func (a *adapter) ApplyConfig(view controlruntime.ConfigView) (controlruntime.ConfigView, error) {
@@ -207,10 +158,6 @@ func (a *adapter) ApplyConfig(view controlruntime.ConfigView) (controlruntime.Co
 		return controlruntime.ConfigView{}, err
 	}
 	return a.ConfigView(), nil
-}
-
-func (a *adapter) CurrentSessionID() string {
-	return a.bot.CurrentSessionID()
 }
 
 func (a *adapter) ListSessions() []controlruntime.SessionMeta {
@@ -222,20 +169,12 @@ func (a *adapter) SessionMessages() []controlruntime.DisplayMessage {
 	return viewmodel.DisplayMessages(snapshot.Transcript)
 }
 
-func (a *adapter) ResumeSession(id string) error {
-	return a.bot.ResumeSession(id)
-}
-
 func (a *adapter) NewSession() (controlruntime.SessionMeta, error) {
 	snapshot, err := a.bot.NewSession()
-	if err != nil {
+	if snapshot == nil {
 		return controlruntime.SessionMeta{}, err
 	}
-	return viewmodel.SessionSnapshot(snapshot), nil
-}
-
-func (a *adapter) DeleteSession(id string) error {
-	return a.bot.DeleteSession(id)
+	return viewmodel.SessionSnapshot(snapshot), err
 }
 
 func (a *adapter) ReplaceMCPServers(ctx context.Context, source string, servers []controlruntime.MCPServerSpec) error {
@@ -243,56 +182,52 @@ func (a *adapter) ReplaceMCPServers(ctx context.Context, source string, servers 
 	return a.bot.ReplaceSessionMCPServers(ctx, source, configs)
 }
 
-func (a *adapter) Close() error {
-	return a.bot.Close()
-}
-
 func (a *adapter) services() controlruntime.ServiceGroups {
 	return controlruntime.ServiceGroups{
 		Commands: controlruntime.CommandsServices{
 			ExecuteCommand:      a.ExecuteCommand,
-			ExecuteLocalCommand: a.ExecuteLocalCommand,
-			CommandMenu:         a.CommandMenu,
-			Steer:               a.Steer,
+			ExecuteLocalCommand: a.bot.ExecuteLocalCommand,
+			CommandMenu:         a.bot.CommandMenu,
+			Steer:               a.bot.Steer,
 		},
 		Models: controlruntime.ModelsServices{
 			CurrentModel:            a.CurrentModel,
 			SwitchModel:             a.SwitchModel,
 			SwitchSessionModel:      a.SwitchSessionModel,
 			ModelOptions:            a.ModelOptions,
-			SetReasoningEffort:      a.SetReasoningEffort,
-			SetSessionReasoning:     a.SetSessionReasoning,
+			SetReasoningEffort:      a.bot.SetReasoningEffort,
+			SetSessionReasoning:     a.bot.SetReasoningEffortRuntime,
 			ImageAttachmentsEnabled: a.ImageAttachmentsEnabled,
 			VisionEnabled:           a.VisionEnabled,
 		},
 		Permissions: controlruntime.PermissionsServices{
 			PermissionMode: a.PermissionMode,
-			SetFullAccess:  a.SetFullAccess,
+			SetFullAccess:  a.bot.SetFullAccess,
 		},
 		Context: controlruntime.ContextServices{
 			ContextSnapshot:  a.ContextSnapshot,
-			WorkspaceChanges: a.WorkspaceChanges,
+			WorkspaceChanges: a.bot.WorkspaceChanges,
 			MemoryView:       a.MemoryView,
 		},
 		Skills: controlruntime.SkillsServices{
 			SkillManagementView:    a.SkillManagementView,
-			SelectSkill:            a.SelectSkill,
-			ClearSelectedSkill:     a.ClearSelectedSkill,
+			SelectSkill:            a.bot.SelectSkill,
+			ClearSelectedSkill:     a.bot.ClearSelectedSkill,
 			RefreshSkillManagement: a.RefreshSkillManagement,
 			SetPluginEnabled:       a.SetPluginEnabled,
 		},
 		Config: controlruntime.ConfigServices{
 			ConfigView:          a.ConfigView,
-			ResolveModelProfile: a.ResolveModelProfile,
+			ResolveModelProfile: viewmodel.ModelProfileFromSpec,
 			ApplyConfig:         a.ApplyConfig,
 		},
 		Sessions: controlruntime.SessionsServices{
-			CurrentSessionID: a.CurrentSessionID,
+			CurrentSessionID: a.bot.CurrentSessionID,
 			ListSessions:     a.ListSessions,
 			SessionMessages:  a.SessionMessages,
-			ResumeSession:    a.ResumeSession,
+			ResumeSession:    a.bot.ResumeSession,
 			NewSession:       a.NewSession,
-			DeleteSession:    a.DeleteSession,
+			DeleteSession:    a.bot.DeleteSession,
 		},
 		Tools: controlruntime.ToolsServices{
 			Checkpoints: a.bot.Checkpoints,
@@ -304,8 +239,8 @@ func (a *adapter) services() controlruntime.ServiceGroups {
 			ReplaceMCPServers:      a.ReplaceMCPServers,
 		},
 		Lifecycle: controlruntime.LifecycleServices{
-			Metrics: a.Metrics,
-			Close:   a.Close,
+			Metrics: a.bot.Metrics,
+			Close:   a.bot.Close,
 		},
 	}
 }

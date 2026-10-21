@@ -109,6 +109,7 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
 	defer cleanupExecutor()
 
 	ctxMgr := e.newContextManager(cfg)
+	ctxMgr.SetOutputStore(executor.ExecutionState().OutputStore)
 	ctxMgr.SetSessionIDProvider(func() string { return cfg.SessionID })
 	ctxMgr.SetLLMUsageRecorder(func(usage providertypes.StreamUsage) {
 		state.addTokens(cfg)(usage.PromptTokens, usage.CompletionTokens)
@@ -176,28 +177,18 @@ func (r *engineRun) stepOnce() bool {
 		return true
 	}
 
-	if _, err := r.ctxMgr.AutoCompactIfNeeded(r.ctx); err != nil {
-		r.log("compact error: %v", err)
-		if r.state.lastText != "" {
-			r.result = buildPartialResult(r.state.lastText, r.state.meta(r.ctxMgr))
-		} else {
-			r.result = buildFailedResult(err.Error(), r.state.meta(r.ctxMgr))
-		}
-		r.err = err
-		return true
-	}
 	profile := r.cfg.Profile
 	calls, text, err := r.engine.reason(r.ctx, r.ctxMgr, profile.Tools, buildSkillWorkflow(r.cfg), r.state.addTokens(r.cfg), r.cfg.RecordLLMUsage, r.cfg.SessionID, r.phase, r.cfg)
 	r.ctxMgr.SetHints("")
 	if err != nil {
 		r.log("error: %v", err)
+		r.err = err
 		if r.state.lastText != "" {
 			r.log("partial_result: %q", r.state.lastText[:min(len(r.state.lastText), 300)])
 			r.result = buildPartialResult(r.state.lastText, r.state.meta(r.ctxMgr))
 			return true
 		}
 		r.result = buildFailedResult(err.Error(), r.state.meta(r.ctxMgr))
-		r.err = err
 		return true
 	}
 

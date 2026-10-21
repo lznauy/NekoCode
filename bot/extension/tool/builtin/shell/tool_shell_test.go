@@ -63,11 +63,11 @@ func TestShellRunCompletesWithinObservation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if strings.Contains(out, "task:") || strings.Contains(out, "status:") || strings.Contains(out, "exit_code:") {
-		t.Fatalf("completed run should not include process metadata:\n%s", out)
+	if strings.Contains(out.Render(), "task:") || strings.Contains(out.Render(), "status:") || strings.Contains(out.Render(), "exit_code:") {
+		t.Fatalf("completed run should not include process metadata:\n%s", out.Render())
 	}
-	if !strings.Contains(out, "shell-done") {
-		t.Fatalf("unexpected output:\n%s", out)
+	if !strings.Contains(out.Render(), "shell-done") {
+		t.Fatalf("unexpected output:\n%s", out.Render())
 	}
 }
 
@@ -82,8 +82,8 @@ func TestShellRunReturnsManagedTaskThenProcessWaits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if !strings.Contains(out, "task: download") || strings.Contains(out, "status:") || strings.Contains(out, "elapsed:") {
-		t.Fatalf("expected managed task, got:\n%s", out)
+	if !strings.Contains(out.Render(), "task: download") || strings.Contains(out.Render(), "status:") || strings.Contains(out.Render(), "elapsed:") {
+		t.Fatalf("expected managed task, got:\n%s", out.Render())
 	}
 
 	wait, err := processTool.Execute(context.Background(), map[string]any{
@@ -93,11 +93,11 @@ func TestShellRunReturnsManagedTaskThenProcessWaits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("wait: %v", err)
 	}
-	if !strings.Contains(wait, "status: done") || !strings.Contains(wait, "reason: exit") || !strings.Contains(wait, "shell-later") {
-		t.Fatalf("unexpected wait output:\n%s", wait)
+	if !strings.Contains(wait.Render(), "status: done") || !strings.Contains(wait.Render(), "reason: exit") || !strings.Contains(wait.Render(), "shell-later") {
+		t.Fatalf("unexpected wait output:\n%s", wait.Render())
 	}
-	if strings.Contains(wait, "elapsed:") {
-		t.Fatalf("wait output should omit elapsed metadata:\n%s", wait)
+	if strings.Contains(wait.Render(), "elapsed:") {
+		t.Fatalf("wait output should omit elapsed metadata:\n%s", wait.Render())
 	}
 }
 
@@ -112,16 +112,16 @@ func TestShellHardTimeoutStopsTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if !strings.Contains(out, "task: bounded") || strings.Contains(out, "status:") || strings.Contains(out, "elapsed:") {
-		t.Fatalf("expected managed task, got:\n%s", out)
+	if !strings.Contains(out.Render(), "task: bounded") || strings.Contains(out.Render(), "status:") || strings.Contains(out.Render(), "elapsed:") {
+		t.Fatalf("expected managed task, got:\n%s", out.Render())
 	}
 
 	wait, err := processTool.Execute(context.Background(), map[string]any{"action": "wait", "task": "bounded"})
 	if err != nil {
 		t.Fatalf("wait: %v", err)
 	}
-	if !strings.Contains(wait, "status: timeout") || !strings.Contains(wait, "command timed out") {
-		t.Fatalf("expected hard timeout status, got:\n%s", wait)
+	if !strings.Contains(wait.Render(), "status: timeout") || !strings.Contains(wait.Render(), "command timed out") {
+		t.Fatalf("expected hard timeout status, got:\n%s", wait.Render())
 	}
 }
 
@@ -147,8 +147,8 @@ func TestManagedTaskSurvivesCallerCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if !strings.Contains(out, "task: survivor") {
-		t.Fatalf("expected task handle: %s", out)
+	if !strings.Contains(out.Render(), "task: survivor") {
+		t.Fatalf("expected task handle: %s", out.Render())
 	}
 	cancel()
 
@@ -156,8 +156,8 @@ func TestManagedTaskSurvivesCallerCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("wait after caller cancellation: %v", err)
 	}
-	if !strings.Contains(wait, "status: done") || !strings.Contains(wait, "survived") {
-		t.Fatalf("managed process was tied to caller context:\n%s", wait)
+	if !strings.Contains(wait.Render(), "status: done") || !strings.Contains(wait.Render(), "survived") {
+		t.Fatalf("managed process was tied to caller context:\n%s", wait.Render())
 	}
 }
 
@@ -254,8 +254,8 @@ func TestManagedProcessesAreScopedToSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list session-b: %v", err)
 	}
-	if list != "(no managed processes)" || tool.ProcessSummary() != "" {
-		t.Fatalf("session-b can see session-a process: list=%q summary=%q", list, tool.ProcessSummary())
+	if list.Render() != "(no managed processes)" || tool.ProcessSummary() != "" {
+		t.Fatalf("session-b can see session-a process: list=%q summary=%q", list.Render(), tool.ProcessSummary())
 	}
 	if _, err := processTool.Execute(context.Background(), map[string]any{
 		"action": "wait", "task": "private-service",

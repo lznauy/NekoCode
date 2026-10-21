@@ -22,6 +22,25 @@ func messagesContain(msgs []types.Message, substr string) bool {
 	return false
 }
 
+func TestRestoreSessionUsageClearsPreviousRunMetrics(t *testing.T) {
+	a := newTestAgent()
+	a.deps.ctxMgr.Add("user", "previous task")
+	a.life.Start()
+	a.AddCompletionTokens(50)
+	a.RecordLLMUsage(types.StreamUsage{PromptTokens: 20, CompletionTokens: 50})
+	a.RestoreSessionUsage(17)
+	got := a.Metrics()
+	if got.Duration != "" || got.CompletionTokens != 17 || got.TurnCompletion != 0 || got.TurnPrompt != 0 || got.TurnTotal != 0 || got.TurnOutput != 0 {
+		t.Fatalf("previous run metrics leaked into restored session: %+v", got)
+	}
+	a.AddCompletionTokens(3)
+	a.RecordLLMUsage(types.StreamUsage{PromptTokens: 8, CompletionTokens: 3})
+	got = a.Metrics()
+	if got.CompletionTokens != 20 || got.TurnCompletion != 3 || got.TurnTotal != 11 {
+		t.Fatalf("new usage was not counted from the restored baseline: %+v", got)
+	}
+}
+
 func TestDrainSteeringRotatesCheckpointMessage(t *testing.T) {
 	cp := checkpoint.New(t.TempDir())
 	cp.Activate("session", nil, 0)

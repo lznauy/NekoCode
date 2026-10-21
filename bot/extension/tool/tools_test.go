@@ -14,8 +14,8 @@ func (t *testTool) Name() string                                    { return t.n
 func (t *testTool) Description() string                             { return "test" }
 func (t *testTool) Parameters() []core.Parameter                    { return nil }
 func (t *testTool) ExecutionMode(map[string]any) core.ExecutionMode { return core.ModeParallel }
-func (t *testTool) Execute(ctx context.Context, args map[string]any) (string, error) {
-	return "ok", nil
+func (t *testTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
+	return core.ToolOutput{Text: "ok"}, nil
 }
 
 func TestRegistry(t *testing.T) {
@@ -115,8 +115,8 @@ func TestRegistrationOptionsLifecycle(t *testing.T) {
 		Preview: func(_ context.Context, args map[string]any) string {
 			return args["preview"].(string)
 		},
-		Privileged: func(context.Context, map[string]any, core.PermissionRequest) (string, error) {
-			return "privileged", nil
+		Privileged: func(context.Context, map[string]any, core.PermissionRequest) (core.ToolOutput, error) {
+			return core.ToolOutput{Text: "privileged"}, nil
 		},
 		PermissionPlan: func(map[string]any, string) *core.PermissionRequest {
 			return &core.PermissionRequest{Capabilities: []string{core.CapNetOutbound}}

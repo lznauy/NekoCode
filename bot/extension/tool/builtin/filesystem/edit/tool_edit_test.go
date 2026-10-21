@@ -21,13 +21,13 @@ func TestEditV2ExactUniqueReplacement(t *testing.T) {
 		"newString": "TWO",
 	})
 	if err != nil {
-		t.Fatalf("edit failed: %v\n%s", err, result)
+		t.Fatalf("edit failed: %v\n%s", err, result.Render())
 	}
 	if got, want := readFile(t, p), "one\nTWO\nthree\n"; got != want {
 		t.Fatalf("unexpected content:\n%s", got)
 	}
-	if !strings.Contains(result, "-2:two") || !strings.Contains(result, "+2:TWO") {
-		t.Fatalf("expected diff in result, got:\n%s", result)
+	if !strings.Contains(result.Render(), "-2:two") || !strings.Contains(result.Render(), "+2:TWO") {
+		t.Fatalf("expected diff in result, got:\n%s", result.Render())
 	}
 }
 
@@ -89,8 +89,8 @@ func TestEditV2LineTrimFallback(t *testing.T) {
 	if got, want := readFile(t, p), "func main() {\n    other()\n}\n"; got != want {
 		t.Fatalf("unexpected content:\n%s", got)
 	}
-	if !strings.Contains(result, "matched via line-trim") {
-		t.Fatalf("expected fallback note, got:\n%s", result)
+	if !strings.Contains(result.Render(), "matched via line-trim") {
+		t.Fatalf("expected fallback note, got:\n%s", result.Render())
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"nekocode/bot/contextmgr"
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/policy"
+	"nekocode/bot/provider"
 	"nekocode/bot/provider/types"
 	"nekocode/logger"
 	"nekocode/protocol"
@@ -39,6 +40,10 @@ func (r *modelRunner) reason(input string) *reasoningResult {
 	result, err := r.callLLMForTool()
 	if err != nil {
 		a.stream.discardText()
+		var budgetErr *contextmgr.RequestBudgetError
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && errors.As(err, &budgetErr) {
+			a.run.err = err
+		}
 		return fromLLM(nil, "", err)
 	}
 	reasoning := fromLLM(result.ToolCalls, result.Text, nil)
@@ -54,7 +59,10 @@ func (r *modelRunner) callLLMForTool() (*llmstream.LLMCallResult, error) {
 	a := r.agent
 	toolDefs := core.ToToolDefs(a.deps.toolRegistry.Descriptors())
 	policyHints := r.preModelHints()
-	messages := a.deps.ctxMgr.BuildRequest(contextmgr.ModelRequest{Tools: toolDefs, PolicyHints: policyHints})
+	messages, err := a.deps.ctxMgr.PrepareRequest(a.getCtx(), contextmgr.ModelRequest{Tools: toolDefs, PolicyHints: policyHints, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient)})
+	if err != nil {
+		return nil, err
+	}
 
 	result, err := llmstream.CallLLMWithRetry(a.getCtx(), a.deps.llmClient, func() llmstream.LLMCallOptions {
 		return llmstream.LLMCallOptions{
@@ -96,6 +104,11 @@ func (r *modelRunner) synthesize() string {
 	text, err := r.streamSynthesize(a.getCtx())
 	if err != nil || !usableFinalText(text) {
 		a.stream.discardText()
+		var budgetErr *contextmgr.RequestBudgetError
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && errors.As(err, &budgetErr) {
+			a.run.err = err
+			return ""
+		}
 		logger.Log("synthesize: LLM summary failed (err=%v), using fallback", err)
 		return fallbackSynthesize
 	}
@@ -110,8 +123,10 @@ func usableFinalText(text string) bool {
 
 func (r *modelRunner) streamSynthesize(ctx context.Context) (string, error) {
 	a := r.agent
-	messages := a.deps.ctxMgr.BuildRequest(contextmgr.ModelRequest{})
-	messages = append(messages, types.Message{Role: "user", Content: synthesizePrompt})
+	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient), ExtraMessages: []types.Message{{Role: "user", Content: synthesizePrompt}}})
+	if err != nil {
+		return "", err
+	}
 
 	result, err := llmstream.CallLLM(a.deps.llmClient, llmstream.LLMCallOptions{
 		Ctx:         ctx,

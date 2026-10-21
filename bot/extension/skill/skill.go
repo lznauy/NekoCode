@@ -59,6 +59,9 @@ func NewWithDirs(ctx *ctxmgr.Manager, toolRegistry *tools.Registry, contextWindo
 		contextWindow: contextWindow,
 		dirs:          append([]string(nil), dirs...),
 	}
+	if ctx != nil {
+		ctx.SetSkillLoadedRecorder(m.MarkLoaded)
+	}
 	// Register the capability before extensions validate Agent tools. Its
 	// catalog remains empty until Load publishes successfully activated skills.
 	m.RegisterTool()

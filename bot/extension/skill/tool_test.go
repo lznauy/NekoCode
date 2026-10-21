@@ -36,11 +36,11 @@ description: A test skill
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if !strings.Contains(out, "<skill_content") || !strings.Contains(out, "# Test Body") {
-		t.Errorf("output missing content: %s", out)
+	if !strings.Contains(out.Render(), "<skill_content") || !strings.Contains(out.Render(), "# Test Body") {
+		t.Errorf("output missing content: %s", out.Render())
 	}
-	if !reg.IsLoaded("test-skill") {
-		t.Fatal("skill tool should mark the loaded state directly")
+	if reg.IsLoaded("test-skill") {
+		t.Fatal("tool return must not mark delivery before context accepts it")
 	}
 
 	// Missing name.
@@ -61,7 +61,16 @@ description: A test skill
 	if err != nil {
 		t.Fatalf("already loaded should not error: %v", err)
 	}
-	if !strings.Contains(out, "<skill_content") || !strings.Contains(out, "# Test Body") {
-		t.Errorf("loaded skill should be recoverable after compaction: %s", out)
+	if !strings.Contains(out.Render(), "<skill_content") || !strings.Contains(out.Render(), "# Test Body") {
+		t.Errorf("loaded skill should be recoverable after compaction: %s", out.Render())
+	}
+}
+
+func TestOversizedSkillIsNotLoaded(t *testing.T) {
+	reg := newRegistry()
+	reg.Register(&Skill{Name: "large", Content: strings.Repeat("instruction\n", 4000)})
+	output, err := newSkillTool(reg).Execute(context.Background(), map[string]any{"name": "large"})
+	if err == nil || output.Render() != "" || reg.IsLoaded("large") {
+		t.Fatalf("oversized skill must be rejected intact, got %d bytes, err=%v", len(output.Render()), err)
 	}
 }

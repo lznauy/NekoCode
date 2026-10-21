@@ -87,45 +87,45 @@ func (t *IndexTool) Parameters() []core.Parameter {
 	}
 }
 
-func (t *IndexTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *IndexTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	mgr, err := t.ensureInit(ctx)
 	if err != nil {
-		return fmt.Sprintf("Index initialization failed: %v", err), nil
+		return core.ToolOutput{Text: fmt.Sprintf("Index initialization failed: %v", err)}, nil
 	}
 
 	query, _ := args["query"].(string)
 	if query == "" {
-		return "Missing required parameter 'query'. Usage: query=\"file:manager.go\" or query=\"symbol:Agent\". Note: 'file' is not a parameter name — use query=\"file:<name>\".", nil
+		return core.ToolOutput{Text: "Missing required parameter 'query'. Usage: query=\"file:manager.go\" or query=\"symbol:Agent\". Note: 'file' is not a parameter name — use query=\"file:<name>\"."}, nil
 	}
 
 	if strings.HasPrefix(query, "search:") {
 		value := strings.TrimSpace(strings.TrimPrefix(query, "search:"))
-		return querySearch(mgr, value), nil
+		return core.ToolOutput{Text: querySearch(mgr, value)}, nil
 	}
 
 	if query == "skeleton" {
-		return mgr.Skeleton(), nil
+		return core.ToolOutput{Text: mgr.Skeleton()}, nil
 	}
 
 	prefix, value, ok := strings.Cut(query, ":")
 	if !ok {
-		return "Invalid query format. Use '<prefix>:<value>' (e.g. \"file:manager.go\", \"symbol:Agent\") or \"skeleton\".", nil
+		return core.ToolOutput{Text: "Invalid query format. Use '<prefix>:<value>' (e.g. \"file:manager.go\", \"symbol:Agent\") or \"skeleton\"."}, nil
 	}
 	value = strings.TrimSpace(value)
 
 	switch prefix {
 	case "symbol":
-		return querySymbol(mgr, value), nil
+		return core.ToolOutput{Text: querySymbol(mgr, value)}, nil
 	case "callers":
-		return queryCalls(mgr, value, true), nil
+		return core.ToolOutput{Text: queryCalls(mgr, value, true)}, nil
 	case "callees":
-		return queryCalls(mgr, value, false), nil
+		return core.ToolOutput{Text: queryCalls(mgr, value, false)}, nil
 	case "deps":
-		return queryDeps(mgr, value), nil
+		return core.ToolOutput{Text: queryDeps(mgr, value)}, nil
 	case "file":
-		return queryFile(mgr, value), nil
+		return core.ToolOutput{Text: queryFile(mgr, value)}, nil
 	default:
-		return fmt.Sprintf("Unknown query prefix '%s'. Available: symbol, callers, callees, deps, file, search, skeleton", prefix), nil
+		return core.ToolOutput{Text: fmt.Sprintf("Unknown query prefix '%s'. Available: symbol, callers, callees, deps, file, search, skeleton", prefix)}, nil
 	}
 }
 

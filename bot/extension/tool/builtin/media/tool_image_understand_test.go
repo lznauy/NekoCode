@@ -55,8 +55,8 @@ func TestImageUnderstandToolOpenAI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output != "a tiny test image" {
-		t.Fatalf("unexpected output: %q", output)
+	if output.Render() != "a tiny test image" {
+		t.Fatalf("unexpected output: %q", output.Render())
 	}
 	if received["model"] != "vision-1" {
 		t.Fatalf("unexpected model: %#v", received["model"])
@@ -92,8 +92,8 @@ func TestImageUnderstandToolAccurateModeSelectsAccurateModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output != "careful result" {
-		t.Fatalf("unexpected output: %q", output)
+	if output.Render() != "careful result" {
+		t.Fatalf("unexpected output: %q", output.Render())
 	}
 	if received["model"] != "accurate-model" {
 		t.Fatalf("accurate mode selected model %#v", received["model"])
@@ -192,8 +192,8 @@ func TestImageUnderstandToolAnthropic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output != "first\nsecond" {
-		t.Fatalf("unexpected output: %q", output)
+	if output.Render() != "first\nsecond" {
+		t.Fatalf("unexpected output: %q", output.Render())
 	}
 }
 

@@ -71,8 +71,8 @@ func TestExecuteBadUsage(t *testing.T) {
 	tool := New(mcp.New())
 	ctx := context.Background()
 	out, err := tool.Execute(ctx, map[string]any{"action": "list"})
-	if err != nil || out != "No MCP servers configured." {
-		t.Fatalf("empty list = %q, %v", out, err)
+	if err != nil || out.Render() != "No MCP servers configured." {
+		t.Fatalf("empty list = %q, %v", out.Render(), err)
 	}
 	for _, args := range []map[string]any{
 		{"action": "inspect"},                 // missing server/tool

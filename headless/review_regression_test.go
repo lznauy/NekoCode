@@ -274,7 +274,7 @@ func TestReviewCancelShutdownRejectsBufferedInteractions(t *testing.T) {
 	for _, mode := range []string{"drain", "cancel"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
-			backend := rt.New(rt.RunnerFunc(func(context.Context, string, rt.RunHost) (string, error) { return "", nil }), rt.Services{})
+			backend := rt.New(rt.RunnerFunc(func(context.Context, string, rt.RunHost) (string, error) { return "", nil }), rt.ServiceGroups{})
 			defer backend.Close()
 			s := &server{backend: backend, conn: &transport{ctx: ctx, writes: make(chan writeItem, 8)}, pending: make(map[string]pendingRequest)}
 			request, _ := json.Marshal(map[string]any{"subtype": "shutdown", "mode": mode})

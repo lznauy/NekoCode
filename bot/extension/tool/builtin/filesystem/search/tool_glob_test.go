@@ -15,7 +15,7 @@ func TestGlobTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("glob: %v", err)
 	}
-	if out == "" {
+	if out.Render() == "" {
 		t.Error("expected files matching *.go")
 	}
 

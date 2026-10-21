@@ -43,47 +43,48 @@ func (t *ProcessTool) ExecutionMode(map[string]any) core.ExecutionMode {
 	return core.ModeSequential
 }
 
-func (t *ProcessTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *ProcessTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	if t.shell == nil {
-		return "", fmt.Errorf("process manager is unavailable")
+		return core.ToolOutput{}, fmt.Errorf("process manager is unavailable")
 	}
 	action, err := toolutil.RequireStringArg(args, "action")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	action = strings.ToLower(strings.TrimSpace(action))
 	registry := t.shell.registryOnce()
 	owner := t.shell.CurrentSessionID()
 	switch action {
 	case "list":
-		return formatProcessList(registry.list(owner)), nil
+		return core.ToolOutput{Text: formatProcessList(registry.list(owner))}, nil
 	case "wait", "watch", "stop":
 	default:
-		return "", fmt.Errorf("unknown action %q: must be list, wait, watch, or stop", action)
+		return core.ToolOutput{}, fmt.Errorf("unknown action %q: must be list, wait, watch, or stop", action)
 	}
 	ref, err := toolutil.RequireStringArg(args, "task")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	switch action {
 	case "wait":
 		result, err := registry.wait(ctx, owner, ref, t.waitDuration())
 		if err != nil {
-			return "", err
+			return core.ToolOutput{}, err
 		}
-		return formatProcessResult(result), nil
+		return core.ToolOutput{Text: formatProcessResult(result)}, nil
 	case "watch":
 		event, err := toolutil.RequireStringArg(args, "event")
 		if err != nil {
-			return "", err
+			return core.ToolOutput{}, err
 		}
 		result, err := registry.watch(ctx, owner, ref, strings.ToLower(strings.TrimSpace(event)), t.waitDuration())
 		if err != nil {
-			return "", err
+			return core.ToolOutput{}, err
 		}
-		return formatProcessResult(result), nil
+		return core.ToolOutput{Text: formatProcessResult(result)}, nil
 	default: // stop; other values were rejected above.
-		return registry.stop(owner, ref)
+		toolText, toolErr := registry.stop(owner, ref)
+		return core.ToolOutput{Text: toolText}, toolErr
 	}
 }
 

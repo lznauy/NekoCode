@@ -13,7 +13,7 @@ import (
 func TestSharedLifecycleContract(t *testing.T) {
 	for _, scenario := range eventcontract.Scenarios() {
 		t.Run(scenario.Name, func(t *testing.T) {
-			backend := rt.NewWithServices(rt.RunnerFunc(func(context.Context, string, rt.RunHost) (string, error) { return "", nil }), rt.ServiceGroups{})
+			backend := rt.New(rt.RunnerFunc(func(context.Context, string, rt.RunHost) (string, error) { return "", nil }), rt.ServiceGroups{})
 			defer backend.Close()
 			conn := &transport{ctx: t.Context(), writes: make(chan writeItem, 128), errors: make(chan error, 1)}
 			s := &server{backend: backend, conn: conn, active: &turn{runID: "contract-run", cancel: func() {}, tools: make(map[toolKey]*toolState), wireIDs: map[string]bool{}}}

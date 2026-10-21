@@ -39,10 +39,10 @@ func (t *WebSearchTool) Parameters() []core.Parameter {
 	}
 }
 
-func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	query, err := toolutil.RequireStringArg(args, "query")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	n := 8
 	if v, ok := args["numResults"].(float64); ok && v > 0 {
@@ -51,7 +51,8 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) (strin
 			n = 15
 		}
 	}
-	return t.searchExa(ctx, query, n)
+	toolText, toolErr := t.searchExa(ctx, query, n)
+	return core.ToolOutput{Text: toolText}, toolErr
 }
 
 // --- Exa MCP (JSON-RPC over SSE) ---

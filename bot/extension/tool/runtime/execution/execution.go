@@ -4,11 +4,13 @@ import (
 	"context"
 
 	"nekocode/bot/checkpoint"
+	"nekocode/bot/extension/tool/runtime/core"
 )
 
 // ExecutionState carries mutable tool execution state that must be isolated
 // per agent/sub-agent run.
 type ExecutionState struct {
+	OutputStore   *core.OutputStore
 	FileCache     *FileStateCache
 	SnapshotStore *SnapshotStore
 	Checkpoints   *checkpoint.Manager
@@ -18,6 +20,7 @@ type executionStateCtxKey struct{}
 
 func NewExecutionState() *ExecutionState {
 	return &ExecutionState{
+		OutputStore:   core.NewOutputStore(""),
 		FileCache:     NewFileStateCache(),
 		SnapshotStore: NewSnapshotStore(),
 	}

@@ -59,6 +59,7 @@ func (r *loopRunner) runContext(ctx context.Context, input string, images []type
 	r.stepLimitHit = false
 	beforeRun := a.deps.ctxMgr.Snapshot()
 	r.startRun(input, images)
+	defer a.life.StopTiming()
 	// Reset in startRun replaces canceled lifecycle contexts. Install the
 	// watcher afterwards so startup can never erase this run's cancellation.
 	finished, watchDone := make(chan struct{}), make(chan struct{})
@@ -91,6 +92,7 @@ func (r *loopRunner) runContext(ctx context.Context, input string, images []type
 	result.Error = errors.Join(result.Error, a.drainSteering())
 	r.restoreInterruptedRun(beforeRun, result)
 	r.restoreUnansweredRun(beforeRun, result)
+	a.life.StopTiming()
 	r.publishSummary(result, callback)
 	return result
 }
@@ -157,11 +159,7 @@ func (r *loopRunner) runTurn(input string, callback RunCallback) (finished bool)
 	a := r.agent
 	msgCountBefore := a.deps.ctxMgr.Len()
 
-	if err := a.turnRunner.prepareTurn(input); err != nil {
-		a.run.err = err
-		a.clearFinalState()
-		return true
-	}
+	a.applyTurnHints(nil)
 	defer a.deps.ctxMgr.SetHints("")
 
 	if a.turnRunner.interruptedBeforeReasoning(callback) {
@@ -173,6 +171,10 @@ func (r *loopRunner) runTurn(input string, callback RunCallback) (finished bool)
 		return false
 	}
 	if a.run.stopReason == policy.StopInterrupted {
+		return true
+	}
+	if a.run.err != nil {
+		a.clearFinalState()
 		return true
 	}
 
@@ -250,7 +252,11 @@ func (r *loopRunner) finishRun(callback RunCallback) *RunResult {
 	if a.run.err != nil {
 		return &RunResult{Error: a.run.err, Steps: a.run.step}
 	}
-	return &RunResult{FinalOutput: r.resolveFinalOutput(callback), Steps: a.run.step}
+	output := r.resolveFinalOutput(callback)
+	if a.run.err != nil {
+		return &RunResult{Error: a.run.err, Steps: a.run.step}
+	}
+	return &RunResult{FinalOutput: output, Steps: a.run.step}
 }
 
 // resolveFinalOutput picks the run's answer by priority: the recorded final
@@ -274,6 +280,9 @@ func (r *loopRunner) resolveFinalOutput(callback RunCallback) string {
 		}
 	}
 	output := a.modelRunner.synthesize()
+	if a.run.err != nil {
+		return ""
+	}
 	a.run.finalPersisted = true
 	if callback != nil {
 		callback(protocol.StepEvent{Action: protocol.StepActionChat, Output: output})

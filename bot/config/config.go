@@ -265,7 +265,10 @@ func cloneStrings(input map[string]string) map[string]string {
 	return output
 }
 
+// Save validates an independent copy and atomically replaces the configuration.
+// Errors are returned before replacement; a successful rename commits the save.
 func Save(cfg Config) error {
+	cfg = cfg.Clone()
 	if err := Validate(&cfg); err != nil {
 		return err
 	}
@@ -274,7 +277,66 @@ func Save(cfg Config) error {
 		return err
 	}
 	data = append(data, '\n')
-	return fs.WriteFileWithDir(Path(), data, 0o600)
+	path := Path()
+	// Resolve the final symlink chain, including links to a not-yet-created
+	// file, so replacement updates the target without destroying the link.
+	seen := make(map[string]bool)
+	for {
+		// Split preserves .. until directory links have been resolved.
+		parent, name := filepath.Split(path)
+		if err := os.MkdirAll(parent, 0o755); err != nil {
+			return err
+		}
+		parent, err := filepath.EvalSymlinks(parent)
+		if err != nil {
+			return err
+		}
+		path = filepath.Join(parent, name)
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			break
+		}
+		if seen[path] {
+			return fmt.Errorf("configuration symlink cycle at %q", path)
+		}
+		seen[path] = true
+		target, err := os.Readlink(path)
+		if err != nil {
+			return err
+		}
+		if !filepath.IsAbs(target) {
+			target = parent + string(filepath.Separator) + target
+		}
+		path = target
+	}
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".config-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 func Validate(cfg *Config) error {

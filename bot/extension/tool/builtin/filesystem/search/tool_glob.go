@@ -28,16 +28,16 @@ func (t *GlobTool) Parameters() []core.Parameter {
 	}
 }
 
-func (t *GlobTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *GlobTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	pattern, err := toolutil.RequireStringArg(args, "pattern")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 
 	basePath := toolutil.OptStringArg(args, "path", ".")
 	safeBasePath, err := toolutil.ValidatePathReadableContext(ctx, basePath)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 
 	var matches []string
@@ -45,18 +45,18 @@ func (t *GlobTool) Execute(ctx context.Context, args map[string]any) (string, er
 		var err error
 		matches, err = globRecursive(safeBasePath, pattern)
 		if err != nil {
-			return "", fmt.Errorf("glob failed: %w", err)
+			return core.ToolOutput{}, fmt.Errorf("glob failed: %w", err)
 		}
 	} else {
 		var err error
 		matches, err = filepath.Glob(filepath.Join(safeBasePath, pattern))
 		if err != nil {
-			return "", fmt.Errorf("glob failed: %w", err)
+			return core.ToolOutput{}, fmt.Errorf("glob failed: %w", err)
 		}
 	}
 
 	if len(matches) == 0 {
-		return "No matching files found", nil
+		return core.ToolOutput{Text: "No matching files found"}, nil
 	}
 
 	var sb strings.Builder
@@ -64,7 +64,7 @@ func (t *GlobTool) Execute(ctx context.Context, args map[string]any) (string, er
 		sb.WriteString(m)
 		sb.WriteByte('\n')
 	}
-	return sb.String(), nil
+	return core.ToolOutput{Text: sb.String()}, nil
 }
 
 func globRecursive(basePath, pattern string) ([]string, error) {

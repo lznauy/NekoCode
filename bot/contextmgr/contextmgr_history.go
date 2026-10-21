@@ -5,13 +5,15 @@ import (
 	"unicode/utf8"
 
 	"nekocode/bot/contextmgr/token"
+	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/provider/types"
 	"nekocode/logger"
 )
 
 type ToolResultMsg struct {
-	Message  types.Message
-	ToolName string
+	Message         types.Message
+	ToolName        string
+	AllowOutputFile func(string) error
 }
 
 func (m *Manager) Add(role, content string, source ...string) {
@@ -69,27 +71,98 @@ func (m *Manager) AddAssistant(message types.Message) {
 
 func (m *Manager) AddToolResultsBatch(results []ToolResultMsg) {
 	m.state.mu.Lock()
-	defer m.state.mu.Unlock()
+	var loadedSkills []string
+	defer func() {
+		m.state.mu.Unlock()
+		m.recordSkillsLoaded(loadedSkills)
+	}()
+	// One shared budget for the whole batch. Leave half the remaining space
+	// for request overhead, assistant output and the next compaction. Reserve
+	// message metadata separately; content bytes conservatively bound tokens.
+	window := m.state.contextWindow
+	if window <= 0 {
+		window = defaultBudget
+	}
+	remaining := max(0, (window-m.estimatedTokens()-window/10)/2)
 	for _, r := range results {
+		remaining = max(0, remaining-token.EstimateString(r.Message.ToolCallID)-8)
+	}
+	for i, r := range results {
 		role := "tool"
 		if r.Message.ToolCallID == "" {
 			role = "user"
 		}
-		content, _ := budgetToolResult(r.Message.Content, r.ToolName)
-		message := types.Message{
-			Role:       role,
-			Content:    content,
-			ToolCallID: r.Message.ToolCallID,
-			IsError:    r.Message.IsError,
+		output := core.ToolOutput{Text: r.Message.Content, Artifact: r.Message.ToolOutput}
+		limit := min(core.MaxOutputBytes, remaining/(len(results)-i))
+		deferred := false
+		if len(output.Render()) > limit {
+			if r.ToolName == "skill" || limit < 512 {
+				deferred = true
+			} else {
+				bounded, err := m.state.outputStore.BoundOutput(output, limit)
+				if err == nil && r.AllowOutputFile != nil {
+					err = r.AllowOutputFile(bounded.Artifact.Path)
+				}
+				if err != nil {
+					deferred = true
+				} else {
+					output = bounded
+				}
+			}
 		}
+		message := types.Message{Role: role, ToolCallID: r.Message.ToolCallID, IsError: r.Message.IsError}
+		if r.ToolName == "skill" && !message.IsError {
+			message.SkillName = r.Message.SkillName
+		}
+		if deferred {
+			var err error
+			// Preserve the exact bounded delivery, including errors and capture
+			// status, rather than reconstructing it from the raw artifact.
+			pending := output
+			if len(output.Render()) > core.MaxOutputBytes {
+				pending, err = m.state.outputStore.BoundOutput(output, core.MaxOutputBytes)
+				if err == nil {
+					output = pending
+				}
+			}
+			if err == nil {
+				message.DeferredContent = pending.Render()
+			}
+			if err == nil && output.Artifact.Path == "" {
+				output.Artifact.Path, err = m.state.outputStore.PreserveOutput(output.Text)
+			}
+			if err == nil {
+				err = m.state.outputStore.CheckArtifact(output.Artifact)
+			}
+			if err == nil && r.AllowOutputFile != nil {
+				err = r.AllowOutputFile(output.Artifact.Path)
+			}
+			message.Content = core.DeferredOutput
+			if err == nil {
+				message.ToolOutput = output.Artifact
+				message.Content += "\nFull result: " + output.Artifact.Path
+			} else {
+				message.DeferredContent = ""
+				message.Content += "\nFull result could not be saved."
+			}
+			message.Source = core.DeferredOutputSource
+		} else {
+			message.Content, message.ToolOutput = output.Render(), output.Artifact
+			if message.SkillName != "" {
+				loadedSkills = append(loadedSkills, message.SkillName)
+			}
+		}
+		remaining = max(0, remaining-len(message.Content))
 		m.state.ctx.Messages = append(m.state.ctx.Messages, message)
 		transcriptMessage := message
+		transcriptMessage.Source = ""
+		transcriptMessage.DeferredContent = ""
 		// The transcript keeps the untruncated original, but bounded: one
 		// giant tool result (e.g. reading a huge file) must not exceed the
 		// transcript reader's per-line limit and make the session unloadable.
-		transcriptMessage.Content = capTranscriptContent(r.Message.Content)
+		transcriptMessage.Content = capTranscriptContent(core.ToolOutput{Text: r.Message.Content, Artifact: r.Message.ToolOutput}.Render())
 		m.state.transcript = append(m.state.transcript, transcriptMessage)
-		m.state.tracker.AddNew(len(role) + len(content) + len(r.Message.ToolCallID))
+		m.state.tracker.AddNew(len(role) + len(message.Content) + len(r.Message.ToolCallID))
 	}
 	if len(results) > 0 {
 		m.state.revision++

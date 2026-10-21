@@ -39,7 +39,7 @@ type PreviewFunc func(context.Context, map[string]any) string
 // PrivilegedFunc retries a tool call with an explicitly approved capability
 // grant. It is registration metadata so the executor never needs to inspect a
 // concrete tool implementation.
-type PrivilegedFunc func(context.Context, map[string]any, core.PermissionRequest) (string, error)
+type PrivilegedFunc func(context.Context, map[string]any, core.PermissionRequest) (core.ToolOutput, error)
 
 // PermissionPlanFunc predicts the capability request implied by explicit tool
 // arguments. It lives beside PrivilegedFunc so only the tool that owns an

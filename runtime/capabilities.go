@@ -3,8 +3,8 @@ package runtime
 import "context"
 
 // Consumer-facing capability groups keep transport contracts composable.
-// Services remains the backwards-compatible composition-root callback table;
-// consumers should depend only on the groups they actually use.
+// ServiceGroups supplies application callbacks at the composition root;
+// consumers depend only on the capabilities they actually use.
 type RunControl interface {
 	StartRun(context.Context, Input) (RunID, error)
 	CancelRun(context.Context, RunID) error

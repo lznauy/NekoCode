@@ -27,7 +27,7 @@ func TestReadTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if out == "" {
+	if out.Render() == "" {
 		t.Error("empty output")
 	}
 }
@@ -63,10 +63,10 @@ func TestReadToolDoesNotEmitEditViewMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if strings.Contains(out, "\nVIEW rev=") || strings.Contains(out, " window=W") {
-		t.Fatalf("did not expect VIEW metadata in read output, got:\n%s", out)
+	if strings.Contains(out.Render(), "\nVIEW rev=") || strings.Contains(out.Render(), " window=W") {
+		t.Fatalf("did not expect VIEW metadata in read output, got:\n%s", out.Render())
 	}
-	if !strings.Contains(out, "[") || !strings.Contains(out, "#") || !strings.Contains(out, "1:package main") {
-		t.Fatalf("expected tag header and line output, got:\n%s", out)
+	if !strings.Contains(out.Render(), "[") || !strings.Contains(out.Render(), "#") || !strings.Contains(out.Render(), "1:package main") {
+		t.Fatalf("expected tag header and line output, got:\n%s", out.Render())
 	}
 }

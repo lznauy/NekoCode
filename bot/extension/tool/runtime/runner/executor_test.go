@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"nekocode/protocol"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -39,7 +40,7 @@ func newTestRegistry(items fakeRegistry) *tools.Registry {
 	for _, item := range items {
 		options := tools.RegistrationOptions{}
 		if privileged, ok := item.(interface {
-			ExecuteWithPermission(context.Context, map[string]any, core.PermissionRequest) (string, error)
+			ExecuteWithPermission(context.Context, map[string]any, core.PermissionRequest) (core.ToolOutput, error)
 		}); ok {
 			options.Privileged = privileged.ExecuteWithPermission
 			if item.Name() == "shell" {
@@ -65,11 +66,11 @@ func (t fakeTool) Name() string                                    { return t.na
 func (t fakeTool) Description() string                             { return "test" }
 func (t fakeTool) Parameters() []core.Parameter                    { return nil }
 func (t fakeTool) ExecutionMode(map[string]any) core.ExecutionMode { return t.mode }
-func (t fakeTool) Execute(context.Context, map[string]any) (string, error) {
+func (t fakeTool) Execute(context.Context, map[string]any) (core.ToolOutput, error) {
 	if t.output != "" {
-		return t.output, nil
+		return core.ToolOutput{Text: t.output}, nil
 	}
-	return "ok", nil
+	return core.ToolOutput{Text: "ok"}, nil
 }
 
 type captureTool struct {
@@ -81,13 +82,13 @@ type privilegedCaptureTool struct {
 	fakeTool
 }
 
-func (t privilegedCaptureTool) ExecuteWithPermission(context.Context, map[string]any, core.PermissionRequest) (string, error) {
-	return "ok", nil
+func (t privilegedCaptureTool) ExecuteWithPermission(context.Context, map[string]any, core.PermissionRequest) (core.ToolOutput, error) {
+	return core.ToolOutput{Text: "ok"}, nil
 }
 
-func (t *captureTool) Execute(_ context.Context, args map[string]any) (string, error) {
+func (t *captureTool) Execute(_ context.Context, args map[string]any) (core.ToolOutput, error) {
 	t.seen = args
-	return "ok", nil
+	return core.ToolOutput{Text: "ok"}, nil
 }
 
 func TestExecutorBatchPreservesCallOrderAcrossModes(t *testing.T) {
@@ -380,33 +381,9 @@ func TestExecutorWorkspaceDenialBlocksBeforeExecute(t *testing.T) {
 	}
 }
 
-func TestTruncateOutput(t *testing.T) {
+func TestExecutorBoundsTaskOutput(t *testing.T) {
 	var output string
-	for i := range maxLines + 5 {
-		output += fmt.Sprintf("line %d\n", i)
-	}
-	got := truncateOutput(output)
-	if len(got) >= len(output) {
-		t.Fatal("expected truncated output")
-	}
-	if !strings.Contains(got, "truncated") {
-		t.Fatalf("missing truncation marker: %q", got)
-	}
-	for _, want := range []string{"line 0", "line 49", "line 1955", "line 2004"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("missing retained line %q in %q", want, got)
-		}
-	}
-	for _, notWant := range []string{"line 50\n", "line 1954\n"} {
-		if strings.Contains(got, notWant) {
-			t.Fatalf("middle line %q should be truncated from %q", notWant, got)
-		}
-	}
-}
-
-func TestExecutorPreservesTaskOutput(t *testing.T) {
-	var output string
-	for i := range maxLines + 5 {
+	for i := range 2500 {
 		output += fmt.Sprintf("line %d\n", i)
 	}
 	e := newTestExecutor(fakeRegistry{
@@ -415,8 +392,8 @@ func TestExecutorPreservesTaskOutput(t *testing.T) {
 
 	got := e.ExecuteBatch(context.Background(), []core.ToolCallItem{{ID: "1", Name: "task"}})[0]
 
-	if got.Output != output {
-		t.Fatal("task output should not be truncated")
+	if len(got.Output) > core.MaxOutputBytes || !strings.Contains(got.Output, "truncated") {
+		t.Fatal("task output must obey the shared output limit")
 	}
 }
 
@@ -427,7 +404,7 @@ type permissionTool struct {
 	req             core.PermissionRequest
 }
 
-func (t *permissionTool) Execute(context.Context, map[string]any) (string, error) {
+func (t *permissionTool) Execute(context.Context, map[string]any) (core.ToolOutput, error) {
 	req := t.req
 	if len(req.Capabilities) == 0 {
 		req = core.PermissionRequest{
@@ -440,14 +417,14 @@ func (t *permissionTool) Execute(context.Context, map[string]any) (string, error
 	}
 	err := testPermissionError{req: req}
 	if t.wrapError {
-		return "", fmt.Errorf("sandbox rejected command: %w", err)
+		return core.ToolOutput{}, fmt.Errorf("sandbox rejected command: %w", err)
 	}
-	return "", err
+	return core.ToolOutput{}, err
 }
 
-func (t *permissionTool) ExecuteWithPermission(context.Context, map[string]any, core.PermissionRequest) (string, error) {
+func (t *permissionTool) ExecuteWithPermission(context.Context, map[string]any, core.PermissionRequest) (core.ToolOutput, error) {
 	t.privilegedCalls++
-	return "privileged ok", nil
+	return core.ToolOutput{Text: "privileged ok"}, nil
 }
 
 type testPermissionError struct {
@@ -764,24 +741,24 @@ type stickyEscalationTool struct {
 	privilegedCalls int
 }
 
-func (t *stickyEscalationTool) Execute(context.Context, map[string]any) (string, error) {
+func (t *stickyEscalationTool) Execute(context.Context, map[string]any) (core.ToolOutput, error) {
 	if !t.escalate {
-		return "ok", nil
+		return core.ToolOutput{Text: "ok"}, nil
 	}
 	capability := t.capability
 	if capability == "" {
 		capability = core.CapNetOutbound
 	}
-	return "", testPermissionError{req: core.PermissionRequest{
+	return core.ToolOutput{}, testPermissionError{req: core.PermissionRequest{
 		Reason:       "needs network",
 		Capabilities: []string{capability},
 		Details:      map[string]any{"workspace": "/repo"},
 	}}
 }
 
-func (t *stickyEscalationTool) ExecuteWithPermission(context.Context, map[string]any, core.PermissionRequest) (string, error) {
+func (t *stickyEscalationTool) ExecuteWithPermission(context.Context, map[string]any, core.PermissionRequest) (core.ToolOutput, error) {
 	t.privilegedCalls++
-	return "privileged ok", nil
+	return core.ToolOutput{Text: "privileged ok"}, nil
 }
 
 // TestExecutor_SkipsBasicPromptWhenGrantMatches regresses bug #5: a shell run
@@ -1140,16 +1117,16 @@ type privilegedExecuteErrTool struct {
 	retryErr error
 }
 
-func (t *privilegedExecuteErrTool) Execute(context.Context, map[string]any) (string, error) {
-	return "", testPermissionError{req: core.PermissionRequest{
+func (t *privilegedExecuteErrTool) Execute(context.Context, map[string]any) (core.ToolOutput, error) {
+	return core.ToolOutput{}, testPermissionError{req: core.PermissionRequest{
 		Reason:       "command requests unsandboxed host execution",
 		Capabilities: []string{core.CapProcessHost},
 		Details:      map[string]any{"workspace": "/repo"},
 	}}
 }
 
-func (t *privilegedExecuteErrTool) ExecuteWithPermission(context.Context, map[string]any, core.PermissionRequest) (string, error) {
-	return "", t.retryErr
+func (t *privilegedExecuteErrTool) ExecuteWithPermission(context.Context, map[string]any, core.PermissionRequest) (core.ToolOutput, error) {
+	return core.ToolOutput{}, t.retryErr
 }
 
 type fakeShellNetworkTool struct {
@@ -1157,8 +1134,8 @@ type fakeShellNetworkTool struct {
 	privilegedCalls int
 }
 
-func (t *fakeShellNetworkTool) Execute(context.Context, map[string]any) (string, error) {
-	return "", testPermissionError{req: core.PermissionRequest{
+func (t *fakeShellNetworkTool) Execute(context.Context, map[string]any) (core.ToolOutput, error) {
+	return core.ToolOutput{}, testPermissionError{req: core.PermissionRequest{
 		Reason:       "shell command needs local network listener access",
 		Capabilities: []string{core.CapNetOutbound},
 		Scope:        "project",
@@ -1166,10 +1143,95 @@ func (t *fakeShellNetworkTool) Execute(context.Context, map[string]any) (string,
 	}}
 }
 
-func (t *fakeShellNetworkTool) ExecuteWithPermission(_ context.Context, _ map[string]any, req core.PermissionRequest) (string, error) {
+func (t *fakeShellNetworkTool) ExecuteWithPermission(_ context.Context, _ map[string]any, req core.PermissionRequest) (core.ToolOutput, error) {
 	t.privilegedCalls++
 	if len(req.Capabilities) != 1 || req.Capabilities[0] != core.CapNetOutbound {
-		return "", fmt.Errorf("unexpected grant: %+v", req)
+		return core.ToolOutput{}, fmt.Errorf("unexpected grant: %+v", req)
 	}
-	return "started with network", nil
+	return core.ToolOutput{Text: "started with network"}, nil
+}
+
+// All tools, including errors, cross the same return boundary.
+type oversizedErrorTool struct{ fakeTool }
+
+func (t oversizedErrorTool) Execute(context.Context, map[string]any) (core.ToolOutput, error) {
+	return core.ToolOutput{}, fmt.Errorf("HEAD%sTAIL", strings.Repeat("x", 2<<20))
+}
+func TestExecutorBoundsAllToolResults(t *testing.T) {
+	for _, name := range []string{"read", "grep", "shell", "mcp.search"} {
+		for _, failed := range []bool{false, true} {
+			var tool core.Tool = fakeTool{name: name, output: "HEAD" + strings.Repeat("x", 2<<20) + "TAIL"}
+			if failed {
+				tool = oversizedErrorTool{fakeTool{name: name}}
+			}
+			e := newTestExecutor(fakeRegistry{name: tool})
+			e.SetPermissionPolicy(permission.PermissionsDecl{Allow: []string{name}}, "", "")
+			got := e.ExecuteBatch(context.Background(), []core.ToolCallItem{{ID: "1", Name: name}})[0]
+			output := got.EffectiveOutput()
+			if len(output) > core.MaxOutputBytes || !strings.Contains(output, "truncated") || (got.Error != "") != failed {
+				t.Fatalf("%s error=%v: length=%d error state=%v", name, failed, len(output), got.Error != "")
+			}
+		}
+	}
+}
+
+func TestToolOutputArtifactsAreRecoverableAndIsolated(t *testing.T) {
+	original := "HEAD\n" + strings.Repeat("evidence\n", 5000) + "TAIL"
+	makeExecutor := func() *Executor {
+		registry := newTestRegistry(fakeRegistry{"task": fakeTool{name: "task", output: original}})
+		registry.SetWorkspace(workspace.New(t.TempDir(), nil))
+		return NewExecutor(registry)
+	}
+	first, second := makeExecutor(), makeExecutor()
+	result := first.ExecuteBatch(context.Background(), []core.ToolCallItem{{ID: "1", Name: "task"}})[0]
+	if result.Error != "" {
+		t.Fatal(result.Error)
+	}
+	path := result.Artifact.Path
+	raw, err := os.ReadFile(path)
+	if err != nil || string(raw) != original {
+		t.Fatalf("lost task evidence: %v", err)
+	}
+	if _, _, allowed, err := first.workspace.CheckRead(path); err != nil || !allowed {
+		t.Fatal("own artifact is unreadable")
+	}
+	if _, _, allowed, err := second.workspace.CheckRead(path); err != nil || allowed {
+		t.Fatal("another executor can read the artifact")
+	}
+	second.ExecuteBatch(context.Background(), []core.ToolCallItem{{ID: "2", Name: "task"}})
+	if _, _, allowed, err := second.workspace.CheckRead(path); err != nil || allowed {
+		t.Fatal("creating another artifact grants directory access")
+	}
+}
+
+type partialEvidenceTool struct {
+	fakeTool
+	artifact protocol.ToolOutputArtifact
+}
+
+func (t partialEvidenceTool) Execute(context.Context, map[string]any) (core.ToolOutput, error) {
+	return core.ToolOutput{Text: "available partial evidence", Artifact: t.artifact}, fmt.Errorf("request budget exceeded")
+}
+
+func TestExecutorKeepsPartialEvidenceWithError(t *testing.T) {
+	e := newTestExecutor(fakeRegistry{"task": partialEvidenceTool{fakeTool: fakeTool{name: "task"}}})
+	result := e.ExecuteBatch(context.Background(), []core.ToolCallItem{{ID: "task", Name: "task"}})[0]
+	if result.Error == "" || !strings.Contains(result.Error, "request budget exceeded") || !strings.Contains(result.Error, "available partial evidence") {
+		t.Fatalf("failure lost partial evidence: %+v", result)
+	}
+}
+
+func TestExecutorRejectsArtifactFromAnotherActor(t *testing.T) {
+	outside, err := core.NewOutputStore(t.TempDir()).PreserveOutput("private evidence")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := newTestExecutor(fakeRegistry{"task": partialEvidenceTool{fakeTool: fakeTool{name: "task"}, artifact: protocol.ToolOutputArtifact{Path: outside}}})
+	result := e.ExecuteBatch(context.Background(), []core.ToolCallItem{{ID: "task", Name: "task"}})[0]
+	if !strings.Contains(result.Error, "cannot preserve tool result") || result.Artifact.Path != "" {
+		t.Fatalf("foreign artifact accepted: %+v", result)
+	}
+	if _, _, allowed, err := e.workspace.CheckRead(outside); err != nil || allowed {
+		t.Fatal("foreign artifact was granted read access")
+	}
 }

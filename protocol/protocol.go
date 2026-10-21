@@ -383,3 +383,10 @@ type FileDeliverer interface {
 	// DeliverFile sends a local file to the connector's paired chats.
 	DeliverFile(ctx context.Context, path string) error
 }
+
+// ToolOutputArtifact references framework-preserved tool output. Incomplete
+// means the producer stopped before its full result was captured.
+type ToolOutputArtifact struct {
+	Path       string `json:"path,omitempty"`
+	Incomplete bool   `json:"incomplete,omitempty"`
+}

@@ -2,16 +2,19 @@ package core
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"nekocode/bot/agent"
 	"nekocode/bot/checkpoint"
 	"nekocode/bot/command"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/extension/tool/builtin/catalog"
 	"nekocode/bot/extension/tool/builtin/shell"
+	toolcore "nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/workspace"
 	"nekocode/bot/provider/types"
 	"nekocode/bot/session"
@@ -26,7 +29,7 @@ func TestSyncSessionGrantsReadOnlyAccessToItsImageDirectory(t *testing.T) {
 	toolbox := catalog.NewToolboxWithConfig(catalog.ToolboxConfig{})
 	t.Cleanup(func() { _ = toolbox.Close() })
 	b := &Bot{cwd: cwd, sess: manager, toolbox: toolbox}
-	b.syncPolicySessionID()
+	b.bindSessionResources()
 
 	dir, err := attachment.ImageDir(manager.CurrentID())
 	if err != nil {
@@ -176,7 +179,8 @@ func TestCheckpointChangeHelpersDoNotTreatUnknownAsModified(t *testing.T) {
 	}
 }
 
-func TestResumePersistsCommittedRewindEventBeforeAcknowledgingJournal(t *testing.T) {
+func sessionWithPendingRewind(t *testing.T) (*session.Manager, string, string, checkpoint.Result) {
+	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	cwd := t.TempDir()
 	checkpointRoot := t.TempDir()
@@ -219,6 +223,12 @@ func TestResumePersistsCommittedRewindEventBeforeAcknowledgingJournal(t *testing
 		t.Fatal("committed rewind journal was not retained for session recovery")
 	}
 
+	return manager, cwd, checkpointRoot, result
+}
+
+func TestResumePersistsCommittedRewindEventBeforeAcknowledgingJournal(t *testing.T) {
+	manager, cwd, checkpointRoot, result := sessionWithPendingRewind(t)
+	sessionID := manager.CurrentID()
 	reloadedCP := checkpoint.New(checkpointRoot)
 	b := &Bot{cwd: cwd, sess: manager, checkpoints: reloadedCP, ctxMgr: ctxmgr.New(ctxmgr.Config{})}
 	if _, err := b.resumeSession(sessionID); err != nil {
@@ -355,5 +365,151 @@ func TestResetConversationStopsOldSessionProcesses(t *testing.T) {
 	shellTool.SetSessionID(oldID)
 	if strings.Contains(shellTool.ProcessSummary(), "(running") {
 		t.Fatalf("old session process survived reset: %q", shellTool.ProcessSummary())
+	}
+}
+
+func TestSessionOutputAccessSurvivesReloadAndSwitchesWithSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cwd := t.TempDir()
+	manager := session.New(cwd)
+	firstID := manager.CurrentID()
+	dir, err := session.ToolOutputDir(firstID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := toolcore.NewOutputStore(dir).PreserveOutput("saved evidence")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A fresh toolbox models a process which has no in-memory file grants.
+	toolbox := catalog.NewToolboxWithConfig(catalog.ToolboxConfig{Workspace: workspace.New(cwd, nil)})
+	t.Cleanup(func() { _ = toolbox.Close() })
+	contextManager := ctxmgr.New(ctxmgr.Config{})
+	activeAgent := agent.New(context.Background(), agent.Config{Context: contextManager, Tools: toolbox.Registry})
+	b := &Bot{cwd: cwd, sess: manager, toolbox: toolbox, ctxMgr: contextManager, ag: activeAgent}
+	b.bindSessionResources()
+	firstStore := activeAgent.Executor().ExecutionState().OutputStore
+	b.bindSessionResources()
+	if activeAgent.Executor().ExecutionState().OutputStore != firstStore {
+		t.Fatal("rebinding the same session replaced its output store")
+	}
+	activeDir, err := activeAgent.Executor().ExecutionState().OutputStore.Directory()
+	if err != nil || activeDir != dir {
+		t.Fatal("executor store was not bound to the session")
+	}
+	contextManager.AddToolResultsBatch([]ctxmgr.ToolResultMsg{{ToolName: "read", Message: types.Message{Content: strings.Repeat("x", 32768), ToolCallID: "call"}}})
+	generated := contextManager.Snapshot().Messages[0].ToolOutput.Path
+	if filepath.Dir(generated) != dir {
+		t.Fatal("context and executor use different output stores")
+	}
+	if _, _, allowed, err := toolbox.Workspace().CheckRead(path); err != nil || !allowed {
+		t.Fatal("reloaded session cannot read its output")
+	}
+	if _, _, allowed, err := toolbox.Workspace().CheckWrite(path); err != nil || allowed {
+		t.Fatal("output store is writable through tool grants")
+	}
+	// Rebuilding the agent must preserve the store owned by this session.
+	b.ag = agent.New(context.Background(), agent.Config{Context: contextManager, Tools: toolbox.Registry})
+	b.bindSessionResources()
+	if b.ag.Executor().ExecutionState().OutputStore != firstStore {
+		t.Fatal("agent rebuild replaced the session's output store")
+	}
+	manager.StartNew()
+	b.bindSessionResources()
+	if _, _, allowed, err := toolbox.Workspace().CheckRead(path); err != nil || allowed {
+		t.Fatal("new session can read previous session output")
+	}
+	newStore := b.ag.Executor().ExecutionState().OutputStore
+	if newStore == firstStore {
+		t.Fatal("session switch retained previous output store")
+	}
+	manager.ClearCurrent()
+	contextManager.Reset()
+	b.bindSessionResources()
+	if b.ag.Executor().ExecutionState().OutputStore == newStore {
+		t.Fatal("clearing the session retained the deleted session's store")
+	}
+	contextManager.AddToolResultsBatch([]ctxmgr.ToolResultMsg{{ToolName: "read", Message: types.Message{Content: strings.Repeat("x", 32768), ToolCallID: "fallback"}}})
+	fallback := contextManager.Snapshot().Messages[0].ToolOutput.Path
+	fallbackDir, err := b.ag.Executor().ExecutionState().OutputStore.Directory()
+	if err != nil || filepath.Dir(fallback) != fallbackDir || fallbackDir == dir {
+		t.Fatal("context and executor did not switch to the same fallback store")
+	}
+}
+
+func TestSessionCompletionUsageIsRestoredRatherThanAccumulated(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cwd := t.TempDir()
+	manager := session.New(cwd)
+	first := manager.Current()
+	first.Messages = []types.Message{{Role: "user", Content: "first task"}}
+	first.CompletionTokens = 17
+	if err := manager.Save(first); err != nil {
+		t.Fatal(err)
+	}
+	second := manager.StartNew()
+	second.Messages = []types.Message{{Role: "user", Content: "second task"}}
+	second.CompletionTokens = 41
+	if err := manager.Save(second); err != nil {
+		t.Fatal(err)
+	}
+	contextManager := ctxmgr.New(ctxmgr.Config{})
+	activeAgent := agent.New(context.Background(), agent.Config{Context: contextManager})
+	activeAgent.AddCompletionTokens(100)
+	b := &Bot{cwd: cwd, sess: manager, ctxMgr: contextManager, ag: activeAgent}
+	for _, snapshot := range []*session.Snapshot{first, first, second, first} {
+		if _, err := b.resumeSession(snapshot.ID); err != nil {
+			t.Fatal(err)
+		}
+		if got := activeAgent.Metrics(); got.CompletionTokens != snapshot.CompletionTokens || got.TurnCompletion != 0 {
+			t.Fatalf("session %s usage = %d/%d, want %d/0", snapshot.ID, got.CompletionTokens, got.TurnCompletion, snapshot.CompletionTokens)
+		}
+	}
+	if err := b.saveSession(); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := manager.Load(first.ID)
+	if err != nil || persisted.CompletionTokens != first.CompletionTokens {
+		t.Fatalf("restored usage was persisted incorrectly: %+v %v", persisted, err)
+	}
+	if _, err := b.NewSession(); err != nil {
+		t.Fatal(err)
+	}
+	if got := activeAgent.Metrics(); got.CompletionTokens != 0 || got.TurnCompletion != 0 {
+		t.Fatalf("new session inherited usage: %+v", got)
+	}
+	activeAgent.AddCompletionTokens(23)
+	currentID := manager.CurrentID()
+	if err := b.DeleteSession(currentID); err != nil {
+		t.Fatal(err)
+	}
+	if got := activeAgent.Metrics(); got.CompletionTokens != 0 || got.TurnCompletion != 0 {
+		t.Fatalf("deleted session retained usage: %+v", got)
+	}
+}
+
+func TestResumeReportsCommittedStateWhenRewindPersistenceFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("requires filesystem permission enforcement")
+	}
+	manager, cwd, checkpointRoot, result := sessionWithPendingRewind(t)
+	targetID := manager.CurrentID()
+	manager.StartNew()
+	dir := filepath.Join(fs.NekocodeHome(), "sessions", targetID)
+	if err := os.Chmod(dir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0700) })
+	b := &Bot{cwd: cwd, sess: manager, checkpoints: checkpoint.New(checkpointRoot), ctxMgr: ctxmgr.New(ctxmgr.Config{})}
+	snapshot, err := b.resumeSession(targetID)
+	var committed interface{ MutationCommitted() bool }
+	if !errors.Is(err, os.ErrPermission) || !errors.As(err, &committed) || !committed.MutationCommitted() {
+		t.Fatalf("committed restore was reported as an ordinary failure: %v", err)
+	}
+	if snapshot == nil || snapshot.ID != targetID || manager.CurrentID() != targetID || !b.hasRewindEvent(result.RewindID) {
+		t.Fatal("committed session and recovered state were lost")
+	}
+	if len(b.checkpoints.Recovered(targetID)) != 1 {
+		t.Fatal("failed persistence acknowledged the recovery journal")
 	}
 }

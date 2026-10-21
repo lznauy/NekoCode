@@ -28,21 +28,24 @@ func (t *ReadTool) Parameters() []core.Parameter {
 
 const maxReadLines = 500
 
-func (t *ReadTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *ReadTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	path, err := toolutil.RequireStringArg(args, "path")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	safePath, err := toolutil.ValidatePathReadableContext(ctx, path)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	switch strings.ToLower(filepath.Ext(safePath)) {
 	case ".png", ".jpg", ".jpeg", ".gif":
-		return t.readImage(safePath)
+		toolText, toolErr := t.readImage(safePath)
+		return core.ToolOutput{Text: toolText}, toolErr
 	case ".pdf":
-		return t.readPDF(safePath)
+		toolText, toolErr := t.readPDF(safePath)
+		return core.ToolOutput{Text: toolText}, toolErr
 	default:
-		return t.readTextCached(ctx, safePath, args)
+		toolText, toolErr := t.readTextCached(ctx, safePath, args)
+		return core.ToolOutput{Text: toolText}, toolErr
 	}
 }

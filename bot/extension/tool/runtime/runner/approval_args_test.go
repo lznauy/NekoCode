@@ -57,7 +57,7 @@ func verifyBrokerPreview(t *testing.T, req protocol.ConfirmRequest) {
 	r := rt.New(rt.RunnerFunc(func(_ context.Context, _ string, host rt.RunHost) (string, error) {
 		host.Confirm(req)
 		return "", nil
-	}), rt.Services{})
+	}), rt.ServiceGroups{})
 	defer r.Close()
 	events, err := r.Events(ctx, rt.EventFilter{Types: []rt.EventType{rt.EventApprovalRequested}, Reliable: true})
 	if err != nil {

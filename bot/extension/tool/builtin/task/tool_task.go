@@ -37,23 +37,23 @@ func (t *TaskTool) Parameters() []core.Parameter {
 	}
 }
 
-func (t *TaskTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *TaskTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	if t.run == nil {
-		return "", fmt.Errorf("task tool: not wired")
+		return core.ToolOutput{}, fmt.Errorf("task tool: not wired")
 	}
 
 	prompt, err := toolutil.RequireStringArg(args, "prompt")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 
 	profile, err := toolutil.RequireStringArg(args, "profile")
 	if err != nil {
-		return "", fmt.Errorf("missing profile parameter — built-ins: coder, explore")
+		return core.ToolOutput{}, fmt.Errorf("missing profile parameter — built-ins: coder, explore")
 	}
 	skills, err := stringSliceArg(args, "skills")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 
 	// Read sub-callback from args (injected by agent for TUI forwarding).
@@ -71,17 +71,33 @@ func (t *TaskTool) Execute(ctx context.Context, args map[string]any) (string, er
 		Prompt: prompt, Profile: profile, Skills: skills,
 	})
 	if err != nil && result == nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	if result == nil {
-		return "", fmt.Errorf("task tool: subagent returned nil result")
+		return core.ToolOutput{}, fmt.Errorf("task tool: subagent returned nil result")
 	}
 
-	out := result.Content
-	if err != nil && result.Status == taskbridge.TaskStatusPartial {
-		out += fmt.Sprintf("\n\nNote: subagent was interrupted before completion: %v", err)
+	output := core.ToolOutput{Text: result.Content}
+	switch result.Status {
+	case taskbridge.TaskStatusCompleted:
+		if err != nil {
+			return output, fmt.Errorf("subagent reported completion with an error: %w", err)
+		}
+		return output, nil
+	case taskbridge.TaskStatusPartial:
+		output.Text = "[Subagent returned a partial result]\n" + output.Text
+		if err != nil {
+			return output, fmt.Errorf("subagent stopped before completion: %w", err)
+		}
+		return output, nil
+	case taskbridge.TaskStatusFailed:
+		if err == nil {
+			err = fmt.Errorf("subagent failed")
+		}
+		return output, err
+	default:
+		return output, fmt.Errorf("subagent returned invalid status %d", result.Status)
 	}
-	return out, nil
 }
 
 func stringSliceArg(args map[string]any, name string) ([]string, error) {

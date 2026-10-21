@@ -72,8 +72,8 @@ func TestWebFetchNeverCallsExtractor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(got, "origin body") {
-		t.Fatalf("result did not come from the direct fetch: %q", got)
+	if !strings.Contains(got.Render(), "origin body") {
+		t.Fatalf("result did not come from the direct fetch: %q", got.Render())
 	}
 	if requests := stub.requested(); len(requests) != 1 || stub.hit(testExtractorHost) {
 		t.Fatalf("web_fetch must make exactly one direct request, got %v", requests)

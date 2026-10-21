@@ -21,11 +21,11 @@ func TestListTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if out == "" {
+	if out.Render() == "" {
 		t.Error("expected directory listing")
 	}
-	if !strings.Contains(out, ".env") {
-		t.Fatalf("expected hidden file in listing, got:\n%s", out)
+	if !strings.Contains(out.Render(), ".env") {
+		t.Fatalf("expected hidden file in listing, got:\n%s", out.Render())
 	}
 
 	_, err = l.Execute(context.Background(), nil)

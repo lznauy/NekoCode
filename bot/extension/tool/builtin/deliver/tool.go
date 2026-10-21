@@ -52,10 +52,10 @@ func (t *DeliverFileTool) Parameters() []core.Parameter {
 // platform rejection, and bounds the multipart memory spike on the send path.
 const maxDeliverFileBytes = 50 << 20
 
-func (t *DeliverFileTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *DeliverFileTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	path := strings.TrimSpace(toolutil.OptStringArg(args, "path", ""))
 	if path == "" {
-		return "", fmt.Errorf("path is required")
+		return core.ToolOutput{}, fmt.Errorf("path is required")
 	}
 	// Resolve relative paths against the workspace root first — the readable
 	// roots check below only understands absolute paths.
@@ -69,14 +69,14 @@ func (t *DeliverFileTool) Execute(ctx context.Context, args map[string]any) (str
 	// Workspace gate: only files under the session workspace leave the machine.
 	safePath, err := toolutil.ValidatePathReadableContext(ctx, path)
 	if err != nil {
-		return "", fmt.Errorf("file must be inside the current workspace: %w", err)
+		return core.ToolOutput{}, fmt.Errorf("file must be inside the current workspace: %w", err)
 	}
 	info, err := os.Stat(safePath)
 	if err != nil {
-		return "", fmt.Errorf("read file size: %w", err)
+		return core.ToolOutput{}, fmt.Errorf("read file size: %w", err)
 	}
 	if info.Size() > maxDeliverFileBytes {
-		return "", fmt.Errorf("file is %d MiB, above the %d MiB delivery limit (IM platform constraints); give the user the local path instead or split the file",
+		return core.ToolOutput{}, fmt.Errorf("file is %d MiB, above the %d MiB delivery limit (IM platform constraints); give the user the local path instead or split the file",
 			info.Size()>>20, maxDeliverFileBytes>>20)
 	}
 
@@ -84,9 +84,9 @@ func (t *DeliverFileTool) Execute(ctx context.Context, args map[string]any) (str
 	sent, err := t.deliverer.DeliverConnectorFile(ctx, connector, safePath)
 	if err != nil {
 		if len(sent) > 0 {
-			return fmt.Sprintf("Delivered via %s, but other targets failed: %v", strings.Join(sent, ", "), err), nil
+			return core.ToolOutput{Text: fmt.Sprintf("Delivered via %s, but other targets failed: %v", strings.Join(sent, ", "), err)}, nil
 		}
-		return "", fmt.Errorf("file delivery failed: %w", err)
+		return core.ToolOutput{}, fmt.Errorf("file delivery failed: %w", err)
 	}
-	return fmt.Sprintf("File delivered to %s: %s", strings.Join(sent, ", "), safePath), nil
+	return core.ToolOutput{Text: fmt.Sprintf("File delivered to %s: %s", strings.Join(sent, ", "), safePath)}, nil
 }

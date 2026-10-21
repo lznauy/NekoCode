@@ -16,11 +16,15 @@ func TestSaveClipboardImageUsesSessionTemporaryDirectory(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	runner := &imageSessionRunner{cwd: t.TempDir()}
-	rt := controlruntime.New(runner, controlruntime.Services{
-		CurrentSessionID:        runner.CurrentSessionID,
-		ListSessions:            runner.ListSessions,
-		SessionMessages:         runner.SessionMessages,
-		ImageAttachmentsEnabled: func() bool { return true },
+	rt := controlruntime.New(runner, controlruntime.ServiceGroups{
+		Models: controlruntime.ModelsServices{
+			ImageAttachmentsEnabled: func() bool { return true },
+		},
+		Sessions: controlruntime.SessionsServices{
+			CurrentSessionID: runner.CurrentSessionID,
+			ListSessions:     runner.ListSessions,
+			SessionMessages:  runner.SessionMessages,
+		},
 	})
 	app := &App{ctx: context.Background(), rt: rt}
 	png := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0, 'I', 'H', 'D', 'R'}
@@ -49,10 +53,12 @@ func TestSaveClipboardImageUsesSessionTemporaryDirectory(t *testing.T) {
 
 func TestSaveClipboardImageRequiresConfiguredUnderstandingModel(t *testing.T) {
 	runner := &imageSessionRunner{cwd: t.TempDir()}
-	rt := controlruntime.New(runner, controlruntime.Services{
-		CurrentSessionID: runner.CurrentSessionID,
-		ListSessions:     runner.ListSessions,
-		SessionMessages:  runner.SessionMessages,
+	rt := controlruntime.New(runner, controlruntime.ServiceGroups{
+		Sessions: controlruntime.SessionsServices{
+			CurrentSessionID: runner.CurrentSessionID,
+			ListSessions:     runner.ListSessions,
+			SessionMessages:  runner.SessionMessages,
+		},
 	})
 	app := &App{ctx: context.Background(), rt: rt}
 	if _, err := app.SaveClipboardImage("data:image/png;base64,anything"); err == nil || !strings.Contains(err.Error(), "image_understand_models") {
@@ -64,10 +70,12 @@ func TestDeleteClipboardImageRejectsUntrackedSessionImage(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	runner := &imageSessionRunner{cwd: t.TempDir()}
-	rt := controlruntime.New(runner, controlruntime.Services{
-		CurrentSessionID: runner.CurrentSessionID,
-		ListSessions:     runner.ListSessions,
-		SessionMessages:  runner.SessionMessages,
+	rt := controlruntime.New(runner, controlruntime.ServiceGroups{
+		Sessions: controlruntime.SessionsServices{
+			CurrentSessionID: runner.CurrentSessionID,
+			ListSessions:     runner.ListSessions,
+			SessionMessages:  runner.SessionMessages,
+		},
 	})
 	app := &App{ctx: context.Background(), rt: rt}
 	path := filepath.Join(home, ".nekocode", "tmp", "images", "session_1", "sent.png")
@@ -110,15 +118,19 @@ func TestFailedImageSavePreservesDraftWhileCreatedSessionEventSynchronizes(t *te
 	}
 	current := ""
 	runner := &imageSessionRunner{cwd: t.TempDir()}
-	rt := controlruntime.New(runner, controlruntime.Services{
-		CurrentSessionID: func() string { return current },
-		ListSessions:     runner.ListSessions,
-		SessionMessages:  runner.SessionMessages,
-		NewSession: func() (controlruntime.SessionMeta, error) {
-			current = "created-session"
-			return controlruntime.SessionMeta{ID: current}, nil
+	rt := controlruntime.New(runner, controlruntime.ServiceGroups{
+		Models: controlruntime.ModelsServices{
+			ImageAttachmentsEnabled: func() bool { return true },
 		},
-		ImageAttachmentsEnabled: func() bool { return true },
+		Sessions: controlruntime.SessionsServices{
+			CurrentSessionID: func() string { return current },
+			ListSessions:     runner.ListSessions,
+			SessionMessages:  runner.SessionMessages,
+			NewSession: func() (controlruntime.SessionMeta, error) {
+				current = "created-session"
+				return controlruntime.SessionMeta{ID: current}, nil
+			},
+		},
 	})
 	app := &App{ctx: context.Background(), rt: rt}
 	png := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0, 'I', 'H', 'D', 'R'}
@@ -132,7 +144,7 @@ func TestFailedImageSavePreservesDraftWhileCreatedSessionEventSynchronizes(t *te
 
 func TestSendMessageReturnsStartErrorAndKeepsPendingDraft(t *testing.T) {
 	runner := &imageSessionRunner{cwd: t.TempDir()}
-	rt := controlruntime.New(runner, controlruntime.Services{})
+	rt := controlruntime.New(runner, controlruntime.ServiceGroups{})
 	app := &App{
 		ctx:           context.Background(),
 		rt:            rt,
@@ -191,10 +203,12 @@ func TestReadImageBase64RejectsSymlinkOutsideSession(t *testing.T) {
 	}
 
 	runner := &imageSessionRunner{cwd: cwd}
-	rt := controlruntime.New(runner, controlruntime.Services{
-		CurrentSessionID: runner.CurrentSessionID,
-		ListSessions:     runner.ListSessions,
-		SessionMessages:  runner.SessionMessages,
+	rt := controlruntime.New(runner, controlruntime.ServiceGroups{
+		Sessions: controlruntime.SessionsServices{
+			CurrentSessionID: runner.CurrentSessionID,
+			ListSessions:     runner.ListSessions,
+			SessionMessages:  runner.SessionMessages,
+		},
 	})
 	app := &App{ctx: context.Background(), rt: rt}
 	if _, err := app.ReadImageBase64(link); err == nil || !strings.Contains(err.Error(), "outside allowed") {
@@ -273,7 +287,7 @@ func (b *approvalBot) Run(_ context.Context, _ string, host controlruntime.RunHo
 func startApprovalApp(t *testing.T) (*App, string, <-chan controlruntime.ConfirmReply) {
 	t.Helper()
 	bot := &approvalBot{replies: make(chan controlruntime.ConfirmReply, 1)}
-	rt := controlruntime.New(bot, controlruntime.Services{})
+	rt := controlruntime.New(bot, controlruntime.ServiceGroups{})
 	t.Cleanup(func() {
 		if err := rt.Close(); err != nil {
 			t.Error(err)

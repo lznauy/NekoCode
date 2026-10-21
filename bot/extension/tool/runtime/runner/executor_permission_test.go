@@ -20,8 +20,8 @@ func (t fakeToolForPerm) Name() string                                    { retu
 func (t fakeToolForPerm) Description() string                             { return "test" }
 func (t fakeToolForPerm) Parameters() []core.Parameter                    { return nil }
 func (t fakeToolForPerm) ExecutionMode(map[string]any) core.ExecutionMode { return core.ModeSequential }
-func (t fakeToolForPerm) Execute(context.Context, map[string]any) (string, error) {
-	return "ran", nil
+func (t fakeToolForPerm) Execute(context.Context, map[string]any) (core.ToolOutput, error) {
+	return core.ToolOutput{Text: "ran"}, nil
 }
 
 func newPermTestExecutor(t *testing.T) *Executor {

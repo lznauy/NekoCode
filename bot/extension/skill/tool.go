@@ -37,22 +37,21 @@ func (t *skillTool) ExecutionMode(args map[string]any) core.ExecutionMode {
 	return core.ModeSequential
 }
 
-func (t *skillTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *skillTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	name, ok := args["name"].(string)
 	if !ok || name == "" {
-		return "", fmt.Errorf("skill name is required")
+		return core.ToolOutput{}, fmt.Errorf("skill name is required")
 	}
 
 	sk, ok := t.registry.Get(name)
 	if !ok {
-		return "", fmt.Errorf("skill not found: %s (available: %s)", name, t.registry.namesString())
+		return core.ToolOutput{}, fmt.Errorf("skill not found: %s (available: %s)", name, t.registry.namesString())
 	}
 
-	// Keep loaded skills reloadable: compaction can remove the original tool
-	// result while the registry's conversation-level loaded flag survives.
-	if !t.registry.IsLoaded(name) {
-		t.registry.MarkLoaded(name)
+	content := FormatForContext(sk)
+	if len(content) > core.MaxOutputBytes {
+		return core.ToolOutput{}, fmt.Errorf("skill %q was not loaded: complete instructions exceed the %d-byte tool output budget; shorten the skill before retrying", name, core.MaxOutputBytes)
 	}
-
-	return FormatForContext(sk), nil
+	// Context delivery records loaded state; Execute can still be deferred.
+	return core.ToolOutput{Text: content}, nil
 }

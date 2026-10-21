@@ -74,14 +74,8 @@ var (
 	_ ConnectorRuntime = (*Runtime)(nil)
 )
 
-// New constructs the interaction runtime with explicitly supplied optional
-// application services. Pass Services{} for a core-only runtime.
-func New(runner Runner, services Services) *Runtime {
-	return NewWithServices(runner, services.Grouped())
-}
-
-// NewWithServices constructs a runtime from domain-grouped capabilities.
-func NewWithServices(runner Runner, services ServiceGroups) *Runtime {
+// New constructs a runtime from a runner and explicit, domain-grouped services.
+func New(runner Runner, services ServiceGroups) *Runtime {
 	if runner == nil {
 		panic("runtime: nil runner")
 	}

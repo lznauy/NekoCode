@@ -18,7 +18,7 @@ func TestWriteTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if out == "" {
+	if out.Render() == "" {
 		t.Error("empty output")
 	}
 	data, _ := os.ReadFile(p)

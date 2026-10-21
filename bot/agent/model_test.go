@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -347,5 +348,109 @@ func TestFromLLMTruncatedReplyKeepsProse(t *testing.T) {
 	leaked := fromLLM(nil, `<invoke name="read">`, truncated)
 	if !leaked.IsError {
 		t.Fatalf("truncated leak should not be surfaced as an answer: %+v", leaked)
+	}
+}
+
+type outputLimitedLLM struct {
+	fakeLLM
+	maxOutput int
+}
+
+func (f *outputLimitedLLM) GetMaxTokens() int { return f.maxOutput }
+
+func TestRequestBudgetFailureStopsRunBeforeInference(t *testing.T) {
+	a := newTestAgent()
+	a.deps.ctxMgr = contextmgr.New(contextmgr.Config{SystemPrompt: "small", ContextWindow: 1000})
+	llm := &outputLimitedLLM{maxOutput: 2000}
+	a.deps.llmClient = llm
+	result := a.Run("hello", nil, nil)
+	var budget *contextmgr.RequestBudgetError
+	if !errors.As(result.Error, &budget) || llm.calls != 0 {
+		t.Fatalf("budget failure did not stop run: %v calls=%d", result.Error, llm.calls)
+	}
+	if budget.Output != 2000 {
+		t.Fatal("configured output limit was not reserved")
+	}
+}
+
+func TestSynthesisPromptIsInsideRequestBudget(t *testing.T) {
+	a := newTestAgent()
+	a.deps.ctxMgr = contextmgr.New(contextmgr.Config{SystemPrompt: strings.Repeat("x", 3000), ContextWindow: 1000})
+	llm := &outputLimitedLLM{maxOutput: 200}
+	a.deps.llmClient = llm
+	if _, err := a.deps.ctxMgr.PrepareRequest(context.Background(), contextmgr.ModelRequest{OutputTokens: 200}); err != nil {
+		t.Fatal("base request should fit", err)
+	}
+	_, err := a.modelRunner.streamSynthesize(context.Background())
+	var budget *contextmgr.RequestBudgetError
+	if !errors.As(err, &budget) || llm.calls != 0 {
+		t.Fatalf("synthesis bypassed budget: %v calls=%d", err, llm.calls)
+	}
+}
+
+func TestSynthesisBudgetErrorIsReportedAsRunFailure(t *testing.T) {
+	a := newTestAgent()
+	a.deps.ctxMgr = contextmgr.New(contextmgr.Config{SystemPrompt: strings.Repeat("x", 3000), ContextWindow: 1000})
+	llm := &outputLimitedLLM{maxOutput: 200}
+	a.deps.llmClient = llm
+	result := a.loopRunner.finishRun(nil)
+	var budget *contextmgr.RequestBudgetError
+	if !errors.As(result.Error, &budget) || llm.calls != 0 || result.FinalOutput != "" {
+		t.Fatalf("budget error hidden by synthesis fallback: %+v", result)
+	}
+}
+
+func TestSteeringDuringBudgetCompactionDoesNotLeaveFatalError(t *testing.T) {
+	a := newTestAgent()
+	summaries := 0
+	m := contextmgr.New(contextmgr.Config{ContextWindow: 4000, Summarizer: func([]types.Message, string) (string, error) {
+		summaries++
+		if summaries == 1 {
+			if err := a.TrySteer("updated task"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return "<summary>older work</summary>", nil
+	}})
+	for i := 0; i < 8; i++ {
+		m.Add("user", strings.Repeat("q", 800))
+		m.Add("assistant", strings.Repeat("a", 800))
+	}
+	a.deps.ctxMgr = m
+	llm := &outputLimitedLLM{maxOutput: 1500}
+	llm.tokens = []types.StreamToken{{Content: "continued"}}
+	a.deps.llmClient = llm
+	before := m.Len()
+	first := a.modelRunner.reason("initial task")
+	if !first.Interrupted || a.run.err != nil {
+		t.Fatalf("steering became fatal: %+v err=%v", first, a.run.err)
+	}
+	if !a.turnRunner.retryAfterInterruptedReasoning(first, before) {
+		t.Fatal("steering did not resume")
+	}
+	next := a.modelRunner.reason("updated task")
+	if next.Interrupted || next.IsError || next.ActionInput != "continued" || a.run.err != nil || llm.calls != 1 {
+		t.Fatalf("resumed request failed: %+v err=%v calls=%d", next, a.run.err, llm.calls)
+	}
+}
+
+func TestRunCompactsAtMostOnceBeforeInference(t *testing.T) {
+	a := newTestAgent()
+	summaries := 0
+	m := contextmgr.New(contextmgr.Config{ContextWindow: 4000, Summarizer: func([]types.Message, string) (string, error) {
+		summaries++
+		return "<summary>" + strings.Repeat("s", 8500) + "</summary>", nil
+	}})
+	for range 8 {
+		m.Add("user", strings.Repeat("q", 800))
+		m.Add("assistant", strings.Repeat("a", 800))
+	}
+	a.deps.ctxMgr = m
+	llm := &outputLimitedLLM{maxOutput: 1500}
+	a.deps.llmClient = llm
+	result := a.Run("continue", nil, nil)
+	var budget *contextmgr.RequestBudgetError
+	if !errors.As(result.Error, &budget) || summaries != 1 || llm.calls != 0 {
+		t.Fatalf("request retried compaction or escaped admission: %v summaries=%d calls=%d", result.Error, summaries, llm.calls)
 	}
 }

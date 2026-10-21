@@ -102,3 +102,11 @@ func New(config Config) LLM {
 		return client
 	}
 }
+
+// MaxOutputTokensFor reads optional model metadata without changing the client.
+func MaxOutputTokensFor(llm LLM) int {
+	if configured, ok := llm.(interface{ GetMaxTokens() int }); ok {
+		return max(0, configured.GetMaxTokens())
+	}
+	return 0
+}

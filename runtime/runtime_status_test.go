@@ -23,7 +23,12 @@ func TestManagerUsesExplicitRunnerCapabilities(t *testing.T) {
 		snapshot: ContextSnapshot{Budget: 100, Used: 40},
 		memory:   MemoryView{Scope: MemoryScopeProject, Path: "/tmp/memory.md"},
 	}
-	rt := New(runner, Services{ContextSnapshot: runner.ContextSnapshot, MemoryView: runner.MemoryView})
+	rt := New(runner, ServiceGroups{
+		Context: ContextServices{
+			ContextSnapshot: runner.ContextSnapshot,
+			MemoryView:      runner.MemoryView,
+		},
+	})
 
 	if !rt.Capabilities().Context {
 		t.Fatal("context capability not discovered")
@@ -39,9 +44,11 @@ func TestManagerUsesExplicitRunnerCapabilities(t *testing.T) {
 func TestContextSamplesAreCachedClonedAndOnlyPublishedOnChange(t *testing.T) {
 	calls := 0
 	snapshot := ContextSnapshot{Budget: 100, Used: 10, Segments: []ContextSegment{{Key: "system", Tokens: 10}}}
-	rt := New(&testBot{}, Services{
-		ContextSnapshot: func() ContextSnapshot { calls++; return snapshot },
-		MemoryView:      func(MemoryScope) MemoryView { return MemoryView{} },
+	rt := New(&testBot{}, ServiceGroups{
+		Context: ContextServices{
+			ContextSnapshot: func() ContextSnapshot { calls++; return snapshot },
+			MemoryView:      func(MemoryScope) MemoryView { return MemoryView{} },
+		},
 	})
 	first := rt.ContextSnapshot()
 	first.Segments[0].Tokens = 999
@@ -75,7 +82,7 @@ func TestContextCallbackCanInvalidateWithoutDeadlocking(t *testing.T) {
 			MemoryView: func(MemoryScope) MemoryView { return MemoryView{} },
 		},
 	}
-	rt = NewWithServices(&testBot{}, services)
+	rt = New(&testBot{}, services)
 	if got := rt.ContextSnapshot(); got.Budget != 12 {
 		t.Fatalf("ContextSnapshot = %+v", got)
 	}
@@ -87,7 +94,7 @@ func TestContextCallbackCanInvalidateWithoutDeadlocking(t *testing.T) {
 func TestManagerReportsUnsupportedOptionalCapabilities(t *testing.T) {
 	rt := New(RunnerFunc(func(_ context.Context, _ string, _ RunHost) (string, error) {
 		return "", nil
-	}), Services{})
+	}), ServiceGroups{})
 
 	if rt.Capabilities().Models {
 		t.Fatal("unexpected model capability")
@@ -109,7 +116,7 @@ func TestNewRejectsNilRunner(t *testing.T) {
 			t.Fatal("New(nil) did not panic")
 		}
 	}()
-	New(nil, Services{})
+	New(nil, ServiceGroups{})
 }
 
 type modelServiceRunner struct{ testBot }
@@ -120,13 +127,15 @@ func (*modelServiceRunner) CurrentModel() ModelSelection {
 
 func TestOptionalServicesRequireExplicitComposition(t *testing.T) {
 	runner := &modelServiceRunner{}
-	plain := New(runner, Services{})
+	plain := New(runner, ServiceGroups{})
 	if plain.Capabilities().Models || plain.CurrentModel() != (ModelSelection{}) {
 		t.Fatal("New must not discover optional services from runner methods")
 	}
 
-	explicit := New(runner, Services{
-		CurrentModel: func() ModelSelection { return ModelSelection{Model: "explicit"} },
+	explicit := New(runner, ServiceGroups{
+		Models: ModelsServices{
+			CurrentModel: func() ModelSelection { return ModelSelection{Model: "explicit"} },
+		},
 	})
 	if !explicit.Capabilities().Models || explicit.CurrentModel().Model != "explicit" {
 		t.Fatal("New did not expose the supplied model service")
@@ -139,7 +148,11 @@ func TestNewRejectsIncompleteServiceGroups(t *testing.T) {
 			t.Fatal("New accepted an incomplete context service group")
 		}
 	}()
-	New(&modelServiceRunner{}, Services{ContextSnapshot: func() ContextSnapshot { return ContextSnapshot{} }})
+	New(&modelServiceRunner{}, ServiceGroups{
+		Context: ContextServices{
+			ContextSnapshot: func() ContextSnapshot { return ContextSnapshot{} },
+		},
+	})
 }
 
 type reentrantModelMutator struct {
@@ -174,7 +187,11 @@ func (r *reentrantModelMutator) SwitchModel(name string) (ModelSelection, error)
 
 func TestMutationDoesNotHoldRuntimeStateLockAcrossRunnerCall(t *testing.T) {
 	runner := &reentrantModelMutator{called: make(chan struct{})}
-	rt := New(runner, Services{SwitchModel: runner.SwitchModel})
+	rt := New(runner, ServiceGroups{
+		Models: ModelsServices{
+			SwitchModel: runner.SwitchModel,
+		},
+	})
 	runner.runtime = rt
 
 	done := make(chan error, 1)
@@ -196,7 +213,7 @@ func TestMutationDoesNotHoldRuntimeStateLockAcrossRunnerCall(t *testing.T) {
 func TestInteractionResolutionHonorsCancelledContext(t *testing.T) {
 	rt := New(RunnerFunc(func(context.Context, string, RunHost) (string, error) {
 		return "", nil
-	}), Services{})
+	}), ServiceGroups{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -214,7 +231,14 @@ func TestCloseWaitsForActiveMutation(t *testing.T) {
 		release: make(chan struct{}),
 		closed:  make(chan struct{}),
 	}
-	rt := New(runner, Services{SwitchModel: runner.SwitchModel, Close: runner.Close})
+	rt := New(runner, ServiceGroups{
+		Models: ModelsServices{
+			SwitchModel: runner.SwitchModel,
+		},
+		Lifecycle: LifecycleServices{
+			Close: runner.Close,
+		},
+	})
 	mutationDone := make(chan error, 1)
 	go func() {
 		_, err := rt.SwitchModel("next")
@@ -286,7 +310,11 @@ func (r *liveMetricsRunner) unblock() {
 
 func TestCancelledRunPublishesFinalMetricsBeforeTerminal(t *testing.T) {
 	runner := newLiveMetricsRunner()
-	rt := New(runner, Services{Metrics: runner.Metrics})
+	rt := New(runner, ServiceGroups{
+		Lifecycle: LifecycleServices{
+			Metrics: runner.Metrics,
+		},
+	})
 	runID, err := rt.StartRun(context.Background(), Input{Text: "hello"})
 	if err != nil {
 		t.Fatal(err)
@@ -305,7 +333,11 @@ func TestCancelledRunPublishesFinalMetricsBeforeTerminal(t *testing.T) {
 
 func TestMetricsUpdatedPublishedWhileRunActive(t *testing.T) {
 	runner := newLiveMetricsRunner()
-	rt := New(runner, Services{Metrics: runner.Metrics})
+	rt := New(runner, ServiceGroups{
+		Lifecycle: LifecycleServices{
+			Metrics: runner.Metrics,
+		},
+	})
 	t.Cleanup(func() {
 		runner.unblock()
 		if err := rt.Close(); err != nil {
@@ -363,7 +395,11 @@ func TestMetricsUpdatedPublishedWhileRunActive(t *testing.T) {
 
 func TestMetricsPrefersLiveServiceOverCache(t *testing.T) {
 	runner := newLiveMetricsRunner()
-	rt := New(runner, Services{Metrics: runner.Metrics})
+	rt := New(runner, ServiceGroups{
+		Lifecycle: LifecycleServices{
+			Metrics: runner.Metrics,
+		},
+	})
 	t.Cleanup(func() {
 		runner.unblock()
 		if err := rt.Close(); err != nil {
@@ -389,8 +425,10 @@ func TestMetricsPrefersLiveServiceOverCache(t *testing.T) {
 
 func TestToolNamesDoesNotCallServiceAfterClose(t *testing.T) {
 	calls := 0
-	r := New(RunnerFunc(func(context.Context, string, RunHost) (string, error) { return "", nil }), Services{
-		ToolNames: func() []string { calls++; return []string{"read"} },
+	r := New(RunnerFunc(func(context.Context, string, RunHost) (string, error) { return "", nil }), ServiceGroups{
+		Tools: ToolsServices{
+			ToolNames: func() []string { calls++; return []string{"read"} },
+		},
 	})
 	if names := r.ToolNames(); len(names) != 1 {
 		t.Fatal(names)

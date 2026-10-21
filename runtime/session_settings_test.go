@@ -14,32 +14,36 @@ func TestSessionSettingsRollbackRestoresBothModelProfiles(t *testing.T) {
 			efforts := map[string]string{"old": "low", "new": "medium"}
 			full := false
 			failure := errors.New("injected failure")
-			r := New(&testBot{}, Services{
-				ModelOptions: func() ([]ModelOption, string) {
-					return []ModelOption{{Name: "old", ReasoningEffort: efforts["old"]}, {Name: "new", ReasoningEffort: efforts["new"]}}, active
+			r := New(&testBot{}, ServiceGroups{
+				Models: ModelsServices{
+					ModelOptions: func() ([]ModelOption, string) {
+						return []ModelOption{{Name: "old", ReasoningEffort: efforts["old"]}, {Name: "new", ReasoningEffort: efforts["new"]}}, active
+					},
+					CurrentModel: func() ModelSelection { return ModelSelection{Model: active, ReasoningEffort: efforts[active]} },
+					SwitchSessionModel: func(name string) (ModelSelection, error) {
+						active = name
+						if failModel && name == "new" {
+							return ModelSelection{}, failure
+						}
+						return ModelSelection{Model: name}, nil
+					},
+					SetSessionReasoning: func(effort string) error {
+						efforts[active] = effort
+						if effort == "invalid" {
+							return failure
+						}
+						return nil
+					},
 				},
-				CurrentModel: func() ModelSelection { return ModelSelection{Model: active, ReasoningEffort: efforts[active]} },
-				PermissionMode: func() string {
-					if full {
-						return "full"
-					}
-					return "manual"
+				Permissions: PermissionsServices{
+					PermissionMode: func() string {
+						if full {
+							return "full"
+						}
+						return "manual"
+					},
+					SetFullAccess: func(on bool) { full = on },
 				},
-				SwitchSessionModel: func(name string) (ModelSelection, error) {
-					active = name
-					if failModel && name == "new" {
-						return ModelSelection{}, failure
-					}
-					return ModelSelection{Model: name}, nil
-				},
-				SetSessionReasoning: func(effort string) error {
-					efforts[active] = effort
-					if effort == "invalid" {
-						return failure
-					}
-					return nil
-				},
-				SetFullAccess: func(on bool) { full = on },
 			})
 			defer r.Close()
 			err := r.ApplySessionSettings(SessionSettings{Model: "new", ReasoningEffort: "invalid", FullAccess: true})
@@ -57,7 +61,7 @@ func TestSessionSettingsRollbackRestoresBothModelProfiles(t *testing.T) {
 }
 
 func TestSessionSettingsRejectUnsupportedAndBusy(t *testing.T) {
-	r := New(&testBot{}, Services{})
+	r := New(&testBot{}, ServiceGroups{})
 	defer r.Close()
 	if err := r.ApplySessionSettings(SessionSettings{}); err == nil {
 		t.Fatal("unsupported operation accepted")
@@ -78,12 +82,17 @@ func TestSessionSettingsRejectUnsupportedAndBusy(t *testing.T) {
 
 func TestSessionSettingsExcludeRunStartup(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
-	r := New(&testBot{}, Services{
-		ModelOptions:        func() ([]ModelOption, string) { return nil, "old" },
-		CurrentModel:        func() ModelSelection { return ModelSelection{} },
-		PermissionMode:      func() string { return "manual" },
-		SwitchSessionModel:  func(string) (ModelSelection, error) { close(entered); <-release; return ModelSelection{}, nil },
-		SetSessionReasoning: func(string) error { return nil }, SetFullAccess: func(bool) {},
+	r := New(&testBot{}, ServiceGroups{
+		Models: ModelsServices{
+			ModelOptions:        func() ([]ModelOption, string) { return nil, "old" },
+			CurrentModel:        func() ModelSelection { return ModelSelection{} },
+			SwitchSessionModel:  func(string) (ModelSelection, error) { close(entered); <-release; return ModelSelection{}, nil },
+			SetSessionReasoning: func(string) error { return nil },
+		},
+		Permissions: PermissionsServices{
+			PermissionMode: func() string { return "manual" },
+			SetFullAccess:  func(bool) {},
+		},
 	})
 	defer r.Close()
 	changed := make(chan error, 1)

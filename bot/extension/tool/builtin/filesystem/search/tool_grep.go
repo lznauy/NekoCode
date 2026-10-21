@@ -30,16 +30,16 @@ func (t *GrepTool) Parameters() []core.Parameter {
 	}
 }
 
-func (t *GrepTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *GrepTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	pattern, err := toolutil.RequireStringArg(args, "pattern")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 
 	basePath := toolutil.OptStringArg(args, "path", ".")
 	safeBasePath, err := toolutil.ValidatePathReadableContext(ctx, basePath)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 
 	bin := "rg"
@@ -70,19 +70,19 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) (string, er
 
 	grepArgs = append(grepArgs, "--", pattern, safeBasePath)
 
-	cmd := exec.CommandContext(ctx, bin, grepArgs...)
-	cmd.Dir, err = workspace.WorkingDirectory(ctx)
+	dir, err := workspace.WorkingDirectory(ctx)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
-	output, err := cmd.CombinedOutput()
+	output, err := toolutil.CaptureCommand(ctx, bin, grepArgs, dir)
 
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return "No matches found", nil
+			return core.ToolOutput{Text: "No matches found"}, nil
 		}
-		return "", fmt.Errorf("grep failed: %w\nOutput: %s", err, string(output))
+		return output, fmt.Errorf("grep failed: %w", err)
 	}
 
-	return toolutil.StripAnsi(string(output)), nil
+	output.Text = toolutil.StripAnsi(output.Text)
+	return output, nil
 }

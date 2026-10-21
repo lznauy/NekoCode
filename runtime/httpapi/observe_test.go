@@ -24,19 +24,27 @@ func observeHandler(t *testing.T) http.Handler {
 		host.Step(protocol.StepEvent{Action: protocol.StepActionToolStart, ToolName: "read", CallID: "c1"})
 		host.Step(protocol.StepEvent{Action: protocol.StepActionExecuteTool, ToolName: "read", CallID: "c1"})
 		return "ok", nil
-	}), controlruntime.Services{
-		Metrics: func() controlruntime.MetricsSnapshot { return controlruntime.MetricsSnapshot{PromptTokens: 10} },
-		ContextSnapshot: func() controlruntime.ContextSnapshot {
-			return controlruntime.ContextSnapshot{Budget: 100, Used: 25, Free: 75}
+	}), controlruntime.ServiceGroups{
+		Models: controlruntime.ModelsServices{
+			CurrentModel: func() controlruntime.ModelSelection {
+				return controlruntime.ModelSelection{Provider: "openai", Model: "gpt-test"}
+			},
+			ModelOptions: func() ([]controlruntime.ModelOption, string) {
+				return []controlruntime.ModelOption{{Name: "default", Model: "gpt-test"}}, "default"
+			},
 		},
-		MemoryView: func(controlruntime.MemoryScope) controlruntime.MemoryView { return controlruntime.MemoryView{} },
-		CurrentModel: func() controlruntime.ModelSelection {
-			return controlruntime.ModelSelection{Provider: "openai", Model: "gpt-test"}
+		Context: controlruntime.ContextServices{
+			ContextSnapshot: func() controlruntime.ContextSnapshot {
+				return controlruntime.ContextSnapshot{Budget: 100, Used: 25, Free: 75}
+			},
+			MemoryView: func(controlruntime.MemoryScope) controlruntime.MemoryView { return controlruntime.MemoryView{} },
 		},
-		ModelOptions: func() ([]controlruntime.ModelOption, string) {
-			return []controlruntime.ModelOption{{Name: "default", Model: "gpt-test"}}, "default"
+		Tools: controlruntime.ToolsServices{
+			ToolNames: func() []string { return []string{"read", "shell"} },
 		},
-		ToolNames: func() []string { return []string{"read", "shell"} },
+		Lifecycle: controlruntime.LifecycleServices{
+			Metrics: func() controlruntime.MetricsSnapshot { return controlruntime.MetricsSnapshot{PromptTokens: 10} },
+		},
 	})
 	t.Cleanup(func() { _ = rt.Close() })
 	// An older failure followed by success exercises filtering before limit.

@@ -52,8 +52,8 @@ func TestExecuteDeliversWorkspaceFile(t *testing.T) {
 	if d.path != path {
 		t.Fatalf("path = %q, want %q", d.path, path)
 	}
-	if !strings.Contains(out, "telegram") {
-		t.Fatalf("output = %q", out)
+	if !strings.Contains(out.Render(), "telegram") {
+		t.Fatalf("output = %q", out.Render())
 	}
 }
 
@@ -117,7 +117,7 @@ func TestExecuteSurfacesDeliveryFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "telegram") || !strings.Contains(out, "feishu") {
-		t.Fatalf("partial result = %q", out)
+	if !strings.Contains(out.Render(), "telegram") || !strings.Contains(out.Render(), "feishu") {
+		t.Fatalf("partial result = %q", out.Render())
 	}
 }

@@ -287,9 +287,9 @@ func TestSteeringCannotPrecedeRecordingRegistration(t *testing.T) {
 	var once sync.Once
 	bot := &testBot{run: func(string, RunHost) (string, error) { <-finish; return "done", nil }}
 	services := testBotServices(bot)
-	services.ListSessions = func() []SessionMeta { return nil }
-	services.SessionMessages = func() []DisplayMessage { return nil }
-	services.CurrentSessionID = func() string { once.Do(func() { close(entered); <-release }); return "session_b" }
+	services.Sessions.ListSessions = func() []SessionMeta { return nil }
+	services.Sessions.SessionMessages = func() []DisplayMessage { return nil }
+	services.Sessions.CurrentSessionID = func() string { once.Do(func() { close(entered); <-release }); return "session_b" }
 	rt := New(bot, services)
 	base := t.TempDir()
 	if err := rt.EnableEventRecording(base); err != nil {
@@ -327,9 +327,9 @@ func TestRecordingFollowsLazyAndSwitchedSessions(t *testing.T) {
 	sessionID := ""
 	bot := &testBot{run: func(input string, _ RunHost) (string, error) { sessionID = input; return "done", nil }}
 	services := testBotServices(bot)
-	services.CurrentSessionID = func() string { return sessionID }
-	services.ListSessions = func() []SessionMeta { return nil }
-	services.SessionMessages = func() []DisplayMessage { return nil }
+	services.Sessions.CurrentSessionID = func() string { return sessionID }
+	services.Sessions.ListSessions = func() []SessionMeta { return nil }
+	services.Sessions.SessionMessages = func() []DisplayMessage { return nil }
 	rt := New(bot, services)
 	if err := rt.EnableEventRecording(base); err != nil {
 		t.Fatal(err)

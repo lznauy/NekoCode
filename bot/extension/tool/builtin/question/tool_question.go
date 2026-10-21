@@ -66,28 +66,28 @@ func (t *Tool) questionFunc() protocol.QuestionFunc {
 	return t.fn
 }
 
-func (t *Tool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *Tool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	select {
 	case <-ctx.Done():
-		return "", ctx.Err()
+		return core.ToolOutput{}, ctx.Err()
 	default:
 	}
 
 	questions, err := parseQuestions(args)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	fn := t.questionFunc()
 	if fn == nil {
-		return "", fmt.Errorf("question UI is not available")
+		return core.ToolOutput{}, fmt.Errorf("question UI is not available")
 	}
 
 	req := protocol.NewQuestionRequest(questions)
 	reply := fn(req)
 	if reply.Rejected {
-		return "", fmt.Errorf("question rejected")
+		return core.ToolOutput{}, fmt.Errorf("question rejected")
 	}
-	return formatAnswers(questions, reply.Answers), nil
+	return core.ToolOutput{Text: formatAnswers(questions, reply.Answers)}, nil
 }
 
 func parseQuestions(args map[string]any) ([]protocol.QuestionItem, error) {

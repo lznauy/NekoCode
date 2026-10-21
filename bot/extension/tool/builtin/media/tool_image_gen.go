@@ -41,25 +41,26 @@ func (t *ImageGenTool) Parameters() []core.Parameter {
 	}
 }
 
-func (t *ImageGenTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *ImageGenTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	prompt, err := toolutil.RequireStringArg(args, "prompt")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 
 	cfg := t.resolveModel(args)
 	if cfg.Name == "" {
-		return "", fmt.Errorf("no image gen models configured — add image_gen_models in ~/.nekocode/config.json")
+		return core.ToolOutput{}, fmt.Errorf("no image gen models configured — add image_gen_models in ~/.nekocode/config.json")
 	}
 	outputDir, err := resolveOutputDir(ctx, args)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 
 	switch cfg.Provider {
 	case "jimeng":
-		return t.executeJimeng(ctx, cfg, prompt, outputDir, args)
+		toolText, toolErr := t.executeJimeng(ctx, cfg, prompt, outputDir, args)
+		return core.ToolOutput{Text: toolText}, toolErr
 	default:
-		return "", fmt.Errorf("unsupported image gen provider: %s", cfg.Provider)
+		return core.ToolOutput{}, fmt.Errorf("unsupported image gen provider: %s", cfg.Provider)
 	}
 }

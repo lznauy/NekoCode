@@ -290,9 +290,9 @@ nekocode/
 
 ## Runtime 控制契约
 
-`runtime.New(runner, services)` 只要求 Runner 实现 `Run(context.Context, input, RunHost)`；可选应用能力由组合根通过 `runtime.Services` 显式提供。流输出、工具/子 Agent 事件、phase、todo、approval 和 question 都经本次调用独占的 `RunHost` 传递；命令在一次同步生命周期中返回完整结果。
+`runtime.New(runner, services)` 只要求 Runner 实现 `Run(context.Context, input, RunHost)`；可选应用能力由组合根通过 `runtime.ServiceGroups` 显式提供。流输出、工具/子 Agent 事件、phase、todo、approval 和 question 都经本次调用独占的 `RunHost` 传递；命令在一次同步生命周期中返回完整结果。
 
-`Runtime` 是 UI/HTTP/connector 的唯一交互入口，核心方法为 `StartRun`、`SteerRun`、`CancelRun`、`Status`、`LookupRun`、`Events`、`DecideApproval` 和 `AnswerQuestion`。命令、Steering、Metrics、Model、Context、Extension、Configuration 和 Session 是 `runtime.Services` 中的显式函数字段；UI 先读 `Capabilities()`，再直接调用同一个 Runtime 的只读方法。关闭统一使用 `Close() error`，connector、Runner 和 recorder 的错误不会被吞掉。
+`Runtime` 是 UI/HTTP/connector 的唯一交互入口，核心方法为 `StartRun`、`SteerRun`、`CancelRun`、`Status`、`LookupRun`、`Events`、`DecideApproval` 和 `AnswerQuestion`。命令、Steering、Metrics、Model、Context、Extension、Configuration 和 Session 是 `runtime.ServiceGroups` 中的显式函数字段；UI 先读 `Capabilities()`，再直接调用同一个 Runtime 的只读方法。关闭统一使用 `Close() error`，connector、Runner 和 recorder 的错误不会被吞掉。
 
 事件协议版本为 `2.0`，每个事件携带单调 `sequence`；订阅可用 `EventFilter.After` 续传。协议错误使用稳定 `ErrorCode`。标准应用由 `runtime/standard.New()` 装配完整 Bot、事件录制和 connector；`examples/web-assistant` 则展示只组合 web 工具的独立应用。
 
@@ -326,13 +326,12 @@ New()
   ▼
 Run() 主循环 → runTurn(state)
   │
-  ├─ AutoCompactIfNeeded() 看门狗
   ├─ drainSteering() 排空中途输入
   │
   ├─ Reason(state) → ReasoningResult
   │   ├─ phase(PhaseThinking)
   │   ├─ Policy.BeforeModel() → tagged request-scoped hints
-  │   ├─ ctxMgr.BuildRequest() 追加变化的 runtime user context 并组装请求
+  │   ├─ ctxMgr.PrepareRequest() 组装请求，统一自动阈值和最终预算，至多压缩一次
   │   ├─ callLLMForTool() 流式调用
   │   └─ withRetry() 指数退避重试
   │
@@ -447,7 +446,8 @@ ContextReport 与自动压缩门限使用同一 replay contract 估算实际输�
 | 方法 | 说明 |
 |------|------|
 | `Build()` | 组装完整消息列表（含孤儿过滤） |
-| `BuildRequest()` | 原子组装模型请求并记录 system/tools/history 稳定形状 |
+| `BuildRequest()` | 组装和观察请求形状，供只需投影的调用使用 |
+| `PrepareRequest(ctx, request)` | 模型调用前统一阈值与准入预算，至多压缩一次并重建最终请求 |
 | `New(Config)` | 使用同一配置协议创建主 Agent 或子 Agent 上下文 |
 | `AutoCompactIfNeeded(ctx)` | 自动压缩看门狗 |
 | `Summarize(ctx)` | 手动触发完整压缩 + Archive 合并 |
@@ -469,6 +469,7 @@ ag.Run()  →  ctxMgr.SetSystemPrompt()  →  ctxMgr.Summarize()（按需）  �
   `pre-compact-*.session.json`；备份失败时不调用摘要模型。
   Session 包不通过回调访问 Agent、Extension 或 Policy。
 - `Snapshot()`（`bot/contextmgr/contextmgr_snapshot.go`）**深拷贝** `Messages` 后再返回，避免后续 `append` 共享 backing array 导致已捕获内容被覆盖
+- Bot 在 `bindSessionResources` 中集中绑定会话输出存储、Policy、工具会话及只读文件授权。同一会话重绑或重建 Agent 时复用输出存储；切换、清空会话时更新上下文和执行器。新建与删除会话共享 `clearConversationState` 重置对话状态。
 - 触发时机：每次 agent run 结束自动保存；`/sessions`、`/export`、`/new` 等命令也会触发
 
 Agent 结束时的文本处理（`bot/agent/loop.go` `finishRun`）：
@@ -487,9 +488,15 @@ type Tool interface {
     Description() string
     Parameters() []Parameter
     ExecutionMode(args map[string]any) ExecutionMode
-    Execute(ctx context.Context, args map[string]any) (string, error)
+    Execute(ctx context.Context, args map[string]any) (ToolOutput, error)
 }
 ```
+
+`ToolOutput` 包含原始文本或预览 `Text`，以及独立的 `Artifact`（文件路径和是否仅保留不完整前缀）。普通执行和提权重试使用同一返回契约；错误仍由 `error` 返回，失败时的已有输出不会丢弃。
+
+执行器将结果限制为 16 KiB；需要保存时，原始内容只落盘一次，后续上下文限流复用同一文件。grep 流式捕获最多 8 MiB，超限停止生产者并标记不完整。模型和 UI 的文件引用提示由 `Render()` 生成，内部不解析提示文案来恢复路径或授予权限。
+
+上下文不足时，消息以 `tool_output_deferred` 标记待交付，`ToolOutput` 元数据和不超过 16 KiB 的 `DeferredContent` 随活动会话保存。`/compact` 在空间足够时恢复原有预览，保留失败原因和捕获状态；原始文件仍作为独立证据保留。Provider 的请求编码不包含这些本地恢复字段。
 
 ### 工具注册
 

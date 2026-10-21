@@ -93,17 +93,17 @@ func (t *WebExtractTool) Parameters() []core.Parameter {
 	}
 }
 
-func (t *WebExtractTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *WebExtractTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	rawURL, err := toolutil.RequireStringArg(args, "url")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 
 	// Validate before anything else: a private, loopback, or non-http(s) target
 	// must be refused locally rather than handed to the extractor, and the answer
 	// must not depend on how that third party treats such a URL.
 	if err := validateURL(rawURL); err != nil {
-		return "", fmt.Errorf("URL validation failed: %w", err)
+		return core.ToolOutput{}, fmt.Errorf("URL validation failed: %w", err)
 	}
 
 	prompt := toolutil.OptStringArg(args, "prompt", "")
@@ -119,10 +119,10 @@ func (t *WebExtractTool) Execute(ctx context.Context, args map[string]any) (stri
 		logger.Log("web_extract: extractor unavailable (%v); falling back to direct fetch", err)
 		content, err = fetchPageDirect(ctx, t.client, rawURL)
 		if err != nil {
-			return "", err
+			return core.ToolOutput{}, err
 		}
 	}
-	return finalizeContent(content, prompt), nil
+	return core.ToolOutput{Text: finalizeContent(content, prompt)}, nil
 }
 
 // extract asks the hosted extractor to convert rawURL into Markdown. Any

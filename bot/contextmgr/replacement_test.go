@@ -145,11 +145,11 @@ func TestSummarizeRefusesInputBeyondSummarizerWindow(t *testing.T) {
 	}, 0)
 	s.modelWindow = 16384
 
-	_, _, _, err := s.summarize(ctx.Messages, "", 64000, nil)
+	_, _, _, err := s.summarize(ctx.Messages, strings.Repeat("archive ", 16000), 64000, nil)
 	if err == nil {
 		t.Fatal("oversized summary input was not refused")
 	}
-	if !strings.Contains(err.Error(), "16384") || !strings.Contains(err.Error(), "flash_model") {
+	if !strings.Contains(err.Error(), "16384") {
 		t.Fatalf("error lacks window or guidance: %v", err)
 	}
 }

@@ -62,11 +62,12 @@ func (t *EditTool) PreviewContext(ctx context.Context, args map[string]any) stri
 // execute
 // ---------------------------------------------------------------------------
 
-func (t *EditTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *EditTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	path, ok := args["path"].(string)
 	if !ok || path == "" {
-		return "", fmt.Errorf("path parameter is required")
+		return core.ToolOutput{}, fmt.Errorf("path parameter is required")
 	}
 
-	return t.executeEdit(ctx, args)
+	toolText, toolErr := t.executeEdit(ctx, args)
+	return core.ToolOutput{Text: toolText}, toolErr
 }

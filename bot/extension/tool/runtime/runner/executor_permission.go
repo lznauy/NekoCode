@@ -35,18 +35,18 @@ const (
 //     (the raw PermissionError for non-retry failures; the actual
 //     ExecuteWithPermission error for failRetryError so the model isn't told
 //     "permission required" after it already got approval)
-func (e *Executor) tryPermissionEscalation(ctx context.Context, privileged tools.PrivilegedFunc, tc core.ToolCallItem, execErr error, confirmFn protocol.ConfirmFunc, preApproved escalationApproval, hasPreApproval bool, jevSafe bool) (output string, ok bool, reason escalationFailReason, causeErr error) {
+func (e *Executor) tryPermissionEscalation(ctx context.Context, privileged tools.PrivilegedFunc, tc core.ToolCallItem, execErr error, confirmFn protocol.ConfirmFunc, preApproved escalationApproval, hasPreApproval bool, jevSafe bool) (output core.ToolOutput, ok bool, reason escalationFailReason, causeErr error) {
 	var permErr core.PermissionError
 	if !errors.As(execErr, &permErr) {
-		return "", false, failNotPermissionError, execErr
+		return core.ToolOutput{}, false, failNotPermissionError, execErr
 	}
 	if privileged == nil {
-		return "", false, failNotPrivileged, execErr
+		return core.ToolOutput{}, false, failNotPrivileged, execErr
 	}
 
 	req := permErr.PermissionRequest()
 	if e.permissionDenied(tc.Name, req) {
-		return "", false, failDeniedByRule, execErr
+		return core.ToolOutput{}, false, failDeniedByRule, execErr
 	}
 	// Full-takeover mode: escalate without any dialog, including capabilities
 	// (like process.host) that manual mode never pre-approves. Deny rules
@@ -56,17 +56,17 @@ func (e *Executor) tryPermissionEscalation(ctx context.Context, privileged tools
 		if err == nil {
 			return out, true, 0, nil
 		}
-		return "", false, failRetryError, err
+		return out, false, failRetryError, err
 	}
 	if e.permissionAllowed(tc.Name, req) {
 		out, err := privileged(e.toolContext(ctx), tc.Args, req)
 		if err == nil {
 			return out, true, 0, nil
 		}
-		return "", false, failRetryError, err
+		return out, false, failRetryError, err
 	}
 	if confirmFn == nil {
-		return "", false, failNoConfirmFn, execErr
+		return core.ToolOutput{}, false, failNoConfirmFn, execErr
 	}
 	if hasPreApproval && preApproved.requestCoveredBy(req) {
 		// The unified dialog already showed this call's predicted capabilities.
@@ -77,7 +77,7 @@ func (e *Executor) tryPermissionEscalation(ctx context.Context, privileged tools
 		if err == nil {
 			return out, true, 0, nil
 		}
-		return "", false, failRetryError, err
+		return out, false, failRetryError, err
 	}
 	if jevSafe {
 		// The auto-mode risk judge already vetted this call's content when
@@ -90,7 +90,7 @@ func (e *Executor) tryPermissionEscalation(ctx context.Context, privileged tools
 		if err == nil {
 			return out, true, 0, nil
 		}
-		return "", false, failRetryError, err
+		return out, false, failRetryError, err
 	}
 	confirmReq := protocol.NewApprovalRequest(
 		canonicalPermissionTool(tc.Name),
@@ -101,7 +101,7 @@ func (e *Executor) tryPermissionEscalation(ctx context.Context, privileged tools
 	confirmReq.CallID = tc.ID
 	reply := confirmFn(confirmReq)
 	if !reply.Allowed {
-		return "", false, failUserDenied, execErr
+		return core.ToolOutput{}, false, failUserDenied, execErr
 	}
 	if reply.Remember {
 		e.rememberPermission(tc.Name, req, true)
@@ -110,7 +110,7 @@ func (e *Executor) tryPermissionEscalation(ctx context.Context, privileged tools
 	if err == nil {
 		return out, true, 0, nil
 	}
-	return "", false, failRetryError, err
+	return out, false, failRetryError, err
 }
 
 // permissionFailureMessage renders the error string shown to the model when

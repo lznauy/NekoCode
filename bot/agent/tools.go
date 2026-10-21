@@ -143,7 +143,7 @@ func emitResultCallbacks(calls []core.ToolCallItem, blocked map[int]string, resu
 	for i, r := range results {
 		call := effectiveToolCall(calls[i])
 		content := r.EffectiveOutput()
-		msgs[i] = types.Message{Content: content, ToolCallID: r.ID, IsError: r.Error != ""}
+		msgs[i] = types.Message{Content: r.TextOutput().Text, ToolOutput: r.Artifact, ToolCallID: r.ID, IsError: r.Error != ""}
 		if callback != nil {
 			if _, isBlocked := blocked[i]; isBlocked {
 				continue
@@ -199,8 +199,11 @@ func (r *toolRunner) recordToolResults(calls []core.ToolCallItem, blocked map[in
 func (r *toolRunner) addToolResultsAndHints(calls []core.ToolCallItem, msgs []types.Message, preToolHints []*policy.Hint) {
 	toolResults := make([]ctxmgr.ToolResultMsg, len(msgs))
 	for i, m := range msgs {
-		name, _ := calls[i].Effective()
-		toolResults[i] = ctxmgr.ToolResultMsg{Message: m, ToolName: name}
+		name, args := calls[i].Effective()
+		if name == "skill" && !m.IsError {
+			m.SkillName, _ = args["name"].(string)
+		}
+		toolResults[i] = ctxmgr.ToolResultMsg{Message: m, ToolName: name, AllowOutputFile: r.agent.deps.toolExecutor.AllowOutputFile}
 	}
 	r.agent.deps.ctxMgr.AddToolResultsBatch(toolResults)
 

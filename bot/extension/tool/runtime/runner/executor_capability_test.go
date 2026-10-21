@@ -103,6 +103,6 @@ func (*permissionProxyTool) Parameters() []core.Parameter { return nil }
 func (*permissionProxyTool) ExecutionMode(map[string]any) core.ExecutionMode {
 	return core.ModeSequential
 }
-func (*permissionProxyTool) Execute(context.Context, map[string]any) (string, error) {
-	return "called", nil
+func (*permissionProxyTool) Execute(context.Context, map[string]any) (core.ToolOutput, error) {
+	return core.ToolOutput{Text: "called"}, nil
 }

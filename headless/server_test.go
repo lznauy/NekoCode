@@ -23,27 +23,27 @@ type harness struct {
 }
 
 func newHarness(t *testing.T, runner rt.RunnerFunc, options Options) *harness {
-	return newHarnessWithServices(t, runner, options, rt.Services{})
+	return newHarnessWithServices(t, runner, options, rt.ServiceGroups{})
 }
-func newHarnessWithServices(t *testing.T, runner rt.RunnerFunc, options Options, services rt.Services) *harness {
+func newHarnessWithServices(t *testing.T, runner rt.RunnerFunc, options Options, services rt.ServiceGroups) *harness {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	in, input := io.Pipe()
 	output, out := io.Pipe()
-	if services.NewSession == nil {
-		services.NewSession = func() (rt.SessionMeta, error) { return rt.SessionMeta{ID: "session-test"}, nil }
+	if services.Sessions.NewSession == nil {
+		services.Sessions.NewSession = func() (rt.SessionMeta, error) { return rt.SessionMeta{ID: "session-test"}, nil }
 	}
-	if services.CurrentSessionID == nil {
-		services.CurrentSessionID = func() string { return "session-test" }
+	if services.Sessions.CurrentSessionID == nil {
+		services.Sessions.CurrentSessionID = func() string { return "session-test" }
 	}
-	if services.ListSessions == nil {
-		services.ListSessions = func() []rt.SessionMeta { return nil }
+	if services.Sessions.ListSessions == nil {
+		services.Sessions.ListSessions = func() []rt.SessionMeta { return nil }
 	}
-	if services.SessionMessages == nil {
-		services.SessionMessages = func() []rt.DisplayMessage { return nil }
+	if services.Sessions.SessionMessages == nil {
+		services.Sessions.SessionMessages = func() []rt.DisplayMessage { return nil }
 	}
-	if services.CurrentModel == nil {
-		services.CurrentModel = func() rt.ModelSelection { return rt.ModelSelection{Model: "test-model"} }
+	if services.Models.CurrentModel == nil {
+		services.Models.CurrentModel = func() rt.ModelSelection { return rt.ModelSelection{Model: "test-model"} }
 	}
 	backend := rt.New(runner, services)
 	h := &harness{in: input, frames: make(chan map[string]any, 1024), done: make(chan error, 1), cancel: cancel}

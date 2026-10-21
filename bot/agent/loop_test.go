@@ -6,12 +6,14 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/extension/tool"
 	"nekocode/bot/policy"
 	"nekocode/bot/policy/builtin"
 	"nekocode/bot/provider/types"
+	"nekocode/protocol"
 )
 
 func TestSmallContextWindowDoesNotTriggerSyntheticBlocking(t *testing.T) {
@@ -211,4 +213,20 @@ func lastAssistantContent(msgs []types.Message) string {
 		}
 	}
 	return ""
+}
+
+func TestRunDurationIsFixedBeforeSummary(t *testing.T) {
+	a, _ := newTestAgentWithLLM()
+	var elapsedAtSummary time.Duration
+	result := a.Run("hello", nil, func(event protocol.StepEvent) {
+		if event.Action == protocol.StepActionRunSummary {
+			elapsedAtSummary = a.life.Duration()
+		}
+	})
+	if result.Error != nil {
+		t.Fatal(result.Error)
+	}
+	if elapsedAtSummary <= 0 || a.life.Duration() != elapsedAtSummary {
+		t.Fatalf("summary duration = %v, completed duration = %v", elapsedAtSummary, a.life.Duration())
+	}
 }

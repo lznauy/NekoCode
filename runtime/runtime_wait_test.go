@@ -10,7 +10,7 @@ func TestWaitRunWaitsForLifecycleCleanup(t *testing.T) {
 	runtime := New(RunnerFunc(func(context.Context, string, RunHost) (string, error) {
 		<-release
 		return "done", nil
-	}), Services{})
+	}), ServiceGroups{})
 	defer runtime.Close()
 	runID, err := runtime.StartRun(context.Background(), Input{Text: "hello"})
 	if err != nil {

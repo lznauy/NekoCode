@@ -114,7 +114,7 @@ func TestManagerSessionMutationsPublishCurrentSession(t *testing.T) {
 func TestDeleteSessionPublishesCommittedStateWhenCleanupFails(t *testing.T) {
 	runner := &sessionCommandRunner{current: "session_1"}
 	services := sessionRunnerServices(runner)
-	services.DeleteSession = func(string) error {
+	services.Sessions.DeleteSession = func(string) error {
 		runner.current = ""
 		return committedTestError{}
 	}
@@ -129,6 +129,63 @@ func TestDeleteSessionPublishesCommittedStateWhenCleanupFails(t *testing.T) {
 	payload, ok := events[0].Payload.(SessionPayload)
 	if !ok || payload.Reason != "delete" || payload.ChangedID != "session_1" || payload.ID != "" || !payload.CurrentChanged {
 		t.Fatalf("session_changed payload = %#v", events[0].Payload)
+	}
+}
+
+func TestSessionMutationsPublishCommittedFailures(t *testing.T) {
+	for _, op := range []string{"resume", "new"} {
+		for _, committed := range []bool{false, true} {
+			outcome := "rejected"
+			if committed {
+				outcome = "committed"
+			}
+			t.Run(op+"/"+outcome, func(t *testing.T) {
+				runner := &sessionCommandRunner{current: "session_1"}
+				services := sessionRunnerServices(runner)
+				var cause error = errors.New("operation rejected")
+				if committed {
+					cause = committedTestError{}
+				}
+				change := func() {
+					if committed {
+						runner.current = "session_2"
+					}
+				}
+				services.Sessions.ResumeSession = func(string) error { change(); return cause }
+				services.Sessions.NewSession = func() (SessionMeta, error) {
+					change()
+					if committed {
+						return SessionMeta{ID: "session_2"}, cause
+					}
+					return SessionMeta{}, cause
+				}
+				rt := New(runner, services)
+				defer rt.Close()
+				var err error
+				if op == "resume" {
+					err = rt.ResumeSession("session_2")
+				} else {
+					_, err = rt.NewSession()
+				}
+				if !errors.Is(err, cause) {
+					t.Fatalf("lost error: %v", err)
+				}
+				events := rt.events.History(EventFilter{Types: []EventType{EventSessionChanged}})
+				if !committed {
+					if len(events) != 0 {
+						t.Fatal("rejected mutation announced a session switch")
+					}
+					return
+				}
+				if len(events) != 1 {
+					t.Fatalf("committed mutation emitted %d session events", len(events))
+				}
+				payload, ok := events[0].Payload.(SessionPayload)
+				if !ok || payload.ID != "session_2" || payload.ChangedID != "session_2" || payload.Reason != op || !payload.CurrentChanged {
+					t.Fatalf("wrong committed state: %#v", events[0].Payload)
+				}
+			})
+		}
 	}
 }
 
@@ -155,7 +212,11 @@ func TestManagerRejectsMutationsWhileRunIsActive(t *testing.T) {
 		<-release
 		return "", nil
 	}
-	rt := New(runner, Services{SwitchModel: runner.SwitchModel})
+	rt := New(runner, ServiceGroups{
+		Models: ModelsServices{
+			SwitchModel: runner.SwitchModel,
+		},
+	})
 	runID, err := rt.StartRun(context.Background(), Input{Source: SourceRef{Kind: "test"}, Text: "run"})
 	if err != nil {
 		t.Fatal(err)

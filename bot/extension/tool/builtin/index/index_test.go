@@ -50,10 +50,10 @@ func TestIndexToolSkeleton(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if !strings.Contains(result, "<project>") {
+	if !strings.Contains(result.Render(), "<project>") {
 		t.Error("skeleton should contain <project>")
 	}
-	if !strings.Contains(result, "<language>go</language>") {
+	if !strings.Contains(result.Render(), "<language>go</language>") {
 		t.Error("skeleton should detect Go")
 	}
 }
@@ -66,8 +66,8 @@ func TestIndexToolSymbol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if !strings.Contains(result, "Hello") {
-		t.Errorf("symbol query should find Hello, got: %s", result)
+	if !strings.Contains(result.Render(), "Hello") {
+		t.Errorf("symbol query should find Hello, got: %s", result.Render())
 	}
 }
 
@@ -79,8 +79,8 @@ func TestIndexToolCallers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if !strings.Contains(result, "main") || !strings.Contains(result, "Hello") {
-		t.Errorf("callers query should show main -> Hello, got: %s", result)
+	if !strings.Contains(result.Render(), "main") || !strings.Contains(result.Render(), "Hello") {
+		t.Errorf("callers query should show main -> Hello, got: %s", result.Render())
 	}
 }
 
@@ -92,8 +92,8 @@ func TestIndexToolCallees(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if !strings.Contains(result, "main") || !strings.Contains(result, "Hello") {
-		t.Errorf("callees query should show main -> Hello, got: %s", result)
+	if !strings.Contains(result.Render(), "main") || !strings.Contains(result.Render(), "Hello") {
+		t.Errorf("callees query should show main -> Hello, got: %s", result.Render())
 	}
 }
 
@@ -105,8 +105,8 @@ func TestIndexToolFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if !strings.Contains(result, "main.go") {
-		t.Errorf("file query should find main.go, got: %s", result)
+	if !strings.Contains(result.Render(), "main.go") {
+		t.Errorf("file query should find main.go, got: %s", result.Render())
 	}
 }
 
@@ -119,8 +119,8 @@ func TestIndexToolDeps(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 	// main imports util, so should show util
-	if !strings.Contains(result, "util") && !strings.Contains(result, "not found") {
-		t.Errorf("deps query result: %s", result)
+	if !strings.Contains(result.Render(), "util") && !strings.Contains(result.Render(), "not found") {
+		t.Errorf("deps query result: %s", result.Render())
 	}
 }
 
@@ -133,11 +133,11 @@ func TestIndexToolSearch(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 	// FTS may not be available in memory-only mode
-	if strings.Contains(result, "not available") {
+	if strings.Contains(result.Render(), "not available") {
 		t.Skip("FTS not available")
 	}
-	if !strings.Contains(result, "Hello") {
-		t.Errorf("search should find Hello, got: %s", result)
+	if !strings.Contains(result.Render(), "Hello") {
+		t.Errorf("search should find Hello, got: %s", result.Render())
 	}
 }
 
@@ -149,8 +149,8 @@ func TestIndexToolEmptyQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if !strings.Contains(result, "Missing") {
-		t.Errorf("empty query should return error message, got: %s", result)
+	if !strings.Contains(result.Render(), "Missing") {
+		t.Errorf("empty query should return error message, got: %s", result.Render())
 	}
 }
 
@@ -162,8 +162,8 @@ func TestIndexToolInvalidFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if !strings.Contains(result, "Invalid") {
-		t.Errorf("invalid format should return error message, got: %s", result)
+	if !strings.Contains(result.Render(), "Invalid") {
+		t.Errorf("invalid format should return error message, got: %s", result.Render())
 	}
 }
 
@@ -175,8 +175,8 @@ func TestIndexToolUnknownPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if !strings.Contains(result, "Unknown") {
-		t.Errorf("unknown prefix should return error message, got: %s", result)
+	if !strings.Contains(result.Render(), "Unknown") {
+		t.Errorf("unknown prefix should return error message, got: %s", result.Render())
 	}
 }
 

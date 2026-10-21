@@ -84,25 +84,31 @@ func newTestRuntime(b *testBot) *Runtime {
 	return New(b, testBotServices(b))
 }
 
-func testBotServices(b *testBot) Services {
-	return Services{
-		ExecuteCommand:          b.ExecuteCommand,
-		CommandMenu:             b.CommandMenu,
-		Steer:                   b.Steer,
-		Metrics:                 b.Metrics,
-		ImageAttachmentsEnabled: func() bool { return true },
-		Close:                   b.Close,
+func testBotServices(b *testBot) ServiceGroups {
+	return ServiceGroups{
+		Commands: CommandsServices{
+			ExecuteCommand: b.ExecuteCommand,
+			CommandMenu:    b.CommandMenu,
+			Steer:          b.Steer,
+		},
+		Models: ModelsServices{
+			ImageAttachmentsEnabled: func() bool { return true },
+		},
+		Lifecycle: LifecycleServices{
+			Metrics: b.Metrics,
+			Close:   b.Close,
+		},
 	}
 }
 
-func sessionRunnerServices(r *sessionCommandRunner) Services {
+func sessionRunnerServices(r *sessionCommandRunner) ServiceGroups {
 	services := testBotServices(&r.testBot)
-	services.CurrentSessionID = r.CurrentSessionID
-	services.ListSessions = r.ListSessions
-	services.SessionMessages = r.SessionMessages
-	services.ResumeSession = r.ResumeSession
-	services.NewSession = r.NewSession
-	services.DeleteSession = r.DeleteSession
+	services.Sessions.CurrentSessionID = r.CurrentSessionID
+	services.Sessions.ListSessions = r.ListSessions
+	services.Sessions.SessionMessages = r.SessionMessages
+	services.Sessions.ResumeSession = r.ResumeSession
+	services.Sessions.NewSession = r.NewSession
+	services.Sessions.DeleteSession = r.DeleteSession
 	return services
 }
 
@@ -258,7 +264,11 @@ func TestManagerCloseIsIdempotent(t *testing.T) {
 func TestManagerReturnsRunnerCloseError(t *testing.T) {
 	closeErr := errors.New("runner close failed")
 	runner := &failingCloseRunner{err: closeErr}
-	rt := New(runner, Services{Close: runner.Close})
+	rt := New(runner, ServiceGroups{
+		Lifecycle: LifecycleServices{
+			Close: runner.Close,
+		},
+	})
 	if err := rt.Close(); !errors.Is(err, closeErr) {
 		t.Fatalf("Close error = %v, want %v", err, closeErr)
 	}
@@ -273,7 +283,11 @@ func TestManagerCloseWaitsForRunnerExit(t *testing.T) {
 		release: make(chan struct{}),
 		closed:  make(chan struct{}),
 	}
-	rt := New(runner, Services{Close: runner.Close})
+	rt := New(runner, ServiceGroups{
+		Lifecycle: LifecycleServices{
+			Close: runner.Close,
+		},
+	})
 	if _, err := rt.StartRun(context.Background(), Input{Source: SourceRef{Kind: "test"}, Text: "run"}); err != nil {
 		t.Fatal(err)
 	}

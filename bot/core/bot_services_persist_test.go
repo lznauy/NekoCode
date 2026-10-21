@@ -1,6 +1,10 @@
 package core
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 
 	"nekocode/bot/config"
@@ -95,5 +99,46 @@ func TestRuntimeReasoningRebuildPreservesFullAccess(t *testing.T) {
 	}
 	if !b.FullAccess() || !b.getAgent().Executor().FullAccess() {
 		t.Fatal("agent rebuild disabled full access")
+	}
+}
+
+func TestPersistedModelChangesLeaveRuntimeUnchangedOnSaveFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		apply func(*Bot) error
+	}{
+		{"model", func(b *Bot) error { return b.SwitchModel("alt") }},
+		{"reasoning", func(b *Bot) error { return b.SetReasoningEffort("high") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newPersistTestBot(t)
+			previous := b.Configuration()
+			originalAgent := b.getAgent()
+			originalHome := os.Getenv("HOME")
+			blocker := filepath.Join(t.TempDir(), "not-a-directory")
+			if err := os.WriteFile(blocker, []byte("blocked"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("HOME", blocker)
+			err := tc.apply(b)
+			t.Setenv("HOME", originalHome)
+			var pathError *os.PathError
+			if !errors.As(err, &pathError) {
+				t.Fatalf("save failure lost filesystem error: %v", err)
+			}
+			if !reflect.DeepEqual(b.Configuration(), previous) {
+				t.Error("failed save changed in-memory configuration")
+			}
+			if b.getAgent() != originalAgent {
+				t.Error("failed save rebuilt the agent")
+			}
+			saved, err := config.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if saved.Active != previous.Active || saved.ActiveModelConfig().ReasoningEffort != previous.ActiveModelConfig().ReasoningEffort {
+				t.Error("failed save changed persisted model settings")
+			}
+		})
 	}
 }

@@ -121,27 +121,28 @@ func (t *posTool) Parameters() []core.Parameter {
 	}
 }
 
-func (t *posTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *posTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	file, err := toolutil.RequireStringArg(args, "file")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	line, err := toolutil.RequireIntArg(args, "line")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	if line < 1 {
-		return "", fmt.Errorf("line must be >= 1, got %d", line)
+		return core.ToolOutput{}, fmt.Errorf("line must be >= 1, got %d", line)
 	}
 	symbol, err := toolutil.RequireStringArg(args, "symbol")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	mgr, err := t.owner.ensureManager(ctx)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
-	return t.query(mgr, ctx, resolveFile(ctx, file), line, symbol)
+	toolText, toolErr := t.query(mgr, ctx, resolveFile(ctx, file), line, symbol)
+	return core.ToolOutput{Text: toolText}, toolErr
 }
 
 // diagTool adapts lsp_diagnostics: file in, compiler/linter problems out.
@@ -161,14 +162,15 @@ func (t *diagTool) Parameters() []core.Parameter {
 	}
 }
 
-func (t *diagTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *diagTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	file, err := toolutil.RequireStringArg(args, "file")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	mgr, err := t.owner.ensureManager(ctx)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
-	return mgr.Diagnostics(ctx, resolveFile(ctx, file))
+	toolText, toolErr := mgr.Diagnostics(ctx, resolveFile(ctx, file))
+	return core.ToolOutput{Text: toolText}, toolErr
 }

@@ -12,15 +12,15 @@ import (
 func TestBuildBodyOmitsInternalToolErrorFlag(t *testing.T) {
 	c := New("", "", "test-model")
 	body := c.buildBody([]types.Message{
-		{Role: "tool", Content: "command failed", ToolCallID: "tc1", IsError: true},
+		{Role: "tool", Content: "command failed", ToolCallID: "tc1", IsError: true, SkillName: "local-skill"},
 	}, nil, false)
 	data, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(data)
-	if strings.Contains(s, "is_error") {
-		t.Fatalf("request body leaks internal is_error flag: %s", s)
+	if strings.Contains(s, "is_error") || strings.Contains(s, "skill_name") {
+		t.Fatalf("request body leaks internal tool metadata: %s", s)
 	}
 	if !strings.Contains(s, `"tool_call_id":"tc1"`) {
 		t.Fatalf("request body missing tool_call_id: %s", s)

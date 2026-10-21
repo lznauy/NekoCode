@@ -18,16 +18,25 @@ func TestPromptRealRuntimeDiscardsRetriedText(t *testing.T) {
 		host.Text("provisional-answer")
 		host.Step(protocol.StepEvent{Action: protocol.StepActionChat, Output: "canonical-answer"})
 		return "canonical-answer", nil
-	}), rt.Services{
-		CurrentSessionID:    func() string { return "session-1" },
-		ListSessions:        func() []rt.SessionMeta { return []rt.SessionMeta{{ID: "session-1", CWD: "/workspace"}} },
-		SessionMessages:     func() []rt.DisplayMessage { return nil },
-		ModelOptions:        func() ([]rt.ModelOption, string) { return nil, "" },
-		CurrentModel:        func() rt.ModelSelection { return rt.ModelSelection{} },
-		PermissionMode:      func() string { return "manual" },
-		SwitchSessionModel:  func(string) (rt.ModelSelection, error) { return rt.ModelSelection{}, nil },
-		SetSessionReasoning: func(string) error { return nil }, SetFullAccess: func(bool) {},
-		ReplaceMCPServers: func(context.Context, string, []rt.MCPServerSpec) error { return nil },
+	}), rt.ServiceGroups{
+		Models: rt.ModelsServices{
+			ModelOptions:        func() ([]rt.ModelOption, string) { return nil, "" },
+			CurrentModel:        func() rt.ModelSelection { return rt.ModelSelection{} },
+			SwitchSessionModel:  func(string) (rt.ModelSelection, error) { return rt.ModelSelection{}, nil },
+			SetSessionReasoning: func(string) error { return nil },
+		},
+		Permissions: rt.PermissionsServices{
+			PermissionMode: func() string { return "manual" },
+			SetFullAccess:  func(bool) {},
+		},
+		Sessions: rt.SessionsServices{
+			CurrentSessionID: func() string { return "session-1" },
+			ListSessions:     func() []rt.SessionMeta { return []rt.SessionMeta{{ID: "session-1", CWD: "/workspace"}} },
+			SessionMessages:  func() []rt.DisplayMessage { return nil },
+		},
+		MCP: rt.MCPServices{
+			ReplaceMCPServers: func(context.Context, string, []rt.MCPServerSpec) error { return nil },
+		},
 	})
 	defer backend.Close()
 	var wire bytes.Buffer

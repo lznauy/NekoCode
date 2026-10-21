@@ -551,7 +551,7 @@ func TestServerRejectsUnavailableOptionalCapabilities(t *testing.T) {
 		func(context.Context, string, controlruntime.RunHost) (string, error) {
 			return "", nil
 		},
-	), controlruntime.Services{})
+	), controlruntime.ServiceGroups{})
 	t.Cleanup(func() {
 		if err := rt.Close(); err != nil {
 			t.Error(err)

@@ -74,6 +74,7 @@ type Lifecycle struct {
 	cancelFn  context.CancelFunc
 	steering  chan string
 	startTime time.Time
+	endTime   time.Time
 	finished  atomic.Bool
 }
 
@@ -122,18 +123,43 @@ func (l *Lifecycle) Cancel() {
 	l.mu.Unlock()
 }
 
-// Duration reports how long the run has been going, or 0 before Start.
+// Duration reports elapsed run time, fixed after StopTiming, or 0 before Start.
 func (l *Lifecycle) Duration() time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.startTime.IsZero() {
 		return 0
+	}
+	if !l.endTime.IsZero() {
+		return l.endTime.Sub(l.startTime)
 	}
 	return time.Since(l.startTime)
 }
 
 // Start marks the run as unfinished and records its start time.
 func (l *Lifecycle) Start() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.finished.Store(false)
 	l.startTime = time.Now()
+	l.endTime = time.Time{}
+}
+
+// StopTiming freezes elapsed time after all run processing has finished.
+// It is idempotent and does not change the loop's termination flag.
+func (l *Lifecycle) StopTiming() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.startTime.IsZero() && l.endTime.IsZero() {
+		l.endTime = time.Now()
+	}
+}
+
+// ResetTiming clears the previous run's timing between sessions.
+func (l *Lifecycle) ResetTiming() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.startTime, l.endTime = time.Time{}, time.Time{}
 }
 
 // Finished exposes the run's finished flag for atomic Load/Store by callers.

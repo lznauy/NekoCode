@@ -313,3 +313,11 @@ func loadedSkillNames(loaded map[string]bool) []string {
 	sort.Strings(names)
 	return names
 }
+
+// ToolOutputDir follows the session lifecycle, including deletion.
+func ToolOutputDir(id string) (string, error) {
+	if err := validateID(id); err != nil {
+		return "", err
+	}
+	return filepath.Join(dir(), id, "tool-results"), nil
+}

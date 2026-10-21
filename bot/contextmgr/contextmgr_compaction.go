@@ -3,11 +3,13 @@ package contextmgr
 import (
 	"context"
 	"fmt"
+	"nekocode/bot/contextmgr/token"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"nekocode/bot/decision"
+	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/provider/types"
 	"nekocode/logger"
 	"nekocode/protocol"
@@ -38,7 +40,62 @@ func (m *Manager) AutoCompactIfNeeded(ctx context.Context) (bool, error) {
 // Summarize compacts the current history regardless of its token occupancy.
 // It reports whether any messages were actually replaced.
 func (m *Manager) Summarize(ctx context.Context) (bool, error) {
-	return m.compact(ctx, true)
+	applied, err := m.compact(ctx, true)
+	if err != nil {
+		return applied, err
+	}
+	restored, err := m.restoreDeferredResults()
+	return applied || restored, err
+}
+
+// A manual compaction can free space while keeping the current user turn.
+// Restore deferred deliveries only when their complete bounded previews fit again.
+func (m *Manager) restoreDeferredResults() (bool, error) {
+	m.state.mu.Lock()
+	var loadedSkills []string
+	defer func() {
+		m.state.mu.Unlock()
+		m.recordSkillsLoaded(loadedSkills)
+	}()
+	count, delta := 0, 0
+	for _, msg := range m.state.ctx.Messages {
+		if msg.Source != core.DeferredOutputSource {
+			continue
+		}
+		if err := m.state.outputStore.CheckArtifact(msg.ToolOutput); err != nil {
+			return false, fmt.Errorf("deferred tool result unavailable: %w; start a new session", err)
+		}
+		if msg.DeferredContent == "" || len(msg.DeferredContent) > core.MaxOutputBytes {
+			return false, fmt.Errorf("deferred tool result has no valid bounded preview; start a new session")
+		}
+		count++
+		delta += token.EstimateString(msg.DeferredContent) - token.EstimateString(msg.Content)
+	}
+	if count == 0 {
+		return false, nil
+	}
+	window := m.state.contextWindow
+	if window <= 0 {
+		window = defaultBudget
+	}
+	// Admit the whole replacement, including savings from shorter results.
+	// Validate everything before changing messages or delivery bookkeeping.
+	if m.estimatedTokens()+delta > window-window/10 {
+		return false, fmt.Errorf("context still cannot hold deferred tool result; start a new session or reduce context")
+	}
+	for i := range m.state.ctx.Messages {
+		msg := &m.state.ctx.Messages[i]
+		if msg.Source != core.DeferredOutputSource {
+			continue
+		}
+		msg.Content, msg.Source, msg.DeferredContent = msg.DeferredContent, "", ""
+		if msg.SkillName != "" && !msg.IsError {
+			loadedSkills = append(loadedSkills, msg.SkillName)
+		}
+	}
+	m.state.tracker.AddEstimated(delta)
+	m.state.revision++
+	return true, nil
 }
 
 func (m *Manager) compact(ctx context.Context, force bool) (applied bool, resultErr error) {
@@ -52,6 +109,13 @@ func (m *Manager) compact(ctx context.Context, force bool) (applied bool, result
 	}
 
 	snap, compressor := m.compactionInput()
+	if !force {
+		for _, msg := range snap.history {
+			if msg.Source == core.DeferredOutputSource {
+				return false, fmt.Errorf("%s", core.DeferredOutput)
+			}
+		}
+	}
 	if compressor == nil {
 		return false, nil
 	}

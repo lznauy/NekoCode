@@ -35,8 +35,8 @@ func permErrFor() error {
 }
 
 // privilegedOK is a PrivilegedFunc that succeeds when invoked.
-func privilegedOK(context.Context, map[string]any, core.PermissionRequest) (string, error) {
-	return "escalated-ok", nil
+func privilegedOK(context.Context, map[string]any, core.PermissionRequest) (core.ToolOutput, error) {
+	return core.ToolOutput{Text: "escalated-ok"}, nil
 }
 
 func TestJevSafeEscalationSkipsDialog(t *testing.T) {
@@ -49,8 +49,8 @@ func TestJevSafeEscalationSkipsDialog(t *testing.T) {
 	if !ok {
 		t.Fatalf("jev-safe escalation should succeed, cause=%v", cause)
 	}
-	if out != "escalated-ok" {
-		t.Fatalf("out = %q", out)
+	if out.Text != "escalated-ok" {
+		t.Fatalf("out = %q", out.Text)
 	}
 	if *confirmCalls != 0 {
 		t.Fatalf("confirm dialog must not fire for a jev-safe grant, got %d calls", *confirmCalls)
@@ -93,8 +93,8 @@ func TestJevSafeGrantsHostExecutionWithoutDialog(t *testing.T) {
 	if !ok {
 		t.Fatalf("jev-safe host execution should be granted, cause=%v", cause)
 	}
-	if out != "escalated-ok" {
-		t.Fatalf("out = %q", out)
+	if out.Text != "escalated-ok" {
+		t.Fatalf("out = %q", out.Text)
 	}
 	if *confirmCalls != 0 {
 		t.Fatalf("dialog must not fire for a jev-safe host grant, got %d calls", *confirmCalls)

@@ -14,6 +14,7 @@ import (
 	"nekocode/bot/checkpoint"
 	"nekocode/bot/command"
 	"nekocode/bot/contextmgr"
+	toolcore "nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/execution"
 	"nekocode/bot/extension/tool/runtime/workspace"
 	"nekocode/bot/policy/ledger"
@@ -58,7 +59,6 @@ func (b *Bot) registerSessionCommands(p *command.Parser) {
 		if err != nil {
 			return fmt.Sprintf("Failed to resume session %s: %v", id, err), true
 		}
-		b.syncPolicySessionID()
 		return fmt.Sprintf("Resumed session %s (%d messages restored).", id, len(snapshot.Transcript)), true
 	})
 	p.RegisterInfo("export", "Export conversation context", func(ctx context.Context, _ *command.Command) (string, bool) {
@@ -97,6 +97,7 @@ func (b *Bot) saveSession() error {
 	snapshot := b.sess.Current()
 	if snapshot == nil {
 		snapshot = b.sess.StartNew()
+		b.bindSessionResources()
 	}
 	promptTokens, completionTokens := 0, 0
 	if ag := b.getAgent(); ag != nil {
@@ -112,9 +113,7 @@ func (b *Bot) saveSession() error {
 		snapshot.CheckpointNext = b.checkpoints.Next(snapshot.ID)
 	}
 	snapshot.Ledger = b.ledgerSnapshot()
-	err := b.sess.Save(snapshot)
-	b.syncPolicySessionID()
-	return err
+	return b.sess.Save(snapshot)
 }
 
 func (b *Bot) CurrentSessionID() string { return b.sess.CurrentID() }
@@ -161,7 +160,7 @@ func (b *Bot) resumeSession(id string) (*session.Snapshot, error) {
 	// volatile environment data is injected separately on every Build.
 	b.reloadProject()
 	if ag := b.getAgent(); ag != nil {
-		ag.AddCompletionTokens(snapshot.CompletionTokens)
+		ag.RestoreSessionUsage(snapshot.CompletionTokens)
 	}
 	if b.ext != nil {
 		b.ext.ClearLoadedSkills()
@@ -177,9 +176,9 @@ func (b *Bot) resumeSession(id string) (*session.Snapshot, error) {
 	if b.cmd != nil {
 		b.cmd.ResetSkill()
 	}
-	b.syncPolicySessionID()
+	b.bindSessionResources()
 	if err := b.recoverCheckpointEvents(snapshot.ID); err != nil {
-		return nil, err
+		return snapshot, &sessionCommitError{operation: "resume", err: err}
 	}
 	return snapshot, nil
 }
@@ -213,10 +212,20 @@ func (b *Bot) resetConversation() (string, error) {
 		return "", err
 	}
 	b.reloadProject()
-	b.ctxMgr.Reset()
+	b.clearConversationState()
 	newSession := b.sess.StartNew()
 	if b.checkpoints != nil {
 		b.checkpoints.Activate(newSession.ID, nil, 0)
+	}
+	b.bindSessionResources()
+	return "New session started.", nil
+}
+
+// clearConversationState resets the session-owned conversation state together.
+func (b *Bot) clearConversationState() {
+	b.ctxMgr.Reset()
+	if ag := b.getAgent(); ag != nil {
+		ag.RestoreSessionUsage(0)
 	}
 	if b.ext != nil {
 		b.ext.ClearLoadedSkills()
@@ -227,8 +236,6 @@ func (b *Bot) resetConversation() (string, error) {
 	if b.policy != nil {
 		b.policy.Restore(ledger.Snapshot{})
 	}
-	b.syncPolicySessionID()
-	return "New session started.", nil
 }
 
 func (b *Bot) ensureSessionIdentity() {
@@ -241,7 +248,7 @@ func (b *Bot) ensureSessionIdentity() {
 			b.checkpoints.Activate(newSession.ID, nil, 0)
 		}
 	}
-	b.syncPolicySessionID()
+	b.bindSessionResources()
 }
 
 func (b *Bot) DeleteSession(id string) error {
@@ -250,26 +257,17 @@ func (b *Bot) DeleteSession(id string) error {
 	}
 	attachmentDelete, err := attachment.BeginSessionDelete(id)
 	if err != nil {
-		b.syncPolicySessionID()
+		b.bindSessionResources()
 		return fmt.Errorf("stage session image attachments: %w", err)
 	}
 	if err := b.sess.Delete(id); err != nil {
-		b.syncPolicySessionID()
+		b.bindSessionResources()
 		return errors.Join(err, attachmentDelete.Rollback())
 	}
 	if b.sess.CurrentID() == id {
-		b.ctxMgr.Reset()
+		b.clearConversationState()
 		b.sess.ClearCurrent()
-		if b.ext != nil {
-			b.ext.ClearLoadedSkills()
-		}
-		if b.cmd != nil {
-			b.cmd.ResetSkill()
-		}
-		if b.policy != nil {
-			b.policy.Restore(ledger.Snapshot{})
-		}
-		b.syncPolicySessionID()
+		b.bindSessionResources()
 	}
 	var cleanupErrors []error
 	if err := attachmentDelete.Commit(); err != nil {
@@ -281,23 +279,24 @@ func (b *Bot) DeleteSession(id string) error {
 		}
 	}
 	if len(cleanupErrors) > 0 {
-		return &sessionDeleteCleanupError{err: errors.Join(cleanupErrors...)}
+		return &sessionCommitError{operation: "delete", err: errors.Join(cleanupErrors...)}
 	}
 	return nil
 }
 
-// sessionDeleteCleanupError reports that the durable session record was
-// deleted even though one or more ancillary stores could not be cleaned.
-// Runtime uses this marker to publish the authoritative session state while
-// still surfacing the cleanup failure to the caller.
-type sessionDeleteCleanupError struct{ err error }
-
-func (e *sessionDeleteCleanupError) Error() string {
-	return "session deleted, but cleanup is incomplete: " + e.err.Error()
+// sessionCommitError distinguishes a committed session change from a rejected
+// operation. Callers still receive the follow-up error and its original cause.
+type sessionCommitError struct {
+	operation string
+	err       error
 }
 
-func (e *sessionDeleteCleanupError) Unwrap() error           { return e.err }
-func (e *sessionDeleteCleanupError) MutationCommitted() bool { return true }
+func (e *sessionCommitError) Error() string {
+	return fmt.Sprintf("session %s committed, but finalization failed: %v", e.operation, e.err)
+}
+
+func (e *sessionCommitError) Unwrap() error           { return e.err }
+func (e *sessionCommitError) MutationCommitted() bool { return true }
 
 func (b *Bot) rewindCheckpoint(turn string) (string, error) {
 	if b.checkpoints == nil || b.sess == nil {
@@ -447,17 +446,40 @@ func formatSessionList(sessions []session.Meta) string {
 	return out.String()
 }
 
-func (b *Bot) syncPolicySessionID() {
+func (b *Bot) bindSessionResources() {
 	if b.sess == nil {
 		return
 	}
 	id := b.sess.CurrentID()
+	if b.sessionOutput.store == nil || b.sessionOutput.id != id {
+		dir := ""
+		if id != "" {
+			var err error
+			dir, err = session.ToolOutputDir(id)
+			if err != nil {
+				logger.Log("bind session output: %v", err)
+				return
+			}
+		}
+		b.sessionOutput.id, b.sessionOutput.store = id, toolcore.NewOutputStore(dir)
+	}
+	if b.ag != nil {
+		b.ag.Executor().ExecutionState().OutputStore = b.sessionOutput.store
+	}
+	if b.ctxMgr != nil {
+		b.ctxMgr.SetOutputStore(b.sessionOutput.store)
+	}
 	if b.policy != nil {
 		b.policy.SetSessionID(id)
 	}
 	if b.toolbox != nil {
 		b.toolbox.SetSessionID(id)
 		if id != "" {
+			if dir, err := session.ToolOutputDir(id); err == nil {
+				if _, err := b.toolbox.Workspace().AddSessionRoot(dir, workspace.AccessReadOnly); err != nil {
+					logger.Log("tool output: restore session access: %v", err)
+				}
+			}
 			if dir, err := attachment.ImageDir(id); err == nil {
 				if _, err := b.toolbox.Workspace().AddSessionRoot(dir, workspace.AccessReadOnly); err != nil {
 					logger.Log("attachment: grant session image directory %s: %v", id, err)

@@ -118,6 +118,7 @@ func New(ctx context.Context, cfg Config) *Agent {
 	a.turnRunner = newTurnRunner(a)
 	a.toolRunner = newToolRunner(a)
 	if a.deps.ctxMgr != nil {
+		a.deps.ctxMgr.SetOutputStore(a.deps.toolExecutor.ExecutionState().OutputStore)
 		a.deps.ctxMgr.SetLLMUsageRecorder(func(usage types.StreamUsage) {
 			a.AddCompletionTokens(usage.CompletionTokens)
 			a.RecordLLMUsage(usage)
@@ -251,6 +252,15 @@ func (a *Agent) Governance() *aggov.Policy {
 
 func (a *Agent) AddCompletionTokens(completion int) {
 	a.tokens.addCompletion(completion)
+}
+
+// RestoreSessionUsage replaces the session total and clears the previous run's
+// metrics. Call only between runs, after restoring or clearing the context.
+func (a *Agent) RestoreSessionUsage(completion int) {
+	a.life.ResetTiming()
+	a.tokens.completion.Store(int64(max(0, completion)))
+	a.tokens.snapshot(a.contextTokens())
+	a.llmUsage.reset()
 }
 
 func (a *Agent) RecordLLMUsage(usage types.StreamUsage) {

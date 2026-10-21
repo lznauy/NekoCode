@@ -30,7 +30,7 @@ func TestGUIImageAttachmentLimitMatchesRuntime(t *testing.T) {
 }
 
 func TestRuntimeRejectsAttachmentsWithoutImageToolCapability(t *testing.T) {
-	rt := New(&testBot{}, Services{})
+	rt := New(&testBot{}, ServiceGroups{})
 	_, err := rt.StartRun(context.Background(), Input{
 		Text:   "inspect [Image #1]",
 		Images: []ImageAttachment{{Label: "[Image #1]", Path: "/tmp/paste.png"}},
@@ -50,12 +50,12 @@ func TestStartRunSerializesImageCapabilityWithRuntimeMutation(t *testing.T) {
 		return "", nil
 	}}
 	services := testBotServices(bot)
-	services.ImageAttachmentsEnabled = func() bool {
+	services.Models.ImageAttachmentsEnabled = func() bool {
 		close(capabilityEntered)
 		<-releaseCapability
 		return true
 	}
-	services.SetReasoningEffort = func(string) error {
+	services.Models.SetReasoningEffort = func(string) error {
 		applyCalled.Store(true)
 		return nil
 	}

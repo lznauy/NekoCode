@@ -79,24 +79,26 @@ func (t *tool) ExecutionMode(args map[string]any) core.ExecutionMode {
 	return core.ModeSequential
 }
 
-func (t *tool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *tool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	action, _ := args["action"].(string)
 	server, _ := args["server"].(string)
 	toolName, _ := args["tool"].(string)
 	switch action {
 	case "list":
-		return t.mcp.ListCapabilities(), nil
+		return core.ToolOutput{Text: t.mcp.ListCapabilities()}, nil
 	case "inspect":
 		if server == "" || toolName == "" {
-			return "", fmt.Errorf("inspect requires server and tool")
+			return core.ToolOutput{}, fmt.Errorf("inspect requires server and tool")
 		}
-		return t.mcp.InspectTool(server, toolName)
+		toolText, toolErr := t.mcp.InspectTool(server, toolName)
+		return core.ToolOutput{Text: toolText}, toolErr
 	case "call":
 		if server == "" || toolName == "" {
-			return "", fmt.Errorf("call requires server and tool")
+			return core.ToolOutput{}, fmt.Errorf("call requires server and tool")
 		}
 		callArgs, _ := args["args"].(map[string]any)
-		return t.mcp.CallServerTool(ctx, server, toolName, callArgs)
+		toolText, toolErr := t.mcp.CallServerTool(ctx, server, toolName, callArgs)
+		return core.ToolOutput{Text: toolText}, toolErr
 	}
-	return "", fmt.Errorf("unknown action %q: must be list, inspect, or call", action)
+	return core.ToolOutput{}, fmt.Errorf("unknown action %q: must be list, inspect, or call", action)
 }

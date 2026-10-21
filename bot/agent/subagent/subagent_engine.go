@@ -3,6 +3,7 @@ package subagent
 import (
 	"context"
 	"fmt"
+	"github.com/google/uuid"
 	"strings"
 
 	"nekocode/bot/agent/internal/llmstream"
@@ -86,6 +87,9 @@ func (e *Engine) newExecutor(cfg RunConfig) (*runner.Executor, func()) {
 
 	toolState := executor.ExecutionState()
 	if cfg.ToolState != nil {
+		if cfg.ToolState.OutputStore != nil {
+			toolState.OutputStore = cfg.ToolState.OutputStore.Child("agent-" + uuid.NewString())
+		}
 		toolState.FileCache.Seed(cfg.ToolState.FileCache)
 		if cfg.ToolState.SnapshotStore != nil {
 			toolState.SnapshotStore = cfg.ToolState.SnapshotStore
@@ -168,8 +172,12 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 		name, args := calls[i].Effective()
 		content := r.EffectiveOutput()
 		batch[i] = ctxmgr.ToolResultMsg{
-			Message:  types.Message{Content: content, ToolCallID: r.ID},
-			ToolName: name,
+			Message:         types.Message{Content: r.TextOutput().Text, ToolOutput: r.Artifact, ToolCallID: r.ID, IsError: r.Error != ""},
+			ToolName:        name,
+			AllowOutputFile: executor.AllowOutputFile,
+		}
+		if name == "skill" && r.Error == "" {
+			batch[i].Message.SkillName, _ = args["name"].(string)
 		}
 		if cfg.OnToolCall != nil {
 			if _, wasBlocked := blocked[i]; wasBlocked {
@@ -218,12 +226,15 @@ func profileAllowsCall(allowed map[string]struct{}, call core.ToolCallItem) bool
 
 func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []string, workflow string, addTokens func(int, int), recordCall func(types.StreamUsage), sessionID string, phase func(string), output RunConfig) ([]core.ToolCallItem, string, error) {
 	toolDefs := e.filteredToolDefs(allowed)
-	messages := mgr.BuildRequest(ctxmgr.ModelRequest{Tools: toolDefs})
+	request := ctxmgr.ModelRequest{Tools: toolDefs, OutputTokens: provider.MaxOutputTokensFor(e.llmClient)}
 	if workflow != "" {
-		// Keep task-scoped workflow at user authority and outside compactable
-		// history. It is re-projected on every model request.
-		messages = append(messages, types.Message{Role: "user", Content: workflow})
+		request.ExtraMessages = []types.Message{{Role: "user", Content: workflow}}
 	}
+	messages, err := mgr.PrepareRequest(ctx, request)
+	if err != nil {
+		return nil, "", err
+	}
+
 	result, err := llmstream.CallLLMWithRetry(ctx, e.llmClient, func() llmstream.LLMCallOptions {
 		return llmstream.LLMCallOptions{
 			Ctx:      ctx,

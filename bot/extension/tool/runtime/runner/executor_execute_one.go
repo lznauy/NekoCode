@@ -13,9 +13,29 @@ import (
 	"nekocode/bot/extension/tool/runtime/workspace"
 	"nekocode/logger"
 	"nekocode/protocol"
+	textutil "nekocode/util/text"
 )
 
-func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) core.ToolCallResult {
+func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result core.ToolCallResult) {
+	defer func() {
+		bounded, err := e.state.OutputStore.BoundOutput(result.TextOutput(), core.MaxOutputBytes)
+		if err == nil && bounded.Artifact.Path != "" {
+			err = e.AllowOutputFile(bounded.Artifact.Path)
+		}
+		if err != nil {
+			result.Error = "cannot preserve tool result: " + err.Error()
+			result.Output = ""
+			result.Artifact = protocol.ToolOutputArtifact{}
+			return
+		}
+		bounded.Text = textutil.NormalizeTerminalOutput(bounded.Text)
+		result.Artifact = bounded.Artifact
+		if result.Error != "" {
+			result.Error, result.Output = bounded.Text, ""
+		} else {
+			result.Output = bounded.Text
+		}
+	}()
 	entry, err := e.registry.Lookup(tc.Name)
 	if err != nil {
 		return core.ToolCallResult{ID: tc.ID, Name: tc.Name, Error: err.Error()}
@@ -107,13 +127,20 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) core.To
 		escOut, escOk, escReason, escCause := e.tryPermissionEscalation(ctx, entry.Privileged, tc, execErr, confirmFn, preApproved, preApproval != nil, dec.jevSafe)
 		if escOk {
 			e.invalidateMutatedPaths(tc.Name, paths)
-			return core.ToolCallResult{ID: tc.ID, Name: resultName, Output: formatOutput(resultName, escOut)}
+			return core.ToolCallResult{ID: tc.ID, Name: resultName, Output: escOut.Text, Artifact: escOut.Artifact}
 		}
-		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: permissionFailureMessage(tc, execErr, escReason, escCause)}
+		if escReason == failRetryError {
+			output = escOut
+		}
+		failure := permissionFailureMessage(tc, execErr, escReason, escCause)
+		if output.Text != "" {
+			failure += "\nOutput:\n" + output.Text
+		}
+		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: failure, Artifact: output.Artifact}
 	}
 
 	e.invalidateMutatedPaths(tc.Name, paths)
-	return core.ToolCallResult{ID: tc.ID, Name: resultName, Output: formatOutput(resultName, output)}
+	return core.ToolCallResult{ID: tc.ID, Name: resultName, Output: output.Text, Artifact: output.Artifact}
 }
 
 func (e *Executor) captureMutationPaths(tc core.ToolCallItem) ([]string, error) {
@@ -522,7 +549,7 @@ func (e *Executor) callbacks() (protocol.PhaseFunc, protocol.ConfirmFunc, bool) 
 	return e.phaseFn, e.confirmFn, e.planMode
 }
 
-func (e *Executor) callTool(ctx context.Context, tool core.Tool, tc core.ToolCallItem) (output string, execErr error) {
+func (e *Executor) callTool(ctx context.Context, tool core.Tool, tc core.ToolCallItem) (output core.ToolOutput, execErr error) {
 	defer func() {
 		if r := recover(); r != nil {
 			execErr = fmt.Errorf("panic: %v", r)
@@ -532,7 +559,7 @@ func (e *Executor) callTool(ctx context.Context, tool core.Tool, tc core.ToolCal
 }
 
 func (e *Executor) toolContext(ctx context.Context) context.Context {
-	return workspace.WithManager(execution.WithExecutionState(ctx, e.state), e.workspace)
+	return workspace.WithManager(core.WithOutputStore(execution.WithExecutionState(ctx, e.state), e.state.OutputStore), e.workspace)
 }
 
 func (e *Executor) invalidateMutatedPaths(toolName string, paths []string) {
@@ -546,4 +573,11 @@ func (e *Executor) invalidateMutatedPaths(toolName string, paths []string) {
 			}
 		}
 	}
+}
+
+// AllowOutputFile grants access to one generated artifact, never the shared
+// directory containing other sessions' results.
+func (e *Executor) AllowOutputFile(path string) error {
+	_, err := e.workspace.AddSessionRoot(path, workspace.AccessReadOnly)
+	return err
 }

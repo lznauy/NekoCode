@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -173,4 +174,47 @@ func TestLifecycleFinishedFlagAndDuration(t *testing.T) {
 	if l.startTime.After(time.Now()) {
 		t.Fatal("start time should not be in the future")
 	}
+}
+
+func TestLifecycleTimingBoundaries(t *testing.T) {
+	l := NewLifecycle(context.Background(), 1)
+	l.StopTiming()
+	if l.Duration() != 0 {
+		t.Fatal("stopping an unstarted run must not create timing")
+	}
+	l.Start()
+	l.Finished().Store(true)
+	if !l.endTime.IsZero() {
+		t.Fatal("loop termination must not end timing before finalization")
+	}
+	l.StopTiming()
+	elapsed := l.Duration()
+	l.StopTiming()
+	if elapsed <= 0 || l.Duration() != elapsed {
+		t.Fatal("stopped duration must remain fixed")
+	}
+	l.Start()
+	if !l.endTime.IsZero() {
+		t.Fatal("new run must restart timing")
+	}
+	l.ResetTiming()
+	if l.Duration() != 0 {
+		t.Fatal("session reset must clear timing")
+	}
+}
+
+func TestLifecycleConcurrentTiming(t *testing.T) {
+	l := NewLifecycle(context.Background(), 1)
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			for range 1000 {
+				l.Start()
+				l.Duration()
+				l.StopTiming()
+				l.ResetTiming()
+			}
+		})
+	}
+	wg.Wait()
 }

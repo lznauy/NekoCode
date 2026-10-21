@@ -45,23 +45,23 @@ func (t *TodoWriteTool) Parameters() []core.Parameter {
 	}
 }
 
-func (t *TodoWriteTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t *TodoWriteTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	var items []protocol.TodoItem
 	switch v := args["todos"].(type) {
 	case string:
 		if v == "" {
-			return "", fmt.Errorf("missing todos parameter")
+			return core.ToolOutput{}, fmt.Errorf("missing todos parameter")
 		}
 		if err := json.Unmarshal([]byte(v), &items); err != nil {
-			return "", fmt.Errorf("failed to parse todos: %w", err)
+			return core.ToolOutput{}, fmt.Errorf("failed to parse todos: %w", err)
 		}
 	case []any:
 		raw, _ := json.Marshal(v)
 		if err := json.Unmarshal(raw, &items); err != nil {
-			return "", fmt.Errorf("failed to parse todos: %w", err)
+			return core.ToolOutput{}, fmt.Errorf("failed to parse todos: %w", err)
 		}
 	default:
-		return "", fmt.Errorf("invalid todos format: expected JSON string or array, got %T", args["todos"])
+		return core.ToolOutput{}, fmt.Errorf("invalid todos format: expected JSON string or array, got %T", args["todos"])
 	}
 
 	t.mu.Lock()
@@ -82,7 +82,7 @@ func (t *TodoWriteTool) Execute(ctx context.Context, args map[string]any) (strin
 	if done == len(items) {
 		fmt.Fprintf(&b, "All %d tasks complete.", done)
 	}
-	return b.String(), nil
+	return core.ToolOutput{Text: b.String()}, nil
 }
 
 func todoStatusIcon(status string) string {

@@ -177,3 +177,18 @@ func TestHeadersSupportAnthropicAndBearerAuth(t *testing.T) {
 		t.Fatalf("Authorization = %q", headers["Authorization"])
 	}
 }
+
+func TestToolResultOmitsLocalSkillMetadata(t *testing.T) {
+	c := New("", "", "test")
+	messages, _ := c.toMessages([]types.Message{{Role: "tool", Content: "instructions", ToolCallID: "skill-call", SkillName: "local-skill"}}, types.ReasoningSettings{})
+	data, err := json.Marshal(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "skill_name") || strings.Contains(string(data), "local-skill") {
+		t.Fatalf("wire result leaked local skill metadata: %s", data)
+	}
+	if !strings.Contains(string(data), "instructions") {
+		t.Fatal("wire result lost delivered instructions")
+	}
+}

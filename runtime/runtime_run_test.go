@@ -156,11 +156,15 @@ func TestManagerCommandDoesNotPublishStaleTurnMetrics(t *testing.T) {
 	bot.command = func(string, RunHost) CommandResult {
 		return CommandResult{Action: CommandHandled, Output: "handled"}
 	}
-	rt := New(bot, Services{
-		ExecuteCommand: bot.ExecuteCommand,
-		CommandMenu:    bot.CommandMenu,
-		Metrics: func() MetricsSnapshot {
-			return MetricsSnapshot{TurnInput: 1000, TurnOutput: 20}
+	rt := New(bot, ServiceGroups{
+		Commands: CommandsServices{
+			ExecuteCommand: bot.ExecuteCommand,
+			CommandMenu:    bot.CommandMenu,
+		},
+		Lifecycle: LifecycleServices{
+			Metrics: func() MetricsSnapshot {
+				return MetricsSnapshot{TurnInput: 1000, TurnOutput: 20}
+			},
 		},
 	})
 

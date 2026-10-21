@@ -61,8 +61,9 @@ func (t *Tool) PreviewContext(ctx context.Context, args map[string]any) string {
 	return result
 }
 
-func (t *Tool) Execute(ctx context.Context, args map[string]any) (string, error) {
-	return t.computeDiff(ctx, args)
+func (t *Tool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
+	toolText, toolErr := t.computeDiff(ctx, args)
+	return core.ToolOutput{Text: toolText}, toolErr
 }
 
 func (t *Tool) computeDiff(ctx context.Context, args map[string]any) (string, error) {

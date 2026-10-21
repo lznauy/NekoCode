@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,8 +63,8 @@ func (t testProxyTool) Parameters() []core.Parameter {
 func (t testProxyTool) ExecutionMode(map[string]any) core.ExecutionMode {
 	return core.ModeParallel
 }
-func (t testProxyTool) Execute(context.Context, map[string]any) (string, error) {
-	return "ok", nil
+func (t testProxyTool) Execute(context.Context, map[string]any) (core.ToolOutput, error) {
+	return core.ToolOutput{Text: "ok"}, nil
 }
 
 type countingTool struct {
@@ -79,9 +80,9 @@ func (t *countingTool) Parameters() []core.Parameter {
 func (t *countingTool) ExecutionMode(map[string]any) core.ExecutionMode {
 	return core.ModeParallel
 }
-func (t *countingTool) Execute(context.Context, map[string]any) (string, error) {
+func (t *countingTool) Execute(context.Context, map[string]any) (core.ToolOutput, error) {
 	t.calls++
-	return "ok", nil
+	return core.ToolOutput{Text: "ok"}, nil
 }
 
 func TestBuildTaskPromptKeepsHandoffOutOfSystemRole(t *testing.T) {
@@ -542,5 +543,40 @@ func TestDelegatedJevJudgmentsAndPreviews(t *testing.T) {
 	}
 	if len(previews) != 2 || previews[0].CallID != "shell1" || previews[0].Action != protocol.StepActionToolPreview || previews[0].Decision != protocol.ToolDecisionJevSafe || previews[1].CallID != "web1" || previews[1].Decision != protocol.ToolDecisionJevURLRisky {
 		t.Fatalf("missing delegated previews: %+v", previews)
+	}
+}
+
+func TestSubagentWorkflowCannotBypassRequestBudget(t *testing.T) {
+	llm := &scriptedLLM{}
+	engine := New(Config{LLM: llm, Tools: tools.New()})
+	cfg := RunConfig{ContextWindow: 10000}
+	_, _, err := engine.reason(context.Background(), engine.newContextManager(cfg), nil, strings.Repeat("x", 50000), nil, nil, "", nil, cfg)
+	var budget *ctxmgr.RequestBudgetError
+	if !errors.As(err, &budget) || llm.calls != 0 {
+		t.Fatalf("workflow bypassed budget: %v calls=%d", err, llm.calls)
+	}
+}
+
+func TestSubagentPartialResultRetainsBudgetError(t *testing.T) {
+	llm := &scriptedLLM{}
+	engine := New(Config{LLM: llm, Tools: tools.New()})
+	cfg := RunConfig{ContextWindow: 4000, SkillContents: []string{strings.Repeat("x", 50000)}}
+	state := newRunState()
+	state.lastText = "partial findings"
+	run := &engineRun{
+		engine: engine, ctx: context.Background(), cfg: cfg,
+		ctxMgr: ctxmgr.New(ctxmgr.Config{ContextWindow: 4000}), state: state,
+		log: func(string, ...any) {}, phase: func(string) {},
+	}
+	if !run.stepOnce() {
+		t.Fatal("budget failure must stop the run")
+	}
+	result, err := run.finish()
+	var budget *ctxmgr.RequestBudgetError
+	if !errors.As(err, &budget) || llm.calls != 0 {
+		t.Fatalf("budget failure was hidden: %v calls=%d", err, llm.calls)
+	}
+	if result == nil || result.Status != StatusPartial || result.Content != state.lastText {
+		t.Fatalf("partial findings were lost: %+v", result)
 	}
 }

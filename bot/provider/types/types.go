@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"nekocode/bot/reasoning"
+	"nekocode/protocol"
 	utilhttp "nekocode/util/http"
 )
 
@@ -32,6 +33,17 @@ type Message struct {
 	ToolCallID         string     `json:"tool_call_id,omitempty"`
 	IsError            bool       `json:"is_error,omitempty"`
 	Source             string     `json:"source,omitempty"` // internal routing metadata; provider wire structs omit it
+
+	// SkillName identifies a successful skill result for local delivery tracking.
+	// Like Source, it is persisted locally and omitted from provider wire types.
+	SkillName string `json:"skill_name,omitempty"`
+
+	// DeferredContent is the bounded tool preview awaiting context capacity.
+	// It preserves error/status text independently of the raw output file.
+	DeferredContent string `json:"deferred_content,omitempty"`
+	// ToolOutput is local recovery metadata, omitted from provider wire types.
+	ToolOutput protocol.ToolOutputArtifact `json:"tool_output,omitzero"`
+
 	// Images carries native image input for user messages when the active
 	// model supports vision. Only local file references are persisted; the
 	// base64 encoding happens at provider wire-build time. Providers with

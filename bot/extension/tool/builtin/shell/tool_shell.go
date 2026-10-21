@@ -90,12 +90,14 @@ func (t *ShellTool) Parameters() []core.Parameter {
 	}
 }
 
-func (t *ShellTool) Execute(ctx context.Context, args map[string]any) (string, error) {
-	return t.run(ctx, args, core.PermissionRequest{})
+func (t *ShellTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
+	toolText, toolErr := t.run(ctx, args, core.PermissionRequest{})
+	return core.ToolOutput{Text: toolText}, toolErr
 }
 
-func (t *ShellTool) ExecuteWithPermission(ctx context.Context, args map[string]any, grant core.PermissionRequest) (string, error) {
-	return t.run(ctx, args, grant)
+func (t *ShellTool) ExecuteWithPermission(ctx context.Context, args map[string]any, grant core.PermissionRequest) (core.ToolOutput, error) {
+	toolText, toolErr := t.run(ctx, args, grant)
+	return core.ToolOutput{Text: toolText}, toolErr
 }
 
 func (t *ShellTool) run(ctx context.Context, args map[string]any, grant core.PermissionRequest) (string, error) {

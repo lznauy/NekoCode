@@ -1,6 +1,7 @@
 package session
 
 import (
+	toolcore "nekocode/bot/extension/tool/runtime/core"
 	"os"
 	"path/filepath"
 	"strings"
@@ -131,5 +132,34 @@ func TestLoadRejectsMismatchedSnapshotID(t *testing.T) {
 	}
 	if _, err := load(requestedID); err == nil {
 		t.Fatal("Load accepted a mismatched snapshot id")
+	}
+}
+
+func TestToolOutputsFollowSessionDeletion(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir, err := ToolOutputDir("session-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := toolcore.NewOutputStore(dir).PreserveOutput("retained output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherDir, _ := ToolOutputDir("session-two")
+	otherPath, err := toolcore.NewOutputStore(otherDir).PreserveOutput("other output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := deleteSnapshot("session-one"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("session deletion left its tool output")
+	}
+	if _, err := os.Stat(otherPath); err != nil {
+		t.Fatal("session deletion removed another session's output")
+	}
+	if _, err := ToolOutputDir("../escape"); err == nil {
+		t.Fatal("accepted invalid session id")
 	}
 }

@@ -6,7 +6,7 @@
 先记住三个边界：
 
 1. `runtime.Runtime` 是上层交互的唯一实例入口。
-2. AI 应用只必须实现 `runtime.Runner`，新代码用 `runtime.ServiceGroups` 显式装配可选能力；旧 `Services` API 仍可使用。
+2. AI 应用只必须实现 `runtime.Runner`，通过 `runtime.ServiceGroups` 按领域显式装配可选能力。
 3. UI 只依赖 `nekocode/runtime`，不依赖 `bot` 或 `runtime/internal`。
 
 模块职责、状态所有权及事件契约见 [架构协作约定](ARCHITECTURE_BOUNDARIES.md)。
@@ -17,8 +17,8 @@
 | --- | --- | --- |
 | 使用完整 NekoCode | `standard.New()` | UI 或启动代码 |
 | 使用完整 Bot，但不启用默认录制和 Connector | `standard.FromBot(bot)` | 启动代码 |
-| 自定义提示词和工具 | `runtime.NewWithServices(runner, runner.ServiceGroups())` | Agent 组装 |
-| 接入其他推理引擎 | `runtime.NewWithServices(runner, serviceGroups)` | `Runner.Run` 和 ServiceGroups |
+| 自定义提示词和工具 | `runtime.New(runner, runner.ServiceGroups())` | Agent 组装 |
+| 接入其他推理引擎 | `runtime.New(runner, serviceGroups)` | `Runner.Run` 和 ServiceGroups |
 | 新增进程内 UI | 接收同一个 `*runtime.Runtime` | 事件投影 |
 | 新增远程 UI | `httpapi.New(manager)` | HTTP/SSE 客户端 |
 | 通过子进程接入 | `nekocode-tui --headless` | [NDJSON 客户端](../headless/README.md) |
@@ -27,7 +27,7 @@
 不需要完整 NekoCode 能力时，不要先创建 `bot.Bot` 再关闭功能。应从模型、提示词和
 工具白名单开始组装独立应用。
 
-`runtime.New(runner, services)` 是保留的兼容入口，会在组装时把扁平 `Services` 转成分组能力；新应用优先构造 `ServiceGroups` 并调用 `NewWithServices`。
+`runtime.New(runner, services)` 是唯一构造入口，直接接收 `ServiceGroups`。从旧版迁移时，将扁平回调移入对应的领域组，`NewWithServices` 调用改为 `New`，AgentRunner 的 `Services()` 调用改为 `ServiceGroups()`。
 
 ## 2. 分层
 
@@ -88,7 +88,7 @@ func main() {
         },
     )
 
-    rt := controlruntime.New(runner, controlruntime.Services{})
+    rt := controlruntime.New(runner, controlruntime.ServiceGroups{})
     defer func() {
         if err := rt.Close(); err != nil {
             log.Printf("close runtime: %v", err)
@@ -166,7 +166,7 @@ assistant := agent.New(context.Background(), agent.Config{
 })
 
 runner := agentrunner.New(assistant)
-rt := runtime.New(runner, runner.Services())
+rt := runtime.New(runner, runner.ServiceGroups())
 ```
 
 `agentrunner` 已处理流式文本、推理、工具和子 Agent 事件、取消、指标和关闭。
@@ -237,15 +237,21 @@ Runtime 会串行处理同一个 run 的 `Confirm` 和 `Ask`，UI 同时只需�
 
 ## 6. 可选能力
 
-`runtime.New(runner, runtime.Services{})` 只启用核心执行。应用需要命令、Steering、指标、模型、上下文、
-Extension、配置或 Session 时，在组合根通过一个显式 `runtime.Services` 值装配：
+`runtime.New(runner, runtime.ServiceGroups{})` 只启用核心执行。应用需要命令、Steering、指标、模型、上下文、
+Extension、配置或 Session 时，在组合根通过一个显式 `runtime.ServiceGroups` 值装配：
 
 ```go
-services := runtime.Services{
-    Steer:        assistant.Steer,
-    Metrics:      assistant.Metrics,
-    CurrentModel: assistant.CurrentModel,
-    Close:        assistant.Close,
+services := runtime.ServiceGroups{
+    Commands: runtime.CommandsServices{
+        Steer: assistant.Steer,
+    },
+    Models: runtime.ModelsServices{
+        CurrentModel: assistant.CurrentModel,
+    },
+    Lifecycle: runtime.LifecycleServices{
+        Metrics: assistant.Metrics,
+        Close:   assistant.Close,
+    },
 }
 rt := runtime.New(assistant, services)
 ```
@@ -289,15 +295,23 @@ Runtime 的可选只读方法：
 `SessionDelete`。权限修改检查 `PermissionControl`，检查点查询和回滚分别检查
 `Checkpoints`、`Rewind`。不要从只读能力推断写操作可用。
 
-写能力同样通过 `Services` 中的函数显式提供：
+写能力同样通过 `ServiceGroups` 中的函数显式提供：
 
 ```go
-services := runtime.Services{
-    SwitchModel:      assistant.SwitchModel,
-    ApplyConfig:      assistant.ApplyConfig,
-    ResumeSession:    assistant.ResumeSession,
-    NewSession:       assistant.NewSession,
-    DeleteSession:    assistant.DeleteSession,
+services := runtime.ServiceGroups{
+    Models: runtime.ModelsServices{
+        SwitchModel: assistant.SwitchModel,
+    },
+    Config: runtime.ConfigServices{
+        ConfigView:          assistant.ConfigView,
+        ResolveModelProfile: assistant.ResolveModelProfile,
+        ApplyConfig:         assistant.ApplyConfig,
+    },
+    Sessions: runtime.SessionsServices{
+        ResumeSession: assistant.ResumeSession,
+        NewSession:    assistant.NewSession,
+        DeleteSession: assistant.DeleteSession,
+    },
 }
 ```
 
@@ -574,7 +588,7 @@ func (a *limitedAssistant) Run(
 }
 ```
 
-可选能力保存在组合根的 `Services` 中，不受 wrapper 方法集影响；需要改变能力时，
+可选能力保存在组合根的 `ServiceGroups` 中，不受 wrapper 方法集影响；需要改变能力时，
 显式替换对应函数字段。
 
 生命周期约束：

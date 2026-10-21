@@ -31,11 +31,11 @@ func TestToolReadsPathSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "[sample.txt#diff]") {
-		t.Fatalf("missing header in %q", out)
+	if !strings.Contains(out.Render(), "[sample.txt#diff]") {
+		t.Fatalf("missing header in %q", out.Render())
 	}
-	if !strings.Contains(out, "-2:two") || !strings.Contains(out, "+2:TWO") {
-		t.Fatalf("missing changed lines in %q", out)
+	if !strings.Contains(out.Render(), "-2:two") || !strings.Contains(out.Render(), "+2:TWO") {
+		t.Fatalf("missing changed lines in %q", out.Render())
 	}
 }
 

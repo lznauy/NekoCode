@@ -41,13 +41,6 @@ func (b *Bot) model() config.ModelConfig {
 	return b.cfg.ActiveModelConfig()
 }
 
-// persistConfigLocked writes the current in-memory configuration to disk.
-// Callers must hold b.mu. The config is cloned first so config.Validate's
-// in-place fixes cannot mutate the shared configuration.
-func (b *Bot) persistConfigLocked() error {
-	return config.Save(b.cfg.Clone())
-}
-
 func (b *Bot) SwitchModel(name string) error {
 	return b.switchModel(name, true)
 }
@@ -63,18 +56,18 @@ func (b *Bot) switchModel(name string, persist bool) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if !b.cfg.SwitchModel(name) {
+	next := b.cfg.Clone()
+	if !next.SwitchModel(name) {
 		return fmt.Errorf("model %q not found. Available: %v", name, b.cfg.AllModelNames())
 	}
 
-	b.rebuildAgentLocked()
 	if persist {
-		// The in-memory switch already took effect, so a save failure must not
-		// be silent.
-		if err := b.persistConfigLocked(); err != nil {
-			return fmt.Errorf("switched to %q but failed to persist config: %w", name, err)
+		if err := config.Save(next); err != nil {
+			return fmt.Errorf("persist model %q: %w", name, err)
 		}
 	}
+	b.cfg = &next
+	b.rebuildAgentLocked()
 	return nil
 }
 
@@ -98,22 +91,24 @@ func (b *Bot) setReasoningEffort(effort string, persist bool) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	active := b.cfg.Active
-	for i := range b.cfg.Models {
-		if b.cfg.Models[i].Name != active {
+	next := b.cfg.Clone()
+	active := next.Active
+	for i := range next.Models {
+		if next.Models[i].Name != active {
 			continue
 		}
-		capability := config.ReasoningCapabilityFor(b.cfg.Models[i])
+		capability := config.ReasoningCapabilityFor(next.Models[i])
 		if !capability.Supports(effort) {
-			return fmt.Errorf("model %q supports reasoning effort: %v", b.cfg.Models[i].Model, capability.Values())
+			return fmt.Errorf("model %q supports reasoning effort: %v", next.Models[i].Model, capability.Values())
 		}
-		b.cfg.Models[i].ReasoningEffort = effort
-		b.rebuildAgentLocked()
+		next.Models[i].ReasoningEffort = effort
 		if persist {
-			if err := b.persistConfigLocked(); err != nil {
-				return fmt.Errorf("effort set to %q but failed to persist config: %w", effort, err)
+			if err := config.Save(next); err != nil {
+				return fmt.Errorf("persist reasoning effort %q: %w", effort, err)
 			}
 		}
+		b.cfg = &next
+		b.rebuildAgentLocked()
 		return nil
 	}
 	return fmt.Errorf("active model %q not found", active)
@@ -122,7 +117,7 @@ func (b *Bot) setReasoningEffort(effort string, persist bool) error {
 func (b *Bot) rebuildAgentLocked() {
 	_, completion := b.ag.TokenUsage()
 	b.initAgent()
-	b.ag.AddCompletionTokens(completion)
+	b.ag.RestoreSessionUsage(completion)
 }
 
 func (b *Bot) Metrics() protocol.Metrics {
@@ -144,10 +139,6 @@ func (b *Bot) ApplyConfiguration(next config.Config) error {
 
 	b.mu.Lock()
 	authorityChanged := sandboxAuthorityChanged(b.cfg, next)
-	oldCompletion := 0
-	if b.ag != nil {
-		_, oldCompletion = b.ag.TokenUsage()
-	}
 	b.mu.Unlock()
 
 	// Revoke processes launched under the old sandbox authority before the new
@@ -163,27 +154,36 @@ func (b *Bot) ApplyConfiguration(next config.Config) error {
 	}
 
 	b.mu.Lock()
+	defer b.mu.Unlock()
+	completion := 0
+	if b.ag != nil {
+		_, completion = b.ag.TokenUsage()
+	}
+	// Configuration owns runtime services; the conversation still owns its
+	// loaded skills, audit facts, and completion total across their rebuild.
+	var loadedSkills map[string]bool
+	if b.ext != nil {
+		loadedSkills = b.ext.Snapshot().LoadedSkills
+	}
+	audit := b.policy.Snapshot()
 	b.cfg = &next
-	b.mu.Unlock()
-	return b.reloadRuntime(oldCompletion)
+	b.rebuildRuntime()
+	for name, loaded := range loadedSkills {
+		if loaded {
+			b.ext.MarkSkillLoaded(name)
+		}
+	}
+	b.policy.Restore(audit)
+	if b.ag != nil {
+		b.ag.RestoreSessionUsage(completion)
+	}
+	return nil
 }
 
 func sandboxAuthorityChanged(current *config.Config, next config.Config) bool {
 	return current == nil ||
 		!reflect.DeepEqual(current.Permissions, next.Permissions) ||
 		!reflect.DeepEqual(current.Workspaces, next.Workspaces)
-}
-
-func (b *Bot) reloadRuntime(oldCompletion int) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if err := b.rebuildRuntime(); err != nil {
-		return err
-	}
-	if b.ag != nil {
-		b.ag.AddCompletionTokens(oldCompletion)
-	}
-	return nil
 }
 
 func (b *Bot) ContextReport() contextmgr.ContextReport {
