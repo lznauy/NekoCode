@@ -504,7 +504,7 @@ type Tool interface {
 
 `Registry` 除了保存 `Tool`，还集中保存 preview 与 delegated-call target 等执行元数据。模型侧名称仍是固定的 `capability`，但解析后的 canonical identity 会随 `ToolCallItem` 贯穿权限、Pre/Post Hook、Ledger、audit、结果和 UI 回调。canonical identity 会转义 server/tool 名称中的 `%` 和 `__`，避免不同 server.tool 组合碰撞到同一条权限规则。Runner 和 Policy 都不通过 optional interface 或硬编码 MCP 参数来推断行为。
 
-TUI 与 GUI 的图片粘贴统一使用 runtime `Input.Images` 附件字段。交互层通过中立的 `util/attachment` 将剪贴板图片写入 `~/.nekocode/tmp/images/<session-id>/`，输入框仅显示可原子删除的 `[Image #N]`；runtime 在送入 Agent 前追加模型可见、UI 不展示的附件路径元数据，引导 Agent 调用条件注册的 `image_understand`。未发送附件由输入组件清理，已发送附件在删除会话时清理。`image_understand` 默认采用 `fast` 模式（优先选择名为 `fast` 的配置、将大尺寸 PNG/JPEG 长边缩至 1280px、最大输出 1024 Token）；GIF/WebP 保持原文件，`accurate` 模式选择同名配置、保留原图并将最大输出提高到 4096 Token。显式 `model` 参数可覆盖模式的模型选择。
+TUI 与 GUI 的图片粘贴统一使用 runtime `Input.Images` 附件字段。交互层通过中立的 `util/attachment` 将剪贴板图片写入 `~/.nekocode/tmp/images/<session-id>/`，输入框仅显示可原子删除的 `[Image #N]`；runtime 在送入 Agent 前追加模型可见、UI 不展示的附件路径元数据，引导 Agent 调用条件注册的 `image_understand`。未发送附件由输入组件清理，已发送附件在删除会话时清理。`image_understand` 默认采用 `fast` 模式（优先选择名为 `fast` 的配置、将大尺寸 PNG/JPEG 长边缩至 1280px、最大输出 1024 Token）；GIF/WebP 保持原文件，`accurate` 模式选择同名配置并保留原图。两种模式均默认最多输出 1024 Token，`max_tokens` 可调整至 1–4096；按模型能力关闭推理。工具支持 `path` 单图或 `paths` 一批 1–4 张图，整批原图合计上限 20 MiB；所有路径在授权规划前通过工作区检查，授权摘要绑定整批图片。OpenAI 兼容请求使用 SSE 流式聚合并兼容 JSON 返回。显式 `model` 参数可覆盖模式的模型选择。
 
 ### 内置工具
 

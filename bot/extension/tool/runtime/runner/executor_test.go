@@ -217,6 +217,26 @@ func TestDeniedFileToolDoesNotResolveOrPromptForWorkspacePath(t *testing.T) {
 	}
 }
 
+func TestImageBatchChecksEveryPathBeforePermissionPlan(t *testing.T) {
+	root := t.TempDir()
+	registry := tools.New()
+	registry.SetWorkspace(workspace.New(root, nil))
+	planned := false
+	registry.RegisterWithOptions(fakeTool{name: "image_understand"}, tools.RegistrationOptions{
+		PermissionPlan: func(map[string]any, string) *core.PermissionRequest {
+			planned = true
+			return &core.PermissionRequest{Capabilities: []string{core.CapNetOutbound}}
+		},
+	})
+	e := NewExecutor(registry)
+	result := e.ExecuteBatch(context.Background(), []core.ToolCallItem{{Name: "image_understand", Args: map[string]any{
+		"paths": []string{filepath.Join(root, "first.png"), filepath.Join(t.TempDir(), "outside.png")},
+	}}})[0]
+	if result.Error == "" || planned {
+		t.Fatalf("error=%q planned=%v", result.Error, planned)
+	}
+}
+
 func TestExecutorBlocksPermissionDenyAndPlanMode(t *testing.T) {
 	e := newTestExecutor(fakeRegistry{
 		"blocked": fakeTool{name: "blocked", mode: core.ModeParallel},

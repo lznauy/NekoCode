@@ -7,10 +7,41 @@ import (
 
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/permission"
+	"nekocode/bot/extension/tool/runtime/toolutil"
 	"nekocode/bot/extension/tool/runtime/workspace"
 )
 
 func (e *Executor) ensureWorkspaceAccess(tc core.ToolCallItem, confirmFn protocol.ConfirmFunc) (core.ToolCallItem, string, bool) {
+	if tc.Name == "image_understand" {
+		paths, err := toolutil.ImageUnderstandingPaths(tc.Args)
+		if err != nil {
+			return tc, err.Error(), false
+		}
+		for i, path := range paths {
+			if err := validateLocalImagePath(path); err != nil {
+				return tc, err.Error(), false
+			}
+			safe, _, allowed, err := e.workspace.CheckReadLexical(path)
+			if err != nil {
+				return tc, err.Error(), false
+			}
+			if !allowed {
+				return tc, fmt.Sprintf("image path is outside configured workspaces: %s", safe), false
+			}
+			paths[i] = safe
+		}
+		next := make(map[string]any, len(tc.Args))
+		for k, v := range tc.Args {
+			next[k] = v
+		}
+		if _, batch := tc.Args["paths"]; batch {
+			next["paths"] = paths
+		} else {
+			next["path"] = paths[0]
+		}
+		tc.Args = next
+		return tc, "", true
+	}
 	access, ok := fileToolAccess(tc.Name)
 	if !ok {
 		return tc, "", true
@@ -19,26 +50,10 @@ func (e *Executor) ensureWorkspaceAccess(tc core.ToolCallItem, confirmFn protoco
 	if path == "" {
 		return tc, "", true
 	}
-	if tc.Name == "image_understand" {
-		if err := validateLocalImagePath(path); err != nil {
-			return tc, err.Error(), false
-		}
-	}
 
 	var safePath string
 	var allowed bool
 	var err error
-	if tc.Name == "image_understand" {
-		safePath, _, allowed, err = e.workspace.CheckReadLexical(path)
-		if err != nil {
-			return tc, err.Error(), false
-		}
-		if !allowed {
-			return tc, fmt.Sprintf("image path is outside configured workspaces: %s", safePath), false
-		}
-		tc.Args = setToolPath(tc.Name, tc.Args, safePath)
-		return tc, "", true
-	}
 	if access == workspace.AccessReadWrite {
 		safePath, _, allowed, err = e.workspace.CheckWrite(path)
 	} else {

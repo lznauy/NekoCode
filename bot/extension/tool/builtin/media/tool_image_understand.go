@@ -19,18 +19,18 @@ import (
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/toolutil"
 	"nekocode/bot/extension/tool/runtime/workspace"
+	"nekocode/logger"
 	utilhttp "nekocode/util/http"
 	utilurl "nekocode/util/url"
 )
 
 const (
 	maxImageUnderstandBytes = 20 << 20
-	defaultFastImagePrompt  = "Identify the task-relevant content in this image concisely. Include visible text, UI state, and errors when present."
-	defaultAccuratePrompt   = "Analyze this image carefully and in detail. Include visible text, UI elements, errors, charts, and other task-relevant details. Clearly mark anything uncertain."
+	defaultFastImagePrompt  = "Briefly describe only task-relevant visible facts, text and errors. Do not include reasoning. For multiple images, identify results by image number."
+	defaultAccuratePrompt   = "Read visible text and task-relevant details precisely. Answer concisely without reasoning. Mark uncertainty. For multiple images, identify results by image number."
 	approvedImageDigestArg  = "_nekocode_approved_image_sha256"
 	unavailableImageDigest  = "unavailable"
 	fastImageMaxTokens      = 1024
-	accurateImageMaxTokens  = 4096
 )
 
 type imageUnderstandMode string
@@ -56,15 +56,17 @@ func NewImageUnderstandTool(models []config.ImageUnderstandConfig) *ImageUnderst
 func (t *ImageUnderstandTool) Name() string { return "image_understand" }
 
 func (t *ImageUnderstandTool) Description() string {
-	return "Analyze a local image with a configured multimodal model. Use fast mode for ordinary screenshots and accurate mode for small text, OCR, charts, or complex reasoning."
+	return "Quickly read 1–4 local images without deep reasoning. Batch related screenshots with paths in one call; results follow input order. Use fast for ordinary screenshots and accurate to preserve small text and original resolution."
 }
 
 func (t *ImageUnderstandTool) Parameters() []core.Parameter {
 	return []core.Parameter{
-		{Name: "path", Type: "string", Required: true, Description: "Path to a local PNG, JPEG, WebP, or GIF image"},
+		{Name: "path", Type: "string", Description: "Single local PNG, JPEG, WebP, or GIF image. Provide either path or paths."},
+		{Name: "paths", Type: "array", Items: &core.Schema{Type: "string"}, Description: "1–4 related local images in order. Combined source size must not exceed 20 MiB. Provide either path or paths."},
 		{Name: "prompt", Type: "string", Required: false, Description: "Focused question or analysis instruction. A concise mode-specific prompt is used when omitted."},
 		{Name: "mode", Type: "string", Required: false, Enum: []string{string(imageUnderstandModeFast), string(imageUnderstandModeAccurate)}, Description: "fast (default) resizes large images and limits output; accurate preserves the original image and uses the configured accurate model."},
 		{Name: "model", Type: "string", Required: false, Description: "Image understanding model name from config. Uses the first configured model if omitted."},
+		{Name: "max_tokens", Type: "integer", Description: "Output limit, 1–4096 tokens. Defaults to 1024; increase only for full OCR or detailed extraction."},
 	}
 }
 
@@ -72,15 +74,22 @@ func (t *ImageUnderstandTool) Parameters() []core.Parameter {
 // confirmation shown before this data leaves the workspace.
 func (t *ImageUnderstandTool) PermissionPlan(args map[string]any, workspaceRoot string) *core.PermissionRequest {
 	args[approvedImageDigestArg] = unavailableImageDigest
-	path := strings.TrimSpace(toolutil.OptStringArg(args, "path", ""))
-	if path != "" {
+	paths, pathErr := toolutil.ImageUnderstandingPaths(args)
+	var digests []string
+	totalBytes := 0
+	for i, path := range paths {
 		if !filepath.IsAbs(path) && workspaceRoot != "" {
 			path = filepath.Join(workspaceRoot, path)
 		}
 		path = filepath.Clean(path)
+		paths[i] = path
 		if data, _, err := readImageFile(path); err == nil {
-			args[approvedImageDigestArg] = imageDigest(data)
+			totalBytes += len(data)
+			digests = append(digests, imageDigest(data))
 		}
+	}
+	if pathErr == nil && len(digests) == len(paths) && totalBytes <= maxImageUnderstandBytes {
+		args[approvedImageDigestArg] = imageDigest([]byte(strings.Join(digests, ":")))
 	}
 	mode, err := parseImageUnderstandMode(args)
 	if err != nil {
@@ -104,7 +113,7 @@ func (t *ImageUnderstandTool) PermissionPlan(args map[string]any, workspaceRoot 
 		destination = parsed.Host
 	}
 	return &core.PermissionRequest{
-		Reason:       fmt.Sprintf("send local image %s to %s", path, destination),
+		Reason:       fmt.Sprintf("send local images %s to %s", strings.Join(paths, ", "), destination),
 		Capabilities: []string{core.CapNetOutbound},
 		Scope:        "once",
 		Details:      map[string]any{"workspace": workspaceRoot},
@@ -112,7 +121,12 @@ func (t *ImageUnderstandTool) PermissionPlan(args map[string]any, workspaceRoot 
 }
 
 func (t *ImageUnderstandTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
-	path, err := toolutil.RequireStringArg(args, "path")
+	started := time.Now()
+	paths, err := toolutil.ImageUnderstandingPaths(args)
+	if err != nil {
+		return core.ToolOutput{}, err
+	}
+	maxTokens, err := imageUnderstandOutputTokens(args)
 	if err != nil {
 		return core.ToolOutput{}, err
 	}
@@ -127,19 +141,40 @@ func (t *ImageUnderstandTool) Execute(ctx context.Context, args map[string]any) 
 	if approved, planned := args[approvedImageDigestArg].(string); planned && approved == unavailableImageDigest {
 		return core.ToolOutput{}, fmt.Errorf("image was unavailable during approval; choose a regular local file and approve it again")
 	}
-	imageData, mediaType, err := readImageForUnderstanding(ctx, path)
-	if err != nil {
-		return core.ToolOutput{}, err
+	images := make([]understandingImage, 0, len(paths))
+	var digests []string
+	sourceBytes, sentBytes := 0, 0
+	for _, path := range paths {
+		imageData, mediaType, err := readImageForUnderstanding(ctx, path)
+		if err != nil {
+			return core.ToolOutput{}, err
+		}
+		sourceBytes += len(imageData)
+		if sourceBytes > maxImageUnderstandBytes {
+			return core.ToolOutput{}, fmt.Errorf("combined images exceed 20 MiB limit")
+		}
+		digests = append(digests, imageDigest(imageData))
+		imageData, mediaType, err = prepareImageForUnderstanding(imageData, mediaType, mode)
+		if err != nil {
+			return core.ToolOutput{}, err
+		}
+		sentBytes += len(imageData)
+		images = append(images, understandingImage{data: imageData, mediaType: mediaType})
 	}
-	if approved, planned := args[approvedImageDigestArg].(string); planned && approved != imageDigest(imageData) {
+	if approved, planned := args[approvedImageDigestArg].(string); planned && approved != imageDigest([]byte(strings.Join(digests, ":"))) {
 		return core.ToolOutput{}, fmt.Errorf("image changed or became unavailable after approval; review and approve it again")
 	}
-	imageData, mediaType, err = prepareImageForUnderstanding(imageData, mediaType, mode)
-	if err != nil {
-		return core.ToolOutput{}, err
+	prepared := time.Since(started)
+	var firstText time.Duration
+	onText := func() {
+		if firstText == 0 {
+			firstText = time.Since(started)
+		}
 	}
+	defer func() {
+		logger.Log("image_understand: model=%s mode=%s images=%d source_bytes=%d sent_bytes=%d prepare=%s first_text=%s total=%s", cfg.Model, mode, len(images), sourceBytes, sentBytes, prepared, firstText, time.Since(started))
+	}()
 	prompt := toolutil.OptStringArg(args, "prompt", defaultImagePrompt(mode))
-	maxTokens := imageUnderstandMaxTokens(mode)
 
 	protocol := strings.ToLower(strings.TrimSpace(cfg.Protocol))
 	if protocol == "" {
@@ -151,10 +186,13 @@ func (t *ImageUnderstandTool) Execute(ctx context.Context, args map[string]any) 
 
 	switch protocol {
 	case "openai":
-		toolText, toolErr := t.executeOpenAIUnderstanding(ctx, cfg, prompt, mediaType, imageData, maxTokens)
+		toolText, toolErr := t.executeOpenAIUnderstanding(ctx, cfg, prompt, images, maxTokens, onText)
 		return core.ToolOutput{Text: toolText}, toolErr
 	case "anthropic":
-		toolText, toolErr := t.executeAnthropicUnderstanding(ctx, cfg, prompt, mediaType, imageData, maxTokens)
+		toolText, toolErr := t.executeAnthropicUnderstanding(ctx, cfg, prompt, images, maxTokens)
+		if toolErr == nil {
+			onText()
+		}
 		return core.ToolOutput{Text: toolText}, toolErr
 	default:
 		return core.ToolOutput{}, fmt.Errorf("unsupported image understand protocol: %s", protocol)
@@ -178,11 +216,32 @@ func defaultImagePrompt(mode imageUnderstandMode) string {
 	return defaultFastImagePrompt
 }
 
-func imageUnderstandMaxTokens(mode imageUnderstandMode) int {
-	if mode == imageUnderstandModeAccurate {
-		return accurateImageMaxTokens
+func imageUnderstandOutputTokens(args map[string]any) (int, error) {
+	v, ok := args["max_tokens"]
+	if !ok {
+		return fastImageMaxTokens, nil
 	}
-	return fastImageMaxTokens
+	var n int
+	switch value := v.(type) {
+	case int:
+		n = value
+	case float64:
+		if value < 1 || value > 4096 || value != float64(int(value)) {
+			return 0, fmt.Errorf("max_tokens must be an integer between 1 and 4096")
+		}
+		n = int(value)
+	default:
+		return 0, fmt.Errorf("max_tokens must be an integer between 1 and 4096")
+	}
+	if n < 1 || n > 4096 {
+		return 0, fmt.Errorf("max_tokens must be an integer between 1 and 4096")
+	}
+	return n, nil
+}
+
+type understandingImage struct {
+	data      []byte
+	mediaType string
 }
 
 func (t *ImageUnderstandTool) resolveUnderstandModel(args map[string]any, mode imageUnderstandMode) (config.ImageUnderstandConfig, error) {
@@ -268,13 +327,22 @@ func imageDigest(data []byte) string {
 }
 
 func (t *ImageUnderstandTool) postJSON(ctx context.Context, endpoint string, headers map[string]string, body any, result any) error {
-	payload, err := json.Marshal(body)
+	resp, err := t.post(ctx, endpoint, headers, body)
 	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
+	return json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(result)
+}
+
+func (t *ImageUnderstandTool) post(ctx context.Context, endpoint string, headers map[string]string, body any) (*http.Response, error) {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	for key, value := range headers {
@@ -286,20 +354,17 @@ func (t *ImageUnderstandTool) postJSON(ctx context.Context, endpoint string, hea
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return err
+		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("image model request failed (%s): %s", resp.Status, strings.TrimSpace(string(data)))
+		defer resp.Body.Close()
+		data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("image model request failed (%s): %s", resp.Status, strings.TrimSpace(string(data)))
 	}
-	if err := json.Unmarshal(data, result); err != nil {
-		return fmt.Errorf("decode image model response: %w", err)
-	}
-	return nil
+	return resp, nil
 }
 
 func newImageUnderstandHTTPClient() *http.Client {
