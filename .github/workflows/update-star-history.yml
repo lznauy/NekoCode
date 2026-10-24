@@ -72,7 +72,12 @@ jobs:
           mkdir -p assets/star-history
           cp "$OUTPUT_DIR/star-history-light.svg" assets/star-history/star-history-light.svg
           cp "$OUTPUT_DIR/star-history-dark.svg" assets/star-history/star-history-dark.svg
-          git add assets/star-history
+          # This branch contains chart assets, not the website. Vercel reads
+          # config from the pushed branch, so master-only config cannot stop
+          # these previews. Cover both repository-root and official-root projects.
+          mkdir -p official
+          node -e 'const fs = require("node:fs"); const config = JSON.stringify({git: {deploymentEnabled: false}}, null, 2) + "\n"; for (const path of ["vercel.json", "official/vercel.json"]) fs.writeFileSync(path, config);'
+          git add assets/star-history vercel.json official/vercel.json
 
           if git diff --cached --quiet; then
             echo "Star History chart is already current."
