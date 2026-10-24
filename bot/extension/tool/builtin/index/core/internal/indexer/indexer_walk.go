@@ -16,7 +16,10 @@ import (
 func (i *Indexer) IndexAll(cwd string) (*graphpkg.Graph, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	return i.indexAllLocked(cwd)
+}
 
+func (i *Indexer) indexAllLocked(cwd string) (*graphpkg.Graph, error) {
 	if err := i.db.Clear(); err != nil {
 		return nil, fmt.Errorf("clear db: %w", err)
 	}
@@ -61,11 +64,13 @@ func buildGraphFromWalk(cwd string, parser *parserpkg.Parser, db *dbpkg.DB) (*gr
 
 		hash := fmt.Sprintf("%x", sha256.Sum256(content))
 		nodes, edges := parser.ParseFile(path, content)
-		_, lang := insertFileIntoGraph(g, db, path, cwd, nodes, edges)
+		nodes, edges, lang := prepareFile(g, path, cwd, nodes, edges)
 		if db != nil {
-			_ = db.SaveFile(path, hash, lang)
+			if err := db.ReplaceFile(path, hash, lang, nodes, edges); err != nil {
+				return fmt.Errorf("index %s: %w", path, err)
+			}
 		}
-		g.SetFileInfo(path, hash, lang)
+		publishFile(g, path, hash, lang, nodes, edges)
 		filesIndexed++
 		return nil
 	})

@@ -27,6 +27,10 @@ const (
 // --- done ---
 
 func (m *Model) handleDone(msg doneMsg) tea.Cmd {
+	if m.sessionLoading {
+		m.sessionLoadDone = &msg
+		return nil
+	}
 	m.Messages.SettleCompactions()
 	finalBlocks := block.FilterFinalBlocks(m.Messages.ProcessingBlocks())
 
@@ -65,7 +69,7 @@ func (m *Model) handleDone(msg doneMsg) tea.Cmd {
 				m.Messages.AddMessage(message.ChatMessage{Role: "telemetry", Telemetry: telemetry})
 			}
 			m.refreshRuntimeStatus()
-			return loadWorkspaceChanges(m.Runtime)
+			return m.refreshCompletedHistory()
 		}
 		footer := ""
 		if telemetry == nil && msg.metrics.Duration != "" {
@@ -85,7 +89,20 @@ func (m *Model) handleDone(msg doneMsg) tea.Cmd {
 	if m.Messages.Follow {
 		m.Messages.GotoBottom()
 	}
-	return loadWorkspaceChanges(m.Runtime)
+	if msg.err != nil {
+		// Keep the live error visible; it may not exist in conversation history.
+		return m.continuePendingChat(loadWorkspaceChanges(m.Runtime))
+	}
+	return m.refreshCompletedHistory()
+}
+
+func (m *Model) refreshCompletedHistory() tea.Cmd {
+	refresh := m.sessionHistoryPaging && m.sessionHistoryDirty
+	m.sessionHistoryDirty = false
+	if refresh {
+		return tea.Batch(loadWorkspaceChanges(m.Runtime), m.loadSessionWindow(0, 0))
+	}
+	return m.continuePendingChat(loadWorkspaceChanges(m.Runtime))
 }
 
 // --- keys: confirm ---
@@ -194,7 +211,8 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 		if m.Suggestions.Visible() {
 			m.Suggestions.Cycle(-1)
 		} else if m.state == stateProcessing {
-			m.Messages.Update(msg)
+			_, cmd := m.Messages.Update(msg)
+			return cmd
 		} else if m.Input.CanCursorUp() {
 			input, cmd := m.Input.Update(msg)
 			m.Input = input
@@ -209,7 +227,8 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 		if m.Suggestions.Visible() {
 			m.Suggestions.Cycle(1)
 		} else if m.state == stateProcessing {
-			m.Messages.Update(msg)
+			_, cmd := m.Messages.Update(msg)
+			return cmd
 		} else if m.Input.CanCursorDown() {
 			input, cmd := m.Input.Update(msg)
 			m.Input = input
@@ -222,9 +241,9 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 
 	case "pgup", "pgdown":
-		m.Messages.Update(msg)
+		_, cmd := m.Messages.Update(msg)
 		m.Input.SetFollow(m.Messages.Follow)
-		return nil
+		return cmd
 	}
 
 	if m.state == stateProcessing {
@@ -613,14 +632,12 @@ func (m *Model) handleSpinnerTick(msg spinner.TickMsg) tea.Cmd {
 		m.Messages.UpdateProcessing(func(p *processing.ProcessingItem) {
 			p.SetSpinnerView(spinnerView)
 			p.SetStatusText(statusText)
-		})
-		if m.processingPhase != phaseCompacting {
-			st := m.metrics
-			m.Messages.UpdateProcessing(func(p *processing.ProcessingItem) {
+			if m.processingPhase != phaseCompacting {
+				st := m.metrics
 				p.SetTokens(st.TurnPrompt, st.TurnCompletion)
 				p.SetCompactCount(st.CompactCount)
-			})
-		}
+			}
+		})
 		return spinnerTick()
 	}
 
@@ -641,6 +658,7 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) tea.Cmd {
 			m.Messages.UpdateCompaction(p)
 		}
 	case controlruntime.EventInputAccepted:
+		m.sessionHistoryDirty = true
 		if p, ok := ev.Payload.(controlruntime.MessagePayload); ok {
 			if p.Source.Kind == "tui" {
 				if len(p.Images) > 0 || len(m.Input.ImageAttachments()) == 0 {
@@ -667,11 +685,15 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) tea.Cmd {
 	case controlruntime.EventSystemMessage:
 		var clipboard tea.Cmd
 		if p, ok := ev.Payload.(controlruntime.MessagePayload); ok && strings.TrimSpace(p.Content) != "" && !m.Messages.IsDuplicateCompactionResponse(p.Content) {
-			m.Messages.AddMessage(message.ChatMessage{
+			notice := message.ChatMessage{
 				Role:            "system",
 				Content:         p.Content,
 				RenderedContent: p.Content,
-			})
+			}
+			m.Messages.AddMessage(notice)
+			if m.sessionLoading {
+				m.sessionLoadNotices = append(m.sessionLoadNotices, notice)
+			}
 			if url := message.LastBareURL(p.Content); url != "" {
 				clipboard = tea.SetClipboard(url)
 			}
@@ -679,10 +701,30 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) tea.Cmd {
 		m.refreshRuntimeStatus()
 		return clipboard
 	case controlruntime.EventRunStarted:
+		reloadHistory := m.sessionLoading && m.sessionLoadDone != nil
+		if reloadHistory {
+			// A deferred terminal event belongs to the previous run. Never
+			// apply it to the new run when an old history worker finishes.
+			if err := m.sessionLoadDone.err; err != nil {
+				notice := message.ChatMessage{Role: "error", Content: fmt.Sprintf("Error: %v", err)}
+				m.Messages.AddMessage(notice)
+				m.sessionLoadNotices = append(m.sessionLoadNotices, notice)
+			}
+			m.sessionLoadDone = nil
+			m.transitionTo(stateReady)
+			m.sessionLoadPhase = PhaseWaiting
+		}
+		m.sessionHistoryDirty = false
+		if m.sessionLoading {
+			m.sessionLoadWaitForRun = true
+		}
 		if m.state != stateProcessing {
 			m.transitionTo(stateProcessing)
 		}
 		m.metrics = controlruntime.MetricsSnapshot{}
+		if reloadHistory {
+			return tea.Batch(spinnerTick(), m.loadSessionWindow(0, 0))
+		}
 		return spinnerTick()
 	case controlruntime.EventAssistantDelta:
 		if p, ok := ev.Payload.(controlruntime.DeltaPayload); ok {
@@ -781,9 +823,7 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) tea.Cmd {
 	case controlruntime.EventRunCancelled:
 		return m.handleDone(doneMsg{metrics: m.metrics, err: errors.New("cancelled")})
 	case controlruntime.EventSessionChanged:
-		m.refreshRuntimeStatus()
-		m.loadSessionMessages()
-		return loadWorkspaceChanges(m.Runtime)
+		return m.loadSessionMessages()
 	case controlruntime.EventConnectorStatus:
 		if p, ok := ev.Payload.(controlruntime.ConnectorStatusPayload); ok && p.Message != "" {
 			m.Messages.AddMessage(message.ChatMessage{

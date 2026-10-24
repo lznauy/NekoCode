@@ -67,6 +67,7 @@ type Runtime struct {
 	closeOnce     sync.Once
 	closeErr      error
 	contextView   contextView
+	archivedRuns  map[RunID]recording.RecordedRun
 }
 
 var (

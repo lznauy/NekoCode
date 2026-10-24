@@ -29,5 +29,8 @@ func NewIndexer(dbPath string) (*Indexer, error) {
 
 // Close closes the indexer and database.
 func (i *Indexer) Close() error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.parser.Close()
 	return i.db.Close()
 }

@@ -2,8 +2,10 @@ package recording
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"nekocode/logger"
 	"os"
 	"path/filepath"
@@ -29,9 +31,13 @@ type EventRecorder struct {
 }
 
 type runRecording struct {
-	dir         string
-	provisional bool
-	lock        *os.File
+	dir               string
+	provisional       bool
+	lock              *os.File
+	events            *os.File
+	lastMetrics       time.Time
+	pendingMetrics    core.Event
+	hasPendingMetrics bool
 }
 
 type recordedEvent struct {
@@ -177,6 +183,10 @@ func (r *EventRecorder) bindRunLocked(id core.RunID, run *runRecording, sessionI
 		}
 		return fmt.Errorf("runtime: recorded run identity collision: %s", id)
 	}
+	// Close before renaming for platforms that disallow moving open files.
+	if err := r.closeEventsLocked(run); err != nil {
+		return err
+	}
 	if err := os.Rename(run.dir, target); err != nil {
 		return err
 	}
@@ -191,6 +201,7 @@ func (r *EventRecorder) bindRunLocked(id core.RunID, run *runRecording, sessionI
 func (r *EventRecorder) EndRun(id core.RunID) {
 	r.mu.Lock()
 	if run := r.runs[id]; run != nil {
+		_ = r.closeEventsLocked(run)
 		_ = run.lock.Close()
 		delete(r.runs, id)
 	}
@@ -264,6 +275,7 @@ func (r *EventRecorder) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for id, run := range r.runs {
+		_ = r.closeEventsLocked(run)
 		_ = run.lock.Close()
 		delete(r.runs, id)
 	}
@@ -291,8 +303,56 @@ func (r *EventRecorder) RecordError(ev core.Event) (err error) {
 	if err := r.beginRunLocked(ev.RunID, r.sessionID); err != nil {
 		return err
 	}
-	runDir := r.runs[ev.RunID].dir
-	if err := appendJSONLine(filepath.Join(runDir, "events.jsonl"), recordedEventFrom(ev)); err != nil {
+	run := r.runs[ev.RunID]
+	if ev.Type == core.EventMetricsUpdated {
+		// Observers run outside the event-bus lock, so an older sample may
+		// arrive after a newer pending sample. Keep the newest by replay time,
+		// including when this call crosses the persistence interval.
+		if run.hasPendingMetrics && ev.Time.Before(run.pendingMetrics.Time) {
+			ev = run.pendingMetrics
+		}
+		// Retain the selected sample until a write succeeds, so a transient
+		// failure cannot discard metrics already accepted by an earlier call.
+		run.pendingMetrics = ev
+		run.hasPendingMetrics = true
+		if !run.lastMetrics.IsZero() && time.Since(run.lastMetrics) < time.Second {
+			return nil
+		}
+		return r.flushMetricsLocked(run)
+	}
+	// Flush before other events to preserve event ordering and final metrics.
+	if err := r.flushMetricsLocked(run); err != nil {
+		return err
+	}
+	return r.writeEventLocked(run, ev)
+}
+
+func (r *EventRecorder) flushMetricsLocked(run *runRecording) error {
+	if !run.hasPendingMetrics {
+		return nil
+	}
+	if err := r.writeEventLocked(run, run.pendingMetrics); err != nil {
+		return err
+	}
+	run.pendingMetrics = core.Event{}
+	run.hasPendingMetrics = false
+	run.lastMetrics = time.Now()
+	return nil
+}
+
+func (r *EventRecorder) writeEventLocked(run *runRecording, ev core.Event) error {
+	data, err := json.Marshal(recordedEventFrom(ev))
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if run.events == nil {
+		run.events, err = os.OpenFile(filepath.Join(run.dir, "events.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return err
+		}
+	}
+	if _, err := run.events.Write(data); err != nil {
 		return fmt.Errorf("append event: %w", err)
 	}
 	return nil
@@ -462,24 +522,40 @@ func pruneEmptyBatches(sessionsRoot string) {
 }
 
 func loadRecordedEventFile(path string) ([]core.Event, error) {
+	var events []core.Event
+	err := WalkRecordedEventFile(path, func(ev core.Event) { events = append(events, ev) })
+	return events, err
+}
+
+// WalkRecordedEventFile decodes one event at a time for bounded startup and
+// on-demand run recovery. It does not retain the stream's delta payloads.
+func WalkRecordedEventFile(path string, visit func(core.Event)) error {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer func() { _ = f.Close() }()
 
-	var events []core.Event
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	// The writer accepts complete tool outputs of arbitrary size. Read one
+	// record at a time without Scanner's token ceiling so cache eviction does
+	// not make a large, successfully recorded run inaccessible.
+	reader := bufio.NewReaderSize(f, 64*1024)
 	lineNo := 0
-	for scanner.Scan() {
+	for {
+		line, err := reader.ReadBytes('\n')
+		if err != nil && err != io.EOF {
+			return err
+		}
+		if len(line) == 0 && err == io.EOF {
+			return nil
+		}
 		lineNo++
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
 			continue
 		}
 		var rec recordedEvent
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+		if err := json.Unmarshal(line, &rec); err != nil {
 			logger.Log("runtime: recorded event %s:%d unmarshal: %v", path, lineNo, err)
 			continue
 		}
@@ -488,9 +564,8 @@ func loadRecordedEventFile(path string) ([]core.Event, error) {
 			logger.Log("runtime: recorded event %s:%d decode: %v", path, lineNo, err)
 			continue
 		}
-		events = append(events, ev)
+		visit(ev)
 	}
-	return events, scanner.Err()
 }
 
 func (r recordedEvent) Event() (core.Event, error) {
@@ -544,24 +619,25 @@ func payloadTypeName(payload any) string {
 	return strings.Replace(fmt.Sprintf("%T", payload), "core.", "runtime.", 1)
 }
 
-func appendJSONLine(path string, v any) error {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return err
+// closeEventsLocked preserves close errors for Close's caller. Writes are
+// unbuffered; a run owns at most one log descriptor until EndRun or Close.
+func (r *EventRecorder) closeEventsLocked(run *runRecording) error {
+	flushErr := r.flushMetricsLocked(run)
+	if flushErr != nil && r.writeErr == nil {
+		r.writeErr = flushErr
 	}
-	data = append(data, '\n')
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
+	if run.events == nil {
+		return flushErr
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return err
+	err := run.events.Close()
+	run.events = nil
+	if err != nil && r.writeErr == nil {
+		r.writeErr = err
 	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		return err
+	if flushErr != nil {
+		return flushErr
 	}
-	return f.Close()
+	return err
 }
 
 func safePathPart(s string) string {

@@ -6,6 +6,7 @@ import (
 
 	graphpkg "nekocode/bot/extension/tool/builtin/index/core/internal/graph"
 
+	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
 )
 
@@ -77,6 +78,15 @@ func (d *DB) LoadGraph() (*graphpkg.Graph, error) {
 		return nil, fmt.Errorf("finalize edges: %w", err)
 	}
 
+	err = sqlitex.ExecuteTransient(conn, "SELECT path, content_hash, language FROM files", &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			g.SetFileInfo(stmt.ColumnText(0), stmt.ColumnText(1), stmt.ColumnText(2))
+			return nil
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("load files: %w", err)
+	}
 	return g, nil
 }
 

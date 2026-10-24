@@ -116,7 +116,7 @@ func (m *Manager) Save(sess *Snapshot) error {
 	if sess == nil {
 		return fmt.Errorf("session: cannot save nil snapshot")
 	}
-	if len(sess.Transcript) == 0 && len(sess.Messages) == 0 {
+	if len(sess.Transcript) == 0 && len(sess.Messages) == 0 && sess.TranscriptSeq == 0 && sess.TranscriptBase == 0 {
 		if err := deleteSnapshot(sess.ID); err != nil {
 			return err
 		}
@@ -126,7 +126,13 @@ func (m *Manager) Save(sess *Snapshot) error {
 	if err := sess.save(); err != nil {
 		return err
 	}
-	m.set(sess)
+	saved := sess
+	if sess.TranscriptLazy {
+		saved = sess.Clone()
+		saved.Transcript = nil
+		saved.TranscriptBase = sess.TranscriptSeq
+	}
+	m.set(saved)
 	return nil
 }
 
@@ -147,6 +153,10 @@ func (m *Manager) Load(id string) (*Snapshot, error) {
 	}
 	return sess, nil
 }
+
+// LoadLazy restores active context and history metadata without retaining old
+// transcript bodies. Load remains an explicit full-history compatibility API.
+func (m *Manager) LoadLazy(id string) (*Snapshot, error) { return loadMode(id, true) }
 
 // Activate replaces the current session with a previously loaded snapshot.
 func (m *Manager) Activate(sess *Snapshot) error {

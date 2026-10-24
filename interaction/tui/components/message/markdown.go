@@ -234,6 +234,7 @@ func uintPtr(u uint) *uint       { return &u }
 
 var (
 	mu        sync.Mutex
+	renderMu  sync.Mutex
 	renderers = map[int]*glamour.TermRenderer{}
 )
 
@@ -278,6 +279,10 @@ func RenderMarkdown(content string, width int) string {
 	if content == "" {
 		return ""
 	}
+	// Cached glamour renderers hold mutable parser state. History preparation
+	// can now overlap the foreground UI, so serialize access to them.
+	renderMu.Lock()
+	defer renderMu.Unlock()
 	out, err := getRenderer(width).Render(content)
 	if err != nil {
 		return content

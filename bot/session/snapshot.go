@@ -29,8 +29,11 @@ type Snapshot struct {
 	Archive         string          `json:"archive"`
 	Messages        []types.Message `json:"messages"`
 	Transcript      []types.Message `json:"-"`
-	TranscriptSeq   int             `json:"transcript_seq,omitempty"`
-	CompactBoundary int             `json:"compact_boundary"`
+	TranscriptBase  int             `json:"-"`
+	TranscriptLazy  bool            `json:"-"`
+	history         *HistoryStore
+	TranscriptSeq   int `json:"transcript_seq,omitempty"`
+	CompactBoundary int `json:"compact_boundary"`
 
 	ContextWindow     int `json:"context_window"`
 	PromptTokens      int `json:"prompt_tokens"`
@@ -89,7 +92,9 @@ func newSnapshot(cwd string) *Snapshot {
 	}
 }
 
-func load(id string) (*Snapshot, error) {
+func load(id string) (*Snapshot, error) { return loadMode(id, false) }
+
+func loadMode(id string, lazy bool) (*Snapshot, error) {
 	if err := validateID(id); err != nil {
 		return nil, err
 	}
@@ -113,21 +118,42 @@ func load(id string) (*Snapshot, error) {
 	if persistedSeq < 0 {
 		return nil, fmt.Errorf("invalid negative transcript watermark %d", persistedSeq)
 	}
-	transcript, err := loadTranscript(filepath.Dir(path), persistedSeq)
-	if err != nil {
-		return nil, fmt.Errorf("load transcript: %w", err)
+	if lazy {
+		snapshot.history = newHistoryStore(filepath.Dir(path))
+		count, err := snapshot.history.Count(persistedSeq, true)
+		if err != nil {
+			return nil, fmt.Errorf("load history: %w", err)
+		}
+		if count > persistedSeq {
+			tail, err := snapshot.history.ReadRange(persistedSeq+1, count)
+			if err != nil {
+				return nil, err
+			}
+			snapshot.Messages = append(snapshot.Messages, tail...)
+		}
+		snapshot.TranscriptBase = count
+		snapshot.TranscriptLazy = true
+		if count == 0 && len(snapshot.Messages) > 0 {
+			snapshot.Transcript = append([]types.Message(nil), snapshot.Messages...)
+		}
+		snapshot.TranscriptSeq = count
+	} else {
+		transcript, err := loadTranscript(filepath.Dir(path), persistedSeq)
+		if err != nil {
+			return nil, fmt.Errorf("load transcript: %w", err)
+		}
+		if transcript == nil && persistedSeq > 0 {
+			return nil, fmt.Errorf("transcript.jsonl is missing while the session records %d messages; restore it from a backup or re-run session-migrate", persistedSeq)
+		}
+		if persistedSeq > len(transcript) {
+			return nil, fmt.Errorf("transcript watermark %d exceeds %d records", persistedSeq, len(transcript))
+		}
+		if persistedSeq < len(transcript) {
+			snapshot.Messages = append(snapshot.Messages, transcript[persistedSeq:]...)
+		}
+		snapshot.Transcript = transcript
+		snapshot.TranscriptSeq = len(transcript)
 	}
-	if transcript == nil && persistedSeq > 0 {
-		return nil, fmt.Errorf("transcript.jsonl is missing while the session records %d messages; restore it from a backup or re-run session-migrate", persistedSeq)
-	}
-	if persistedSeq > len(transcript) {
-		return nil, fmt.Errorf("transcript watermark %d exceeds %d records", persistedSeq, len(transcript))
-	}
-	if persistedSeq < len(transcript) {
-		snapshot.Messages = append(snapshot.Messages, transcript[persistedSeq:]...)
-	}
-	snapshot.Transcript = transcript
-	snapshot.TranscriptSeq = len(transcript)
 	return snapshot, nil
 }
 
@@ -156,7 +182,16 @@ func (s *Snapshot) save() error {
 	}
 	s.UpdatedAt = time.Now().Unix()
 	d := filepath.Join(dir(), s.ID)
-	watermark, err := appendTranscript(d, s.TranscriptSeq, s.Transcript)
+	var watermark int
+	var err error
+	if s.TranscriptLazy {
+		if s.history == nil {
+			s.history = newHistoryStore(d)
+		}
+		watermark, err = s.history.Append(s.TranscriptBase, s.Transcript)
+	} else {
+		watermark, err = appendTranscript(d, s.TranscriptSeq, s.Transcript)
+	}
 	s.TranscriptSeq = watermark
 	if err != nil {
 		return fmt.Errorf("persist transcript: %w", err)
@@ -244,6 +279,8 @@ func (s *Snapshot) CaptureContext(snap ctxmgr.ManagerSnapshot, promptTokens, com
 	s.Archive = snap.Archive
 	s.Messages = snap.Messages
 	s.Transcript = snap.Transcript
+	s.TranscriptBase = snap.TranscriptBase
+	s.TranscriptLazy = snap.TranscriptLazy
 	s.CompactBoundary = 0
 	s.ContextWindow = snap.Budget
 	s.PromptTokens = promptTokens
@@ -277,13 +314,15 @@ func (s *Snapshot) ContextSnapshot() ctxmgr.ManagerSnapshot {
 		messages = messages[s.CompactBoundary:]
 	}
 	return ctxmgr.ManagerSnapshot{
-		SystemPrompt: s.SystemPrompt,
-		Skills:       s.Skills,
-		Archive:      s.Archive,
-		Memory:       s.Memory,
-		Messages:     append([]types.Message(nil), messages...),
-		Transcript:   append([]types.Message(nil), s.Transcript...),
-		Budget:       s.ContextWindow,
+		SystemPrompt:   s.SystemPrompt,
+		Skills:         s.Skills,
+		Archive:        s.Archive,
+		Memory:         s.Memory,
+		Messages:       append([]types.Message(nil), messages...),
+		Transcript:     append([]types.Message(nil), s.Transcript...),
+		TranscriptBase: s.TranscriptBase,
+		TranscriptLazy: s.TranscriptLazy,
+		Budget:         s.ContextWindow,
 		Tracker: token.State{
 			LastPromptTokens: s.TrackerPrompt,
 			NewMessageTokens: s.TrackerNewTokens,

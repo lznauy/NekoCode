@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
+
 	graphpkg "nekocode/bot/extension/tool/builtin/index/core/internal/graph"
 	indexerpkg "nekocode/bot/extension/tool/builtin/index/core/internal/indexer"
 )
@@ -108,4 +110,33 @@ func waitForGraph(t *testing.T, graphMu *sync.RWMutex, g *graphpkg.Graph, ok fun
 	graphMu.RLock()
 	defer graphMu.RUnlock()
 	t.Fatalf("graph condition was not met before timeout; nodes=%d edges=%d", len(g.Nodes), len(g.Edges))
+}
+
+func TestBatchUsesFinalStateForRemoveAndCreate(t *testing.T) {
+	cwd := t.TempDir()
+	idx, err := indexerpkg.NewIndexer(filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	g := graphpkg.NewGraph()
+	s := &Syncer{indexer: idx, graph: g, cwd: cwd}
+	path := filepath.Join(cwd, "a.go")
+	if err := idx.UpsertFile(g, cwd, path, []byte("package sample\nfunc Original() {}")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("package sample\nfunc Replacement() {}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.handleFileChanges(map[string]fsnotify.Op{path: fsnotify.Remove | fsnotify.Create | fsnotify.Write})
+	if len(g.FindNodesByName("Replacement")) != 1 || len(g.FindNodesByName("Original")) != 0 {
+		t.Fatal("recreated file was treated as deleted")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	s.handleFileChanges(map[string]fsnotify.Op{path: fsnotify.Remove})
+	if g.FileCount() != 0 || len(g.Nodes) != 0 {
+		t.Fatal("removed file retained in graph")
+	}
 }

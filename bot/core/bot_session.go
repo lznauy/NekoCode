@@ -59,18 +59,18 @@ func (b *Bot) registerSessionCommands(p *command.Parser) {
 		if err != nil {
 			return fmt.Sprintf("Failed to resume session %s: %v", id, err), true
 		}
-		return fmt.Sprintf("Resumed session %s (%d messages restored).", id, len(snapshot.Transcript)), true
+		return fmt.Sprintf("Resumed session %s (%d messages restored).", id, snapshot.TranscriptSeq+len(snapshot.Transcript)), true
 	})
 	p.RegisterInfo("export", "Export conversation context", func(ctx context.Context, _ *command.Command) (string, bool) {
 		if err := ctx.Err(); err != nil {
 			return "Export cancelled: " + err.Error(), true
 		}
-		messages := b.ctxMgr.Snapshot().Transcript
-		path, err := session.ExportMessages(messages, session.DefaultExportPath)
+		base, tail, _ := b.ctxMgr.TranscriptTail()
+		path, count, err := b.sess.ExportHistory(base, tail, session.DefaultExportPath)
 		if err != nil {
 			return fmt.Sprintf("Failed to %v", err), true
 		}
-		return fmt.Sprintf("Context exported to %s (%d messages)", path, len(messages)), true
+		return fmt.Sprintf("Context exported to %s (%d messages)", path, count), true
 	})
 	p.RegisterMenu("sessions", func(_ context.Context, cmd *command.Command) (protocol.CommandMenu, bool) {
 		if len(cmd.Args) != 0 {
@@ -113,16 +113,34 @@ func (b *Bot) saveSession() error {
 		snapshot.CheckpointNext = b.checkpoints.Next(snapshot.ID)
 	}
 	snapshot.Ledger = b.ledgerSnapshot()
-	return b.sess.Save(snapshot)
+	snapshot.TranscriptLazy = true
+	if err := b.sess.Save(snapshot); err != nil {
+		return err
+	}
+	b.ctxMgr.AcknowledgeTranscript(snapshot.TranscriptBase, snapshot.TranscriptSeq)
+	return nil
 }
 
 func (b *Bot) CurrentSessionID() string { return b.sess.CurrentID() }
 
 func (b *Bot) Conversation() contextmgr.ManagerSnapshot {
+	b.historyMu.RLock()
+	defer b.historyMu.RUnlock()
 	if b.ctxMgr == nil {
 		return contextmgr.ManagerSnapshot{}
 	}
-	return b.ctxMgr.Snapshot()
+	snap := b.ctxMgr.Snapshot()
+	if snap.TranscriptLazy && snap.TranscriptBase > 0 {
+		history, err := b.sess.HistoryRange(1, snap.TranscriptBase)
+		if err != nil {
+			logger.Log("session: read full transcript: %v", err)
+		} else {
+			snap.Transcript = append(history, snap.Transcript...)
+			snap.TranscriptBase = 0
+			snap.TranscriptLazy = false
+		}
+	}
+	return snap
 }
 
 func (b *Bot) ResumeSession(id string) error {
@@ -131,8 +149,10 @@ func (b *Bot) ResumeSession(id string) error {
 }
 
 func (b *Bot) resumeSession(id string) (*session.Snapshot, error) {
+	b.historyMu.Lock()
+	defer b.historyMu.Unlock()
 	oldID := b.sess.CurrentID()
-	snapshot, err := b.sess.Load(id)
+	snapshot, err := b.sess.LoadLazy(id)
 	if err != nil {
 		return nil, err
 	}
@@ -208,6 +228,8 @@ func (b *Bot) NewSession() (*session.Snapshot, error) {
 }
 
 func (b *Bot) resetConversation() (string, error) {
+	b.historyMu.Lock()
+	defer b.historyMu.Unlock()
 	if err := b.closeSessionRuntime(b.sess.CurrentID()); err != nil {
 		return "", err
 	}
@@ -239,6 +261,8 @@ func (b *Bot) clearConversationState() {
 }
 
 func (b *Bot) ensureSessionIdentity() {
+	b.historyMu.Lock()
+	defer b.historyMu.Unlock()
 	if b.sess == nil {
 		return
 	}
@@ -252,6 +276,8 @@ func (b *Bot) ensureSessionIdentity() {
 }
 
 func (b *Bot) DeleteSession(id string) error {
+	b.historyMu.Lock()
+	defer b.historyMu.Unlock()
 	if err := b.closeSessionRuntime(id); err != nil {
 		return err
 	}
@@ -359,12 +385,21 @@ func (b *Bot) hasRewindEvent(rewindID string) bool {
 	if rewindID == "" {
 		return false
 	}
-	for _, message := range b.ctxMgr.Snapshot().Transcript {
+	base, tail, _ := b.ctxMgr.TranscriptTail()
+	found := false
+	check := func(message types.Message) error {
 		if message.Source == types.MessageSourceRuntimeEvent && strings.Contains(message.Content, rewindID) {
-			return true
+			found = true
 		}
+		return nil
 	}
-	return false
+	if err := b.sess.WalkHistory(base, check); err != nil {
+		logger.Log("session: rewind event history: %v", err)
+	}
+	for _, message := range tail {
+		_ = check(message)
+	}
+	return found
 }
 
 func (b *Bot) invalidateRewindPaths(changes []checkpoint.RollbackChange) {

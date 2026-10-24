@@ -5,6 +5,7 @@ import (
 
 	graphpkg "nekocode/bot/extension/tool/builtin/index/core/internal/graph"
 
+	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
 )
 
@@ -15,7 +16,11 @@ func (d *DB) SaveNode(n *graphpkg.Node) error {
 		return err
 	}
 	defer d.pool.Put(conn)
-	return sqlitex.ExecuteTransient(conn, `
+	return saveNode(conn, n)
+}
+
+func saveNode(conn *sqlite.Conn, n *graphpkg.Node) error {
+	return sqlitex.Execute(conn, `
 		INSERT INTO nodes (id, name, kind, file, line, end_line, pkg_path, signature, doc, visibility)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
@@ -34,11 +39,21 @@ func (d *DB) SaveEdge(e *graphpkg.Edge) error {
 		return err
 	}
 	defer d.pool.Put(conn)
-	return sqlitex.ExecuteTransient(conn, `
+	return saveEdge(conn, e)
+}
+
+func saveEdge(conn *sqlite.Conn, e *graphpkg.Edge) error {
+	// Unresolved references use NULL in SQLite and zero in the in-memory graph.
+	// NULL satisfies the foreign key until reference resolution finds a target.
+	var target any
+	if e.ToID != 0 {
+		target = e.ToID
+	}
+	return sqlitex.Execute(conn, `
 		INSERT INTO edges (id, from_id, to_id, kind, file, line, callee_name, import_path)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`, &sqlitex.ExecOptions{
-		Args: []any{e.ID, e.FromID, e.ToID, string(e.Kind), e.File, e.Line, e.CalleeName, e.ImportPath},
+		Args: []any{e.ID, e.FromID, target, string(e.Kind), e.File, e.Line, e.CalleeName, e.ImportPath},
 	})
 }
 

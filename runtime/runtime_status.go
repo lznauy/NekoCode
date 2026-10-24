@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"nekocode/runtime/internal/recording"
+	"nekocode/runtime/internal/runstore"
 	"reflect"
 	"slices"
 	"sort"
@@ -361,11 +363,64 @@ func (r *Runtime) CurrentRun() (RunSnapshot, bool) {
 }
 
 func (r *Runtime) LookupRun(runID RunID) (RunSnapshot, bool) {
-	return r.runs.Lookup(runID)
+	if snapshot, ok := r.runs.Lookup(runID); ok {
+		return snapshot, true
+	}
+	r.mu.Lock()
+	run, ok := r.archivedRuns[runID]
+	r.mu.Unlock()
+	if !ok {
+		return RunSnapshot{}, false
+	}
+	temporary := runstore.NewRunStore(1)
+	if err := recording.WalkRecordedEventFile(run.Path, temporary.Record); err != nil {
+		return RunSnapshot{}, false
+	}
+	snapshot, ok := temporary.Lookup(runID)
+	if ok {
+		r.runs.CacheRestored(snapshot)
+	}
+	return snapshot, ok
 }
 
 func (r *Runtime) Runs(limit int) []RunSnapshot {
-	return r.runs.List(limit)
+	// Archive cache insertion order is not run chronology. Apply the caller's
+	// limit only after merging and sorting, so an old lookup cannot hide a
+	// newer live run that has no archive file yet.
+	current := r.runs.List(0)
+	if limit <= 0 {
+		limit = recordedRunRestoreLimit
+	}
+	r.mu.Lock()
+	archived := make(map[RunID]recording.RecordedRun, len(r.archivedRuns))
+	for id, path := range r.archivedRuns {
+		archived[id] = path
+	}
+	r.mu.Unlock()
+	seen := make(map[RunID]bool, len(current))
+	for _, run := range current {
+		seen[run.ID] = true
+	}
+	ids := make([]RunID, 0, len(archived))
+	for id := range archived {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return archived[ids[i]].Sequence > archived[ids[j]].Sequence })
+	if len(ids) > limit {
+		ids = ids[:limit]
+	}
+	for _, id := range ids {
+		if !seen[id] {
+			if run, ok := r.LookupRun(id); ok {
+				current = append(current, run)
+			}
+		}
+	}
+	sort.SliceStable(current, func(i, j int) bool { return current[i].UpdatedAt.After(current[j].UpdatedAt) })
+	if len(current) > limit {
+		current = current[:limit]
+	}
+	return current
 }
 
 // Metrics returns the live context usage snapshot when the host supplies a

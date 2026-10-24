@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"nekocode/interaction/tui/components"
+	"nekocode/interaction/tui/components/message"
 	"nekocode/interaction/tui/styles"
 	controlruntime "nekocode/runtime"
 	"nekocode/util/attachment"
@@ -44,17 +45,31 @@ type Model struct {
 	Height   int
 	Ready    bool
 
-	state           chatState
-	preConfirmState chatState
-	processingStart time.Time
-	processingPhase string
-	Suggestions     *components.Suggestions
-	ConfirmBar      *components.ConfirmBar
-	QuestionBar     *components.QuestionBar
-	Scrollbar       *components.Scrollbar
-	runtimeEvents   <-chan controlruntime.Event
-	metrics         controlruntime.MetricsSnapshot
-	commandMenuBack []string
+	state                 chatState
+	preConfirmState       chatState
+	processingStart       time.Time
+	processingPhase       string
+	Suggestions           *components.Suggestions
+	ConfirmBar            *components.ConfirmBar
+	QuestionBar           *components.QuestionBar
+	Scrollbar             *components.Scrollbar
+	runtimeEvents         <-chan controlruntime.Event
+	metrics               controlruntime.MetricsSnapshot
+	commandMenuBack       []string
+	sessionLoadGeneration uint64
+	sessionLoading        bool
+	sessionLoadStarted    time.Time
+	sessionLoadLabel      string
+	sessionLoadWaitForRun bool
+	sessionLoadPhase      string
+	sessionLoadDone       *doneMsg
+	sessionLoadNotices    []message.ChatMessage
+	sessionHistoryCursors []int
+	sessionHistoryPage    int
+	sessionHistoryBefore  int
+	sessionHistoryPaging  bool
+	sessionHistoryDirty   bool
+	sessionPendingChat    *pendingSessionChat
 }
 
 var displayVersion = version.Version
@@ -91,20 +106,30 @@ func NewModel(rt RuntimeClient) (*Model, error) {
 	return m, nil
 }
 
-func (m *Model) refreshRuntimeStatus() {
-	selection := m.Runtime.CurrentModel()
-	context := m.Runtime.ContextSnapshot()
-	m.Header.SetContext(context.Used, context.Budget, context.CompactionThreshold,
-		context.CacheHitTokens, context.CacheMissTokens)
-	label := selection.Model
-	if selection.Provider != "" && selection.Model != "" {
-		label = selection.Provider + "/" + selection.Model
-	} else if selection.Provider != "" {
-		label = selection.Provider
+type runtimeViewStatus struct {
+	selection  controlruntime.ModelSelection
+	context    controlruntime.ContextSnapshot
+	permission string
+}
+
+func readRuntimeViewStatus(rt RuntimeClient) runtimeViewStatus {
+	return runtimeViewStatus{selection: rt.CurrentModel(), context: rt.ContextSnapshot(), permission: rt.PermissionMode()}
+}
+
+func (m *Model) refreshRuntimeStatus() { m.applyRuntimeViewStatus(readRuntimeViewStatus(m.Runtime)) }
+
+func (m *Model) applyRuntimeViewStatus(status runtimeViewStatus) {
+	m.Header.SetContext(status.context.Used, status.context.Budget, status.context.CompactionThreshold,
+		status.context.CacheHitTokens, status.context.CacheMissTokens)
+	label := status.selection.Model
+	if status.selection.Provider != "" && status.selection.Model != "" {
+		label = status.selection.Provider + "/" + status.selection.Model
+	} else if status.selection.Provider != "" {
+		label = status.selection.Provider
 	}
 	m.Input.SetModel(label)
-	m.Input.SetReasoningEffort(selection.ReasoningEffort)
-	m.Input.SetPermissionMode(m.Runtime.PermissionMode())
+	m.Input.SetReasoningEffort(status.selection.ReasoningEffort)
+	m.Input.SetPermissionMode(status.permission)
 }
 
 func (m *Model) Init() tea.Cmd {
@@ -130,7 +155,8 @@ func (m *Model) resizeMessages() {
 	msgHeight := max(0, m.Height-m.Header.Height()-m.Input.Height()-contentMarginV-extra)
 	// Horizontal scrollbar occupies 1 row above the header when content
 	// overflows the viewport; reserve it so the message area shrinks.
-	if m.Messages.TotalContentHeight() > msgHeight && msgHeight > 0 {
+	totalHeight, _, _ := m.Messages.ScrollbarMetrics()
+	if totalHeight > msgHeight && msgHeight > 0 {
 		msgHeight--
 	}
 	width := m.Width
@@ -176,10 +202,11 @@ func listenRuntimeEvent(ch <-chan controlruntime.Event) tea.Cmd {
 
 // Processing phases displayed in the status line during agent execution.
 const (
-	phaseSteer      = "Processing new input..."
-	phaseCompacting = "Compacting context..."
-	PhaseReady      = "Ready"
-	PhaseWaiting    = "Waiting"
+	phaseSteer          = "Processing new input..."
+	phaseCompacting     = "Compacting context..."
+	phaseSessionLoading = "正在加载会话…"
+	PhaseReady          = "Ready"
+	PhaseWaiting        = "Waiting"
 )
 
 func (m *Model) setPhase(p string) {

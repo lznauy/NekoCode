@@ -508,3 +508,34 @@ func TestCheckpointLookupFailureIsControlError(t *testing.T) {
 	}
 	h.finish(t)
 }
+
+func TestHistoryUsesPageCallbackWithoutFullProjection(t *testing.T) {
+	session := ""
+	pages := 0
+	h := newHarnessWithServices(t, func(context.Context, string, rt.RunHost) (string, error) { return "ok", nil }, Options{}, rt.ServiceGroups{
+		Sessions: rt.SessionsServices{
+			NewSession:       func() (rt.SessionMeta, error) { session = "initial"; return rt.SessionMeta{ID: session}, nil },
+			CurrentSessionID: func() string { return session }, ListSessions: func() []rt.SessionMeta { return nil },
+			SessionMessages: func() []rt.DisplayMessage { t.Error("full projection called for a page"); return nil },
+			SessionMessagesPage: func(offset, limit int) (rt.SessionMessagePage, error) {
+				pages++
+				if offset != 20 || limit != 5 {
+					return rt.SessionMessagePage{}, fmt.Errorf("unexpected page %d/%d", offset, limit)
+				}
+				return rt.SessionMessagePage{Messages: []rt.DisplayMessage{{Content: "page"}}, NextOffset: 21, HasMore: true, Total: 100}, nil
+			},
+		},
+	})
+	response := rpc(t, h, "session.history", map[string]any{"offset": 20, "limit": 5})
+	if response["subtype"] != "success" {
+		t.Fatal(response)
+	}
+	page := response["response"].(map[string]any)
+	if page["total"] != float64(100) || page["next_offset"] != float64(21) || page["has_more"] != true || pages != 1 {
+		t.Fatal(page, pages)
+	}
+	if result := rpc(t, h, "session.history", map[string]any{"limit": 1001}); result["subtype"] != "error" || pages != 1 {
+		t.Fatal("invalid page reached callback", result, pages)
+	}
+	h.finish(t)
+}

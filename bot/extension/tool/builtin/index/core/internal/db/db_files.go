@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 
+	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
 )
 
@@ -13,7 +14,11 @@ func (d *DB) SaveFile(path, hash, lang string) error {
 		return err
 	}
 	defer d.pool.Put(conn)
-	return sqlitex.ExecuteTransient(conn, `
+	return saveFile(conn, path, hash, lang)
+}
+
+func saveFile(conn *sqlite.Conn, path, hash, lang string) error {
+	return sqlitex.Execute(conn, `
 		INSERT INTO files (path, content_hash, language)
 		VALUES (?, ?, ?)
 		ON CONFLICT(path) DO UPDATE SET content_hash=excluded.content_hash, language=excluded.language
@@ -72,7 +77,7 @@ func (d *DB) LoadFileHashes() (map[string]string, error) {
 }
 
 // DeleteFile removes a file and all its nodes/edges.
-func (d *DB) DeleteFile(path string) error {
+func (d *DB) DeleteFile(path string) (err error) {
 	conn, err := d.pool.Take(context.Background())
 	if err != nil {
 		return err
@@ -85,17 +90,29 @@ func (d *DB) DeleteFile(path string) error {
 	}
 	defer endFn(&err)
 
-	if err := sqlitex.ExecuteTransient(conn, `
+	return deleteFile(conn, path)
+}
+
+func deleteFile(conn *sqlite.Conn, path string) error {
+	// Keep named incoming references so unchanged callers can bind to a new
+	// target after this file is replaced. Anonymous edges still cascade away.
+	if err := sqlitex.Execute(conn, `UPDATE edges SET to_id = NULL
+        WHERE to_id IN (SELECT id FROM nodes WHERE file = ?)
+        AND (COALESCE(callee_name, '') <> '' OR COALESCE(import_path, '') <> '')`,
+		&sqlitex.ExecOptions{Args: []any{path}}); err != nil {
+		return err
+	}
+	if err := sqlitex.Execute(conn, `
 		DELETE FROM edges WHERE from_id IN (SELECT id FROM nodes WHERE file = ?)
 		OR to_id IN (SELECT id FROM nodes WHERE file = ?)
 	`, &sqlitex.ExecOptions{Args: []any{path, path}}); err != nil {
 		return err
 	}
-	if err := sqlitex.ExecuteTransient(conn, "DELETE FROM nodes WHERE file = ?",
+	if err := sqlitex.Execute(conn, "DELETE FROM nodes WHERE file = ?",
 		&sqlitex.ExecOptions{Args: []any{path}}); err != nil {
 		return err
 	}
-	return sqlitex.ExecuteTransient(conn, "DELETE FROM files WHERE path = ?",
+	return sqlitex.Execute(conn, "DELETE FROM files WHERE path = ?",
 		&sqlitex.ExecOptions{Args: []any{path}})
 }
 

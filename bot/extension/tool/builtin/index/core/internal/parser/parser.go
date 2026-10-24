@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
@@ -125,7 +126,15 @@ func buildSupportedLangs() map[string]langConfig {
 
 // Parser extracts code symbols from source files using tree-sitter.
 type Parser struct {
+	mu      sync.Mutex
 	parsers map[string]*sitter.Parser
+	queries map[string]map[string]queryResult
+	closed  bool
+}
+
+type queryResult struct {
+	query *sitter.Query
+	err   error
 }
 
 // NewParser creates a new tree-sitter parser.
@@ -136,11 +145,16 @@ func NewParser() *Parser {
 		parser.SetLanguage(cfg.lang)
 		parsers[ext] = parser
 	}
-	return &Parser{parsers: parsers}
+	return &Parser{parsers: parsers, queries: make(map[string]map[string]queryResult)}
 }
 
 // ParseFile parses a source file and extracts nodes and edges.
 func (p *Parser) ParseFile(path string, content []byte) ([]*Node, []*Edge) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return nil, nil
+	}
 	ext := filepath.Ext(path)
 	cfg, ok := supportedLangs[ext]
 	if !ok {
@@ -163,11 +177,14 @@ func (p *Parser) ParseFile(path string, content []byte) ([]*Node, []*Edge) {
 	var edges []*Edge
 
 	// Extract package/module info
-	pkgPath := extractPackagePath(root, path, content, ext)
+	pkgPath := p.extractPackagePath(root, path, content, ext)
 
 	// Track function/method definitions for resolving call edge sources.
 	// key = startLine, value = index into nodes slice.
 	funcByLine := make(map[int]int)
+
+	qc := sitter.NewQueryCursor()
+	defer qc.Close()
 
 	// First pass: extract definitions (functions, classes, structs, etc.)
 	for queryName, pattern := range cfg.queries {
@@ -176,11 +193,10 @@ func (p *Parser) ParseFile(path string, content []byte) ([]*Node, []*Edge) {
 			continue
 		}
 
-		q, err := sitter.NewQuery([]byte(pattern), cfg.lang)
+		q, err := p.query(ext, pattern, cfg.lang)
 		if err != nil {
 			continue
 		}
-		qc := sitter.NewQueryCursor()
 		qc.Exec(q, root)
 
 		for {
@@ -347,11 +363,10 @@ func (p *Parser) ParseFile(path string, content []byte) ([]*Node, []*Edge) {
 			continue
 		}
 
-		q, err := sitter.NewQuery([]byte(pattern), cfg.lang)
+		q, err := p.query(ext, pattern, cfg.lang)
 		if err != nil {
 			continue
 		}
-		qc := sitter.NewQueryCursor()
 		qc.Exec(q, root)
 
 		for {
@@ -414,15 +429,16 @@ func (p *Parser) ParseFile(path string, content []byte) ([]*Node, []*Edge) {
 }
 
 // extractPackagePath determines the package/module path for a file.
-func extractPackagePath(root *sitter.Node, path string, content []byte, ext string) string {
+func (p *Parser) extractPackagePath(root *sitter.Node, path string, content []byte, ext string) string {
 	switch ext {
 	case ".go":
 		// Use tree-sitter to find the package clause precisely
 		cfg, ok := supportedLangs[ext]
 		if ok {
-			q, err := sitter.NewQuery([]byte(`(package_clause (package_identifier) @pkg)`), cfg.lang)
+			q, err := p.query(ext, `(package_clause (package_identifier) @pkg)`, cfg.lang)
 			if err == nil {
 				qc := sitter.NewQueryCursor()
+				defer qc.Close()
 				qc.Exec(q, root)
 				if m, ok := qc.NextMatch(); ok {
 					for _, c := range m.Captures {
@@ -445,9 +461,10 @@ func extractPackagePath(root *sitter.Node, path string, content []byte, ext stri
 		// Look for mod declarations; fall back to directory name
 		cfg, ok := supportedLangs[ext]
 		if ok {
-			q, err := sitter.NewQuery([]byte(`(mod_item name: (identifier) @mod)`), cfg.lang)
+			q, err := p.query(ext, `(mod_item name: (identifier) @mod)`, cfg.lang)
 			if err == nil {
 				qc := sitter.NewQueryCursor()
+				defer qc.Close()
 				qc.Exec(q, root)
 				if m, ok := qc.NextMatch(); ok {
 					for _, c := range m.Captures {
@@ -537,4 +554,43 @@ func extractDoc(node *sitter.Node, content []byte) string {
 		return doc
 	}
 	return ""
+}
+
+// query is called under p.mu. Failed patterns are cached too, so unsupported
+// language query shapes are not repeatedly compiled for every file.
+func (p *Parser) query(ext, pattern string, lang *sitter.Language) (*sitter.Query, error) {
+	queries := p.queries[ext]
+	if queries == nil {
+		queries = make(map[string]queryResult)
+		p.queries[ext] = queries
+	}
+	if result, ok := queries[pattern]; ok {
+		return result.query, result.err
+	}
+	q, err := sitter.NewQuery([]byte(pattern), lang)
+	queries[pattern] = queryResult{query: q, err: err}
+	return q, err
+}
+
+// Close releases native parsers and compiled queries immediately and is
+// serialized with ParseFile so a concurrent shutdown cannot free active state.
+func (p *Parser) Close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return
+	}
+	p.closed = true
+	for _, queries := range p.queries {
+		for _, result := range queries {
+			if result.query != nil {
+				result.query.Close()
+			}
+		}
+	}
+	for _, parser := range p.parsers {
+		parser.Close()
+	}
+	p.queries = nil
+	p.parsers = nil
 }

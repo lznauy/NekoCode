@@ -2,6 +2,7 @@
 package components
 
 import (
+	"fmt"
 	"sync"
 
 	"nekocode/interaction/tui/components/block"
@@ -15,11 +16,19 @@ import (
 
 type Messages struct {
 	*List
-	Processing     bool
-	Follow         bool
-	sty            *styles.Styles
-	processingItem *processing.ProcessingItem
-	mu             sync.Mutex
+	Processing       bool
+	Follow           bool
+	sty              *styles.Styles
+	processingItem   *processing.ProcessingItem
+	history          []message.ChatMessage
+	historyNotice    *message.SystemMessageItem
+	historyPageOlder bool
+	historyPageNewer bool
+	historyBefore    int
+	historyEnd       int
+	historyTotal     int
+	onHistoryPage    func(bool) tea.Cmd
+	mu               sync.Mutex
 }
 
 func NewMessages(width, height int, sty *styles.Styles) *Messages {
@@ -64,6 +73,29 @@ func (m *Messages) SetProcessing(on bool) {
 		if follow {
 			m.ScrollToBottom()
 		}
+	}
+	m.mu.Unlock()
+}
+
+// MoveProcessingFrom keeps live output when a prepared history window replaces
+// its container. The host calls this on the UI thread after preparation ends.
+func (m *Messages) MoveProcessingFrom(previous *Messages) {
+	if previous == nil || previous == m {
+		return
+	}
+	previous.mu.Lock()
+	item := previous.processingItem
+	previous.mu.Unlock()
+	if item == nil {
+		return
+	}
+	previous.SetProcessing(false)
+	m.mu.Lock()
+	m.processingItem = item
+	m.Processing = true
+	m.AppendItems(item)
+	if m.Follow {
+		m.ScrollToBottom()
 	}
 	m.mu.Unlock()
 }
@@ -177,6 +209,75 @@ func (m *Messages) invalidateProcessing() {
 	}
 }
 
+const restoredHistoryPageSize = 100
+
+// ReplaceMessages displays the newest page without rendering the entire
+// transcript. Older messages remain available by scrolling to the top.
+func (m *Messages) ReplaceMessages(messages []message.ChatMessage) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.historyBefore, m.historyEnd, m.historyTotal = 0, 0, 0
+	start := max(0, len(messages)-restoredHistoryPageSize)
+	m.history = append([]message.ChatMessage(nil), messages[:start]...)
+	m.historyNotice = nil
+	m.onHistoryPage = nil
+	items := make([]Item, 0, len(messages)-start+1)
+	if start > 0 {
+		m.historyNotice = message.NewSystemMessageItem(m.sty, "")
+		m.updateHistoryNotice()
+		items = append(items, m.historyNotice)
+	}
+	for _, msg := range messages[start:] {
+		items = append(items, m.messageItem(msg))
+	}
+	m.Processing = false
+	m.processingItem = nil
+	m.SetItems(items...)
+	m.Follow = true
+	m.ScrollToBottom()
+}
+
+func (m *Messages) updateHistoryNotice() {
+	text := "已加载全部历史消息。"
+	if len(m.history) > 0 {
+		text = fmt.Sprintf("还有 %d 条更早的消息，继续向上滚动加载。", len(m.history))
+	}
+	m.historyNotice.SetRenderedContent(text)
+}
+
+// LoadOlderMessages inserts one page above the current viewport, retaining
+// the rendered cache and the viewport's anchor rather than jumping to bottom.
+func (m *Messages) LoadOlderMessages() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.history) == 0 {
+		return false
+	}
+	start := max(0, len(m.history)-restoredHistoryPageSize)
+	count := len(m.history) - start
+	for i := len(m.history) - 1; i >= start; i-- {
+		m.InsertItem(1, m.messageItem(m.history[i]))
+	}
+	clear(m.history[start:])
+	m.history = m.history[:start]
+	m.updateHistoryNotice()
+	m.InvalidateItem(0)
+	if m.offsetIdx == 0 {
+		m.offsetIdx = count + 1
+		m.offsetLine = 0
+	}
+	m.recomputePixelsAbove()
+	m.Follow = false
+	return true
+}
+
+func (m *Messages) scrollHistoryBy(lines int) {
+	if lines < 0 && m.offsetIdx <= 1 && m.offsetLine == 0 {
+		m.LoadOlderMessages()
+	}
+	m.ScrollBy(lines)
+}
+
 func (m *Messages) AddMessage(msg message.ChatMessage) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -245,18 +346,44 @@ func (m *Messages) GotoBottom() {
 }
 
 func (m *Messages) Update(msg tea.Msg) (*Messages, tea.Cmd) {
+	if m.onHistoryPage != nil {
+		direction := 0
+		switch event := msg.(type) {
+		case tea.KeyPressMsg:
+			switch event.String() {
+			case "up", "pgup":
+				direction = -1
+			case "down", "pgdown":
+				direction = 1
+			}
+		case tea.MouseMsg:
+			switch event.Mouse().Button {
+			case tea.MouseWheelUp:
+				direction = -1
+			case tea.MouseWheelDown:
+				direction = 1
+			}
+		}
+		if direction < 0 && m.historyPageOlder && m.offsetIdx <= 1 && m.offsetLine == 0 {
+			return m, m.onHistoryPage(true)
+		}
+		if direction > 0 && m.historyPageNewer && m.AtBottom() {
+			return m, m.onHistoryPage(false)
+		}
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "up":
-			m.ScrollBy(-1)
+			m.scrollHistoryBy(-1)
 			if m.Processing {
 				m.SetFollow(false)
 			}
 		case "down":
 			m.ScrollBy(1)
 		case "pgup":
-			m.ScrollBy(-m.Height())
+			m.scrollHistoryBy(-m.Height())
 			if m.Processing {
 				m.SetFollow(false)
 			}
@@ -267,7 +394,7 @@ func (m *Messages) Update(msg tea.Msg) (*Messages, tea.Cmd) {
 		mev := msg.Mouse()
 		switch mev.Button {
 		case tea.MouseWheelUp:
-			m.ScrollBy(-3)
+			m.scrollHistoryBy(-3)
 			if m.Processing {
 				m.SetFollow(false)
 			}
@@ -285,4 +412,86 @@ func (m *Messages) Update(msg tea.Msg) (*Messages, tea.Cmd) {
 	// If they scroll back to bottom (AtBottom), re-enable follow.
 
 	return m, nil
+}
+
+// ReplaceHistoryWindow holds only one disk-backed window. Moving beyond its
+// edges asks the host for another window rather than accumulating old pages.
+func (m *Messages) ReplaceHistoryWindow(messages []message.ChatMessage, before, end, total int, older, newer bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.historyBefore, m.historyEnd, m.historyTotal = before, end, total
+	m.history = nil
+	m.historyNotice = nil
+	m.onHistoryPage = nil
+	items := make([]Item, 0, len(messages)+2)
+	if total > 0 {
+		hint := fmt.Sprintf("历史记录 %d–%d / %d", before, end, total)
+		if older {
+			hint += " · ↑ 向上加载更早记录"
+		}
+		if newer {
+			hint += " · ↓ 向下返回较新记录"
+		}
+		items = append(items, m.messageItem(message.ChatMessage{Role: "system", Content: hint}))
+	}
+	for _, msg := range messages {
+		items = append(items, m.messageItem(msg))
+	}
+	if newer {
+		items = append(items, m.messageItem(message.ChatMessage{Role: "system", Content: "↓ 继续向下滚动返回较新记录"}))
+	}
+	m.Processing = false
+	m.processingItem = nil
+	m.SetItems(items...)
+	m.Follow = !newer
+	m.historyPageOlder = older
+	m.historyPageNewer = newer
+	m.ScrollToBottom()
+}
+
+func (m *Messages) SetHistoryPageHandler(handler func(bool) tea.Cmd) { m.onHistoryPage = handler }
+
+// ScrollbarMetrics projects the loaded window onto the whole transcript.
+// Unloaded line heights are unknown, so size is estimated from this window;
+// position uses stable raw sequence boundaries rather than restarting per page.
+func (m *Messages) ScrollbarMetrics() (totalHeight, viewportHeight int, percent float64) {
+	totalHeight, viewportHeight = m.TotalContentHeight(), m.Height()
+	percent = m.List.ScrollPercent()
+	span := m.historyEnd - m.historyBefore + 1
+	if m.historyBefore < 1 || span < 1 || m.historyTotal < m.historyEnd {
+		return
+	}
+	start := float64(m.historyBefore-1) / float64(m.historyTotal)
+	end := float64(m.historyEnd) / float64(m.historyTotal)
+	// A short page has no local scroll offset. Prefer its newest boundary,
+	// matching ReplaceHistoryWindow's initial bottom-aligned viewport.
+	if totalHeight <= viewportHeight {
+		percent = 1
+	}
+	percent = start + (end-start)*percent
+	totalHeight = max(totalHeight, int(float64(max(totalHeight, 1))*float64(m.historyTotal)/float64(span)))
+	if m.historyPageOlder || m.historyPageNewer {
+		totalHeight = max(totalHeight, viewportHeight+1)
+	}
+	return
+}
+
+// HistoryWindowBytes conservatively counts source and rendered string bytes.
+// It is a cache budget, not a measurement of total process RSS.
+func (m *Messages) HistoryWindowBytes(messages []message.ChatMessage) int {
+	n := 0
+	for _, msg := range messages {
+		n += len(msg.Content) + len(msg.RenderedContent) + len(msg.Reasoning)
+		for _, b := range msg.Blocks {
+			n += len(b.Content) + len(b.ToolArgs)
+		}
+	}
+	m.cacheMu.RLock()
+	defer m.cacheMu.RUnlock()
+	for _, item := range m.cache {
+		for _, line := range item.lines {
+			n += len(line)
+		}
+	}
+	return n
 }

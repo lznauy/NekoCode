@@ -1,6 +1,7 @@
 package viewmodel
 
 import (
+	"fmt"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
@@ -18,33 +19,62 @@ import (
 var reImagePath = regexp.MustCompile(`(?:=>\s+)?(\S*(?:nekocode_img|/)\S*\.(?:png|jpg|jpeg|gif|webp))\b`)
 
 func DisplayMessages(messages []types.Message) []controlruntime.DisplayMessage {
+	out, _ := displayMessagePage(messages, 0, -1)
+	return out
+}
+
+// DisplayMessagesPage counts visible groups but only materializes the requested
+// page. Off-page terminal output and image dimensions are never decoded.
+func DisplayMessagesPage(messages []types.Message, offset, limit int) (controlruntime.SessionMessagePage, error) {
+	if offset < 0 || limit < 1 || limit > 1000 {
+		return controlruntime.SessionMessagePage{}, fmt.Errorf("offset must be within history; limit must be 1..1000")
+	}
+	out, total := displayMessagePage(messages, offset, limit)
+	if offset > total {
+		return controlruntime.SessionMessagePage{}, fmt.Errorf("offset must be within history; limit must be 1..1000")
+	}
+	if total > 0 && out == nil {
+		out = []controlruntime.DisplayMessage{}
+	}
+	next := offset + len(out)
+	return controlruntime.SessionMessagePage{Messages: out, NextOffset: next, HasMore: next < total, Total: total}, nil
+}
+
+func displayMessagePage(messages []types.Message, offset, limit int) ([]controlruntime.DisplayMessage, int) {
 	toolNames, toolArgs := toolMetaByID(messages)
 	var out []controlruntime.DisplayMessage
-	i := 0
-	for i < len(messages) {
+	total := 0
+	for i := 0; i < len(messages); {
 		m := messages[i]
+		materialize := total >= offset && (limit < 0 || len(out) < limit)
+		var msg controlruntime.DisplayMessage
+		visible := false
 		switch m.Role {
 		case "user":
-			if !isInternalMessage(m) {
-				out = append(out, controlruntime.DisplayMessage{Role: "user", Content: controlruntime.VisibleInputText(m.Content)})
+			visible = !isInternalMessage(m)
+			if materialize && visible {
+				msg = controlruntime.DisplayMessage{Role: "user", Content: controlruntime.VisibleInputText(m.Content)}
 			}
 			i++
 		case "assistant":
-			msg, next := displayAssistantTurn(messages, i, toolNames, toolArgs)
-			if msg.Content != "" || len(msg.Blocks) > 0 || len(msg.Images) > 0 {
-				out = append(out, msg)
-			}
-			i = next
+			msg, i, visible = displayAssistantTurn(messages, i, toolNames, toolArgs, materialize)
 		case "system":
-			if !isInternalMessage(m) {
-				out = append(out, controlruntime.DisplayMessage{Role: "system", Content: m.Content})
+			visible = !isInternalMessage(m)
+			if materialize && visible {
+				msg = controlruntime.DisplayMessage{Role: "system", Content: m.Content}
 			}
 			i++
 		default:
 			i++
 		}
+		if visible {
+			if materialize {
+				out = append(out, msg)
+			}
+			total++
+		}
 	}
-	return out
+	return out, total
 }
 
 func toolMetaByID(msgs []types.Message) (names map[string]string, args map[string]string) {
@@ -64,7 +94,8 @@ func toolMetaByID(msgs []types.Message) (names map[string]string, args map[strin
 	return names, args
 }
 
-func displayAssistantTurn(msgs []types.Message, idx int, toolNames, toolArgs map[string]string) (controlruntime.DisplayMessage, int) {
+func displayAssistantTurn(msgs []types.Message, idx int, toolNames, toolArgs map[string]string, materialize bool) (controlruntime.DisplayMessage, int, bool) {
+	visible := false
 	var contentParts []string
 	var blocks []controlruntime.DisplayBlock
 	var images []controlruntime.ImageRef
@@ -76,14 +107,23 @@ func displayAssistantTurn(msgs []types.Message, idx int, toolNames, toolArgs map
 
 		if len(m.ToolCalls) == 0 {
 			if content := strings.TrimSpace(m.Content); content != "" && !isInternalMessage(m) {
-				contentParts = append(contentParts, content)
+				visible = true
+				if materialize {
+					contentParts = append(contentParts, content)
+				}
 			}
 			continue
 		}
 
 		for next < len(msgs) && msgs[next].Role == "tool" {
 			name := toolNames[msgs[next].ToolCallID]
-			blocks, images = appendDisplayToolResult(blocks, images, name, toolArgs[msgs[next].ToolCallID], msgs[next])
+			if materialize {
+				blocks, images = appendDisplayToolResult(blocks, images, name, toolArgs[msgs[next].ToolCallID], msgs[next])
+			} else if isPersistentTool(name) {
+				visible = true
+			} else if isImageTool(name) && len(imageRefs(msgs[next].Content, false)) > 0 {
+				visible = true
+			}
 			next++
 		}
 	}
@@ -93,7 +133,7 @@ func displayAssistantTurn(msgs []types.Message, idx int, toolNames, toolArgs map
 		Content: strings.Join(contentParts, "\n\n"),
 		Blocks:  blocks,
 		Images:  images,
-	}, next
+	}, next, visible || len(blocks) > 0 || len(images) > 0
 }
 
 func appendDisplayToolResult(blocks []controlruntime.DisplayBlock, images []controlruntime.ImageRef, name, args string, msg types.Message) ([]controlruntime.DisplayBlock, []controlruntime.ImageRef) {
@@ -120,6 +160,10 @@ func isImageTool(name string) bool {
 }
 
 func extractImageRefs(output string) []controlruntime.ImageRef {
+	return imageRefs(output, true)
+}
+
+func imageRefs(output string, dimensions bool) []controlruntime.ImageRef {
 	matches := reImagePath.FindAllStringSubmatch(output, -1)
 	if len(matches) == 0 {
 		return nil
@@ -136,8 +180,10 @@ func extractImageRefs(output string) []controlruntime.ImageRef {
 			continue
 		}
 		ref := controlruntime.ImageRef{Path: abs}
-		if dims := readImageDims(abs); dims != nil {
-			ref.Width, ref.Height = dims[0], dims[1]
+		if dimensions {
+			if dims := readImageDims(abs); dims != nil {
+				ref.Width, ref.Height = dims[0], dims[1]
+			}
 		}
 		refs = append(refs, ref)
 	}

@@ -161,7 +161,7 @@ func TestInitSessionBacksUpSnapshotBeforeCompaction(t *testing.T) {
 	if err != nil || !strings.Contains(string(data), `"old question"`) {
 		t.Fatalf("pre-compaction backup missing history: %v", err)
 	}
-	if got := b.ctxMgr.Snapshot(); len(got.Transcript) != 16 || len(got.Messages) >= 16 {
+	if got := b.Conversation(); len(got.Transcript) != 16 || len(got.Messages) >= 16 {
 		t.Fatalf("transcript/context after compaction = %d/%d", len(got.Transcript), len(got.Messages))
 	}
 }

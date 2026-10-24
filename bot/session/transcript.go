@@ -106,7 +106,11 @@ func appendNewline(path string) error {
 }
 
 func appendTranscript(sessionDir string, persisted int, messages []types.Message) (int, error) {
-	if persisted < 0 || persisted > len(messages) {
+	return appendTranscriptFrom(sessionDir, persisted, 0, messages)
+}
+
+func appendTranscriptFrom(sessionDir string, persisted, base int, messages []types.Message) (int, error) {
+	if base < 0 || persisted < base || persisted > base+len(messages) {
 		return persisted, fmt.Errorf("invalid transcript watermark %d for %d messages", persisted, len(messages))
 	}
 	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
@@ -123,7 +127,7 @@ func appendTranscript(sessionDir string, persisted int, messages []types.Message
 	} else if err != nil {
 		return persisted, err
 	}
-	if persisted == len(messages) {
+	if persisted == base+len(messages) {
 		return persisted, nil
 	}
 	file, err := os.OpenFile(transcriptPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
@@ -146,8 +150,8 @@ func appendTranscript(sessionDir string, persisted int, messages []types.Message
 		return persisted, cause
 	}
 	encoder := json.NewEncoder(file)
-	for i := persisted; i < len(messages); i++ {
-		if err := encoder.Encode(transcriptRecord{Seq: i + 1, Message: messages[i]}); err != nil {
+	for i := persisted - base; i < len(messages); i++ {
+		if err := encoder.Encode(transcriptRecord{Seq: base + i + 1, Message: messages[i]}); err != nil {
 			return rollback(fmt.Errorf("append transcript record %d: %w", i+1, err))
 		}
 	}
@@ -155,10 +159,10 @@ func appendTranscript(sessionDir string, persisted int, messages []types.Message
 		return rollback(fmt.Errorf("sync transcript: %w", err))
 	}
 	if err := file.Close(); err != nil {
-		return len(messages), err
+		return base + len(messages), err
 	}
 	if err := syncTranscriptDir(sessionDir); err != nil {
-		return len(messages), err
+		return base + len(messages), err
 	}
-	return len(messages), nil
+	return base + len(messages), nil
 }

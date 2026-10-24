@@ -103,3 +103,26 @@ func (g *Graph) ReindexEdgeTo(e *Edge, oldToID int64) {
 	}
 	g.edgesByTo[e.ToID] = append(g.edgesByTo[e.ToID], e)
 }
+
+// NextIDs returns unused identifiers for staging a file without mutating the
+// live graph. The caller must serialize staging and publishing the file.
+func (g *Graph) NextIDs() (node, edge int64) {
+	return g.nextNodeID + 1, g.nextEdgeID + 1
+}
+
+// DetachFileReferences keeps named references from other files available for
+// rebinding when a target file is replaced or removed.
+func (g *Graph) DetachFileReferences(file string) {
+	for _, n := range g.nodesByFile[file] {
+		incoming := append([]*Edge(nil), g.edgesByTo[n.ID]...)
+		for _, e := range incoming {
+			source := g.Nodes[e.FromID]
+			if source == nil || source.File == file || (e.CalleeName == "" && e.ImportPath == "") {
+				continue
+			}
+			old := e.ToID
+			e.ToID = 0
+			g.ReindexEdgeTo(e, old)
+		}
+	}
+}

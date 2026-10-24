@@ -78,6 +78,7 @@ func (s *SnapshotStore) Record(path, text string) string {
 	if len(versions) > s.maxPerPath {
 		removed := versions[s.maxPerPath]
 		s.totalBytes -= int64(len(removed.Text))
+		clear(versions[s.maxPerPath:])
 		versions = versions[:s.maxPerPath]
 	}
 	s.totalBytes += int64(len(text))

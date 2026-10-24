@@ -3,11 +3,13 @@ package runtime
 import (
 	"context"
 	"fmt"
-	"sort"
+	"path/filepath"
 	"strings"
 
 	"nekocode/logger"
+	"nekocode/protocol"
 	internalconnectors "nekocode/runtime/internal/connectors"
+	"nekocode/runtime/internal/eventbus"
 	"nekocode/runtime/internal/recording"
 	"nekocode/runtime/internal/runstore"
 )
@@ -42,6 +44,45 @@ func (r *Runtime) Notify(content string) {
 }
 
 func (r *Runtime) ReplayEvents(ctx context.Context, filter EventFilter) (<-chan Event, error) {
+	if filter.RunID != "" {
+		// Archived runs are completed and immutable. Serialize with pruning
+		// while reading, then seed only this subscriber, preserving large
+		// terminal results without growing or displacing shared history.
+		r.recordingMu.Lock()
+		defer r.recordingMu.Unlock()
+		r.mu.Lock()
+		run, ok := r.archivedRuns[filter.RunID]
+		r.mu.Unlock()
+		if ok {
+			recent := make([]Event, 0)
+			bytes := 0
+			if err := recording.WalkRecordedEventFile(run.Path, func(ev Event) {
+				if ev.Type == EventCompaction {
+					if p, ok := ev.Payload.(CompactionPayload); ok && p.Status == protocol.CompactionDelta {
+						return
+					}
+				}
+				recent = append(recent, ev)
+				bytes += eventbus.EstimateEventBytes(ev)
+				// Keep at least the final record even when it alone exceeds
+				// the budget, just as a single oversized history page does.
+				for len(recent) > 1 && (len(recent) > 1000 || bytes > 8<<20) {
+					bytes -= eventbus.EstimateEventBytes(recent[0])
+					recent[0] = Event{}
+					recent = recent[1:]
+				}
+			}); err != nil {
+				if len(r.events.History(EventFilter{RunID: filter.RunID})) > 0 {
+					return r.events.SubscribeReplay(ctx, filter)
+				}
+				return nil, err
+			}
+			if len(recent) == 0 {
+				return r.events.SubscribeReplay(ctx, filter)
+			}
+			return r.events.SubscribeReplayEvents(ctx, filter, recent)
+		}
+	}
 	return r.events.SubscribeReplay(ctx, filter)
 }
 
@@ -100,10 +141,9 @@ func (r *Runtime) EnableDefaultEventRecording() error {
 }
 
 // immediateRestoredRuns is how many of the newest recorded runs are decoded
-// synchronously during startup so /last /status answer instantly. The long
-// tail streams in from a background goroutine — decoding all of them inline
-// cost ~5s of startup on histories of a few hundred runs.
-const immediateRestoredRuns = 10
+// synchronously during startup so /last /status answer instantly. Older runs
+// stay on disk until an explicit lookup or replay requests their contents.
+const immediateRestoredRuns = 1
 
 // BindRecordedSession moves provisional recordings into the real session, or
 // selects a new session for future events. A failed bind preserves its source.
@@ -164,7 +204,24 @@ func (r *Runtime) releaseRecordedRun(runID RunID) {
 	recorder := r.recorder
 	r.mu.Unlock()
 	if recorder != nil {
+		path := filepath.Join(recorder.RunDir(runID), "events.jsonl")
 		recorder.EndRun(runID)
+		r.mu.Lock()
+		if r.archivedRuns == nil {
+			r.archivedRuns = make(map[RunID]recording.RecordedRun)
+		}
+		r.archivedRuns[runID] = recording.RecordedRun{Path: path, Sequence: r.nextRun}
+		for len(r.archivedRuns) > recordedRunRestoreLimit {
+			var oldest RunID
+			var sequence uint64 = ^uint64(0)
+			for id, run := range r.archivedRuns {
+				if run.Sequence < sequence {
+					oldest, sequence = id, run.Sequence
+				}
+			}
+			delete(r.archivedRuns, oldest)
+		}
+		r.mu.Unlock()
 	}
 }
 
@@ -196,26 +253,20 @@ func (r *Runtime) EnableEventRecording(baseDir string) error {
 	// or restored run IDs would collide with fresh ones.
 	r.advanceRunSequenceForRuns(runs)
 
-	// The newest runs restore synchronously into the run store (the data
-	// source of /last /diff /status); the event-bus history is imported in
-	// one piece — either synchronously when everything fit in the immediate
-	// slice, or once the background tail finishes, keeping its ordering
-	// correct.
-	var immediate []recording.RecordedRun
-	if len(runs) > immediateRestoredRuns {
-		immediate, runs = runs[len(runs)-immediateRestoredRuns:], runs[:len(runs)-immediateRestoredRuns]
-	} else {
-		immediate, runs = runs, nil
+	// Only the newest run is decoded eagerly; the rest are path metadata.
+	r.mu.Lock()
+	r.archivedRuns = make(map[RunID]recording.RecordedRun, len(runs))
+	for _, run := range runs {
+		r.archivedRuns[RunID(filepath.Base(filepath.Dir(run.Path)))] = run
 	}
-	if events := recording.LoadRecordedEventFiles(immediate); len(events) > 0 {
-		for _, ev := range events {
-			r.runs.Record(ev)
-		}
-		if len(runs) == 0 {
-			// Small histories have no tail to stream — the synchronous batch
-			// is the complete restore, so the event-bus history comes from
-			// it directly.
-			r.events.ImportHistory(events)
+	r.mu.Unlock()
+	immediate := runs
+	if len(immediate) > immediateRestoredRuns {
+		immediate = immediate[len(immediate)-immediateRestoredRuns:]
+	}
+	for _, run := range immediate {
+		if err := recording.WalkRecordedEventFile(run.Path, func(ev Event) { r.runs.Record(ev); r.events.ImportHistory([]Event{ev}) }); err != nil {
+			logger.Log("runtime: restore recent run: %v", err)
 		}
 	}
 
@@ -233,39 +284,7 @@ func (r *Runtime) EnableEventRecording(baseDir string) error {
 	r.mu.Unlock()
 	r.events.AddObserver(recorder.Record)
 
-	if len(runs) > 0 {
-		tail, immediateRuns := runs, immediate
-		go func() {
-			defer r.pruneRecordedRuns(baseDir)
-			// Two distinct sets: the run store only needs the tail — the
-			// immediate slice was already Recorded synchronously, and Record
-			// accumulates without dedup, so replaying it would double every
-			// event count and concatenate duplicated outputs. The event-bus
-			// history, by contrast, needs the complete restore (tail +
-			// immediate) exactly once and in order — parallel process batches
-			// overlap in time, so the two time-ordered slices are re-sorted
-			// after merging.
-			tailEvents := recording.LoadRecordedEventFiles(tail)
-			immediateEvents := recording.LoadRecordedEventFiles(immediateRuns)
-			r.mu.Lock()
-			closed := r.closed
-			r.mu.Unlock()
-			if closed {
-				return
-			}
-			for _, ev := range tailEvents {
-				r.runs.Record(ev)
-			}
-			events := append(tailEvents, immediateEvents...)
-			if len(events) == 0 {
-				return
-			}
-			sort.SliceStable(events, func(i, j int) bool { return events[i].Time.Before(events[j].Time) })
-			r.events.ImportHistory(events)
-		}()
-	} else {
-		go r.pruneRecordedRuns(baseDir)
-	}
+	go r.pruneRecordedRuns(baseDir)
 	return nil
 }
 

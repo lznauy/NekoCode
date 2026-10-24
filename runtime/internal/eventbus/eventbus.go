@@ -16,6 +16,7 @@ import (
 const defaultSubscriberBuffer = 128
 const defaultSubscriberQueueLimit = 1000
 const defaultEventHistoryLimit = 1000
+const defaultEventHistoryBytes = 8 << 20
 
 type EventBus struct {
 	mu           sync.Mutex
@@ -25,7 +26,11 @@ type EventBus struct {
 	observers    []func(core.Event)
 	observerWG   sync.WaitGroup
 	history      []core.Event
+	historySizes []int
 	historyLimit int
+	historyStart int
+	historyCount int
+	historyBytes int
 	closed       bool
 }
 
@@ -55,14 +60,20 @@ func (b *EventBus) AddObserver(fn func(core.Event)) {
 }
 
 func (b *EventBus) Subscribe(ctx context.Context, filter core.EventFilter) (<-chan core.Event, error) {
-	return b.subscribe(ctx, filter, false)
+	return b.subscribeHistory(ctx, filter, false, nil)
 }
 
 func (b *EventBus) SubscribeReplay(ctx context.Context, filter core.EventFilter) (<-chan core.Event, error) {
-	return b.subscribe(ctx, filter, true)
+	return b.subscribeHistory(ctx, filter, true, nil)
 }
 
-func (b *EventBus) subscribe(ctx context.Context, filter core.EventFilter, replay bool) (<-chan core.Event, error) {
+// SubscribeReplayEvents seeds one subscriber without putting archived payloads
+// in the shared history cache. The caller bounds the supplied recent window.
+func (b *EventBus) SubscribeReplayEvents(ctx context.Context, filter core.EventFilter, events []core.Event) (<-chan core.Event, error) {
+	return b.subscribeHistory(ctx, filter, true, events)
+}
+
+func (b *EventBus) subscribeHistory(ctx context.Context, filter core.EventFilter, replay bool, recorded []core.Event) (<-chan core.Event, error) {
 	if b == nil {
 		return nil, fmt.Errorf("runtime: nil event bus")
 	}
@@ -72,12 +83,20 @@ func (b *EventBus) subscribe(ctx context.Context, filter core.EventFilter, repla
 		return nil, fmt.Errorf("runtime: event bus closed")
 	}
 	var history []core.Event
-	if replay {
-		for _, ev := range b.history {
-			if eventMatches(filter, ev) {
+	if recorded != nil {
+		for _, ev := range recorded {
+			if ev.Version == "" {
+				ev.Version = core.ProtocolVersion
+			}
+			if ev.Sequence == 0 {
+				ev.Sequence, _ = parseEventSequence(ev.ID)
+			}
+			if !isCompactionDelta(ev) && eventMatches(filter, ev) {
 				history = append(history, ev)
 			}
 		}
+	} else if replay {
+		history = b.historyLocked(filter)
 	}
 	b.nextSubID++
 	id := b.nextSubID
@@ -250,10 +269,7 @@ func (b *EventBus) Publish(ev core.Event) core.Event {
 	// late subscribers replay. The terminal event carries the full summary, so
 	// replay does not depend on deltas.
 	if !isCompactionDelta(ev) {
-		b.history = append(b.history, ev)
-		if b.historyLimit > 0 && len(b.history) > b.historyLimit {
-			b.history = append([]core.Event(nil), b.history[len(b.history)-b.historyLimit:]...)
-		}
+		b.appendHistoryLocked(ev)
 	}
 	for _, sub := range b.subscribers {
 		if eventMatches(sub.filter, ev) {
@@ -279,8 +295,42 @@ func (b *EventBus) History(filter core.EventFilter) []core.Event {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	out := make([]core.Event, 0, len(b.history))
-	for _, ev := range b.history {
+	return b.historyLocked(filter)
+}
+
+// appendHistoryLocked overwrites the oldest slot once the history is full.
+func (b *EventBus) appendHistoryLocked(ev core.Event) {
+	size := eventBytes(ev)
+	if size > defaultEventHistoryBytes {
+		return
+	}
+	if b.historyLimit <= 0 {
+		b.history = append(b.history, ev)
+		b.historyCount = len(b.history)
+		return
+	}
+	if len(b.history) == 0 {
+		b.history = make([]core.Event, b.historyLimit)
+		b.historySizes = make([]int, b.historyLimit)
+	}
+	for b.historyCount > 0 && (b.historyCount == len(b.history) || b.historyBytes+size > defaultEventHistoryBytes) {
+		b.historyBytes -= b.historySizes[b.historyStart]
+		b.history[b.historyStart] = core.Event{}
+		b.historySizes[b.historyStart] = 0
+		b.historyStart = (b.historyStart + 1) % len(b.history)
+		b.historyCount--
+	}
+	index := (b.historyStart + b.historyCount) % len(b.history)
+	b.history[index] = ev
+	b.historySizes[index] = size
+	b.historyCount++
+	b.historyBytes += size
+}
+
+func (b *EventBus) historyLocked(filter core.EventFilter) []core.Event {
+	out := make([]core.Event, 0, b.historyCount)
+	for i := 0; i < b.historyCount; i++ {
+		ev := b.history[(b.historyStart+i)%len(b.history)]
 		if eventMatches(filter, ev) {
 			out = append(out, ev)
 		}
@@ -318,7 +368,15 @@ func (b *EventBus) ImportHistory(events []core.Event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var maxID uint64
-	retained := make([]core.Event, 0, len(events))
+	for _, ev := range b.history {
+		n := ev.Sequence
+		if n == 0 {
+			n, _ = parseEventSequence(ev.ID)
+		}
+		if n > maxID {
+			maxID = n
+		}
+	}
 	for i := range events {
 		ev := &events[i]
 		if ev.Version == "" {
@@ -331,24 +389,14 @@ func (b *EventBus) ImportHistory(events []core.Event) {
 			maxID = ev.Sequence
 		}
 		if !isCompactionDelta(*ev) {
-			retained = append(retained, *ev)
+			b.appendHistoryLocked(*ev)
 		}
 	}
-	b.history = append(b.history, retained...)
-	for _, ev := range b.history {
-		n := ev.Sequence
-		if n == 0 {
-			n, _ = parseEventSequence(ev.ID)
+	for {
+		old := atomic.LoadUint64(&b.nextEventID)
+		if maxID <= old || atomic.CompareAndSwapUint64(&b.nextEventID, old, maxID) {
+			break
 		}
-		if n > maxID {
-			maxID = n
-		}
-	}
-	if maxID > atomic.LoadUint64(&b.nextEventID) {
-		atomic.StoreUint64(&b.nextEventID, maxID)
-	}
-	if b.historyLimit > 0 && len(b.history) > b.historyLimit {
-		b.history = append([]core.Event(nil), b.history[len(b.history)-b.historyLimit:]...)
 	}
 }
 

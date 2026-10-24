@@ -200,6 +200,8 @@ func (m *Manager) Reset() {
 	m.clearLocked()
 	m.state.ctx.Archive = ""
 	m.state.transcript = nil
+	m.state.transcriptBase = 0
+	m.state.transcriptLazy = false
 	m.state.ctx.Hints = ""
 	m.state.runtimePolicy = ""
 	m.state.tracker.Restore(token.State{})

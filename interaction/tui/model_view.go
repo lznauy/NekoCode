@@ -2,8 +2,14 @@
 package tui
 
 import (
+	"strings"
+	"time"
+
+	"nekocode/interaction/tui/styles"
+
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func (m *Model) View() tea.View {
@@ -17,15 +23,12 @@ func (m *Model) View() tea.View {
 		parts = append(parts, m.Splash.View())
 	} else {
 		// Horizontal scrollbar sits on top of the header when content overflows.
-		m.Scrollbar.Update(
-			m.Messages.TotalContentHeight(),
-			m.Messages.Height(),
-			m.Messages.ScrollPercent(),
-		)
+		totalHeight, viewportHeight, percent := m.Messages.ScrollbarMetrics()
+		m.Scrollbar.Update(totalHeight, viewportHeight, percent)
 		if hbar := m.Scrollbar.ViewHorizontal(m.Width); hbar != "" {
 			parts = append(parts, hbar)
 		}
-		parts = append(parts, m.Header.View())
+		parts = append(parts, m.sessionHeaderView(time.Now()))
 
 		msgWidth := m.Width
 		if m.Messages.Width() != msgWidth {
@@ -87,4 +90,18 @@ func (m *Model) View() tea.View {
 	v.Cursor = c
 
 	return v
+}
+
+const sessionLoadHintDelay = 200 * time.Millisecond
+
+func (m *Model) sessionHeaderView(now time.Time) string {
+	header := m.Header.View()
+	if !m.sessionLoading || m.sessionLoadStarted.IsZero() || now.Sub(m.sessionLoadStarted) < sessionLoadHintDelay {
+		return header
+	}
+	// Reuse the header's separator row so showing the hint never resizes or
+	// scrolls the message viewport. Existing spinner ticks repaint this row.
+	firstLine, _, _ := strings.Cut(header, "\n")
+	hint := ansi.Truncate(m.Spinner.View()+" "+m.sessionLoadLabel, max(1, m.Width), "…")
+	return firstLine + "\n" + styles.MutedStyle.Render(hint) + "\n"
 }

@@ -28,11 +28,13 @@ export const ThinkingCard = memo(function ThinkingCard({ reasoning, done }: Thin
           {reasoning.length > 600 ? `${(reasoning.length / 1000).toFixed(1)}k` : `${reasoning.length}c`}
         </span>
       </summary>
-      <div className="mt-1 max-h-[240px] overflow-y-auto border-l-2 border-accent/30 pl-3 text-[12.5px] text-text-2">
-        {done
-          ? <MarkdownBody text={reasoning} />
-          : <div className="whitespace-pre-wrap [overflow-wrap:break-word]">{reasoning}</div>}
-      </div>
+      {open && (
+        <div className="mt-1 max-h-[240px] overflow-y-auto border-l-2 border-accent/30 pl-3 text-[12.5px] text-text-2">
+          {done
+            ? <MarkdownBody text={reasoning} />
+            : <div className="whitespace-pre-wrap [overflow-wrap:break-word]">{reasoning}</div>}
+        </div>
+      )}
     </details>
   )
 })

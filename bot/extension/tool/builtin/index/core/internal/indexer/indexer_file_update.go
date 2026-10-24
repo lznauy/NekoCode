@@ -5,95 +5,129 @@ import (
 	"fmt"
 	"path/filepath"
 
-	dbpkg "nekocode/bot/extension/tool/builtin/index/core/internal/db"
 	graphpkg "nekocode/bot/extension/tool/builtin/index/core/internal/graph"
 )
 
+// FileChange is the final state of one file in a watcher batch.
+type FileChange struct {
+	Path    string
+	Content []byte
+	Deleted bool
+}
+
 // DeleteFile removes a file from both persistent index storage and the graph.
 func (i *Indexer) DeleteFile(g *graphpkg.Graph, path string) error {
-	if err := i.db.DeleteFile(path); err != nil {
-		return err
-	}
-	if g != nil {
-		g.RemoveFileNodes(path)
+	return i.ApplyChanges(g, "", []FileChange{{Path: path, Deleted: true}})
+}
+
+// UpsertFile updates one file and resolves references before returning.
+func (i *Indexer) UpsertFile(g *graphpkg.Graph, cwd, path string, content []byte) error {
+	return i.ApplyChanges(g, cwd, []FileChange{{Path: path, Content: content}})
+}
+
+// ApplyChanges commits files independently and resolves references once for the
+// batch. Earlier successful updates remain usable if a later file fails.
+// Callers must hold the graph's write lock throughout this operation.
+func (i *Indexer) ApplyChanges(g *graphpkg.Graph, cwd string, changes []FileChange) (err error) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.applyChangesLocked(g, cwd, changes)
+}
+
+func (i *Indexer) applyChangesLocked(g *graphpkg.Graph, cwd string, changes []FileChange) (err error) {
+	changed := false
+	defer func() {
+		if changed && g != nil {
+			resolveReferences(g)
+		}
+	}()
+	for _, change := range changes {
+		if change.Deleted {
+			if err = i.db.DeleteFile(change.Path); err != nil {
+				return err
+			}
+			if g != nil {
+				g.DetachFileReferences(change.Path)
+				g.RemoveFileNodes(change.Path)
+			}
+			changed = true
+			continue
+		}
+		hash := fmt.Sprintf("%x", sha256.Sum256(change.Content))
+		if i.db.GetFileHash(change.Path) == hash {
+			continue
+		}
+		if g == nil {
+			// Preserve metadata-only updates while removing stale symbols atomically.
+			if err = i.db.ReplaceFile(change.Path, hash, graphpkg.LanguageForFile(filepath.Ext(change.Path)), nil, nil); err != nil {
+				return err
+			}
+			continue
+		}
+		nodes, edges := i.parser.ParseFile(change.Path, change.Content)
+		nodes, edges, lang := prepareFile(g, change.Path, cwd, nodes, edges)
+		if err = i.db.ReplaceFile(change.Path, hash, lang, nodes, edges); err != nil {
+			return fmt.Errorf("index %s: %w", change.Path, err)
+		}
+		publishFile(g, change.Path, hash, lang, nodes, edges)
+		changed = true
 	}
 	return nil
 }
 
-// UpsertFile parses one file, replaces existing index entries, and resolves references.
-func (i *Indexer) UpsertFile(g *graphpkg.Graph, cwd, path string, content []byte) error {
-	hash := fmt.Sprintf("%x", sha256.Sum256(content))
-	if i.db.GetFileHash(path) == hash {
-		return nil
-	}
-	nodes, edges := i.parser.ParseFile(path, content)
-	if err := i.db.DeleteFile(path); err != nil {
-		return err
-	}
-	if g != nil {
-		g.RemoveFileNodes(path)
-		insertFileIntoGraph(g, i.db, path, cwd, nodes, edges)
-		i.ResolveReferences(g)
-	}
-	lang := graphpkg.LanguageForFile(filepath.Ext(path))
-	return i.db.SaveFile(path, hash, lang)
-}
-
-func insertFileIntoGraph(g *graphpkg.Graph, db *dbpkg.DB, path string, cwd string, nodes []*graphpkg.Node, edges []*graphpkg.Edge) (int64, string) {
+// prepareFile assigns graph IDs to parsed symbols without changing the graph.
+func prepareFile(g *graphpkg.Graph, path, cwd string, nodes []*graphpkg.Node, edges []*graphpkg.Edge) ([]*graphpkg.Node, []*graphpkg.Edge, string) {
 	ext := filepath.Ext(path)
 	lang := graphpkg.LanguageForFile(ext)
-
-	relDir, _ := filepath.Rel(cwd, filepath.Dir(path))
-	if relDir == "." {
-		relDir = ""
+	pkgPath, _ := filepath.Rel(cwd, filepath.Dir(path))
+	if pkgPath == "." {
+		pkgPath = ""
 	}
-	pkgPath := relDir
 	if ext == ".go" && pkgPath == "" && len(nodes) > 0 {
 		pkgPath = nodes[0].PkgPath
 	}
-	for _, n := range nodes {
-		n.PkgPath = pkgPath
-	}
-
-	fileNode := &graphpkg.Node{
-		Name:    filepath.Base(path),
-		Kind:    graphpkg.KindFile,
-		File:    path,
-		PkgPath: pkgPath,
-	}
-	fileNodeID := g.AddNode(fileNode)
-	if db != nil {
-		_ = db.SaveNode(fileNode)
-	}
-
-	parserIDToGraphID := make(map[int64]int64)
+	nextNode, nextEdge := g.NextIDs()
+	fileNode := &graphpkg.Node{ID: nextNode, Name: filepath.Base(path), Kind: graphpkg.KindFile, File: path, PkgPath: pkgPath}
+	allNodes := make([]*graphpkg.Node, 0, len(nodes)+1)
+	allNodes = append(allNodes, fileNode)
+	parserIDs := make(map[int64]int64, len(nodes))
 	for idx, n := range nodes {
-		n.ID = g.AddNode(n)
-		parserIDToGraphID[int64(-(idx + 1))] = n.ID
-		if db != nil {
-			_ = db.SaveNode(n)
-		}
+		nextNode++
+		n.ID = nextNode
+		n.PkgPath = pkgPath
+		parserIDs[-int64(idx+1)] = n.ID
+		allNodes = append(allNodes, n)
 	}
-
+	validEdges := make([]*graphpkg.Edge, 0, len(edges))
 	for _, e := range edges {
 		if e.FromID < 0 {
-			graphID, ok := parserIDToGraphID[e.FromID]
+			id, ok := parserIDs[e.FromID]
 			if !ok {
 				continue
 			}
-			e.FromID = graphID
+			e.FromID = id
 		}
 		if e.FromID == 0 {
 			if e.Kind != graphpkg.EdgeImports {
 				continue
 			}
-			e.FromID = fileNodeID
+			e.FromID = fileNode.ID
 		}
-		e.ID = g.AddEdge(e)
-		if db != nil {
-			_ = db.SaveEdge(e)
-		}
+		e.ID = nextEdge
+		nextEdge++
+		validEdges = append(validEdges, e)
 	}
+	return allNodes, validEdges, lang
+}
 
-	return fileNodeID, lang
+func publishFile(g *graphpkg.Graph, path, hash, lang string, nodes []*graphpkg.Node, edges []*graphpkg.Edge) {
+	g.DetachFileReferences(path)
+	g.RemoveFileNodes(path)
+	for _, n := range nodes {
+		g.AddNode(n)
+	}
+	for _, e := range edges {
+		g.AddEdge(e)
+	}
+	g.SetFileInfo(path, hash, lang)
 }

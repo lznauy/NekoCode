@@ -1,6 +1,7 @@
 package runstore
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +12,7 @@ import (
 
 // DefaultLimit is the number of recent runs retained in memory.
 const DefaultLimit = 100
+const DefaultBytes = 8 << 20
 
 type RunStore struct {
 	mu    sync.Mutex
@@ -21,7 +23,12 @@ type RunStore struct {
 }
 
 type runRecord struct {
-	snapshot     core.RunSnapshot
+	snapshot      core.RunSnapshot
+	metadataBytes int
+	// Builders are append-only between replacements, so strings already handed
+	// to snapshot readers remain immutable. Never copy a non-empty builder.
+	output       strings.Builder
+	reasoning    strings.Builder
 	toolStack    []int
 	previewSpans []outputSpan
 }
@@ -82,9 +89,9 @@ func (s *RunStore) Record(ev core.Event) {
 	case core.EventSystemMessage:
 		if p, ok := ev.Payload.(core.MessagePayload); ok && p.Content != "" {
 			if rec.snapshot.Output != "" {
-				rec.snapshot.Output += "\n"
+				rec.appendOutput("\n")
 			}
-			rec.snapshot.Output += p.Content
+			rec.appendOutput(p.Content)
 		}
 	case core.EventAssistantDelta:
 		if p, ok := ev.Payload.(core.DeltaPayload); ok {
@@ -98,7 +105,8 @@ func (s *RunStore) Record(ev core.Event) {
 		rec.completeMessage("")
 	case core.EventReasoningDelta:
 		if p, ok := ev.Payload.(core.DeltaPayload); ok {
-			rec.snapshot.Reasoning += p.Delta
+			rec.reasoning.WriteString(p.Delta)
+			rec.snapshot.Reasoning = rec.reasoning.String()
 		}
 	case core.EventTodosUpdated:
 		if p, ok := ev.Payload.([]protocol.TodoItem); ok {
@@ -164,14 +172,14 @@ func (s *RunStore) Record(ev core.Event) {
 	case core.EventRunDone:
 		if p, ok := ev.Payload.(core.RunResult); ok {
 			if p.Output != "" {
-				rec.snapshot.Output = p.Output
+				rec.replaceOutput(p.Output)
 			}
 		}
 		rec.finish(core.RunDone, ev.Time)
 	case core.EventRunFailed:
 		if p, ok := ev.Payload.(core.RunResult); ok {
 			if p.Output != "" {
-				rec.snapshot.Output = p.Output
+				rec.replaceOutput(p.Output)
 			}
 			rec.snapshot.Error = p.Error
 		}
@@ -182,6 +190,15 @@ func (s *RunStore) Record(ev core.Event) {
 		}
 		rec.finish(core.RunCancelled, ev.Time)
 	}
+	switch ev.Type {
+	case core.EventTodosUpdated, core.EventSubAgentStarted, core.EventSubAgentEnded,
+		core.EventApprovalRequested, core.EventApprovalResolved, core.EventQuestionRequested, core.EventQuestionResolved:
+		rec.metadataBytes = snapshotMetadataBytes(rec.snapshot)
+	}
+	if ev.Type == core.EventRunDone || ev.Type == core.EventRunFailed || ev.Type == core.EventRunCancelled {
+		s.evictBytesLocked()
+	}
+
 }
 
 func (r *runRecord) appendPreview(delta string) {
@@ -189,7 +206,7 @@ func (r *runRecord) appendPreview(delta string) {
 		return
 	}
 	start := len(r.snapshot.Output)
-	r.snapshot.Output += delta
+	r.appendOutput(delta)
 	n := len(r.previewSpans)
 	if n > 0 && r.previewSpans[n-1].end == start {
 		r.previewSpans[n-1].end = len(r.snapshot.Output)
@@ -198,9 +215,27 @@ func (r *runRecord) appendPreview(delta string) {
 	}
 }
 
+func (r *runRecord) replaceOutput(content string) {
+	// Canonical strings are immutable and can be shared with the event history.
+	// Drop preview storage; a later append seeds a fresh builder on demand.
+	r.output.Reset()
+	r.snapshot.Output = content
+}
+
+func (r *runRecord) appendOutput(content string) {
+	if content == "" {
+		return
+	}
+	if r.output.Len() == 0 && r.snapshot.Output != "" {
+		r.output.WriteString(r.snapshot.Output)
+	}
+	r.output.WriteString(content)
+	r.snapshot.Output = r.output.String()
+}
+
 func (r *runRecord) completeMessage(content string) {
 	if len(r.previewSpans) == 0 {
-		r.snapshot.Output += content
+		r.appendOutput(content)
 		return
 	}
 	var output strings.Builder
@@ -213,7 +248,7 @@ func (r *runRecord) completeMessage(content string) {
 		cursor = span.end
 	}
 	output.WriteString(r.snapshot.Output[cursor:])
-	r.snapshot.Output = output.String()
+	r.replaceOutput(output.String())
 	r.previewSpans = nil
 }
 
@@ -264,6 +299,7 @@ func (s *RunStore) record(id core.RunID) *runRecord {
 	s.runs[id] = rec
 	s.order = append(s.order, id)
 	s.last = id
+	s.evictBytesLocked()
 	if len(s.order) > s.limit {
 		drop := s.order[0]
 		s.order = s.order[1:]
@@ -481,4 +517,83 @@ func copyValue(value any) any {
 	default:
 		return value
 	}
+}
+
+func snapshotBytes(v core.RunSnapshot) int {
+	return snapshotTextBytes(v) + snapshotMetadataBytes(v)
+}
+
+func snapshotTextBytes(v core.RunSnapshot) int {
+	n := len(v.ID) + len(v.Input) + len(v.Output) + len(v.Reasoning) + len(v.Error) + len(v.Phase) +
+		len(v.Source.Kind) + len(v.Source.ID) + len(v.Sender.ID) + len(v.Sender.Username) + len(v.Sender.Display) + 512
+	for _, tool := range v.Tools {
+		n += len(tool.Args) + len(tool.Preview) + len(tool.Output) + len(tool.Name) + len(tool.CallID) + len(tool.SubAgentID) + 256
+	}
+	return n
+}
+
+// Only metadata-changing events recalculate this estimate; streaming text
+// never serializes structured controls or existing large outputs.
+func snapshotMetadataBytes(v core.RunSnapshot) int {
+	n := 0
+	for _, todo := range v.Todos {
+		n += 64 + len(todo.Content)
+	}
+	for _, agent := range v.SubAgents {
+		n += 128 + len(agent.ID) + len(agent.Type) + len(agent.Profile)
+		for _, skill := range agent.Skills {
+			n += 16 + len(skill)
+		}
+	}
+	if len(v.Approvals) > 0 {
+		data, _ := json.Marshal(v.Approvals)
+		n += len(data)
+	}
+	if len(v.Questions) > 0 {
+		data, _ := json.Marshal(v.Questions)
+		n += len(data)
+	}
+	return n
+}
+
+// The active/latest run is pinned; completed older details can always be
+// recovered from the event recorder. Never evict a live approval or question.
+func (s *RunStore) evictBytesLocked() {
+	total := 0
+	for _, rec := range s.runs {
+		total += snapshotTextBytes(rec.snapshot) + rec.metadataBytes
+	}
+	for i := 0; i < len(s.order) && (total > DefaultBytes || len(s.order) > s.limit); {
+		id := s.order[i]
+		rec := s.runs[id]
+		terminal := rec.snapshot.Status == core.RunDone || rec.snapshot.Status == core.RunFailed || rec.snapshot.Status == core.RunCancelled
+		if id == s.last || !terminal {
+			i++
+			continue
+		}
+		total -= snapshotTextBytes(rec.snapshot) + rec.metadataBytes
+		delete(s.runs, id)
+		copy(s.order[i:], s.order[i+1:])
+		s.order = s.order[:len(s.order)-1]
+	}
+}
+
+// CacheRestored preserves the current run identity and applies both cache
+// budgets. Oversized historical details are returned to callers but not kept.
+func (s *RunStore) CacheRestored(snapshot core.RunSnapshot) {
+	if snapshot.Status != core.RunDone && snapshot.Status != core.RunFailed && snapshot.Status != core.RunCancelled {
+		return // An interrupted archived run is not a live run in this process.
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.runs[snapshot.ID]; exists {
+		return
+	}
+	size := snapshotBytes(snapshot)
+	if size > DefaultBytes {
+		return
+	}
+	s.runs[snapshot.ID] = &runRecord{snapshot: copyRunSnapshot(snapshot), metadataBytes: size - snapshotTextBytes(snapshot)}
+	s.order = append(s.order, snapshot.ID)
+	s.evictBytesLocked()
 }

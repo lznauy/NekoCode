@@ -142,16 +142,28 @@ func (s *server) manage(ctx context.Context, f frame, method string) error {
 			if request.SessionID != "" && request.SessionID != s.sessionID {
 				err = errors.New("resume the requested session before reading its history")
 			} else {
-				messages := m.SessionMessages()
 				limit := request.Limit
 				if limit == 0 {
 					limit = 100
 				}
-				if request.Offset < 0 || request.Offset > len(messages) || limit < 1 || limit > 1000 {
+				var page rt.SessionMessagePage
+				if request.Offset < 0 || limit < 1 || limit > 1000 {
 					err = errors.New("offset must be within history; limit must be 1..1000")
+				} else if paged, ok := s.backend.(interface {
+					SessionMessagesPage(int, int) (rt.SessionMessagePage, error)
+				}); ok {
+					page, err = paged.SessionMessagesPage(request.Offset, limit)
 				} else {
-					end := request.Offset + min(limit, len(messages)-request.Offset)
-					result = map[string]any{"session_id": s.sessionID, "messages": messages[request.Offset:end], "next_offset": end, "has_more": end < len(messages), "total": len(messages)}
+					messages := m.SessionMessages()
+					if request.Offset > len(messages) {
+						err = errors.New("offset must be within history; limit must be 1..1000")
+					} else {
+						end := request.Offset + min(limit, len(messages)-request.Offset)
+						page = rt.SessionMessagePage{Messages: messages[request.Offset:end], NextOffset: end, HasMore: end < len(messages), Total: len(messages)}
+					}
+				}
+				if err == nil {
+					result = map[string]any{"session_id": s.sessionID, "messages": page.Messages, "next_offset": page.NextOffset, "has_more": page.HasMore, "total": page.Total}
 				}
 			}
 		case "session.new":

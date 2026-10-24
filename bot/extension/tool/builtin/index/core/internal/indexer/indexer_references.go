@@ -14,8 +14,14 @@ func (i *Indexer) ResolveReferences(g *graphpkg.Graph) {
 
 func resolveReferences(g *graphpkg.Graph) {
 	nameIndex := make(map[string][]*graphpkg.Node)
+	packageIndex := make(map[string]*graphpkg.Node)
 	for _, n := range g.Nodes {
 		nameIndex[n.Name] = append(nameIndex[n.Name], n)
+		if n.PkgPath != "" {
+			if old := packageIndex[n.PkgPath]; old == nil || n.ID < old.ID {
+				packageIndex[n.PkgPath] = n
+			}
+		}
 	}
 
 	for _, e := range g.Edges {
@@ -47,11 +53,18 @@ func resolveReferences(g *graphpkg.Graph) {
 			if e.ImportPath == "" || e.ToID != 0 {
 				continue
 			}
-			for _, n := range g.Nodes {
-				if n.PkgPath != "" && (e.ImportPath == n.PkgPath || strings.HasSuffix(e.ImportPath, "/"+n.PkgPath)) {
+			// Prefer an exact package path, then the longest slash-delimited
+			// suffix. External packages cost path lookups rather than a graph scan.
+			for suffix := e.ImportPath; suffix != ""; {
+				if n := packageIndex[suffix]; n != nil {
 					e.ToID = n.ID
 					break
 				}
+				_, rest, ok := strings.Cut(suffix, "/")
+				if !ok {
+					break
+				}
+				suffix = rest
 			}
 		}
 

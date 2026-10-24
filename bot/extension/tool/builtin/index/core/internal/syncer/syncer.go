@@ -2,8 +2,10 @@ package syncer
 
 import (
 	"fmt"
+	"nekocode/logger"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -137,9 +139,7 @@ func (s *Syncer) run() {
 			changes := pendingChanges
 			pendingChanges = make(map[string]fsnotify.Op)
 			debounce = nil
-			for path, op := range changes {
-				s.handleFileChange(path, op)
-			}
+			s.handleFileChanges(changes)
 
 		case _, ok := <-s.watcher.Errors:
 			if !ok {
@@ -149,32 +149,38 @@ func (s *Syncer) run() {
 	}
 }
 
-// handleFileChange processes a file change event.
-// File reading and parsing happen outside the lock; only graph/DB mutations hold it.
-func (s *Syncer) handleFileChange(path string, op fsnotify.Op) {
-	if op&fsnotify.Remove != 0 {
-		if s.graphMu != nil {
-			s.graphMu.Lock()
-			defer s.graphMu.Unlock()
+// handleFileChanges reads the final file states before taking the graph lock.
+// One batch performs reference resolution only after all updates are published.
+func (s *Syncer) handleFileChanges(events map[string]fsnotify.Op) {
+	paths := make([]string, 0, len(events))
+	for path := range events {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	changes := make([]indexerpkg.FileChange, 0, len(paths))
+	for _, path := range paths {
+		content, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			changes = append(changes, indexerpkg.FileChange{Path: path, Deleted: true})
+			continue
 		}
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		_ = s.indexer.DeleteFile(s.graph, path)
+		if err != nil {
+			continue
+		}
+		changes = append(changes, indexerpkg.FileChange{Path: path, Content: content})
+	}
+	if len(changes) == 0 {
 		return
 	}
-
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return
-	}
-
 	if s.graphMu != nil {
 		s.graphMu.Lock()
 		defer s.graphMu.Unlock()
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_ = s.indexer.UpsertFile(s.graph, s.cwd, path, content)
+	if err := s.indexer.ApplyChanges(s.graph, s.cwd, changes); err != nil {
+		logger.Log("index: update files: %v", err)
+	}
 }
 
 // Stop stops the syncer and waits for the background goroutine to exit.

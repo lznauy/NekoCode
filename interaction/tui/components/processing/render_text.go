@@ -4,6 +4,7 @@ package processing
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 )
@@ -69,4 +70,46 @@ func isEmptyOrNoise(s string) bool {
 		}
 	}
 	return true
+}
+
+// wrapTail returns only the final wrapped lines. Earlier paragraphs are never
+// split or converted to runes. A very long final paragraph is counted once to
+// preserve the original wrap alignment, then only its visible suffix is copied.
+func wrapTail(text string, width, maxLines int) string {
+	if maxLines <= 0 {
+		return ""
+	}
+	text = strings.TrimRight(text, "\n")
+	var parts []string
+	remaining := maxLines
+	for remaining > 0 {
+		start := strings.LastIndexByte(text, '\n') + 1
+		paragraph := text[start:]
+		lines := 1
+		if width > 0 {
+			count := utf8.RuneCountInString(paragraph)
+			lines = max(1, (count+width-1)/width)
+			if lines > remaining {
+				keep := count - (lines-remaining)*width
+				offset := len(paragraph)
+				for j := 0; j < keep; j++ {
+					_, size := utf8.DecodeLastRuneInString(paragraph[:offset])
+					offset -= size
+				}
+				paragraph = string([]rune(paragraph[offset:]))
+				lines = remaining
+			}
+			paragraph = WrapPlain(paragraph, width)
+		}
+		parts = append(parts, paragraph)
+		remaining -= lines
+		if start == 0 {
+			break
+		}
+		text = text[:start-1]
+	}
+	for a, b := 0, len(parts)-1; a < b; a, b = a+1, b-1 {
+		parts[a], parts[b] = parts[b], parts[a]
+	}
+	return strings.Join(parts, "\n")
 }

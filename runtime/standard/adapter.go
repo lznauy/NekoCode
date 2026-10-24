@@ -3,6 +3,8 @@ package standard
 import (
 	"context"
 	"maps"
+	"slices"
+	"unicode/utf8"
 
 	"nekocode/bot/config"
 	"nekocode/bot/core"
@@ -169,6 +171,41 @@ func (a *adapter) SessionMessages() []controlruntime.DisplayMessage {
 	return viewmodel.DisplayMessages(snapshot.Transcript)
 }
 
+func (a *adapter) SessionMessagesPage(offset, limit int) (controlruntime.SessionMessagePage, error) {
+	snapshot := a.bot.Conversation()
+	return viewmodel.DisplayMessagesPage(snapshot.Transcript, offset, limit)
+}
+
+func (a *adapter) SessionHistoryWindow(before, limit int) (controlruntime.SessionHistoryWindow, error) {
+	raw, err := a.bot.HistoryPage(before, limit, 1<<20)
+	if err != nil {
+		return controlruntime.SessionHistoryWindow{}, err
+	}
+	// Bound display previews as well as page size. The complete text stays in
+	// JSONL and remains available through streaming /export.
+	for i := range raw.Messages {
+		m := &raw.Messages[i]
+		m.Content = historyPreview(m.Content)
+		m.ReasoningContent = historyPreview(m.ReasoningContent)
+		m.ToolCalls = slices.Clone(m.ToolCalls)
+		for j := range m.ToolCalls {
+			m.ToolCalls[j].Function.Arguments = historyPreview(m.ToolCalls[j].Function.Arguments)
+		}
+	}
+	return controlruntime.SessionHistoryWindow{Messages: viewmodel.DisplayMessages(raw.Messages), Before: raw.Before, End: raw.End, HasMore: raw.HasMore, Total: raw.Total}, nil
+}
+
+func historyPreview(content string) string {
+	if len(content) <= 64<<10 {
+		return content
+	}
+	end := 64 << 10
+	for end > 0 && !utf8.RuneStart(content[end]) {
+		end--
+	}
+	return content[:end] + "\n… [显示预览；完整内容可用 /export 导出]"
+}
+
 func (a *adapter) NewSession() (controlruntime.SessionMeta, error) {
 	snapshot, err := a.bot.NewSession()
 	if snapshot == nil {
@@ -222,12 +259,14 @@ func (a *adapter) services() controlruntime.ServiceGroups {
 			ApplyConfig:         a.ApplyConfig,
 		},
 		Sessions: controlruntime.SessionsServices{
-			CurrentSessionID: a.bot.CurrentSessionID,
-			ListSessions:     a.ListSessions,
-			SessionMessages:  a.SessionMessages,
-			ResumeSession:    a.bot.ResumeSession,
-			NewSession:       a.NewSession,
-			DeleteSession:    a.bot.DeleteSession,
+			CurrentSessionID:    a.bot.CurrentSessionID,
+			ListSessions:        a.ListSessions,
+			SessionMessages:     a.SessionMessages,
+			SessionMessagesPage: a.SessionMessagesPage,
+			HistoryWindow:       a.SessionHistoryWindow,
+			ResumeSession:       a.bot.ResumeSession,
+			NewSession:          a.NewSession,
+			DeleteSession:       a.bot.DeleteSession,
 		},
 		Tools: controlruntime.ToolsServices{
 			Checkpoints: a.bot.Checkpoints,

@@ -36,6 +36,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinner.TickMsg:
 		return m, m.handleSpinnerTick(msg)
 
+	case sessionLoadedMsg:
+		return m, m.applySessionLoaded(msg)
+
 	case doneMsg:
 		return m, m.handleDone(msg)
 
@@ -85,8 +88,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.MouseMsg:
-		m.Messages.Update(msg)
+		_, cmd := m.Messages.Update(msg)
 		m.Input.SetFollow(m.Messages.Follow)
+		return m, cmd
 	}
 
 	return m, nil

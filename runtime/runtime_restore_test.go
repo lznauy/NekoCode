@@ -9,11 +9,10 @@ import (
 	"nekocode/runtime/internal/recording"
 )
 
-// TestEventRecordingRestoresTailInBackground verifies the split restore: the
-// newest runs are available in the run store immediately, and the long tail
-// (beyond immediateRestoredRuns) streams in from the background goroutine
-// without blocking EnableEventRecording's return.
-func TestEventRecordingRestoresTailInBackground(t *testing.T) {
+// TestEventRecordingRestoresOlderRunsOnlyOnDemand verifies that startup keeps
+// older run bodies on disk, while explicit lookup restores them without moving
+// the current run identity.
+func TestEventRecordingRestoresOlderRunsOnlyOnDemand(t *testing.T) {
 	baseDir := t.TempDir()
 
 	// Record more runs than the synchronous slice covers.
@@ -39,40 +38,26 @@ func TestEventRecordingRestoresTailInBackground(t *testing.T) {
 	}
 
 	rt := newTestRuntime(&testBot{})
-	start := time.Now()
 	if err := rt.EnableEventRecording(baseDir); err != nil {
 		t.Fatalf("EnableEventRecording: %v", err)
 	}
-	// The synchronous phase decodes only immediateRestoredRuns files; on
-	// this tiny fixture it is fast regardless, so the meaningful assertion is
-	// the end state, polled below.
-
-	// The newest run is present right away.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if _, ok := rt.LookupRun(RunID("run_" + itoa(totalRuns))); ok {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("newest run not restored synchronously")
-		}
-		time.Sleep(10 * time.Millisecond)
+	defer rt.Close()
+	newestID := RunID("run_" + itoa(totalRuns))
+	if _, ok := rt.runs.Lookup(newestID); !ok {
+		t.Fatal("newest run not restored synchronously")
 	}
-
-	// The background tail eventually restores the oldest run too.
-	for {
-		if _, ok := rt.LookupRun(RunID("run_1")); ok {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("tail run never restored by the background loader")
-		}
-		time.Sleep(10 * time.Millisecond)
+	if _, ok := rt.runs.Lookup("run_1"); ok {
+		t.Fatal("startup eagerly restored older run body")
 	}
-
-	// The immediate batch was already Recorded synchronously; the background
-	// restore must not Record it a second time (runstore accumulates without
-	// dedup — event counts and outputs would double).
+	oldest, ok := rt.LookupRun("run_1")
+	if !ok || oldest.Output != "output 1" || oldest.EventCount != 2 {
+		t.Fatalf("on-demand oldest run = %#v, ok=%v", oldest, ok)
+	}
+	current, ok := rt.CurrentRun()
+	if !ok || current.ID != newestID {
+		t.Fatalf("archive lookup moved current run: %q, want %q", current.ID, newestID)
+	}
+	// Neither lookup nor cache population may re-record the newest events.
 	newest, ok := rt.LookupRun(RunID("run_" + itoa(totalRuns)))
 	if !ok {
 		t.Fatal("newest run missing after restore")
@@ -90,7 +75,6 @@ func TestEventRecordingRestoresTailInBackground(t *testing.T) {
 		t.Fatalf("run id = %q, want %q", runID, want)
 	}
 	waitForRun(t, rt, runID)
-	_ = start
 }
 
 func itoa(n int) string {

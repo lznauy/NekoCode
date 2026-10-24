@@ -86,3 +86,24 @@ func TestSnapshotStore_PathLimit(t *testing.T) {
 		t.Fatal("/c.go should still exist")
 	}
 }
+
+// GC scans the backing array beyond len, so evicted versions must be cleared.
+func TestSnapshotStoreEvictionReleasesBackingReferences(t *testing.T) {
+	store := NewSnapshotStore()
+	store.maxPerPath = 2
+	oldHash := store.Record("file", "old content")
+	store.Record("file", "middle")
+	store.Record("file", "new")
+	versions := store.versions["file"]
+	for _, snap := range versions[len(versions):cap(versions)] {
+		if snap.Text != "" || snap.Path != "" || snap.Hash != "" {
+			t.Fatalf("evicted snapshot retained: %+v", snap)
+		}
+	}
+	if store.ByHash("file", oldHash) != nil {
+		t.Fatal("evicted version remains visible")
+	}
+	if store.totalBytes != int64(len("middle")+len("new")) {
+		t.Fatalf("bytes=%d", store.totalBytes)
+	}
+}

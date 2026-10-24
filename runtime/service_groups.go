@@ -68,12 +68,14 @@ type ConfigServices struct {
 
 // SessionsServices contains optional sessions callbacks supplied by the application.
 type SessionsServices struct {
-	CurrentSessionID func() string
-	ListSessions     func() []SessionMeta
-	SessionMessages  func() []DisplayMessage
-	ResumeSession    func(string) error
-	NewSession       func() (SessionMeta, error)
-	DeleteSession    func(string) error
+	CurrentSessionID    func() string
+	ListSessions        func() []SessionMeta
+	SessionMessages     func() []DisplayMessage
+	SessionMessagesPage func(offset, limit int) (SessionMessagePage, error)
+	HistoryWindow       func(before, limit int) (SessionHistoryWindow, error)
+	ResumeSession       func(string) error
+	NewSession          func() (SessionMeta, error)
+	DeleteSession       func(string) error
 }
 
 // ToolsServices contains optional tools callbacks supplied by the application.

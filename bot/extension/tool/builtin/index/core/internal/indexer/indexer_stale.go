@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	graphpkg "nekocode/bot/extension/tool/builtin/index/core/internal/graph"
@@ -13,45 +14,47 @@ import (
 // LoadOrBuild loads the graph from database or builds it fresh.
 func (i *Indexer) LoadOrBuild(cwd string) (*graphpkg.Graph, error) {
 	i.mu.Lock()
-
+	defer i.mu.Unlock()
 	g, err := i.db.LoadGraph()
 	if err != nil {
-		i.mu.Unlock()
 		return nil, err
 	}
-
-	stale, err := i.isStale(cwd)
-	if err != nil {
-		i.mu.Unlock()
-		return nil, err
+	if len(g.Nodes) == 0 {
+		return i.indexAllLocked(cwd)
 	}
-	if len(g.Nodes) == 0 || stale {
-		i.mu.Unlock()
-		return i.IndexAll(cwd)
-	}
-
-	i.mu.Unlock()
-	return g, nil
-}
-
-func (i *Indexer) isStale(cwd string) (bool, error) {
 	indexed, err := i.db.LoadFileHashes()
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	current, err := currentFileHashes(cwd)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	if len(indexed) != len(current) {
-		return true, nil
-	}
-	for path, hash := range current {
-		if indexed[path] != hash {
-			return true, nil
+	var changes []FileChange
+	for path := range indexed {
+		if _, ok := current[path]; !ok {
+			changes = append(changes, FileChange{Path: path, Deleted: true})
 		}
 	}
-	return false, nil
+	for path, hash := range current {
+		if indexed[path] == hash {
+			continue
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read changed file: %w", err)
+		}
+		changes = append(changes, FileChange{Path: path, Content: content})
+	}
+	sort.Slice(changes, func(a, b int) bool { return changes[a].Path < changes[b].Path })
+	if len(changes) > 0 {
+		if err := i.applyChangesLocked(g, cwd, changes); err != nil {
+			return nil, err
+		}
+	} else {
+		resolveReferences(g)
+	}
+	return g, nil
 }
 
 func currentFileHashes(cwd string) (map[string]string, error) {
@@ -59,7 +62,7 @@ func currentFileHashes(cwd string) (map[string]string, error) {
 	filesSeen := 0
 	err := filepath.Walk(cwd, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil
+			return err
 		}
 		if info.IsDir() {
 			if ShouldSkipDir(info.Name()) {
@@ -79,7 +82,7 @@ func currentFileHashes(cwd string) (map[string]string, error) {
 		}
 		content, err := os.ReadFile(path)
 		if err != nil {
-			return nil
+			return err
 		}
 		hashes[path] = fmt.Sprintf("%x", sha256.Sum256(content))
 		filesSeen++

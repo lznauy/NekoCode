@@ -26,6 +26,16 @@
 
 ### 启动
 
+批量运行时可构建独立入口，避免加载 TUI 的渲染依赖。无参数启动即为双向长连接，
+也支持下文的 headless 参数：
+
+```bash
+go build -o nekocode-headless ./cmd/headless
+./nekocode-headless
+```
+
+原有 TUI 二进制也支持 headless 模式：
+
 ```bash
 # 单次 prompt：产出 result 后进程自行退出
 nekocode-tui -p "解释这个项目" --output-format stream-json

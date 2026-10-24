@@ -285,11 +285,16 @@ func (p *ProcessingItem) renderTodos(w int) string {
 // -- output section ---------------------------------------------------------
 
 func (p *ProcessingItem) renderOutputSection(w int) string {
+	if p.cachedOutputW == w {
+		return p.cachedOutput
+	}
+	p.cachedOutputW = w
+	p.cachedOutput = ""
 	text := strings.TrimSpace(p.OutputText())
 	if text == "" {
 		return ""
 	}
-	content := RenderFixed(WrapPlain(text, w), outputLines, true, p.sty.Base)
+	content := RenderFixed(wrapTail(text, w, outputLines), outputLines, true, p.sty.Base)
 	if content == "" {
 		return ""
 	}
@@ -300,12 +305,18 @@ func (p *ProcessingItem) renderOutputSection(w int) string {
 	sb.WriteString("\n")
 	sb.WriteString(content)
 
-	return sb.String()
+	p.cachedOutput = sb.String()
+	return p.cachedOutput
 }
 
 // -- thinking section ------------------------------------------------------
 
 func (p *ProcessingItem) renderThinkingSection(w int) string {
+	if p.cachedThinkingW == w {
+		return p.cachedThinking
+	}
+	p.cachedThinkingW = w
+	p.cachedThinking = ""
 	if p.ThinkingText() == "" {
 		return ""
 	}
@@ -314,7 +325,8 @@ func (p *ProcessingItem) renderThinkingSection(w int) string {
 	sep := p.sty.Muted.Render("── thinking " + strings.Repeat("─", w-lipgloss.Width("── thinking ")))
 	sb.WriteString(sep)
 	sb.WriteString("\n")
-	sb.WriteString(RenderFixed(WrapPlain(p.ThinkingText(), w), thinkLines, false, p.sty.Muted))
+	sb.WriteString(RenderFixed(wrapTail(p.ThinkingText(), w, thinkLines), thinkLines, false, p.sty.Muted))
 
-	return sb.String()
+	p.cachedThinking = sb.String()
+	return p.cachedThinking
 }

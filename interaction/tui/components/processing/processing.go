@@ -35,6 +35,11 @@ type ProcessingItem struct {
 	cachedRenderW int
 	cachedHeight  int
 
+	cachedOutput    string
+	cachedOutputW   int
+	cachedThinking  string
+	cachedThinkingW int
+
 	cachedActivity  string
 	cachedActivityW int
 	cachedActivityN int
@@ -58,7 +63,7 @@ type subSlot struct {
 func (p *ProcessingItem) SetSkill(s string) { p.skill = s; p.invalidate() }
 
 func NewProcessingItem(sty *styles.Styles) *ProcessingItem {
-	return &ProcessingItem{sty: sty, cachedTodosW: -1}
+	return &ProcessingItem{sty: sty, cachedTodosW: -1, cachedOutputW: -1, cachedThinkingW: -1}
 }
 
 func (p *ProcessingItem) SetSpinnerView(view string) { p.spinnerView = view; p.invalidateLight() }
@@ -90,10 +95,12 @@ func (p *ProcessingItem) SetTodos(text string) {
 
 func (p *ProcessingItem) AppendThinkingText(delta string) {
 	p.thinkingText.WriteString(delta)
+	p.cachedThinkingW = -1
 	p.invalidateLight()
 }
 func (p *ProcessingItem) AppendStreamText(delta string) {
 	p.outputText.WriteString(delta)
+	p.cachedOutputW = -1
 	p.invalidateLight()
 }
 
@@ -102,6 +109,7 @@ func (p *ProcessingItem) AppendStreamText(delta string) {
 // not been flushed into a block yet.
 func (p *ProcessingItem) DiscardStreamText() {
 	p.outputText.Reset()
+	p.cachedOutputW = -1
 	p.invalidateLight()
 }
 func (p *ProcessingItem) AddToolBlock(b block.ContentBlock) {
@@ -156,6 +164,8 @@ func (p *ProcessingItem) Clear() {
 }
 
 func (p *ProcessingItem) invalidate() {
+	p.cachedOutputW = -1
+	p.cachedThinkingW = -1
 	p.cachedRenderW = -1
 	p.cachedActivityN = -1
 	p.cachedChangesN = -1

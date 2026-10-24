@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS nodes (
 CREATE TABLE IF NOT EXISTS edges (
     id INTEGER PRIMARY KEY,
     from_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-    to_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    to_id INTEGER REFERENCES nodes(id) ON DELETE CASCADE,
     kind TEXT NOT NULL,
     file TEXT,
     line INTEGER,
@@ -62,4 +62,25 @@ CREATE INDEX IF NOT EXISTS idx_nodes_kind ON nodes(kind);
 CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_id);
 CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_id);
 CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind);
+`
+
+// Older indexes required every reference to have a target. Keep existing rows
+// while allowing unresolved references to be stored as NULL.
+const nullableEdgeTargetSQL = `
+CREATE TABLE edges_nullable (
+    id INTEGER PRIMARY KEY,
+    from_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    to_id INTEGER REFERENCES nodes(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    file TEXT,
+    line INTEGER,
+    callee_name TEXT,
+    import_path TEXT
+);
+INSERT INTO edges_nullable SELECT id, from_id, to_id, kind, file, line, callee_name, import_path FROM edges;
+DROP TABLE edges;
+ALTER TABLE edges_nullable RENAME TO edges;
+CREATE INDEX idx_edges_from ON edges(from_id);
+CREATE INDEX idx_edges_to ON edges(to_id);
+CREATE INDEX idx_edges_kind ON edges(kind);
 `

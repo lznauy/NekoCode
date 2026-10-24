@@ -72,6 +72,7 @@ type Bot struct {
 	checkpoints     *checkpoint.Manager
 	mcpAuthNotifier func(message string)
 	mu              sync.Mutex
+	historyMu       sync.RWMutex // Binds history reads to one session across context and disk.
 	projectReloadMu sync.Mutex
 	reloadView      *extension.Snapshot // Previous complete view while extensions reload.
 	hostMu          sync.RWMutex

@@ -6,15 +6,17 @@ import (
 )
 
 type ManagerSnapshot struct {
-	SystemPrompt string
-	Skills       string
-	Archive      string
-	Memory       string
-	Hints        string
-	Messages     []types.Message
-	Transcript   []types.Message
-	Budget       int
-	Tracker      token.State
+	SystemPrompt   string
+	Skills         string
+	Archive        string
+	Memory         string
+	Hints          string
+	Messages       []types.Message
+	Transcript     []types.Message
+	TranscriptBase int
+	TranscriptLazy bool
+	Budget         int
+	Tracker        token.State
 	// PrefixBaseline identifies the last request's cache-relevant head so a
 	// resumed session reports why the first call missed instead of a bare
 	// cold-start.
@@ -43,6 +45,8 @@ func (m *Manager) Snapshot() ManagerSnapshot {
 		Hints:          m.state.ctx.Hints,
 		Messages:       msgs,
 		Transcript:     transcript,
+		TranscriptBase: m.state.transcriptBase,
+		TranscriptLazy: m.state.transcriptLazy,
 		Budget:         m.state.contextWindow,
 		Tracker:        m.state.tracker.Snapshot(),
 		PrefixBaseline: m.state.prefix.Baseline(),
@@ -76,7 +80,9 @@ func (m *Manager) Restore(snap ManagerSnapshot) {
 	m.state.ctx.Hints = snap.Hints
 	m.state.runtimePolicy = ""
 	m.state.ctx.Messages = append([]types.Message(nil), snap.Messages...)
-	if snap.Transcript != nil {
+	m.state.transcriptBase = snap.TranscriptBase
+	m.state.transcriptLazy = snap.TranscriptLazy
+	if snap.Transcript != nil || snap.TranscriptLazy {
 		m.state.transcript = append([]types.Message(nil), snap.Transcript...)
 	} else {
 		m.state.transcript = append([]types.Message(nil), snap.Messages...)
@@ -113,4 +119,24 @@ func (m *Manager) Restore(snap ManagerSnapshot) {
 	m.state.compactCount = snap.CompactCount
 	m.state.trimCount = snap.TrimCount
 	m.state.revision++
+}
+
+// AcknowledgeTranscript drops only the saved prefix, preserving messages added
+// after the snapshot was captured. A different base means a session changed.
+func (m *Manager) AcknowledgeTranscript(base, end int) {
+	m.state.mu.Lock()
+	defer m.state.mu.Unlock()
+	if m.state.transcriptBase != base || end < base || end > base+len(m.state.transcript) {
+		return
+	}
+	remaining := append([]types.Message(nil), m.state.transcript[end-base:]...)
+	m.state.transcript = remaining
+	m.state.transcriptBase = end
+	m.state.transcriptLazy = true
+}
+
+func (m *Manager) TranscriptTail() (int, []types.Message, bool) {
+	m.state.mu.RLock()
+	defer m.state.mu.RUnlock()
+	return m.state.transcriptBase, append([]types.Message(nil), m.state.transcript...), m.state.transcriptLazy
 }
