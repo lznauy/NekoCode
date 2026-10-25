@@ -63,9 +63,13 @@ func (h *Header) SetWorkspace(changes protocol.WorkspaceChanges) { h.workspace =
 
 func (h *Header) View() string {
 	w := max(1, h.Width)
-	content := ansi.Truncate(h.fitContent(w), w, "…")
-	line := styles.BorderStyle.Render(strings.Repeat(styles.Horizontal, w))
-	return content + strings.Repeat(" ", max(0, w-lipgloss.Width(content))) + "\n" + line + "\n"
+	inset := min(1, (w-1)/2)
+	innerWidth := w - inset*2
+	content := ansi.Truncate(h.fitContent(innerWidth), innerWidth, "…")
+	margin := strings.Repeat(" ", inset)
+	line := styles.BorderStyle.Render(strings.Repeat(styles.Horizontal, innerWidth))
+	return margin + content + strings.Repeat(" ", max(0, innerWidth-lipgloss.Width(content))) + margin +
+		"\n" + margin + line + margin + "\n"
 }
 
 func (h *Header) fitContent(width int) string {

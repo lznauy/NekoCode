@@ -30,6 +30,7 @@ func (m *Model) View() tea.View {
 	}
 
 	var parts []string
+	historyHint := ""
 
 	if m.Messages.Len() == 0 {
 		parts = append(parts, m.Splash.View())
@@ -40,7 +41,18 @@ func (m *Model) View() tea.View {
 		if hbar := m.Scrollbar.ViewHorizontal(m.Width); hbar != "" {
 			parts = append(parts, hbar)
 		}
-		parts = append(parts, m.sessionHeaderView(time.Now()))
+		header := m.sessionHeaderView(time.Now())
+		if !m.sessionLoading {
+			if hint := m.Messages.HistoryWindowHint(); hint != "" {
+				var placed bool
+				header, placed = m.placeHistoryHintInHeader(header, hint)
+				if !placed {
+					historyHint = lipgloss.NewStyle().Width(max(1, m.Width)).Align(lipgloss.Right).
+						Render(styles.MutedStyle.Render(ansi.Truncate(hint, max(1, m.Width), "…")))
+				}
+			}
+		}
+		parts = append(parts, header)
 
 		msgWidth := m.Width
 		if m.Messages.Width() != msgWidth {
@@ -63,7 +75,7 @@ func (m *Model) View() tea.View {
 		}
 	}
 
-	parts = append(parts, "", m.Input.View())
+	parts = append(parts, historyHint, m.Input.View())
 
 	if sug := m.Suggestions.View(m.Width); sug != "" {
 		parts = append(parts, sug)
@@ -129,10 +141,6 @@ const sessionLoadHintDelay = 200 * time.Millisecond
 func (m *Model) sessionHeaderView(now time.Time) string {
 	header := m.Header.View()
 	if !m.sessionLoading || m.sessionLoadStarted.IsZero() || now.Sub(m.sessionLoadStarted) < sessionLoadHintDelay {
-		if hint := m.Messages.HistoryWindowHint(); hint != "" {
-			firstLine, _, _ := strings.Cut(header, "\n")
-			return firstLine + "\n" + styles.MutedStyle.Render(ansi.Truncate(hint, max(1, m.Width), "…")) + "\n"
-		}
 		return header
 	}
 	// Reuse the header's separator row so showing the hint never resizes or
@@ -140,4 +148,17 @@ func (m *Model) sessionHeaderView(now time.Time) string {
 	firstLine, _, _ := strings.Cut(header, "\n")
 	hint := ansi.Truncate(m.Spinner.View()+" "+m.sessionLoadLabel, max(1, m.Width), "…")
 	return firstLine + "\n" + styles.MutedStyle.Render(hint) + "\n"
+}
+
+func (m *Model) placeHistoryHintInHeader(header, hint string) (string, bool) {
+	firstLine, rest, ok := strings.Cut(header, "\n")
+	if !ok {
+		return header, false
+	}
+	content := strings.TrimRight(firstLine, " ")
+	spacing := m.Width - ansi.StringWidth(content) - ansi.StringWidth(hint) - 1
+	if spacing < 2 {
+		return header, false
+	}
+	return content + strings.Repeat(" ", spacing) + styles.MutedStyle.Render(hint) + " \n" + rest, true
 }
