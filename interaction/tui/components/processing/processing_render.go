@@ -10,45 +10,98 @@ import (
 	"nekocode/util/text"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
-func (p *ProcessingItem) Render(width int) string {
-	if p.cachedRenderW == width && p.cachedRender != "" {
+func (p *ProcessingItem) Render(width int) string { return p.render(width, 0) }
+
+// RenderWithin uses the same sections, frame and caches as Render, compressing
+// section bodies only when the available viewport cannot fit the full card.
+func (p *ProcessingItem) RenderWithin(width, height int) string {
+	if height <= 0 {
+		return ""
+	}
+	return p.render(width, height)
+}
+
+func (p *ProcessingItem) render(width, maxHeight int) string {
+	if maxHeight > 0 && p.cachedConstrained != "" && p.cachedConstrainedW == width && p.cachedConstrainedH == maxHeight {
+		return p.cachedConstrained
+	}
+	contentW := max(1, styles.MessageWidth(width)-4)
+	var sections []string
+	if p.cachedRenderW != width || p.cachedRender == "" {
+		sections = p.renderSections(contentW)
+		p.cachedRender = renderCard(width, strings.Join(sections, "\n\n"))
+		p.cachedRenderW = width
+		p.cachedHeight = strings.Count(p.cachedRender, "\n") + 1
+	}
+	if maxHeight <= 0 || p.cachedHeight <= maxHeight {
 		return p.cachedRender
 	}
-	cw := styles.MessageWidth(width)
-	contentW := cw - 4
-
-	var sections []string
-	sections = append(sections, p.renderSummary())
-	if s := p.renderActivitySection(contentW); s != "" {
-		sections = append(sections, s)
+	if maxHeight < 4 {
+		return ansi.Truncate(p.renderHeader(max(1, width)), max(1, width), "…")
 	}
-	if s := p.renderChangesSection(contentW); s != "" {
-		sections = append(sections, s)
+	if sections == nil {
+		sections = p.renderSections(contentW)
 	}
-	if s := p.renderTodos(contentW); s != "" {
-		sections = append(sections, s)
+	middle := sections[1 : len(sections)-1]
+	budget := maxHeight - 4 // frame, summary and status
+	if len(middle) > budget {
+		middle = middle[len(middle)-budget:]
 	}
-	if s := p.renderOutputSection(contentW); s != "" {
-		sections = append(sections, s)
+	lines := []string{sections[0]}
+	for i, section := range middle {
+		rows := budget / (len(middle) - i)
+		budget -= rows
+		var body []string
+		for _, line := range strings.Split(section, "\n") {
+			if strings.TrimSpace(ansi.Strip(line)) != "" {
+				body = append(body, line)
+			}
+		}
+		if len(body) == 0 {
+			continue
+		}
+		if rows == 1 && len(body) > 1 {
+			label := strings.TrimRight(ansi.Strip(body[0]), "─ ")
+			lines = append(lines, ansi.Truncate(label+" · "+strings.TrimSpace(ansi.Strip(body[len(body)-1])), contentW, "…"))
+			continue
+		}
+		lines = append(lines, body[0])
+		start := max(1, len(body)-rows+1)
+		lines = append(lines, body[start:]...)
 	}
-	if s := p.renderThinkingSection(contentW); s != "" {
-		sections = append(sections, s)
+	lines = append(lines, sections[len(sections)-1])
+	for i, line := range lines {
+		lines[i] = ansi.Truncate(line, contentW, "…")
 	}
-	if s := p.renderCompactions(contentW); s != "" {
-		sections = append(sections, s)
-	}
-	sections = append(sections, p.renderHeader(contentW))
-
-	body := strings.Join(sections, "\n")
-	card := lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color(styles.Primary)).
-		PaddingLeft(0).PaddingRight(0).Width(cw).MaxWidth(cw).Render(body)
-
-	p.cachedRender = card
-	p.cachedRenderW = width
-	p.cachedHeight = strings.Count(card, "\n") + 1
+	card := renderCard(width, strings.Join(lines, "\n"))
+	p.cachedConstrained, p.cachedConstrainedW, p.cachedConstrainedH = card, width, maxHeight
 	return card
+}
+
+func renderCard(width int, body string) string {
+	cw := styles.MessageWidth(width)
+	return lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color(styles.Primary)).
+		Padding(0, 1).Width(cw).MaxWidth(cw).Render(body)
+}
+
+func (p *ProcessingItem) renderSections(contentW int) []string {
+	heading := strings.TrimRight(p.renderSummary(), "\n")
+	if p.subagentSummary != "" && contentW < 40 {
+		heading = p.sty.Subtle.Render(p.subagentSummary)
+	}
+	sections := []string{ansi.Truncate(heading, contentW, "…")}
+	for _, render := range [...]func(int) string{
+		p.renderActivitySection, p.renderChangesSection, p.renderTodos,
+		p.renderOutputSection, p.renderThinkingSection, p.renderCompactions,
+	} {
+		if section := strings.TrimRight(render(contentW), "\n"); section != "" {
+			sections = append(sections, section)
+		}
+	}
+	return append(sections, p.renderHeader(contentW))
 }
 
 func (p *ProcessingItem) renderHeader(width int) string {
@@ -78,24 +131,28 @@ func (p *ProcessingItem) renderHeader(width int) string {
 	spinner := p.sty.Teal.Render(s)
 	const gap = " "
 	tail := strings.Join(meta, gap)
-	const indent = "  "
+	const indent = ""
 	statusW := width - lipgloss.Width(indent) - lipgloss.Width(spinner) - lipgloss.Width(gap)
 	if tail != "" {
 		statusW -= lipgloss.Width(tail) + lipgloss.Width(gap)
 	}
-	if statusW < 10 {
-		statusW = 10
+	if statusW < 12 && tail != "" {
+		tail = ""
+		statusW = width - lipgloss.Width(indent) - lipgloss.Width(spinner) - lipgloss.Width(gap)
 	}
 
-	line := indent + spinner + gap + p.sty.Base.Render(truncatePlain(l, statusW))
+	line := indent + spinner + gap + p.sty.Base.Render(truncatePlain(l, max(1, statusW)))
 	if tail != "" {
 		line += gap + tail
 	}
-	return line
+	return ansi.Truncate(line, max(1, width), "…")
 }
 
 func truncatePlain(s string, width int) string {
-	if width <= 0 || lipgloss.Width(s) <= width {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= width {
 		return s
 	}
 	if width <= 1 {
@@ -110,6 +167,10 @@ func truncatePlain(s string, width int) string {
 		out.WriteRune(r)
 	}
 	return out.String() + "…"
+}
+
+func sectionRule(label string, width int) string {
+	return truncatePlain(label+strings.Repeat("─", max(0, width-lipgloss.Width(label))), width)
 }
 
 // -- summary ---------------------------------------------------------------
@@ -127,6 +188,9 @@ func (p *ProcessingItem) renderSummary() string {
 		}
 	}
 	var parts []string
+	if p.subagentSummary != "" {
+		parts = append(parts, p.subagentSummary)
+	}
 	if p.skill != "" {
 		parts = append(parts, "skill: "+p.skill)
 	}
@@ -145,8 +209,8 @@ func (p *ProcessingItem) renderSummary() string {
 	headerBuilder.WriteString(p.sty.CatEye.Render(styles.CatREye))
 	headerBuilder.WriteString(p.sty.CatBody.Render(styles.CatRight))
 	for _, s := range p.subSlots {
-		if s.ColorIdx >= 0 && s.ColorIdx < len(styles.SubColors) {
-			c := lipgloss.Color(styles.SubColors[s.ColorIdx])
+		if s.ColorIdx >= 0 {
+			c := lipgloss.Color(styles.SubColors[s.ColorIdx%len(styles.SubColors)])
 			headerBuilder.WriteByte(' ')
 			headerBuilder.WriteString(lipgloss.NewStyle().Foreground(c).Render(styles.SubBullet))
 		}
@@ -182,7 +246,7 @@ func (p *ProcessingItem) renderActivitySection(sepW int) string {
 	items = items[start:]
 
 	var sb strings.Builder
-	sep := p.sty.Primary.Render("── activity " + strings.Repeat("─", sepW-lipgloss.Width("── activity ")))
+	sep := p.sty.Primary.Render(sectionRule("── activity ", sepW))
 	sb.WriteString(sep)
 	sb.WriteString("\n")
 	for _, b := range items {
@@ -222,7 +286,7 @@ func (p *ProcessingItem) renderChangesSection(w int) string {
 	}
 
 	var sb strings.Builder
-	sep := p.sty.Primary.Render("── changes " + strings.Repeat("─", w-lipgloss.Width("── changes ")))
+	sep := p.sty.Primary.Render(sectionRule("── changes ", w))
 	sb.WriteString(sep)
 	sb.WriteString("\n")
 	sb.WriteString(block.RenderTools(items, w, p.sty))
@@ -244,7 +308,7 @@ func (p *ProcessingItem) renderTodos(w int) string {
 		green := lipgloss.NewStyle().Foreground(lipgloss.Color(styles.DiffGreen))
 		var sb strings.Builder
 
-		sep := p.sty.Yellow.Render("── tasks " + strings.Repeat("─", w-lipgloss.Width("── tasks ")))
+		sep := p.sty.Yellow.Render(sectionRule("── tasks ", w))
 		sb.WriteString(sep)
 		sb.WriteString("\n")
 		for line := range strings.SplitSeq(p.todos, "\n") {
@@ -300,7 +364,7 @@ func (p *ProcessingItem) renderOutputSection(w int) string {
 	}
 	var sb strings.Builder
 
-	sep := p.sty.Primary.Render("── output " + strings.Repeat("─", w-lipgloss.Width("── output ")))
+	sep := p.sty.Primary.Render(sectionRule("── output ", w))
 	sb.WriteString(sep)
 	sb.WriteString("\n")
 	sb.WriteString(content)
@@ -322,7 +386,7 @@ func (p *ProcessingItem) renderThinkingSection(w int) string {
 	}
 	var sb strings.Builder
 
-	sep := p.sty.Muted.Render("── thinking " + strings.Repeat("─", w-lipgloss.Width("── thinking ")))
+	sep := p.sty.Muted.Render(sectionRule("── thinking ", w))
 	sb.WriteString(sep)
 	sb.WriteString("\n")
 	sb.WriteString(RenderFixed(wrapTail(p.ThinkingText(), w, thinkLines), thinkLines, false, p.sty.Muted))

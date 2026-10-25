@@ -8,6 +8,37 @@ import (
 	"testing"
 )
 
+func TestMaxConcurrentSubagentsConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg, err := Load()
+	if err != nil || cfg.EffectiveMaxConcurrentSubagents() != 8 {
+		t.Fatalf("default=%+v err=%v", cfg, err)
+	}
+	for _, limit := range []int{1, 12, 100} {
+		cfg.MaxConcurrentSubagents = limit
+		if err := Save(*cfg); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := Load()
+		if err != nil || loaded.MaxConcurrentSubagents != limit || loaded.EffectiveMaxConcurrentSubagents() != limit {
+			t.Fatalf("limit=%d config=%+v err=%v", limit, loaded, err)
+		}
+	}
+	for _, text := range []string{`{}`, `{"max_concurrent_subagents":0}`} {
+		if err := os.WriteFile(Path(), []byte(text), 0600); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := Load()
+		if err != nil || loaded.EffectiveMaxConcurrentSubagents() != 8 {
+			t.Fatal("missing/zero must use default")
+		}
+	}
+	cfg.MaxConcurrentSubagents = -1
+	if err := Validate(cfg); err == nil {
+		t.Fatal("negative concurrency accepted")
+	}
+}
+
 func TestDefaultConfig(t *testing.T) {
 	if Default.Active != "default" {
 		t.Errorf("expected Active 'default', got '%s'", Default.Active)

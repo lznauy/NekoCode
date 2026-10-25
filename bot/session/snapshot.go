@@ -1,10 +1,13 @@
 package session
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -17,23 +20,26 @@ import (
 )
 
 type Snapshot struct {
+	Subagent *SubagentMetadata `json:"subagent,omitempty"`
+
 	FormatVersion int    `json:"format_version"`
 	ID            string `json:"id"`
 	CWD           string `json:"cwd"`
 	CreatedAt     int64  `json:"created_at"`
 	UpdatedAt     int64  `json:"updated_at"`
 
-	SystemPrompt    string          `json:"system_prompt"`
-	Skills          string          `json:"skills"`
-	Memory          string          `json:"memory"`
-	Archive         string          `json:"archive"`
-	Messages        []types.Message `json:"messages"`
-	Transcript      []types.Message `json:"-"`
-	TranscriptBase  int             `json:"-"`
-	TranscriptLazy  bool            `json:"-"`
-	history         *HistoryStore
-	TranscriptSeq   int `json:"transcript_seq,omitempty"`
-	CompactBoundary int `json:"compact_boundary"`
+	SystemPrompt           string          `json:"system_prompt"`
+	Skills                 string          `json:"skills"`
+	Memory                 string          `json:"memory"`
+	Archive                string          `json:"archive"`
+	Messages               []types.Message `json:"-"`
+	Transcript             []types.Message `json:"-"`
+	TranscriptBase         int             `json:"-"`
+	TranscriptLazy         bool            `json:"-"`
+	history                *HistoryStore
+	TranscriptSeq          int `json:"transcript_seq,omitempty"`
+	CommittedTranscriptSeq int `json:"-"`
+	CompactBoundary        int `json:"compact_boundary"`
 
 	ContextWindow     int `json:"context_window"`
 	PromptTokens      int `json:"prompt_tokens"`
@@ -84,7 +90,7 @@ func dir() string {
 func newSnapshot(cwd string) *Snapshot {
 	now := time.Now()
 	return &Snapshot{
-		FormatVersion: 2,
+		FormatVersion: 3,
 		ID:            fmt.Sprintf("%s-%09d", now.UTC().Format("20060102T150405"), now.Nanosecond()),
 		CWD:           cwd,
 		CreatedAt:     now.Unix(),
@@ -92,29 +98,134 @@ func newSnapshot(cwd string) *Snapshot {
 	}
 }
 
+const currentSnapshotVersion = 3
+
+type messageRef struct {
+	Slot   int    `json:"slot"`
+	Count  int    `json:"count"`
+	Digest string `json:"sha256"`
+}
+
+type snapshotHeader struct {
+	FormatVersion int             `json:"format_version"`
+	UpdatedAt     int64           `json:"updated_at"`
+	Messages      json.RawMessage `json:"messages"`
+}
+
+type snapshotAlias Snapshot
+
+type diskSnapshot struct {
+	*snapshotAlias
+	Messages json.RawMessage `json:"messages"`
+}
+
+func marshalSnapshot(s *Snapshot, ref messageRef) ([]byte, error) {
+	messages, err := json.Marshal(ref)
+	if err != nil {
+		return nil, err
+	}
+	return json.MarshalIndent(diskSnapshot{snapshotAlias: (*snapshotAlias)(s), Messages: messages}, "", "  ")
+}
+
+func decodeMessageRef(header snapshotHeader) (messageRef, error) {
+	var ref messageRef
+	if header.FormatVersion != currentSnapshotVersion {
+		return ref, fmt.Errorf("unsupported session format v%d", header.FormatVersion)
+	}
+	if err := json.Unmarshal(header.Messages, &ref); err != nil {
+		return ref, fmt.Errorf("decode session messages reference: %w", err)
+	}
+	if ref.Slot < 0 || ref.Slot > 1 || ref.Count < 0 || ref.Digest == "" {
+		return messageRef{}, fmt.Errorf("invalid session messages reference")
+	}
+	return ref, nil
+}
+
+func messagesPath(dir string, slot int) string {
+	return filepath.Join(dir, fmt.Sprintf("messages.%d.json", slot))
+}
+
+func readMessages(dir string, header snapshotHeader) ([]types.Message, error) {
+	if header.FormatVersion < currentSnapshotVersion {
+		var messages []types.Message
+		if err := json.Unmarshal(header.Messages, &messages); err != nil {
+			return nil, fmt.Errorf("decode inline session messages: %w", err)
+		}
+		return messages, nil
+	}
+	ref, err := decodeMessageRef(header)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(messagesPath(dir, ref.Slot))
+	if err != nil {
+		return nil, fmt.Errorf("read session messages: %w", err)
+	}
+	digest := sha256.Sum256(data)
+	if ref.Digest != fmt.Sprintf("%x", digest) {
+		return nil, fmt.Errorf("session messages digest mismatch")
+	}
+	var messages []types.Message
+	if err := json.Unmarshal(data, &messages); err != nil {
+		return nil, fmt.Errorf("decode session messages: %w", err)
+	}
+	if len(messages) != ref.Count {
+		return nil, fmt.Errorf("session messages count mismatch: got %d, want %d", len(messages), ref.Count)
+	}
+	return messages, nil
+}
+
+func sameJSON(a, b []byte) (bool, error) {
+	var av, bv any
+	if err := json.Unmarshal(a, &av); err != nil {
+		return false, err
+	}
+	if err := json.Unmarshal(b, &bv); err != nil {
+		return false, err
+	}
+	return reflect.DeepEqual(av, bv), nil
+}
+
 func load(id string) (*Snapshot, error) { return loadMode(id, false) }
 
 func loadMode(id string, lazy bool) (*Snapshot, error) {
+	return loadModeAt(dir(), id, lazy)
+}
+
+func loadModeAt(root, id string, lazy bool) (*Snapshot, error) {
 	if err := validateID(id); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(dir(), id, "session.json")
-	snapshot, err := fs.ReadJSONFile[*Snapshot](path)
+	path := filepath.Join(root, id, "session.json")
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	_ = os.Chmod(path, 0o600)
-	if snapshot == nil || snapshot.ID != id {
-		found := ""
-		if snapshot != nil {
-			found = snapshot.ID
-		}
+	var header snapshotHeader
+	if err := json.Unmarshal(data, &header); err != nil {
+		return nil, err
+	}
+	var snapshot Snapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return nil, err
+	}
+	if header.FormatVersion > currentSnapshotVersion {
+		return nil, fmt.Errorf("unsupported session format v%d", header.FormatVersion)
+	}
+	snapshot.Messages, err = readMessages(filepath.Dir(path), header)
+	if err != nil {
+		return nil, err
+	}
+	if snapshot.ID != id {
+		found := snapshot.ID
 		return nil, fmt.Errorf("session id mismatch: requested %q, file contains %q", id, found)
 	}
 	if snapshot.FormatVersion < 2 {
 		return nil, fmt.Errorf("legacy session format (v%d); run `go run ./util/session-migrate --session %s` to convert it", snapshot.FormatVersion, id)
 	}
 	persistedSeq := snapshot.TranscriptSeq
+	snapshot.CommittedTranscriptSeq = persistedSeq
 	if persistedSeq < 0 {
 		return nil, fmt.Errorf("invalid negative transcript watermark %d", persistedSeq)
 	}
@@ -154,7 +265,7 @@ func loadMode(id string, lazy bool) (*Snapshot, error) {
 		snapshot.Transcript = transcript
 		snapshot.TranscriptSeq = len(transcript)
 	}
-	return snapshot, nil
+	return &snapshot, nil
 }
 
 // Delete removes a session directory and all its contents.
@@ -174,14 +285,17 @@ func validateID(id string) error {
 }
 
 func (s *Snapshot) save() error {
+	return s.saveAt(dir())
+}
+
+func (s *Snapshot) saveAt(root string) error {
 	if s == nil {
 		return fmt.Errorf("cannot save nil session")
 	}
 	if err := validateID(s.ID); err != nil {
 		return err
 	}
-	s.UpdatedAt = time.Now().Unix()
-	d := filepath.Join(dir(), s.ID)
+	d := filepath.Join(root, s.ID)
 	var watermark int
 	var err error
 	if s.TranscriptLazy {
@@ -196,22 +310,81 @@ func (s *Snapshot) save() error {
 	if err != nil {
 		return fmt.Errorf("persist transcript: %w", err)
 	}
-	data, err := json.MarshalIndent(s, "", "  ")
+
+	manifestPath := filepath.Join(d, "session.json")
+	oldData, err := os.ReadFile(manifestPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	hasOld := err == nil
+	var oldHeader snapshotHeader
+	if hasOld {
+		if err := json.Unmarshal(oldData, &oldHeader); err != nil {
+			return fmt.Errorf("decode saved session: %w", err)
+		}
+		if oldHeader.FormatVersion > currentSnapshotVersion {
+			return fmt.Errorf("unsupported session format v%d", oldHeader.FormatVersion)
+		}
+	}
+
+	messagesData, err := json.MarshalIndent(s.Messages, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal session messages: %w", err)
+	}
+	digest := sha256.Sum256(messagesData)
+	ref := messageRef{Count: len(s.Messages), Digest: fmt.Sprintf("%x", digest)}
+	writeMessages := true
+	if oldHeader.FormatVersion == currentSnapshotVersion {
+		oldRef, err := decodeMessageRef(oldHeader)
+		if err != nil {
+			return err
+		}
+		ref.Slot = 1 - oldRef.Slot
+		if oldRef.Digest == ref.Digest {
+			ref = oldRef
+			writeMessages = false
+		}
+	}
+
+	s.FormatVersion = currentSnapshotVersion
+	updatedAt := time.Now().Unix()
+	if hasOld {
+		s.UpdatedAt = oldHeader.UpdatedAt
+		candidate, marshalErr := marshalSnapshot(s, ref)
+		if marshalErr != nil {
+			return fmt.Errorf("marshal session: %w", marshalErr)
+		}
+		same, compareErr := sameJSON(oldData, candidate)
+		if compareErr != nil {
+			return compareErr
+		}
+		if same {
+			return nil
+		}
+	}
+	s.UpdatedAt = updatedAt
+	data, err := marshalSnapshot(s, ref)
 	if err != nil {
 		return fmt.Errorf("marshal session: %w", err)
 	}
-	return writeAtomic(filepath.Join(d, "session.json"), data, 0o600)
+	if writeMessages {
+		if err := writeAtomic(messagesPath(d, ref.Slot), messagesData, 0o600); err != nil {
+			return fmt.Errorf("persist session messages: %w", err)
+		}
+	}
+	return writeAtomic(manifestPath, data, 0o600)
 }
 
 // sessionMeta is a lightweight struct for deserializing only metadata from
 // session.json, avoiding the cost of unmarshaling the full Messages array.
 type sessionMeta struct {
-	ID            string     `json:"id"`
-	CWD           string     `json:"cwd"`
-	CreatedAt     int64      `json:"created_at"`
-	UpdatedAt     int64      `json:"updated_at"`
-	Messages      []struct{} `json:"messages"` // only need len, not content
-	TranscriptSeq int        `json:"transcript_seq,omitempty"`
+	ID            string          `json:"id"`
+	CWD           string          `json:"cwd"`
+	CreatedAt     int64           `json:"created_at"`
+	UpdatedAt     int64           `json:"updated_at"`
+	FormatVersion int             `json:"format_version"`
+	Messages      json.RawMessage `json:"messages"`
+	TranscriptSeq int             `json:"transcript_seq,omitempty"`
 }
 
 func loadMeta(id string) (Meta, error) {
@@ -225,10 +398,24 @@ func loadMeta(id string) (Meta, error) {
 	if err := json.Unmarshal(data, &sm); err != nil {
 		return Meta{}, err
 	}
+	messageCount := 0
+	if sm.FormatVersion == currentSnapshotVersion {
+		ref, err := decodeMessageRef(snapshotHeader{FormatVersion: sm.FormatVersion, Messages: sm.Messages})
+		if err != nil {
+			return Meta{}, err
+		}
+		messageCount = ref.Count
+	} else {
+		var messages []json.RawMessage
+		if err := json.Unmarshal(sm.Messages, &messages); err != nil {
+			return Meta{}, err
+		}
+		messageCount = len(messages)
+	}
 	return Meta{
 		ID: sm.ID, CWD: sm.CWD,
 		CreatedAt: sm.CreatedAt, UpdatedAt: sm.UpdatedAt,
-		MsgCount: max(len(sm.Messages), sm.TranscriptSeq),
+		MsgCount: max(messageCount, sm.TranscriptSeq),
 	}, nil
 }
 

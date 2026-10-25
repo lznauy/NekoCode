@@ -293,12 +293,13 @@ func (b *Bot) initAgent() {
 	})
 
 	b.ag = agent.New(context.Background(), agent.Config{
-		Context:     b.ctxMgr,
-		Model:       llmClient,
-		Tools:       b.toolbox.Registry,
-		Policy:      b.policy,
-		Checkpoints: b.checkpoints,
-		SessionID:   b.sess.CurrentID,
+		MaxConcurrentSubagents: b.cfg.EffectiveMaxConcurrentSubagents(),
+		Context:                b.ctxMgr,
+		Model:                  llmClient,
+		Tools:                  b.toolbox.Registry,
+		Policy:                 b.policy,
+		Checkpoints:            b.checkpoints,
+		SessionID:              b.sess.CurrentID,
 		Output: agent.Output{
 			Text:      b.stream,
 			Reason:    b.reasoning,

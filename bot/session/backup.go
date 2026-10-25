@@ -12,6 +12,8 @@ import (
 // BackupCurrent copies the durable pre-compaction snapshot without replacing
 // any prior backup. The transcript is append-only and shared by every backup.
 func (m *Manager) BackupCurrent(compactionID string) (string, error) {
+	m.persistMu.Lock()
+	defer m.persistMu.Unlock()
 	id := m.CurrentID()
 	if err := validateID(id); err != nil {
 		return "", err
@@ -23,6 +25,30 @@ func (m *Manager) BackupCurrent(compactionID string) (string, error) {
 	data, err := os.ReadFile(source)
 	if err != nil {
 		return "", err
+	}
+	var header snapshotHeader
+	if err := json.Unmarshal(data, &header); err != nil {
+		return "", err
+	}
+	if header.FormatVersion == currentSnapshotVersion {
+		messages, err := readMessages(filepath.Dir(source), header)
+		if err != nil {
+			return "", err
+		}
+		messageData, err := json.Marshal(messages)
+		if err != nil {
+			return "", err
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(data, &fields); err != nil {
+			return "", err
+		}
+		fields["messages"] = messageData
+		fields["format_version"] = json.RawMessage("2")
+		data, err = json.MarshalIndent(fields, "", "  ")
+		if err != nil {
+			return "", err
+		}
 	}
 	backupDir := filepath.Join(dir(), id, "backups")
 	if err := os.MkdirAll(backupDir, 0o700); err != nil {

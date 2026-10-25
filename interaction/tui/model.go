@@ -35,15 +35,17 @@ type sessionDeleter interface {
 }
 
 type Model struct {
-	Runtime  RuntimeClient
-	Header   *components.Header
-	Messages *components.Messages
-	Input    *components.Input
-	Splash   *components.Splash
-	Spinner  spinner.Model
-	Width    int
-	Height   int
-	Ready    bool
+	Runtime        RuntimeClient
+	Header         *components.Header
+	Messages       *components.Messages
+	Input          *components.Input
+	Splash         *components.Splash
+	Spinner        spinner.Model
+	Width          int
+	Height         int
+	Ready          bool
+	terminalWidth  int
+	terminalHeight int
 
 	state                 chatState
 	preConfirmState       chatState
@@ -70,6 +72,9 @@ type Model struct {
 	sessionHistoryPaging  bool
 	sessionHistoryDirty   bool
 	sessionPendingChat    *pendingSessionChat
+	tasks                 *taskOverlay
+	taskStates            map[string]string // current parent run only
+	taskSummarySyncedAt   time.Time
 }
 
 var displayVersion = version.Version
@@ -79,7 +84,11 @@ func NewModel(rt RuntimeClient) (*Model, error) {
 	sp.Spinner = spinner.Dot
 	sty := styles.DefaultStyles()
 
-	events, err := rt.Events(context.Background(), controlruntime.EventFilter{})
+	filter := controlruntime.EventFilter{}
+	if canObserveTasks(rt) {
+		filter.ExcludeSubagentDetails = true
+	}
+	events, err := rt.Events(context.Background(), filter)
 	if err != nil {
 		return nil, fmt.Errorf("subscribe runtime events: %w", err)
 	}
@@ -99,6 +108,7 @@ func NewModel(rt RuntimeClient) (*Model, error) {
 		state:         stateReady,
 		runtimeEvents: events,
 	}
+	m.Input.SetTaskObserver(canObserveTasks(rt))
 	m.Input.SetHistory(loadInputHistory())
 	m.Input.SetImageCleanup(func(path string) { _ = attachment.DeleteImage(path) })
 	m.refreshRuntimeStatus()

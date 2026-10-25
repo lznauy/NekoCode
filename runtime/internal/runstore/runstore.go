@@ -112,9 +112,9 @@ func (s *RunStore) Record(ev core.Event) {
 		if p, ok := ev.Payload.([]protocol.TodoItem); ok {
 			rec.snapshot.Todos = append([]protocol.TodoItem(nil), p...)
 		}
-	case core.EventSubAgentStarted, core.EventSubAgentEnded:
+	case core.EventSubAgentStarted, core.EventSubAgentEnded, core.EventSubAgentUpdated:
 		if p, ok := ev.Payload.(core.SubAgentPayload); ok {
-			rec.applySubAgent(p, ev.Type == core.EventSubAgentStarted, ev.Time)
+			rec.applySubAgent(p, ev.Type, ev.Time)
 		}
 	case core.EventPhaseChanged:
 		if p, ok := ev.Payload.(core.PhasePayload); ok {
@@ -145,29 +145,13 @@ func (s *RunStore) Record(ev core.Event) {
 			}
 			rec.finishTool(p, status, ev.Time)
 		}
-	case core.EventApprovalRequested:
-		if p, ok := ev.Payload.(core.ApprovalView); ok {
-			rec.snapshot.Status = core.RunWaitingApproval
-			rec.upsertApproval(p)
-		}
-	case core.EventApprovalResolved:
+	case core.EventApprovalRequested, core.EventApprovalResolved:
 		if p, ok := ev.Payload.(core.ApprovalView); ok {
 			rec.upsertApproval(p)
 		}
-		if rec.snapshot.Status == core.RunWaitingApproval {
-			rec.snapshot.Status = core.RunRunning
-		}
-	case core.EventQuestionRequested:
-		if p, ok := ev.Payload.(core.QuestionView); ok {
-			rec.snapshot.Status = core.RunWaitingQuestion
-			rec.upsertQuestion(p)
-		}
-	case core.EventQuestionResolved:
+	case core.EventQuestionRequested, core.EventQuestionResolved:
 		if p, ok := ev.Payload.(core.QuestionView); ok {
 			rec.upsertQuestion(p)
-		}
-		if rec.snapshot.Status == core.RunWaitingQuestion {
-			rec.snapshot.Status = core.RunRunning
 		}
 	case core.EventRunDone:
 		if p, ok := ev.Payload.(core.RunResult); ok {
@@ -191,7 +175,17 @@ func (s *RunStore) Record(ev core.Event) {
 		rec.finish(core.RunCancelled, ev.Time)
 	}
 	switch ev.Type {
-	case core.EventTodosUpdated, core.EventSubAgentStarted, core.EventSubAgentEnded,
+	case core.EventSubAgentStarted, core.EventSubAgentUpdated,
+		core.EventApprovalRequested, core.EventApprovalResolved,
+		core.EventQuestionRequested, core.EventQuestionResolved:
+		rec.refreshSubagentWaits(ev.Time)
+		if ev.Type == core.EventApprovalRequested || ev.Type == core.EventApprovalResolved || ev.Type == core.EventQuestionRequested || ev.Type == core.EventQuestionResolved {
+			rec.refreshParentWaits()
+		}
+	}
+
+	switch ev.Type {
+	case core.EventTodosUpdated, core.EventSubAgentStarted, core.EventSubAgentEnded, core.EventSubAgentUpdated,
 		core.EventApprovalRequested, core.EventApprovalResolved, core.EventQuestionRequested, core.EventQuestionResolved:
 		rec.metadataBytes = snapshotMetadataBytes(rec.snapshot)
 	}
@@ -372,30 +366,91 @@ func (r *runRecord) findOpenTool(callID, name string) int {
 	return -1
 }
 
-func (r *runRecord) applySubAgent(p core.SubAgentPayload, started bool, at time.Time) {
+func (r *runRecord) applySubAgent(p core.SubAgentPayload, kind core.EventType, at time.Time) {
+	p.Prompt = protocol.SubagentTextPreview(p.Prompt, 1024)
+	p.Phase = protocol.SubagentTextPreview(p.Phase, 1024)
+	started := kind != core.EventSubAgentEnded
+	if p.Status == "" {
+		if started {
+			p.Status = "running"
+		} else {
+			p.Status = "unknown"
+		}
+	}
 	profile := p.Profile
 	if profile == "" {
 		profile = p.Type
 	}
-	for i := range r.snapshot.SubAgents {
-		if r.snapshot.SubAgents[i].ID != p.ID {
+	match := -1
+	// The newest placeholder belongs to the latest queued execution. Older
+	// rejected resumes have no attempt ID and must not consume its end event.
+	for i := len(r.snapshot.SubAgents) - 1; i >= 0; i-- {
+		view := &r.snapshot.SubAgents[i]
+		if view.ID != p.ID {
 			continue
 		}
-		if started {
-			r.snapshot.SubAgents[i].Type = profile
-			r.snapshot.SubAgents[i].Profile = profile
-			r.snapshot.SubAgents[i].Skills = append([]string(nil), p.Skills...)
-			r.snapshot.SubAgents[i].Color = p.Color
+		if p.AttemptID != "" {
+			if view.AttemptID == p.AttemptID {
+				match = i
+				break
+			}
+			continue
 		}
-		r.snapshot.SubAgents[i].Active = started
+		// Empty attempt identities are queued placeholders or legacy events.
+		// Never let them overwrite an admitted attempt.
+		if view.AttemptID != "" || p.Status == "queued" && !view.Active {
+			continue
+		}
+		match = i
+		break
+	}
+	if match < 0 && p.AttemptID != "" && kind == core.EventSubAgentStarted {
+		for i := range r.snapshot.SubAgents {
+			view := &r.snapshot.SubAgents[i]
+			if view.ID == p.ID && view.AttemptID == "" && view.Active && view.Status == "queued" {
+				match = i
+				view.AttemptID, view.AttemptSeq = p.AttemptID, p.AttemptSeq
+				break
+			}
+		}
+	}
+	if match >= 0 {
+		view := &r.snapshot.SubAgents[match]
+		if kind == core.EventSubAgentUpdated && !view.Active {
+			return
+		}
+		if kind == core.EventSubAgentStarted {
+			view.FinishedAt = nil
+			if p.SessionID != "" {
+				view.SessionID = p.SessionID
+			}
+			view.Type = profile
+			view.Profile = profile
+			view.Skills = append([]string(nil), p.Skills...)
+			view.Color = p.Color
+			view.AttemptID, view.AttemptSeq = p.AttemptID, p.AttemptSeq
+		}
+		if p.Status != "" {
+			view.Status = p.Status
+		}
+		if p.Phase != "" {
+			view.Phase = p.Phase
+		}
+		if p.Prompt != "" {
+			view.Prompt = p.Prompt
+		}
+		view.UpdatedAt = at
+		view.Active = started
 		if !started {
-			r.snapshot.SubAgents[i].FinishedAt = &at
+			view.FinishedAt = &at
 		}
 		return
 	}
 	view := core.SubAgentView{
-		ID: p.ID, Type: profile, Profile: profile, Skills: append([]string(nil), p.Skills...),
+		ID: p.ID, Type: profile, Profile: profile, Skills: append([]string(nil), p.Skills...), SessionID: p.SessionID,
 		Color: p.Color, Active: started, StartedAt: at,
+		Status: p.Status, Phase: p.Phase, Prompt: p.Prompt, UpdatedAt: at,
+		AttemptID: p.AttemptID, AttemptSeq: p.AttemptSeq,
 	}
 	if !started {
 		view.FinishedAt = &at
@@ -438,6 +493,16 @@ func (r *runRecord) finish(status core.RunStatus, at time.Time) {
 	r.previewSpans = nil
 	r.snapshot.Status = status
 	r.snapshot.FinishedAt = &at
+	for i := range r.snapshot.SubAgents {
+		agent := &r.snapshot.SubAgents[i]
+		if !agent.Active {
+			continue
+		}
+		agent.Active = false
+		agent.Status = "interrupted"
+		agent.FinishedAt = &at
+		agent.UpdatedAt = at
+	}
 }
 
 func copyRunSnapshot(in core.RunSnapshot) core.RunSnapshot {
@@ -540,7 +605,7 @@ func snapshotMetadataBytes(v core.RunSnapshot) int {
 		n += 64 + len(todo.Content)
 	}
 	for _, agent := range v.SubAgents {
-		n += 128 + len(agent.ID) + len(agent.Type) + len(agent.Profile)
+		n += 128 + len(agent.ID) + len(agent.Type) + len(agent.Profile) + len(agent.Status) + len(agent.Phase) + len(agent.Prompt)
 		for _, skill := range agent.Skills {
 			n += 16 + len(skill)
 		}
@@ -596,4 +661,69 @@ func (s *RunStore) CacheRestored(snapshot core.RunSnapshot) {
 	s.runs[snapshot.ID] = &runRecord{snapshot: copyRunSnapshot(snapshot), metadataBytes: size - snapshotTextBytes(snapshot)}
 	s.order = append(s.order, snapshot.ID)
 	s.evictBytesLocked()
+}
+
+// Subagents copies only task metadata, never parent tool output or model text.
+func (s *RunStore) Subagents(sessionID string) []core.SubAgentView {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []core.SubAgentView
+	for _, id := range s.order {
+		for _, agent := range s.runs[id].snapshot.SubAgents {
+			if agent.SessionID != sessionID {
+				continue
+			}
+			agent.Skills = append([]string(nil), agent.Skills...)
+			agent.FinishedAt = copyTime(agent.FinishedAt)
+			out = append(out, agent)
+		}
+	}
+	return out
+}
+
+func (r *runRecord) refreshSubagentWaits(at time.Time) {
+	for i := range r.snapshot.SubAgents {
+		agent := &r.snapshot.SubAgents[i]
+		if !agent.Active || agent.Status == "queued" {
+			continue
+		}
+		status := "running"
+		for _, approval := range r.snapshot.Approvals {
+			if approval.SubAgentID == agent.ID && approval.Status == core.ApprovalPending {
+				status = "waiting_approval"
+				break
+			}
+		}
+		if status == "running" {
+			for _, question := range r.snapshot.Questions {
+				if question.SubAgentID == agent.ID && question.Status == core.QuestionPending {
+					status = "waiting_question"
+					break
+				}
+			}
+		}
+		if status != agent.Status {
+			agent.Status = status
+			agent.UpdatedAt = at
+		}
+	}
+}
+
+func (r *runRecord) refreshParentWaits() {
+	if r.snapshot.Status == core.RunDone || r.snapshot.Status == core.RunFailed || r.snapshot.Status == core.RunCancelled {
+		return
+	}
+	for _, approval := range r.snapshot.Approvals {
+		if approval.Status == core.ApprovalPending {
+			r.snapshot.Status = core.RunWaitingApproval
+			return
+		}
+	}
+	for _, question := range r.snapshot.Questions {
+		if question.Status == core.QuestionPending {
+			r.snapshot.Status = core.RunWaitingQuestion
+			return
+		}
+	}
+	r.snapshot.Status = core.RunRunning
 }

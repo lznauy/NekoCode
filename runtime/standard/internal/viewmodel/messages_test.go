@@ -28,6 +28,21 @@ func TestDisplayMessagesKeepsPersistentToolBlocks(t *testing.T) {
 	}
 }
 
+func TestDisplayMessagesTreatsPartialTaskWithErrorAsPartial(t *testing.T) {
+	msgs := []types.Message{
+		{Role: "assistant", ToolCalls: []types.ToolCall{{ID: "task-call", Function: types.FunctionCall{Name: "task"}}}},
+		{Role: "tool", ToolCallID: "task-call", Content: "[Subagent returned a partial result]\ncompleted evidence\nremaining error", IsError: true},
+	}
+	got := DisplayMessages(msgs)
+	if len(got) != 1 || len(got[0].Blocks) != 1 {
+		t.Fatalf("partial task produced failure blocks: %+v", got)
+	}
+	block := got[0].Blocks[0]
+	if block.ToolName != "子任务" || block.Content != "未完成 1" || block.IsError {
+		t.Fatalf("partial task summary = %+v", block)
+	}
+}
+
 func TestDisplayMessagesHidesImageAttachmentMetadata(t *testing.T) {
 	content := controlruntime.InputWithImageAttachments("分析图片 [Image #1]", []controlruntime.ImageAttachment{{
 		Label: "[Image #1]", Path: "/tmp/paste.png",
@@ -216,5 +231,36 @@ func TestDisplayMessagesDropsReasoningOnlyAssistantTurn(t *testing.T) {
 	got := DisplayMessages([]types.Message{{Role: "assistant", ReasoningContent: "partial thought"}})
 	if len(got) != 0 {
 		t.Fatalf("display messages = %+v, want reasoning-only turn hidden", got)
+	}
+}
+
+func TestTaskHistoryPreservesSummaryFailuresAndResumeIdentity(t *testing.T) {
+	msgs := []types.Message{
+		{Role: "user", Content: "do work"},
+		{Role: "assistant", ToolCalls: []types.ToolCall{
+			{ID: "first", Function: types.FunctionCall{Name: "task"}},
+			{ID: "failed", Function: types.FunctionCall{Name: "task"}},
+		}},
+		{Role: "tool", ToolCallID: "first", Content: "[Subagent returned a partial result]\n[Subagent ID: child]\npartial content"},
+		{Role: "tool", ToolCallID: "failed", IsError: true, Content: "could not start"},
+		{Role: "assistant", ToolCalls: []types.ToolCall{{ID: "resume", Function: types.FunctionCall{Name: "task", Arguments: `{"resume_id":"child"}`}}}},
+		{Role: "tool", ToolCallID: "resume", Content: "[Subagent ID: child]\ncompleted content"},
+	}
+	got := DisplayMessages(msgs)
+	if len(got) != 2 || len(got[1].Blocks) != 2 {
+		t.Fatalf("history = %+v", got)
+	}
+	blocks := got[1].Blocks
+	if blocks[0].ToolName != "子任务失败" || !blocks[0].IsError || blocks[0].Content != "could not start" {
+		t.Fatalf("failure = %+v", blocks[0])
+	}
+	if blocks[1].ToolName != "子任务" || blocks[1].Content != "完成 1 · 失败 1" {
+		t.Fatalf("summary = %+v", blocks[1])
+	}
+	for offset := 0; offset < 2; offset++ {
+		page, err := DisplayMessagesPage(msgs, offset, 1)
+		if err != nil || page.Total != 2 || len(page.Messages) != 1 {
+			t.Fatalf("page %d = %+v, %v", offset, page, err)
+		}
 	}
 }

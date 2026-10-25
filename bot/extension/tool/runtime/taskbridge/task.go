@@ -6,6 +6,9 @@ import (
 	"nekocode/protocol"
 )
 
+// DefaultMaxConcurrentTasks is used when no delegated execution limit is configured.
+const DefaultMaxConcurrentTasks = 8
+
 // TaskStatus is the tool-layer view of delegated task completion.
 type TaskStatus int
 
@@ -17,6 +20,7 @@ const (
 
 // TaskResult is returned by a delegated task runner.
 type TaskResult struct {
+	ID      string
 	Status  TaskStatus
 	Content string
 }
@@ -25,14 +29,61 @@ type TaskResult struct {
 // concrete sub-agent implementation. Profile defines the capability ceiling;
 // Skills supply task-scoped workflows and cannot grant additional tools.
 type TaskSpec struct {
-	Prompt  string
-	Profile string
-	Skills  []string
+	ResumeID string
+	Title    string
+	Prompt   string
+	Profile  string
+	Skills   []string
 }
 
 // TaskRunner executes a delegated task without exposing the concrete sub-agent
 // implementation to builtin tools.
 type TaskRunner func(ctx context.Context, spec TaskSpec) (*TaskResult, error)
+
+type TaskListFilter struct {
+	Query  string
+	Status string
+	Offset int
+	Limit  int
+}
+
+type TaskAttemptSummary struct {
+	ID              string `json:"id"`
+	Seq             int    `json:"seq"`
+	Status          string `json:"status"`
+	Prompt          string `json:"prompt"`
+	Result          string `json:"result,omitempty"`
+	TranscriptStart int    `json:"transcript_start"`
+	TranscriptEnd   int    `json:"transcript_end"`
+	TotalTokens     int    `json:"total_tokens,omitempty"`
+	CacheHitTokens  int    `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens int    `json:"cache_miss_tokens,omitempty"`
+	ToolUseCount    int    `json:"tool_use_count,omitempty"`
+	ContextTokens   int    `json:"context_tokens,omitempty"`
+	ContextWindow   int    `json:"context_window,omitempty"`
+}
+
+type TaskSummary struct {
+	Recorded      bool                `json:"recorded"`
+	Title         string              `json:"title,omitempty"`
+	ID            string              `json:"id"`
+	Profile       string              `json:"profile"`
+	Status        string              `json:"status"`
+	Prompt        string              `json:"prompt"`
+	Result        string              `json:"result,omitempty"`
+	RunCount      int                 `json:"run_count"`
+	LatestAttempt *TaskAttemptSummary `json:"latest_attempt,omitempty"`
+}
+
+type TaskPage struct {
+	Items      []TaskSummary `json:"items"`
+	SessionID  string        `json:"session_id"`
+	Total      int           `json:"total"`
+	NextOffset int           `json:"next_offset"`
+	HasMore    bool          `json:"has_more"`
+}
+
+type TaskLister func(ctx context.Context, filter TaskListFilter) (TaskPage, error)
 
 // TaskCallbackFn forwards delegated task tool events to the caller.
 type TaskCallbackFn func(ev protocol.StepEvent)
@@ -41,6 +92,9 @@ type TaskCallbackFn func(ev protocol.StepEvent)
 type TaskCallback struct {
 	ID       string
 	Callback TaskCallbackFn
+	Begin    func(context.Context) error
+	// Finish is a fallback for calls rejected or cancelled before Execute runs.
+	Finish func(protocol.StepEvent)
 }
 
 type taskCallbackCtxKey struct{}

@@ -7,8 +7,7 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// SubColors are the exclusive palette for sub-agent color assignments.
-// Index 0-7, each sub-agent gets a unique color during its lifetime.
+// SubColors are reused cyclically when concurrency exceeds the palette size.
 var SubColors = [8]string{
 	"#e57373", "#81c784", "#64b5f6", "#ffb74d",
 	"#ba68c8", "#4dd0e1", "#fff176", "#f06292",
@@ -109,9 +108,9 @@ var (
 // BulletForBlock returns the bullet character and style for a content block.
 // Main agent (SubID empty) uses teal; sub-agents use their assigned palette color.
 func BulletForBlock(subID string, subColor int, tealStyle lipgloss.Style) (string, lipgloss.Style) {
-	if subID == "" || subColor < 0 || subColor >= len(SubColors) {
+	if subID == "" || subColor < 0 {
 		return MainBullet, tealStyle
 	}
-	c := lipgloss.Color(SubColors[subColor])
+	c := lipgloss.Color(SubColors[subColor%len(SubColors)])
 	return SubBullet, lipgloss.NewStyle().Foreground(c)
 }

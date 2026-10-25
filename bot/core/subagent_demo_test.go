@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"nekocode/bot/config"
+	ctxmgr "nekocode/bot/contextmgr"
+	"nekocode/bot/session"
 	"nekocode/protocol"
 )
 
@@ -116,6 +118,29 @@ func runSubagentDemo(t *testing.T, profile string, skills []string) {
 		case 5:
 			contains("Read sample.go: Answer = 42")
 			contains("shell was blocked")
+			text := string(messages)
+			start := strings.Index(text, "[Subagent ID: ")
+			if start < 0 {
+				t.Error("task result did not expose its resumable ID")
+				http.Error(w, "missing task ID", 500)
+				return
+			}
+			text = text[start+len("[Subagent ID: "):]
+			id, _, _ := strings.Cut(text, "]")
+			delta = map[string]any{"tool_calls": []any{tool(0, "resume", "task", map[string]any{
+				"resume_id": id, "prompt": "Recheck your earlier conclusion without re-reading the file.",
+			})}}
+		case 6:
+			contains("Read and review")
+			contains("Answer = 42")
+			contains("Recheck your earlier conclusion")
+			contains("Skill: check")
+			delta = map[string]any{"tool_calls": []any{tool(0, "resumed-handoff", "nekocode_submit_result", map[string]any{
+				"summary": "Rechecked earlier evidence: Answer = 42.", "evidence": []string{"Previous read result"}, "files": []string{},
+				"verification": "Reused saved context.", "unfinished": []string{}, "risks": []string{},
+			})}}
+		case 7:
+			contains("Rechecked earlier evidence")
 			finish = "stop"
 			delta = map[string]any{"content": "Demo complete: Answer = 42; read-only delegation verified."}
 		default:
@@ -153,7 +178,7 @@ func runSubagentDemo(t *testing.T, profile string, skills []string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if calls.Load() != 5 || !strings.Contains(out, "Demo complete") {
+	if calls.Load() != 7 || !strings.Contains(out, "Demo complete") {
 		t.Fatalf("calls=%d output=%q", calls.Load(), out)
 	}
 	host.mu.Lock()
@@ -164,7 +189,13 @@ func runSubagentDemo(t *testing.T, profile string, skills []string) {
 	for _, event := range host.events {
 		switch event.Action {
 		case protocol.StepActionSubAgentStart:
+			if event.SubAgentStatus == "queued" {
+				continue
+			}
 			starts++
+			if id != "" && id != event.SubAgentID {
+				t.Error("resume changed durable subagent identity")
+			}
 			if event.SubAgentProfile != "subagent-demo/reviewer" || event.SubAgentType != "subagent-demo/reviewer" {
 				t.Errorf("unresolved profile in start event: %+v", event)
 			}
@@ -184,14 +215,18 @@ func runSubagentDemo(t *testing.T, profile string, skills []string) {
 			ended = event.SubAgentID == id && id != ""
 		}
 	}
-	if starts != 1 || id == "" || !read || !blocked || !ended {
+	if starts != 2 || id == "" || !read || !blocked || !ended {
 		t.Fatalf("lifecycle: id=%q read=%v blocked=%v ended=%v", id, read, blocked, ended)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil || string(data) != source {
 		t.Fatal("demo source changed", err)
 	}
-	t.Log("PASS: manifest → catalog → task → isolated subagent → real read + blocked shell → structured handoff → parent result")
+	metadata, err := session.ReadSubagentMetadata(b.sess.CurrentID(), id)
+	if err != nil || metadata.RunCount != 2 || metadata.Status != "completed" {
+		t.Fatalf("resumed metadata=%+v err=%v", metadata, err)
+	}
+	t.Log("PASS: manifest → task → real read + blocked shell → handoff → resume with saved context and skills → parent result")
 }
 
 type subagentDemoHost struct {
@@ -213,4 +248,49 @@ func (h *subagentDemoHost) Step(ev protocol.StepEvent) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.events = append(h.events, ev)
+}
+
+func TestSubagentResumeCannotChangeSavedProfile(t *testing.T) {
+	b := newPersistTestBot(t)
+	child, err := session.OpenSubagent(b.sess.CurrentID(), "saved-explore", b.cwd, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Close()
+	if err := child.Begin("explore", "inspect", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Checkpoint(ctxmgr.ManagerSnapshot{}, "completed", "done"); err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Close(); err != nil {
+		t.Fatal(err)
+	}
+	tool, err := b.toolbox.Registry.Get("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = tool.Execute(t.Context(), map[string]any{"resume_id": "saved-explore", "profile": "coder", "prompt": "continue"})
+	if err == nil || !strings.Contains(err.Error(), "cannot change subagent profile") {
+		t.Fatalf("profile change accepted: %v", err)
+	}
+	metadata, err := session.ReadSubagentMetadata(b.sess.CurrentID(), "saved-explore")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Profile != "explore" || metadata.RunCount != 1 || metadata.Status != "completed" {
+		t.Fatalf("rejected resume mutated saved task: %+v", metadata)
+	}
+}
+
+func TestSubagentResumeExplainsTaskIdentity(t *testing.T) {
+	b := newPersistTestBot(t)
+	tool, err := b.toolbox.Registry.Get("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = tool.Execute(t.Context(), map[string]any{"resume_id": "attempt-id-not-task-id", "prompt": "continue"})
+	if err == nil || !strings.Contains(err.Error(), "items[].id") || !strings.Contains(err.Error(), "latest_attempt.id") {
+		t.Fatalf("missing actionable task identity error: %v", err)
+	}
 }

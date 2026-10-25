@@ -57,6 +57,10 @@ func (r *Runtime) ReplayEvents(ctx context.Context, filter EventFilter) (<-chan 
 			recent := make([]Event, 0)
 			bytes := 0
 			if err := recording.WalkRecordedEventFile(run.Path, func(ev Event) {
+				ev = eventbus.NormalizeRecordedEvent(ev)
+				if !eventbus.Matches(filter, ev) {
+					return
+				}
 				if ev.Type == EventCompaction {
 					if p, ok := ev.Payload.(CompactionPayload); ok && p.Status == protocol.CompactionDelta {
 						return
@@ -282,7 +286,7 @@ func (r *Runtime) EnableEventRecording(baseDir string) error {
 	}
 	r.recorder = recorder
 	r.mu.Unlock()
-	r.events.AddObserver(recorder.Record)
+	r.events.AddOrderedObserver(recorder.Record)
 
 	go r.pruneRecordedRuns(baseDir)
 	return nil

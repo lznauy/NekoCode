@@ -8,7 +8,29 @@ import (
 	"testing"
 
 	"nekocode/bot/extension/tool/runtime/taskbridge"
+	"nekocode/protocol"
 )
+
+func TestTaskResumePassesIdentityAndReturnsIt(t *testing.T) {
+	tool := NewTaskTool()
+	tool.Wire(func(_ context.Context, spec taskbridge.TaskSpec) (*taskbridge.TaskResult, error) {
+		if spec.ResumeID != "saved" || spec.Skills != nil {
+			t.Fatalf("resume spec=%+v", spec)
+		}
+		return &taskbridge.TaskResult{ID: "saved", Content: "continued"}, nil
+	})
+	args := map[string]any{"profile": "explore", "prompt": "continue", "resume_id": "saved"}
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil || !strings.Contains(out.Text, "[Subagent ID: saved]") {
+		t.Fatalf("output=%+v err=%v", out, err)
+	}
+	for _, invalid := range []any{nil, "", 42} {
+		args["resume_id"] = invalid
+		if _, err := tool.Execute(context.Background(), args); err == nil {
+			t.Fatal("invalid resume ID accepted")
+		}
+	}
+}
 
 func TestTaskToolPassesComposedSpec(t *testing.T) {
 	tk := &TaskTool{}
@@ -21,14 +43,40 @@ func TestTaskToolPassesComposedSpec(t *testing.T) {
 		return &taskbridge.TaskResult{Content: "done"}, nil
 	})
 	out, err := tk.Execute(context.Background(), map[string]any{
-		"_sub_callback": taskbridge.TaskCallback{ID: "sub-test"}, "profile": "explore", "skills": []any{"check", "hunt"}, "prompt": "review",
+		"_sub_callback": taskbridge.TaskCallback{ID: "sub-test"}, "title": "Review auth", "profile": "explore", "skills": []any{"check", "hunt"}, "prompt": "review",
 	})
 	if err != nil || out.Render() != "done" {
 		t.Fatalf("Execute() = %q, %v", out.Render(), err)
 	}
-	want := taskbridge.TaskSpec{Profile: "explore", Skills: []string{"check", "hunt"}, Prompt: "review"}
+	want := taskbridge.TaskSpec{Title: "Review auth", Profile: "explore", Skills: []string{"check", "hunt"}, Prompt: "review"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("spec = %+v, want %+v", got, want)
+	}
+}
+
+func TestTaskToolPublishesActualTerminalStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status taskbridge.TaskStatus
+		err    error
+		want   string
+	}{
+		{"completed", taskbridge.TaskStatusCompleted, nil, "completed"},
+		{"partial", taskbridge.TaskStatusPartial, nil, "partial"},
+		{"failed-save", taskbridge.TaskStatusPartial, errors.New("save failed"), "failed"},
+		{"cancelled", taskbridge.TaskStatusPartial, context.Canceled, "interrupted"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tool := NewTaskTool()
+			tool.Wire(func(context.Context, taskbridge.TaskSpec) (*taskbridge.TaskResult, error) {
+				return &taskbridge.TaskResult{Status: tc.status}, tc.err
+			})
+			var terminal protocol.StepEvent
+			_, _ = tool.Execute(context.Background(), map[string]any{"profile": "explore", "prompt": "inspect", "_sub_callback": taskbridge.TaskCallback{Callback: func(ev protocol.StepEvent) { terminal = ev }}})
+			if terminal.Action != protocol.StepActionSubAgentEnd || terminal.SubAgentStatus != tc.want {
+				t.Fatalf("terminal=%+v", terminal)
+			}
+		})
 	}
 }
 
@@ -75,5 +123,23 @@ func TestTaskToolRequiresProfile(t *testing.T) {
 	_, err := tk.Execute(context.Background(), map[string]any{"prompt": "test"})
 	if err == nil || !strings.Contains(err.Error(), "profile") {
 		t.Fatalf("error = %v, want missing profile", err)
+	}
+}
+
+func TestTaskResumeAllowsOmittedProfile(t *testing.T) {
+	tool := NewTaskTool()
+	tool.Wire(func(_ context.Context, spec taskbridge.TaskSpec) (*taskbridge.TaskResult, error) {
+		if spec.ResumeID != "saved" || spec.Profile != "" {
+			t.Fatalf("resume must resolve saved profile in runner: %+v", spec)
+		}
+		return &taskbridge.TaskResult{ID: "saved", Content: "continued"}, nil
+	})
+	if _, err := tool.Execute(t.Context(), map[string]any{"resume_id": "saved", "prompt": "continue"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, parameter := range tool.Parameters() {
+		if parameter.Name == "profile" && parameter.Required {
+			t.Fatal("schema requires profile even for resume")
+		}
 	}
 }

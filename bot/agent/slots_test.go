@@ -5,6 +5,20 @@ import (
 	"testing"
 )
 
+func TestConfiguredSlotLimitCanExceedDefault(t *testing.T) {
+	for _, limit := range []int{1, 3, 12} {
+		m := newSlotManager(limit)
+		for i := 0; i < limit; i++ {
+			if _, ok := m.Acquire(fmt.Sprint(i), "explore"); !ok {
+				t.Fatalf("limit=%d rejected task %d", limit, i)
+			}
+		}
+		if _, ok := m.Acquire("overflow", "explore"); ok {
+			t.Fatalf("exceeded configured limit %d", limit)
+		}
+	}
+}
+
 func TestSlotManagerAcquireUpToLimit(t *testing.T) {
 	m := newSlotManager()
 	for i := 0; i < maxSubSlots; i++ {

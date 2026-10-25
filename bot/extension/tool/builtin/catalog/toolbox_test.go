@@ -1,10 +1,13 @@
 package catalog
 
 import (
+	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"nekocode/bot/config"
+	"nekocode/bot/extension/tool/runtime/taskbridge"
 	"nekocode/bot/extension/tool/runtime/workspace"
 )
 
@@ -45,6 +48,34 @@ func TestToolboxScopesTemporaryRootsBySession(t *testing.T) {
 	box.SetSessionID("one")
 	if _, _, ok, err := box.Workspace().CheckRead(filepath.Join(extra, "note.md")); err != nil || ok {
 		t.Fatalf("closed session retained temporary root: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestTaskListSurvivesRegistryRebuildAndAllowsPlanMode(t *testing.T) {
+	box := NewToolboxWithConfig(ToolboxConfig{})
+	defer box.Close()
+	calls := 0
+	box.WireTaskLister(func(context.Context, taskbridge.TaskListFilter) (taskbridge.TaskPage, error) {
+		calls++
+		return taskbridge.TaskPage{SessionID: "parent"}, nil
+	})
+	for i := 0; i < 2; i++ {
+		entry, err := box.Registry.Lookup("task_list")
+		if err != nil || !entry.PlanAllowed {
+			t.Fatalf("task_list registration = %+v, %v", entry, err)
+		}
+		out, err := entry.Tool.Execute(context.Background(), nil)
+		if err != nil || !strings.Contains(out.Text, "parent") {
+			t.Fatalf("task_list output = %q, %v", out.Text, err)
+		}
+		box.RebuildRegistryWithConfig(ToolboxConfig{})
+	}
+	if calls != 2 {
+		t.Fatalf("lister calls = %d", calls)
+	}
+	entry, err := box.Registry.Lookup("task")
+	if err != nil || entry.PlanAllowed {
+		t.Fatalf("task unexpectedly allowed in plan mode: %+v, %v", entry, err)
 	}
 }
 

@@ -20,8 +20,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}()
 
+	if s := m.tasks; s != nil {
+		s.reuseView = false
+		if event, ok := msg.(runtimeEventMsg); ok {
+			switch event.event.Type {
+			case controlruntime.EventAssistantDelta, controlruntime.EventAssistantReset,
+				controlruntime.EventReasoningDelta, controlruntime.EventMetricsUpdated, controlruntime.EventPhaseChanged:
+				// Main-only stream updates do not change the visible task panel.
+				s.reuseView = true
+			}
+		}
+	}
+
+	if handled, cmd := m.handleTaskMessage(msg); handled {
+		return m, cmd
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		m.terminalWidth = max(1, msg.Width)
+		m.terminalHeight = max(1, msg.Height)
 		m.Width = max(msg.Width, 10)
 		m.Height = max(msg.Height, 10)
 		m.Ready = true
@@ -31,6 +49,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Splash.SetSize(msg.Width, msg.Height)
 
 		m.resizeMessages()
+		m.resizeTasks()
 		return m, nil
 
 	case spinner.TickMsg:
@@ -59,6 +78,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.state == stateQuestioning {
 			return m.handleQuestionKey(msg)
 		}
+		if m.tasks != nil && m.tasks.open {
+			return m, m.handleTaskKey(msg)
+		}
 		return m, m.handleKeyPress(msg)
 
 	case components.TickMsg:
@@ -79,6 +101,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.QuestionBar.Type(text)
 			return m, nil
 		}
+		if m.tasks != nil && m.tasks.open {
+			if m.tasks.searching {
+				text := strings.Join(strings.Fields(msg.Content), " ")
+				m.tasks.query = string([]rune(m.tasks.query + text)[:min(256, len([]rune(m.tasks.query+text)))])
+				m.tasks.listOffset = 0
+				return m, m.loadTasks()
+			}
+			return m, nil
+		}
 		if msg.Content == "" {
 			return m, readClipboardImage()
 		}
@@ -88,6 +119,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.MouseMsg:
+		if m.tasks != nil && m.tasks.open && m.state != stateConfirming && m.state != stateQuestioning {
+			key := ""
+			switch msg.Mouse().Button {
+			case tea.MouseWheelUp:
+				key = "up"
+			case tea.MouseWheelDown:
+				key = "down"
+			}
+			if key != "" {
+				return m, m.handleTaskKey(tea.KeyPressMsg{Code: map[string]rune{"up": tea.KeyUp, "down": tea.KeyDown}[key]})
+			}
+			return m, nil
+		}
 		_, cmd := m.Messages.Update(msg)
 		m.Input.SetFollow(m.Messages.Follow)
 		return m, cmd

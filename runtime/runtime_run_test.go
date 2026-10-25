@@ -11,6 +11,42 @@ import (
 	"nekocode/runtime/internal/core"
 )
 
+func TestSubagentOutputCarriesAttemptAndTranscriptIdentity(t *testing.T) {
+	rt := newTestRuntime(&testBot{})
+	defer rt.Close()
+	for _, action := range []protocol.StepAction{protocol.StepActionSubAgentText, protocol.StepActionSubAgentReason, protocol.StepActionSubAgentMessage, protocol.StepActionSubAgentReset} {
+		rt.publishStep("run", protocol.StepEvent{Action: action, SubAgentID: "child", SubAgentAttemptID: "attempt", SubAgentAttemptSeq: 2, SubAgentMessageSeq: 7, Output: "text", SubAgentReasoning: "reason"})
+	}
+	events := rt.events.History(EventFilter{RunID: "run", Types: []EventType{EventSubAgentOutput}})
+	if len(events) != 4 {
+		t.Fatalf("missing output events: %d", len(events))
+	}
+	for _, ev := range events {
+		output := ev.Payload.(SubAgentOutput)
+		if output.ID != "child" || output.AttemptID != "attempt" || output.AttemptSeq != 2 || output.MessageSeq != 7 || output.Reasoning != "reason" {
+			t.Fatalf("output identity lost: %+v", output)
+		}
+	}
+}
+
+func TestSubagentToolEventsCarryAttemptIdentity(t *testing.T) {
+	rt := newTestRuntime(&testBot{})
+	defer rt.Close()
+	for _, action := range []protocol.StepAction{protocol.StepActionToolStart, protocol.StepActionToolPreview, protocol.StepActionExecuteTool, protocol.StepActionToolBlocked} {
+		rt.publishStep("run", protocol.StepEvent{Action: action, CallID: "call", ToolName: "shell", SubAgentID: "child", SubAgentAttemptID: "attempt", SubAgentAttemptSeq: 2})
+	}
+	events := rt.events.History(EventFilter{RunID: "run", SubAgentID: "child"})
+	if len(events) != 4 {
+		t.Fatalf("missing tool events: %d", len(events))
+	}
+	for _, ev := range events {
+		payload := ev.Payload.(ToolPayload)
+		if payload.AttemptID != "attempt" || payload.AttemptSeq != 2 {
+			t.Fatalf("tool event lost attempt identity: %+v", payload)
+		}
+	}
+}
+
 func TestCompactionStepHasDedicatedRunEvent(t *testing.T) {
 	bot := &testBot{}
 	bot.run = func(_ string, host RunHost) (string, error) {

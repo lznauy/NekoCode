@@ -9,6 +9,16 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+func TestHeaderFitsVeryNarrowTerminal(t *testing.T) {
+	for _, width := range []int{1, 6, 10, 20} {
+		for _, line := range strings.Split(NewHeader(width, "dev").View(), "\n") {
+			if ansi.StringWidth(line) > width {
+				t.Fatalf("header exceeds %d columns: %q", width, line)
+			}
+		}
+	}
+}
+
 func TestHeaderShowsOperationalStatusWithoutModelOrTotalTokens(t *testing.T) {
 	h := NewHeader(180, "dev")
 	h.SetContext(14500, 1_000_000, 800_000, 9940, 60)

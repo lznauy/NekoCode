@@ -4,6 +4,7 @@ package block
 import (
 	"strings"
 
+	"nekocode/interaction"
 	"nekocode/protocol"
 )
 
@@ -25,9 +26,16 @@ type ContentBlock struct {
 	// For process this distinguishes list/wait/watch/stop.
 	ToolAction string
 	Done       bool
+	FullOutput bool   // explicitly expanded tool detail; keep the complete returned text
 	IsError    bool   // true when the tool returned an error (used for rendering)
 	SubID      string // "" = main agent; non-empty = sub-agent UUID
-	SubColor   int    // -1 = main agent; 0-7 = sub-agent color index
+	SubColor   int    // -1 = main agent; nonnegative slot indices cycle through the palette
+}
+
+// NewTool normalizes tool metadata for both the main conversation and task views.
+func NewTool(name, callID, arguments string) ContentBlock {
+	return ContentBlock{Type: BlockTool, ToolName: name, CallID: callID,
+		ToolArgs: interaction.ToolBrief(name, arguments), ToolAction: interaction.ToolAction(name, arguments)}
 }
 
 // FilterFinalBlocks returns persistent tool blocks.

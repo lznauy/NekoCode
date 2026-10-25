@@ -68,6 +68,11 @@ type ConfigServices struct {
 
 // SessionsServices contains optional sessions callbacks supplied by the application.
 type SessionsServices struct {
+	SubagentToolOutput func(sessionID, id string, sequence int, offset int64) (SubagentOutputPage, error)
+	Subagents          func(sessionID string) ([]SubagentSummary, error)
+	SubagentAttempts   func(sessionID, id string, before, limit int) (SubagentAttemptPage, error)
+	SubagentHistory    func(sessionID, id string, before, limit int) (SubagentHistoryPage, error)
+
 	CurrentSessionID    func() string
 	ListSessions        func() []SessionMeta
 	SessionMessages     func() []DisplayMessage

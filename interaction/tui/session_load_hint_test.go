@@ -40,7 +40,7 @@ func TestSessionLoadHintDelayAndCompletion(t *testing.T) {
 				loaded.err = errors.New("history unavailable")
 			}
 			m.Update(loaded)
-			if m.sessionHeaderView(started.Add(time.Second)) != m.Header.View() {
+			if strings.Contains(ansi.Strip(m.sessionHeaderView(started.Add(time.Second))), "正在加载") {
 				t.Fatal("completion left the loading hint visible")
 			}
 		})
@@ -68,7 +68,7 @@ func TestSessionLoadHintResetsForNewRequest(t *testing.T) {
 		t.Fatal("newer history load has the wrong direction label")
 	}
 	m.Update(load().(sessionLoadedMsg))
-	if m.sessionHeaderView(started.Add(time.Second)) != m.Header.View() {
+	if strings.Contains(ansi.Strip(m.sessionHeaderView(started.Add(time.Second))), "正在加载") {
 		t.Fatal("fast completion produced a delayed hint")
 	}
 }

@@ -45,6 +45,7 @@ const (
 	EventToolCompleted     = core.EventToolCompleted
 	EventSubAgentStarted   = core.EventSubAgentStarted
 	EventSubAgentEnded     = core.EventSubAgentEnded
+	EventSubAgentUpdated   = core.EventSubAgentUpdated
 	EventTodosUpdated      = core.EventTodosUpdated
 	EventApprovalRequested = core.EventApprovalRequested
 	EventApprovalResolved  = core.EventApprovalResolved

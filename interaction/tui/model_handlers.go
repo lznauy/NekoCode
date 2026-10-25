@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"nekocode/interaction"
 	"nekocode/interaction/tui/components"
 	"nekocode/interaction/tui/components/block"
 	"nekocode/interaction/tui/components/message"
@@ -32,7 +31,20 @@ func (m *Model) handleDone(msg doneMsg) tea.Cmd {
 		return nil
 	}
 	m.Messages.SettleCompactions()
+	for id, status := range m.taskStates {
+		if status == "running" || status == "queued" || status == "waiting_approval" || status == "waiting_question" {
+			m.taskStates[id] = "interrupted"
+		}
+	}
 	finalBlocks := block.FilterFinalBlocks(m.Messages.ProcessingBlocks())
+	for _, b := range m.Messages.ProcessingBlocks() {
+		if b.ToolName == "子任务失败" {
+			finalBlocks = append(finalBlocks, b)
+		}
+	}
+	if summary := m.taskSummary(); summary != "" {
+		finalBlocks = append(finalBlocks, block.ContentBlock{Type: block.BlockTool, ToolName: "子任务", ToolArgs: strings.TrimPrefix(summary, "子任务 · "), Content: "Ctrl+G 查看任务记录", Done: true})
+	}
 
 	// Use msg.content (the final chat output) as primary rendered content.
 	// AccumulatedText() may include intermediate turn text when Stop hooks
@@ -195,6 +207,8 @@ func (m *Model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
+	case "ctrl+g":
+		return m.toggleTasks()
 	case "ctrl+v":
 		return readClipboardImage()
 	case "ctrl+c":
@@ -526,6 +540,12 @@ func (m *Model) refreshSuggestions() {
 		return
 	}
 	menu, ok := m.Runtime.CommandMenu(context.Background(), prefix)
+	if prefix == "/" {
+		if canObserveTasks(m.Runtime) {
+			menu.Items = append(menu.Items, controlruntime.CommandMenuItem{Value: "/tasks", Label: "/tasks", Description: "查看子任务执行记录 · Ctrl+G", Submit: true})
+			ok = true
+		}
+	}
 	if !ok {
 		m.Suggestions.Hide()
 		m.resizeMessages()
@@ -537,6 +557,9 @@ func (m *Model) refreshSuggestions() {
 
 func (m *Model) openCommandMenu(input string) bool {
 	input = strings.TrimSpace(input)
+	if input == "/tasks" {
+		return false
+	}
 	menu, ok := m.Runtime.CommandMenu(context.Background(), input)
 	if !ok {
 		return false
@@ -615,6 +638,9 @@ func (m *Model) cycleSuggestion(delta int) {
 
 func (m *Model) handleSpinnerTick(msg spinner.TickMsg) tea.Cmd {
 	m.Spinner, _ = m.Spinner.Update(msg)
+	if m.tasks != nil && m.tasks.open && m.tasks.detail != nil && m.tasks.detail.processing != nil {
+		m.tasks.detail.processing.SetSpinnerView(m.Spinner.View())
+	}
 
 	if m.state == stateConfirming {
 		m.Messages.SetSpinnerView("")
@@ -651,7 +677,15 @@ func spinnerTick() tea.Cmd {
 	}
 }
 
-func (m *Model) handleRuntimeEvent(ev controlruntime.Event) tea.Cmd {
+func (m *Model) handleRuntimeEvent(ev controlruntime.Event) (cmd tea.Cmd) {
+	defer func() {
+		// Lifecycle changes should refresh an open overlay immediately rather
+		// than depending on its polling timer. In-flight reads retain dirty.
+		if s := m.tasks; s != nil && s.open && s.listDirty && !s.listLoading {
+			cmd = tea.Batch(cmd, m.loadTasks())
+		}
+	}()
+	m.observeTaskLifecycle(ev)
 	switch ev.Type {
 	case controlruntime.EventCompaction:
 		if p, ok := ev.Payload.(controlruntime.CompactionPayload); ok {
@@ -701,6 +735,8 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) tea.Cmd {
 		m.refreshRuntimeStatus()
 		return clipboard
 	case controlruntime.EventRunStarted:
+		m.taskStates = nil
+		m.taskSummarySyncedAt = time.Time{}
 		reloadHistory := m.sessionLoading && m.sessionLoadDone != nil
 		if reloadHistory {
 			// A deferred terminal event belongs to the previous run. Never
@@ -721,6 +757,7 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) tea.Cmd {
 		if m.state != stateProcessing {
 			m.transitionTo(stateProcessing)
 		}
+		m.Messages.UpdateProcessing(func(item *processing.ProcessingItem) { item.SetSubagentSummary("") })
 		m.metrics = controlruntime.MetricsSnapshot{}
 		if reloadHistory {
 			return tea.Batch(spinnerTick(), m.loadSessionWindow(0, 0))
@@ -757,7 +794,13 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) tea.Cmd {
 	case controlruntime.EventToolCompleted:
 		m.applyRuntimeToolEvent(ev)
 	case controlruntime.EventSubAgentStarted:
+		if canObserveTasks(m.Runtime) {
+			break
+		}
 		if p, ok := ev.Payload.(controlruntime.SubAgentPayload); ok {
+			if p.Status == "queued" {
+				break
+			}
 			profile := p.Profile
 			if profile == "" {
 				profile = p.Type
@@ -765,6 +808,9 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) tea.Cmd {
 			m.Messages.AddSubAgent(p.ID, profile, p.Color)
 		}
 	case controlruntime.EventSubAgentEnded:
+		if canObserveTasks(m.Runtime) {
+			break
+		}
 		if p, ok := ev.Payload.(controlruntime.SubAgentPayload); ok {
 			m.Messages.RemoveSubAgent(p.ID)
 		}
@@ -823,6 +869,14 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) tea.Cmd {
 	case controlruntime.EventRunCancelled:
 		return m.handleDone(doneMsg{metrics: m.metrics, err: errors.New("cancelled")})
 	case controlruntime.EventSessionChanged:
+		m.taskStates = nil
+		m.taskSummarySyncedAt = time.Time{}
+		if m.tasks != nil {
+			m.closeTasks()
+			m.tasks.detail = nil
+			m.tasks.savedDetail = nil
+			m.tasks.sessionID = ""
+		}
 		return m.loadSessionMessages()
 	case controlruntime.EventConnectorStatus:
 		if p, ok := ev.Payload.(controlruntime.ConnectorStatusPayload); ok && p.Message != "" {
@@ -841,15 +895,20 @@ func (m *Model) applyRuntimeToolEvent(ev controlruntime.Event) {
 	if !ok || interactiveTool(p.ToolName) {
 		return
 	}
+	if p.SubAgentID == "" && p.ToolName == "task" && canObserveTasks(m.Runtime) {
+		// Keep actionable failures visible, without expanding every successful
+		// delegation into a separate activity/tool-output box.
+		if ev.Type == controlruntime.EventToolBlocked || (ev.Type == controlruntime.EventToolCompleted && p.IsError) {
+			m.Messages.ProcessToolBlock(block.ContentBlock{Type: block.BlockTool, ToolName: "子任务失败", CallID: p.CallID, Content: p.Output, Done: true, IsError: true})
+		}
+		return
+	}
 	if p.SubAgentID != "" {
 		switch ev.Type {
 		case controlruntime.EventToolStarted:
-			m.Messages.ProcessToolBlock(block.ContentBlock{
-				Type: block.BlockTool, ToolName: p.ToolName, CallID: p.CallID,
-				ToolArgs:   interaction.ToolBrief(p.ToolName, p.Args),
-				ToolAction: interaction.ToolAction(p.ToolName, p.Args),
-				SubID:      p.SubAgentID, SubColor: p.SubAgentColor,
-			})
+			tool := block.NewTool(p.ToolName, p.CallID, p.Args)
+			tool.SubID, tool.SubColor = p.SubAgentID, p.SubAgentColor
+			m.Messages.ProcessToolBlock(tool)
 		case controlruntime.EventToolPreview:
 			m.Messages.UpdateToolPreviewForCall(p.CallID, p.SubAgentID, p.ToolName, p.Preview, p.Decision)
 		case controlruntime.EventToolCompleted:
@@ -859,19 +918,13 @@ func (m *Model) applyRuntimeToolEvent(ev controlruntime.Event) {
 	}
 	switch ev.Type {
 	case controlruntime.EventToolStarted:
-		m.Messages.ProcessToolBlock(block.ContentBlock{
-			Type: block.BlockTool, ToolName: p.ToolName, CallID: p.CallID,
-			ToolArgs:   interaction.ToolBrief(p.ToolName, p.Args),
-			ToolAction: interaction.ToolAction(p.ToolName, p.Args),
-			Content:    p.Preview,
-		})
+		tool := block.NewTool(p.ToolName, p.CallID, p.Args)
+		tool.Content = p.Preview
+		m.Messages.ProcessToolBlock(tool)
 	case controlruntime.EventToolBlocked:
-		m.Messages.ProcessToolBlock(block.ContentBlock{
-			Type: block.BlockTool, ToolName: p.ToolName, CallID: p.CallID,
-			ToolArgs:   interaction.ToolBrief(p.ToolName, p.Args),
-			ToolAction: interaction.ToolAction(p.ToolName, p.Args),
-			Content:    p.Output, Done: true, IsError: true,
-		})
+		tool := block.NewTool(p.ToolName, p.CallID, p.Args)
+		tool.Content, tool.Done, tool.IsError = p.Output, true, true
+		m.Messages.ProcessToolBlock(tool)
 	case controlruntime.EventToolPreview:
 		m.Messages.UpdateToolPreviewForCall(p.CallID, p.SubAgentID, p.ToolName, p.Preview, p.Decision)
 	case controlruntime.EventToolCompleted:

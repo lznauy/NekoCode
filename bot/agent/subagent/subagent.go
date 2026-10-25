@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -45,6 +46,8 @@ type runState struct {
 	totalTokens       int
 	completionRetries int
 	lastText          string
+	initialCacheHit   int
+	initialCacheMiss  int
 }
 
 // New creates a reusable subagent engine.
@@ -79,8 +82,8 @@ func (s *runState) meta(ctxMgr *ctxmgr.Manager) runMeta {
 		totalTokens:     s.totalTokens,
 		toolUseCount:    s.toolUseCount,
 		durationMs:      time.Since(s.startTime).Milliseconds(),
-		cacheHitTokens:  status.CacheHit,
-		cacheMissTokens: status.CacheMiss,
+		cacheHitTokens:  status.CacheHit - s.initialCacheHit,
+		cacheMissTokens: status.CacheMiss - s.initialCacheMiss,
 	}
 }
 
@@ -88,7 +91,7 @@ func (s *runState) recordCalls(calls []core.ToolCallItem) {
 	s.toolUseCount += len(calls)
 }
 
-func (e *Engine) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
+func (e *Engine) Run(ctx context.Context, cfg RunConfig) (result *Result, runErr error) {
 	if cfg.Profile.MaxSteps < 0 || cfg.Profile.MaxSteps > maxSubAgentSteps {
 		return nil, fmt.Errorf("max_steps must be between 0 and %d", maxSubAgentSteps)
 	}
@@ -118,38 +121,101 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
 		}
 	})
 
+	if cfg.ResumeContext != nil {
+		// Refresh trusted instructions rather than restoring old authority.
+		restored := *cfg.ResumeContext
+		restored.SystemPrompt = buildSystemPrompt(cfg)
+		ctxMgr.Restore(restored)
+		closeInterruptedTools(ctxMgr)
+	}
+	// The restored tracker is cumulative; the parent records only this run's usage.
+	initialUsage := ctxMgr.Status()
+	state.initialCacheHit, state.initialCacheMiss = initialUsage.CacheHit, initialUsage.CacheMiss
 	ctxMgr.Add("user", buildTaskPrompt(cfg))
+	checkpoint := func(status, output string) error {
+		if cfg.SaveContext == nil {
+			return nil
+		}
+		snap := ctxMgr.Snapshot()
+		meta := state.meta(ctxMgr)
+		contextStatus := ctxMgr.Status()
+		usage := AttemptUsage{TotalTokens: meta.totalTokens, CacheHitTokens: meta.cacheHitTokens, CacheMissTokens: meta.cacheMissTokens, ToolUseCount: meta.toolUseCount, DurationMs: meta.durationMs, ContextTokens: contextStatus.Tokens, ContextWindow: contextStatus.Budget}
+		if err := cfg.SaveContext(snap, status, output, usage); err != nil {
+			return err
+		}
+		ctxMgr.AcknowledgeTranscript(snap.TranscriptBase, snap.TranscriptBase+len(snap.Transcript))
+		return nil
+	}
+	if err := checkpoint("running", ""); err != nil {
+		return nil, fmt.Errorf("save subagent: %w", err)
+	}
+	if cfg.OnStarted != nil {
+		cfg.OnStarted()
+	}
+	defer func() {
+		status, output := "failed", ""
+		if result != nil {
+			output = FormatResult(result)
+			switch result.Status {
+			case StatusCompleted:
+				status = "completed"
+			case StatusPartial:
+				status = "partial"
+			}
+		}
+		if runErr != nil {
+			status = "failed"
+		}
+		if ctx.Err() != nil {
+			status = "interrupted"
+		}
+		if err := checkpoint(status, output); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("save subagent: %w", err))
+		}
+	}()
 	phase := phaseReporter(cfg)
 	phase("Waiting")
 
 	run := &engineRun{
-		engine:   e,
-		ctx:      ctx,
-		cfg:      cfg,
-		ctxMgr:   ctxMgr,
-		executor: executor,
-		state:    state,
-		phase:    phase,
-		log:      subLog,
+		engine:     e,
+		ctx:        ctx,
+		cfg:        cfg,
+		ctxMgr:     ctxMgr,
+		executor:   executor,
+		state:      state,
+		phase:      phase,
+		checkpoint: checkpoint,
+		log:        subLog,
 	}
 
 	kernel.RunLoop(kernel.Loop{
 		StepLimitReached: run.stepLimitReached,
-		Step:             run.stepOnce,
+		Step: func() bool {
+			done := run.stepOnce()
+			if done {
+				return true
+			}
+			if err := checkpoint("running", ""); err != nil {
+				run.err = fmt.Errorf("save subagent: %w", err)
+				return true
+			}
+			return done
+		},
 	})
 
 	return run.finish()
 }
 
 type engineRun struct {
-	engine   *Engine
-	ctx      context.Context
-	cfg      RunConfig
-	ctxMgr   *ctxmgr.Manager
-	executor *runner.Executor
-	state    *runState
-	phase    func(string)
-	log      func(string, ...any)
+	engine     *Engine
+	ctx        context.Context
+	cfg        RunConfig
+	ctxMgr     *ctxmgr.Manager
+	executor   *runner.Executor
+	state      *runState
+	phase      func(string)
+	checkpoint func(string, string) error
+	log        func(string, ...any)
 
 	step   int
 	result *Result
@@ -195,9 +261,16 @@ func (r *engineRun) stepOnce() bool {
 	if text != "" {
 		r.state.lastText = text
 	}
+	if r.checkpoint != nil {
+		if err := r.checkpoint("running", ""); err != nil {
+			r.err = fmt.Errorf("save subagent: %w", err)
+			return true
+		}
+	}
 	if handoff, submitted, protocolErr := submittedResult(calls); submitted {
 		if protocolErr == nil {
 			r.complete(handoff)
+			r.ctxMgr.AddToolResultsBatch([]ctxmgr.ToolResultMsg{{Message: providertypes.Message{Content: "Result submitted.", ToolCallID: calls[0].ID}, ToolName: submitResultToolName}})
 			return true
 		}
 		r.rejectToolBatch(calls, protocolErr.Error())
@@ -425,4 +498,27 @@ func buildProtocolPartialResult(lastText, reason string, meta runMeta) *Result {
 		content += "\n\nLast unsubmitted response:\n" + text
 	}
 	return buildPartialResult(content, meta)
+}
+
+// A persisted request may have been interrupted before tool results committed.
+// Close those requests explicitly; never execute them again during recovery.
+func closeInterruptedTools(mgr *ctxmgr.Manager) {
+	snap := mgr.Snapshot()
+	answered := make(map[string]bool)
+	for _, msg := range snap.Messages {
+		if msg.ToolCallID != "" {
+			answered[msg.ToolCallID] = true
+		}
+	}
+	var results []ctxmgr.ToolResultMsg
+	for _, msg := range snap.Messages {
+		for _, call := range msg.ToolCalls {
+			if !answered[call.ID] {
+				results = append(results, ctxmgr.ToolResultMsg{Message: providertypes.Message{ToolCallID: call.ID, Content: "Previous execution was interrupted. Tool outcome is unknown; inspect current state before proceeding. Do not assume this tool ran or replay it automatically.", IsError: true}, ToolName: call.Function.Name})
+			}
+		}
+	}
+	if len(results) > 0 {
+		mgr.AddToolResultsBatch(results)
+	}
 }

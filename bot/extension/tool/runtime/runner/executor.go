@@ -46,10 +46,18 @@ type Executor struct {
 	// Permission rule engine (claude-code style allow/ask/deny). The engine's
 	// deny→ask→allow decision is the single authority for whether a tool call
 	// runs, prompts, or is blocked.
-	permEngine    *permission.Engine
-	permDecl      permission.PermissionsDecl
-	permWorkspace string
-	permHome      string
+	permEngine         *permission.Engine
+	permDecl           permission.PermissionsDecl
+	permWorkspace      string
+	permHome           string
+	maxConcurrentTasks int
+}
+
+// SetMaxConcurrentTasks configures delegated execution; nonpositive uses default.
+func (e *Executor) SetMaxConcurrentTasks(limit int) {
+	e.fnMu.Lock()
+	e.maxConcurrentTasks = limit
+	e.fnMu.Unlock()
 }
 
 func NewExecutor(r *tools.Registry) *Executor {

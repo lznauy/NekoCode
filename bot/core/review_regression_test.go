@@ -91,7 +91,7 @@ func TestSubagentConfigCarriesJevPermissions(t *testing.T) {
 	parent.SetPermissionMode(permission.ModeAuto)
 	calls := 0
 	parent.SetBashAutoJudge(func(context.Context, string) (bool, bool) { calls++; return false, true })
-	cfg := buildSubagentRunConfig(context.Background(), taskbridge.TaskSpec{}, subagent.Profile{}, nil, 1000, 80, b.getAgent(), "test", nil)
+	cfg := buildSubagentRunConfig(context.Background(), taskbridge.TaskSpec{}, subagent.Profile{}, nil, 1000, 80, b.getAgent(), "test", nil, "attempt", 1)
 	if cfg.ConfigurePermissions == nil {
 		t.Fatal("delegation omitted permission configuration")
 	}

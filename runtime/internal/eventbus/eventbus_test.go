@@ -3,6 +3,8 @@ package eventbus
 import (
 	"context"
 	"fmt"
+	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,6 +12,246 @@ import (
 	"nekocode/runtime/internal/core"
 	"nekocode/runtime/internal/runstore"
 )
+
+func TestOrderedObserversKeepConcurrentProjectionInReplayOrder(t *testing.T) {
+	bus := NewEventBus()
+	defer bus.Close()
+	store := runstore.NewRunStore(0)
+	var appliedMu sync.Mutex
+	var applied []uint64
+	bus.AddOrderedObserver(func(ev core.Event) {
+		if ev.Sequence%2 == 1 {
+			runtime.Gosched()
+		}
+		appliedMu.Lock()
+		defer appliedMu.Unlock()
+		store.Record(ev)
+		applied = append(applied, ev.Sequence)
+	})
+	var workers sync.WaitGroup
+	for range 32 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for range 100 {
+				bus.Publish(core.Event{RunID: "run", Type: core.EventAssistantDelta, Payload: core.DeltaPayload{Delta: "x"}})
+			}
+		}()
+	}
+	workers.Wait()
+	for i := 1; i < len(applied); i++ {
+		if applied[i] <= applied[i-1] {
+			t.Fatalf("projection reordered replay events: %d then %d", applied[i-1], applied[i])
+		}
+	}
+	// UpdatedAt belongs to the final replay event only when the projection
+	// observes exactly the same order as subscribers and archived history.
+	history := bus.History(core.EventFilter{})
+	snapshot, _ := store.Lookup("run")
+	if !snapshot.UpdatedAt.Equal(history[len(history)-1].Time) {
+		t.Fatal("projection applied an older event after the final replay event")
+	}
+}
+
+func TestOrderedObserverCanQueryHistory(t *testing.T) {
+	bus := NewEventBus()
+	defer bus.Close()
+	bus.AddOrderedObserver(func(ev core.Event) {
+		history := bus.History(core.EventFilter{})
+		if len(history) != 1 || history[0].Sequence != ev.Sequence {
+			t.Error("ordered observer cannot see its published event")
+		}
+	})
+	bus.Publish(core.Event{Type: core.EventRunStarted})
+}
+
+func TestSubscriberWaitsForOrderedProjection(t *testing.T) {
+	bus := NewEventBus()
+	defer bus.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events, err := bus.Subscribe(ctx, core.EventFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, release, published := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	store := runstore.NewRunStore(0)
+	bus.AddOrderedObserver(func(ev core.Event) {
+		close(started)
+		<-release
+		store.Record(ev)
+	})
+	go func() {
+		bus.Publish(core.Event{RunID: "run", Type: core.EventRunStarted})
+		close(published)
+	}()
+	<-started
+	early := false
+	select {
+	case <-events:
+		early = true
+		t.Error("subscriber observed event before ordered projection completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if !early {
+		select {
+		case <-events:
+			if _, ok := store.Lookup("run"); !ok {
+				t.Error("event arrived before run projection")
+			}
+		case <-time.After(time.Second):
+			t.Error("subscriber never received committed event")
+		}
+	}
+	<-published
+}
+
+func TestReplaySubscriptionWaitsForOrderedProjection(t *testing.T) {
+	bus := NewEventBus()
+	defer bus.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started, release, published := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	bus.AddOrderedObserver(func(core.Event) {
+		close(started)
+		<-release
+	})
+	go func() {
+		bus.Publish(core.Event{RunID: "run", Type: core.EventRunStarted})
+		close(published)
+	}()
+	<-started
+	registered := make(chan (<-chan core.Event), 1)
+	go func() {
+		events, _ := bus.SubscribeReplay(ctx, core.EventFilter{})
+		registered <- events
+	}()
+	var events <-chan core.Event
+	select {
+	case events = <-registered:
+		t.Error("replay subscription registered before ordered projection completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if events == nil {
+		select {
+		case events = <-registered:
+		case <-time.After(time.Second):
+			t.Fatal("replay subscription did not finish")
+		}
+	}
+	<-published
+	select {
+	case <-events:
+	case <-time.After(time.Second):
+		t.Fatal("replay did not receive committed event")
+	}
+	select {
+	case <-events:
+		t.Error("replay received the same event from history and live delivery")
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestOrdinaryObserverCanPublish(t *testing.T) {
+	bus := NewEventBus()
+	defer bus.Close()
+	bus.AddObserver(func(ev core.Event) {
+		if ev.Type == core.EventRunStarted {
+			bus.Publish(core.Event{Type: core.EventRunDone})
+		}
+	})
+	done := make(chan struct{})
+	go func() {
+		bus.Publish(core.Event{Type: core.EventRunStarted})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("ordinary observer could not publish recursively")
+	}
+	if len(bus.History(core.EventFilter{})) != 2 {
+		t.Fatal("recursive publication was lost")
+	}
+}
+
+func TestConcurrentPublishKeepsReplaySequencesOrdered(t *testing.T) {
+	bus := NewEventBus()
+	defer bus.Close()
+	var workers sync.WaitGroup
+	for range 32 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for range 1000 {
+				bus.Publish(core.Event{Type: core.EventSubAgentUpdated})
+			}
+		}()
+	}
+	workers.Wait()
+	history := bus.History(core.EventFilter{})
+	for i := 1; i < len(history); i++ {
+		if history[i].Sequence <= history[i-1].Sequence {
+			t.Fatalf("replay cursor would skip late event: sequences %d then %d", history[i-1].Sequence, history[i].Sequence)
+		}
+	}
+}
+
+func TestSubagentLifecycleFloodDoesNotGrowLossyQueue(t *testing.T) {
+	s := &subscriber{wake: make(chan struct{}, 1)}
+	for i := 0; i < defaultSubscriberQueueLimit*3; i++ {
+		s.enqueue(core.Event{Type: core.EventSubAgentEnded, Payload: core.SubAgentPayload{ID: fmt.Sprint(i), Status: "completed"}})
+	}
+	if len(s.queue) > defaultSubscriberQueueLimit {
+		t.Fatalf("unbounded task lifecycle backlog: %d", len(s.queue))
+	}
+	s.enqueue(core.Event{Type: core.EventRunDone})
+	if len(s.queue) > defaultSubscriberQueueLimit || s.queue[len(s.queue)-1].Type != core.EventRunDone {
+		t.Fatal("bounded lifecycle backlog lost run completion")
+	}
+}
+
+func TestMainObserverExcludesOnlySubagentDetails(t *testing.T) {
+	filter := core.EventFilter{ExcludeSubagentDetails: true}
+	for _, payload := range []any{core.ToolPayload{SubAgentID: "child"}, protocol.SubAgentOutput{ID: "child"}} {
+		event := core.Event{Payload: payload}
+		if Matches(filter, event) || !Matches(core.EventFilter{}, event) {
+			t.Fatalf("unexpected detail filtering: %#v", payload)
+		}
+	}
+	for _, payload := range []any{core.ToolPayload{}, core.SubAgentPayload{ID: "child"}, core.ApprovalView{SubAgentID: "child"}, core.QuestionView{SubAgentID: "child"}} {
+		if !Matches(filter, core.Event{Payload: payload}) {
+			t.Fatalf("lost primary or actionable event: %#v", payload)
+		}
+	}
+}
+
+func TestSubagentFilterMatchesOnlySelectedTask(t *testing.T) {
+	filter := core.EventFilter{SubAgentID: "selected"}
+	for _, event := range []core.Event{
+		{Type: core.EventSubAgentStarted, Payload: core.SubAgentPayload{ID: "selected"}},
+		{Type: core.EventSubAgentUpdated, Payload: core.SubAgentPayload{ID: "selected"}},
+		{Type: core.EventToolStarted, Payload: core.ToolPayload{SubAgentID: "selected"}},
+		{Type: core.EventSubAgentOutput, Payload: protocol.SubAgentOutput{ID: "selected"}},
+		{Type: core.EventQuestionRequested, Payload: core.QuestionView{SubAgentID: "selected"}},
+		{Type: core.EventApprovalRequested, Payload: core.ApprovalView{SubAgentID: "selected"}},
+	} {
+		if !Matches(filter, event) {
+			t.Fatalf("missing selected event: %+v", event)
+		}
+	}
+	for _, event := range []core.Event{
+		{Type: core.EventSubAgentOutput, Payload: protocol.SubAgentOutput{ID: "other"}},
+		{Type: core.EventToolStarted, Payload: core.ToolPayload{}},
+		{Type: core.EventAssistantDelta, Payload: core.DeltaPayload{Delta: "main"}},
+	} {
+		if Matches(filter, event) {
+			t.Fatalf("unrelated event leaked: %+v", event)
+		}
+	}
+}
 
 func TestCompactionBacklogDropsDeltasButKeepsFullSummary(t *testing.T) {
 	s := &subscriber{wake: make(chan struct{}, 1)}
@@ -277,31 +519,40 @@ func TestEventBusRejectsSubscribeAfterClose(t *testing.T) {
 }
 
 func TestEventBusCloseWaitsForObservers(t *testing.T) {
-	bus := NewEventBus()
-	started := make(chan struct{})
-	release := make(chan struct{})
-	bus.AddObserver(func(core.Event) {
-		close(started)
-		<-release
-	})
+	for _, ordered := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ordered=%t", ordered), func(t *testing.T) {
+			bus := NewEventBus()
+			started := make(chan struct{})
+			release := make(chan struct{})
+			observe := func(core.Event) {
+				close(started)
+				<-release
+			}
+			if ordered {
+				bus.AddOrderedObserver(observe)
+			} else {
+				bus.AddObserver(observe)
+			}
 
-	go bus.Publish(core.Event{Type: core.EventRunStarted})
-	<-started
-	closed := make(chan struct{})
-	go func() {
-		bus.Close()
-		close(closed)
-	}()
+			go bus.Publish(core.Event{Type: core.EventRunStarted})
+			<-started
+			closed := make(chan struct{})
+			go func() {
+				bus.Close()
+				close(closed)
+			}()
 
-	select {
-	case <-closed:
-		t.Fatal("Close returned while observer was still running")
-	case <-time.After(20 * time.Millisecond):
-	}
-	close(release)
-	select {
-	case <-closed:
-	case <-time.After(time.Second):
-		t.Fatal("Close did not return after observer completed")
+			select {
+			case <-closed:
+				t.Fatal("Close returned while observer was still running")
+			case <-time.After(20 * time.Millisecond):
+			}
+			close(release)
+			select {
+			case <-closed:
+			case <-time.After(time.Second):
+				t.Fatal("Close did not return after observer completed")
+			}
+		})
 	}
 }

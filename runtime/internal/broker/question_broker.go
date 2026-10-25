@@ -51,11 +51,12 @@ func (b *QuestionBroker) Register(req protocol.QuestionRequest) func() protocol.
 		reply: make(chan protocol.QuestionReply, 1),
 		runID: b.currentRunID(),
 		view: core.QuestionView{
-			ID:        id,
-			Questions: cloneQuestions(req.Questions),
-			Status:    core.QuestionPending,
-			CreatedAt: time.Now(),
-			Source:    b.source,
+			ID:         id,
+			SubAgentID: req.SubAgentID,
+			Questions:  cloneQuestions(req.Questions),
+			Status:     core.QuestionPending,
+			CreatedAt:  time.Now(),
+			Source:     b.source,
 		},
 	}
 

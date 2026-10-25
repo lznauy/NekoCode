@@ -11,6 +11,7 @@ import (
 	"nekocode/util/text"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 var (
@@ -61,8 +62,8 @@ func (h *Header) SetContext(used, budget, compactionAt, cacheHit, cacheMiss int)
 func (h *Header) SetWorkspace(changes protocol.WorkspaceChanges) { h.workspace = changes }
 
 func (h *Header) View() string {
-	w := max(20, h.Width)
-	content := h.fitContent(w)
+	w := max(1, h.Width)
+	content := ansi.Truncate(h.fitContent(w), w, "…")
 	line := styles.BorderStyle.Render(strings.Repeat(styles.Horizontal, w))
 	return content + strings.Repeat(" ", max(0, w-lipgloss.Width(content))) + "\n" + line + "\n"
 }

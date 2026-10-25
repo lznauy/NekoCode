@@ -52,7 +52,9 @@ func NekocodeDirs(subdir string) []string  // 项目级 + 用户级，按此顺�
 
 ```
 sessions/<session-id>/
-├── session.json      快照：system prompt、累计 token、上下文水位
+├── session.json      快照：元数据、累计 token、上下文及消息文件水位
+├── messages.0.json   当前上下文双槽之一（v3）
+├── messages.1.json   当前上下文双槽之一（v3）
 ├── transcript.jsonl  追加式完整对话（每行一条消息）
 └── runs/             该会话的运行事件流
     └── run_<N>_<uuid>/
@@ -61,15 +63,47 @@ sessions/<session-id>/
 
 `<session-id>` 格式为 `20060102T150405-<9 位纳秒>`，**UTC 时刻**。session.json 与 transcript.jsonl 分离是为了让快照保持紧凑：历史越长，`session.json` 也不会跟着膨胀。
 
+v3 会话将当前上下文放在 `messages.0.json` / `messages.1.json`，`session.json` 只记录活动槽、消息数和 SHA-256。上下文变化时先写非活动槽，再原子切换 `session.json`；仅 token 等元数据变化时无需重写消息。读取旧 v2 内联格式不受影响，下次保存自动迁移。完全无变化的保存不会刷新文件或 `updated_at`。
+
 `session.json` 里的累计字段（`prompt_tokens`、`cache_hit_tokens` 等）是整个会话的总量，不是逐轮数据。
 
 **为什么 runs 放在会话里**：删掉一个会话应当带走它的全部数据；把 runs 放在旁边意味着两处都要清理。目录名本身就是会话标识，外部工具按会话查找运行时不需要任何推断。
 
 ### `tool-results/` — 工具原始输出
 
-超出返回预算的工具结果保存在 `sessions/<id>/tool-results/result-*.txt`；子 Agent 使用其下独立的随机子目录。文件默认 `0600`，新建目录默认 `0700`，会话删除时随会话目录清理。
+超出返回预算的工具结果保存在 `sessions/<id>/tool-results/result-*.txt`；子 Agent 使用其下稳定的 `subagents/<subagent-id>/` 子目录。文件默认 `0600`，新建目录默认 `0700`，会话删除时随会话目录清理。
 
 活动消息的 `tool_output` 保存文件路径和不完整标记，`deferred_content` 保存因上下文不足而尚未交付的有界预览。预览可能包含原始文件没有的错误说明，因此恢复直接使用该预览，不从文件重新推导交付文本。未使用延迟机制的历史消息无需这些字段；缺少有效恢复字段的延迟消息会明确报错，不猜测或解析提示文案。
+
+### `subagents/` — 子任务会话
+
+标准 Bot 派发的子任务现在独立保存上下文和完整对话，归属于父会话，而不是某一轮父 run：
+
+```
+sessions/<parent-session-id>/subagents/<subagent-id>/
+├── session.json      任务状态、当前及历史 attempts、各轮结果和上下文指针
+├── messages.*.json   当前上下文双槽（v3）
+├── transcript.jsonl  子任务输入、模型消息、工具调用和结果
+├── transcript.idx    按需建立的可重建历史索引
+├── observation.json  可重建的轻量任务摘要缓存
+└── .active.lock      执行期间持有的操作系统独占锁
+```
+
+子任务工具输出使用 `sessions/<parent-id>/tool-results/subagents/<subagent-id>/` 稳定命名空间；同一任务恢复时可继续引用原有输出文件。父 run 的事件录制仍保留现有格式，尚未拆出独立子 run 事件文件。
+
+子快照复用父会话的 transcript 水位提交机制。在任务开始、模型响应后、工具批次结束及最终退出时保存；无法保存时停止后续工具执行并返回错误。进程退出会释放锁，重新加载时将遗留的 `running` 解释为 `interrupted`。首次 checkpoint 在 transcript 追加后、快照提交前崩溃时，合法 tail 会归入独立的 interrupted 恢复轮次，不会落在轮次边界之外。恢复上下文会将未确认完成的工具调用补为“结果未知”，不会自动重放。
+
+子任务正文和快照随父会话保留，不受 `runs/` 的事件过期策略影响，删除父会话时一起删除。子任务不进入顶层 `/sessions` 列表。
+
+Runtime 已提供当前或指定父会话的任务列表、按任务分页读取 attempts 和完整记录，以及按 `SubAgentID` 过滤实时事件。任务列表只携带最近 attempt 的有界摘要，完整 attempts 按单任务分页查询。列表优先读取 `observation.json`，以源快照大小和修改时间校验；缓存缺失或失效时回退读取快照中的元信息，不恢复活动上下文。单条记录损坏显示为不可用，不隐藏其他任务。
+
+详情查询只读快照确认水位内的 transcript，使用现有索引定位；索引缺失、损坏或落后时回退扫描。查询不修复日志、不更新索引，也不读取尚未提交的尾部，单页目标预算为 1 MiB（单条超大记录可独立返回）。
+
+TUI 可通过 `Ctrl+G` 或 `/tasks` 打开子任务浮层，按需加载任务列表、轮次摘要、对话历史和工具输出。执行中默认显示紧凑状态，完成后默认显示当轮最终结果；`p` 展开过程，`[` / `]` 切换轮次。工具原始输出每页读取最多 64 KiB，只能访问该子任务已提交结果所引用的文件。
+
+`task` 工具通过可选 `resume_id` 继续当前父会话内已保存的任务，沿用任务编号、历史与输出目录。必须保留原 profile，省略 skills 时复用上次保存的技能；指令和权限按当前配置重新构建。运行中的任务拒绝重复调用。每次正式执行保存独立 `attempt_id`、递增 `attempt_seq`、输入、结果、用量和 transcript 范围；旧版记录不会反推历史轮次，首次续跑才创建明确的新 attempt。只读 `task_list` 可查询当前父会话的任务摘要。父会话级全局目录索引尚未接入。
+
+同批次子任务通过独立 worker 池执行，默认最多并发 8 个，可在 `config.json` 中通过 `max_concurrent_subagents` 配置，超出的任务保留在内存队列中。排队时只预留任务编号，不占执行槽，也不会提前创建子会话快照；排队状态通过父 run 的生命周期事件观测。取消或父 run 结束会终止等待状态。队列不是可恢复的作业系统，进程重启不会自动重放尚未开始的调用；已开始任务的上下文仍按上述规则保存。
 
 ### `runs/` — 运行事件流
 
@@ -165,7 +199,7 @@ tmp/images/<session-id>/*.png
 | `sandbox/` | 无影响，会自动重建 |
 | `exports/` | 可重新导出 |
 | `logs/` | 丢失历史日志 |
-| `sessions/<id>/session.json`、`transcript.jsonl` | **丢失对话内容本身，不可恢复** |
+| `sessions/<id>/session.json`、`messages.*.json`、`transcript.jsonl` | **丢失对话内容本身，不可恢复** |
 | **`credentials/`** | 需要重新授权 MCP 服务 |
 
 ## 与外部工具的接口

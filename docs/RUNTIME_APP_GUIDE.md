@@ -419,7 +419,7 @@ type Event struct {
 | --- | --- | --- |
 | 输入与输出 | `input_accepted`、`system_message`、`assistant_delta`、`assistant_reset`、`assistant_message`、`reasoning_delta` | `MessagePayload` / `DeltaPayload` / 无 |
 | 执行过程 | `phase_changed`、`todos_updated` | `PhasePayload` / `[]TodoItem` |
-| 工具与子 Agent | `tool_started`、`tool_blocked`、`tool_preview`、`tool_completed`、`subagent_started`、`subagent_ended`、`subagent_output` | `ToolPayload` / `SubAgentPayload` / `SubAgentOutput` |
+| 工具与子 Agent | `tool_started`、`tool_blocked`、`tool_preview`、`tool_completed`、`subagent_started`、`subagent_updated`、`subagent_ended`、`subagent_output` | `ToolPayload` / `SubAgentPayload` / `SubAgentOutput` |
 | 人机交互 | `approval_requested`、`approval_resolved`、`question_requested`、`question_resolved` | `ApprovalView` / `QuestionView` |
 | 生命周期 | `run_started`、`run_summary`、`run_done`、`run_failed`、`run_aborted` | 无 / `RunSummary` / `RunResult` |
 | 其他状态 | `session_changed`、`connector_status`、`metrics_updated` | `SessionPayload` / `ConnectorStatusPayload` / `MetricsSnapshot` |
@@ -440,7 +440,7 @@ events, err := rt.ReplayEvents(ctx, runtime.EventFilter{
 
 - `Events`：只接收订阅后的实时事件。
 - `ReplayEvents`：先回放保留事件，再继续接收实时事件。
-- `EventFilter`：支持 `RunID`、`After`、`Types`、`Sources` 和 `Reliable`。
+- `EventFilter`：支持 `RunID`、`SubAgentID`、`After`、`Types`、`Sources` 和 `Reliable`。
 - 默认订阅在积压时可能丢弃部分事件。传输层可设置 `Reliable: true`：积压超限直接关闭订阅，调用方必须把异常关闭视为流失败，并取消对应运行或重建连接；这不提供持久化或自动重传保证。
 
 事件是实时投影，不是可靠消息队列。重连时以 `RunSnapshot` 为恢复基线，以
@@ -640,3 +640,37 @@ func (a *limitedAssistant) Run(
 - GUI：[`interaction/gui/app/app.go`](../interaction/gui/app/app.go)
 - HTTP：[`runtime/httpapi/httpapi.go`](../runtime/httpapi/httpapi.go)
 - Connector：[`interaction/connect/connect.go`](../interaction/connect/connect.go)
+
+
+## 15. 子任务观测（进程内接口）
+
+`Runtime` 实现独立的 `SubagentReader` 能力，交互适配器无需读取磁盘：
+
+```go
+page, err := rt.Subagents(runtime.SubagentFilter{
+    SessionID: parentSessionID, // 为空时使用当前会话
+    Query: "认证",             // 匹配编号、profile 和任务摘要
+    Offset: 0, Limit: 100,
+})
+attempts, err := rt.SubagentAttempts(parentSessionID, subagentID, 0, 100) // 可选能力
+history, err := rt.SubagentHistory(parentSessionID, subagentID, 0, 100)
+stream, err := rt.Events(ctx, runtime.EventFilter{
+    SubAgentID: subagentID, Reliable: true,
+})
+```
+
+列表按创建时间和 ID 稳定排序，支持状态筛选；状态包括 `queued`、`running`、`waiting_approval`、`waiting_question`、`completed`、`partial`、`failed`、`interrupted` 和旧事件中的 `unknown`。损坏记录为 `unavailable`。`Recorded` 表示是否已有可读取的子会话快照；排队、验证失败等 live-only 任务可能只有生命周期记录。`not_started` 表示再次调用未进入执行阶段，有已保存记录时保留原记录的状态。
+
+排队通过 `subagent_started` 的 `Status: queued` 事件预登记，实际进入执行后再发送 `Status: running` 的同编号 start 事件。queued 没有 attempt 身份，正式执行事件携带 `attempt_id` 和递增 `attempt_seq`；适配器应把 queued 占位绑定到正式 attempt，不把两次通知算作两个任务或两次执行。不同 attempt 按序号区分，同 attempt 的持久终态不能被迟到的非终态事件降级；排队期间没有执行颜色槽。子任务使用独立执行池，默认最多 8 个 worker，可通过 `config.json` 的 `max_concurrent_subagents` 配置，不占普通并行工具的 16 worker 执行池。直接构建 agent 时使用 `agent.Config.MaxConcurrentSubagents`。队列按批次存在于内存，取消时终止未执行任务，重启后不会自动恢复等待队列。
+
+`subagent_updated` 提供子任务自己的 phase，不覆盖主 agent 的 phase。子任务正常退出即发布带状态的结束事件并释放槽位，批次清理只处理未退出的保留槽位。审批与问题通过 `SubAgentID` 关联；解决一个请求不会清除其他任务的等待状态。
+
+历史接口返回原始消息序列投影，保留所有工具调用、参数、输出引用和错误，不套用主会话隐藏 read/search 的规则。`Before` 为下一页更早记录的排他游标，`End` 和 `Total` 是已提交原始消息序号；正文记录携带 `Sequence`。跨页工具结果附带的调用头标记 `ContextOnly`，仅供匹配工具元信息，不应重复渲染为新消息。
+
+实时 `After` 是 Runtime 事件序号，不能当作持久化 transcript 游标。流关闭或发生缺口时，重新查询任务摘要及已提交历史。
+
+TUI 已接入上述接口：浮层关闭时不轮询，打开后只订阅所选任务的实时工具和生命周期事件，正文通过已提交历史更新，不逐 token 展示。执行中在详情底部固定显示主页面 Processing 风格状态框，完成后状态框消失并默认显示任务 prompt 和当轮结果，`p` 展开过程，`/` 打开可选轮次列表，`[` / `]` 快速切换 attempts。向上翻阅时暂停跟随，按 `End` 返回最新记录。主窗口使用 `ExcludeSubagentDetails` 过滤子任务工具与文本事件，保留生命周期、审批和问题；没有观测能力的适配器继续使用原有事件流。
+
+TUI 主窗口按任务 ID 汇总当前父 run 的状态，成功的 `task` 调用不单独展开，失败结果仍显示。浮层列表根据生命周期和审批/问题事件标记更新，最多每 500 ms 合并查询一次；无事件时运行中每 5 秒、空闲时每 30 秒兜底同步。详情只在未读过历史或摘要水位前进时读取，不因摘要暂时落后、空历史或读取失败而每次 tick 重试；失败后可按 `r` 重试。
+
+任务摘要中的 `Title` 是独立显示名称，prompt 仅作为委派内容。可选的 `SubagentAttemptReader.SubagentAttempts(sessionID, id, before, limit)` 按 attempt 序号分页读取单任务轮次摘要，主列表的 `LatestAttempt` 不携带完整历史。attempt 摘要同时携带本轮缓存 token、工具调用次数、上下文 token 和窗口，供列表展示指标。摘要中的 Result 是有界预览，完整最终结果应从对应 attempt 的 transcript 中 `nekocode_submit_result` 调用读取，不能把预览当作完整回复。可选的 `SubagentOutputReader.SubagentToolOutput(sessionID, id, sequence, offset)` 按已提交工具结果的序号读取原始输出，每页最多 64 KiB，不接受文件路径。`SubagentObservationAvailable()` 可判断 Runtime 是否配置了列表和历史服务。这些接口尚未添加新的 HTTP 路由。

@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <sub>双界面 · 多模型自由切换 · 读代码 / 改文件 / 跑命令，全靠聊</sub>
+  <sub>子任务并行 · 长会话恢复 · 检查点回滚 · 终端 / 编辑器 / IM 多端接入</sub>
 </p>
 
 <p align="center">
@@ -20,22 +20,33 @@
 
 ## 这是什么？
 
-NekoCode 目前的定位是 **AI 编程助手**，你只需要 **像聊天一样说出你的需求**，它就能帮你：
+NekoCode 是一个开源的 **AI 编程工作台**：不仅能读代码、改文件、跑测试，还能把较大的任务拆成可持续跟进的子任务，并通过终端、编辑器、IM 或你自己的应用完成工作。
 
-- **看懂项目**：快速理解陌生代码库，讲清楚某段逻辑在做什么
-- **改代码**：加功能、修 bug、重构，并检查格式和语法
-- **跑命令**：执行构建、测试等命令，持续返回运行状态
-- **查资料**：联网搜索、抓取网页，补充需要实时确认的信息
-- **生成图片**：通过已配置的图片模型生成示意图或封面图
+### 不止能聊，还能把任务做完
 
-**为什么选它？**
+- **并行子任务**：主 Agent 可以委派多个子 Agent；任务独立保存上下文、轮次和工具输出，支持排队、查看过程以及通过 `resume_id` 继续执行
+- **任务过程看得见**：按 `Ctrl+G` 或输入 `/tasks` 打开任务中心，查看运行状态、每一轮结果和大输出，不必让工具流水淹没主对话
+- **长会话也能继续**：完整历史追加保存并按索引分页；活动上下文支持自动或手动压缩，重新打开会话时无需把全部历史一次性载入内存
+- **改错了可以回退**：文件修改自动建立检查点，通过 `/rewind` 按用户消息恢复文件状态
+- **执行过程可控制**：权限审批、沙箱、Plan Mode、任务中断与运行中补充指示，让自动化保留明确的人工控制点
 
-- **远程交互**：支持 Telegram、飞书、QQ 和企业微信，可在离开电脑时提交任务并接收结果
-- **单二进制分发**：TUI 以单个可执行文件发布；Linux 版本需要兼容的 glibc 环境
-- **Claude Code 风格扩展**：支持其插件和 Skill 格式的兼容子集，具体能力以文档和测试为准
-- **二次开发**：`bot → runtime → interaction` 分层，可嵌入其他应用
+内置文件、Shell、代码索引、Web 搜索与网页抓取工具，也支持图片理解和通过已配置模型生成图片，可以覆盖从项目调研到修改验证的完整流程。任务中心目前由 TUI 提供并默认显示当前父会话；内存等待队列不跨进程恢复，详见[子任务使用说明](docs/USER_GUIDE.md#查看子任务)。
 
-它不锁定某一家模型厂商。Anthropic、DeepSeek、Kimi、GLM 等模型可以通过已实现的 OpenAI 或 Anthropic 协议能力接入。
+### 一个底座，多种工作方式
+
+| 使用场景 | NekoCode 能力 |
+|---|---|
+| 在终端日常开发 | Bubble Tea TUI、流式输出、历史分页、任务中心 |
+| 离开电脑继续派任务 | Telegram、飞书、QQ、企业微信连接器 |
+| 接入编辑器 | 稳定版 Agent Client Protocol（ACP）v1 |
+| 接入脚本或自有产品 | Headless NDJSON、Runtime Go API、HTTP/SSE |
+| 扩展工具与工作流 | Skill、Plugin、MCP、Hooks，以及 Claude Code 风格扩展的兼容子集 |
+
+### 模型和数据不由单一厂商锁定
+
+可以通过已实现的 OpenAI 或 Anthropic 协议能力接入 Anthropic、DeepSeek、Kimi、GLM 等服务，并用 `/model` 切换。会话、检查点和运行记录保存在本地 `~/.nekocode`，目录格式公开，便于备份、审计和二次开发。
+
+TUI 以单个可执行文件发布；Linux 版本需要兼容的 glibc 环境。项目采用 `bot → runtime → interaction` 分层，同一个 Agent 底座可以嵌入不同应用。
 
 
 ## 快速开始
@@ -55,7 +66,7 @@ curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/lznauy/N
 
 从 [Releases 页面](https://github.com/lznauy/NekoCode/releases) 下载对应平台的二进制，加执行权限直接运行。
 
-或源码编译（需要 [Go 1.25.12+](https://go.dev/dl/)）：
+或源码编译（需要 [Go 1.26.10+](https://go.dev/dl/)）：
 
 ```bash
 git clone https://github.com/lznauy/NekoCode.git
@@ -92,7 +103,7 @@ EOF
 nekocode-tui
 ```
 
-配置完成后即可开始使用。
+配置完成后即可开始使用。常用入口：`/plan <任务>` 先审方案、`/tasks` 查看子任务、`/compact` 压缩上下文、`/rewind` 回退文件改动、`/sessions` 恢复会话、`/context` 查看上下文和缓存用量。
 
 ### 作为 ACP Agent 使用
 
@@ -127,6 +138,7 @@ NekoCode 仍处于测试阶段，尚未经过大规模生产验证。工具设�
 - [ACP.md](docs/ACP.md)：ACP v1 协议、能力协商、方法清单和 NekoCode 实现状态
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md)：整体架构、Agent 循环、工具系统、技术细节
 - [DATA_DIRECTORY.md](docs/DATA_DIRECTORY.md)：`~/.nekocode` 目录架构、数据流与可删除性
+- [SUBAGENT_EVOLUTION_PLAN.md](docs/SUBAGENT_EVOLUTION_PLAN.md)：子任务后续优化草案、分阶段计划与风险评估
 - [IMAGES.md](docs/IMAGES.md)：各接入面的图片收发能力、marker 约定与模型消费路径
 - [CI_CD.md](docs/CI_CD.md)：持续集成、版本发布、产物校验与失败处理
 - [RUNTIME_APP_GUIDE.md](docs/RUNTIME_APP_GUIDE.md)：基于底座组装上层 AI 应用

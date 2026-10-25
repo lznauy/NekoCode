@@ -70,6 +70,7 @@ const (
 	EventToolCompleted     EventType = "tool_completed"
 	EventSubAgentStarted   EventType = "subagent_started"
 	EventSubAgentEnded     EventType = "subagent_ended"
+	EventSubAgentUpdated   EventType = "subagent_updated"
 	EventTodosUpdated      EventType = "todos_updated"
 	EventApprovalRequested EventType = "approval_requested"
 	EventApprovalResolved  EventType = "approval_resolved"
@@ -103,11 +104,15 @@ type Event struct {
 type EventFilter struct {
 	// Reliable closes the subscription on overflow instead of silently dropping
 	// events. A transport must treat unexpected closure as a failed stream.
-	Reliable bool
-	RunID    RunID
-	After    uint64
-	Types    []EventType
-	Sources  []string
+	Reliable   bool
+	SubAgentID string
+	// ExcludeSubagentDetails keeps lifecycle summaries but omits child tool
+	// and output payloads from a main-conversation subscription.
+	ExcludeSubagentDetails bool
+	RunID                  RunID
+	After                  uint64
+	Types                  []EventType
+	Sources                []string
 }
 
 type MessagePayload struct {
@@ -138,14 +143,23 @@ type ToolPayload struct {
 	IsError       bool                  `json:"is_error,omitempty"`
 	SubAgentID    string                `json:"subagent_id,omitempty"`
 	SubAgentColor int                   `json:"subagent_color,omitempty"`
+	AttemptID     string                `json:"attempt_id,omitempty"`
+	AttemptSeq    int                   `json:"attempt_seq,omitempty"`
 }
 
 type SubAgentPayload struct {
-	ID      string   `json:"id"`
-	Type    string   `json:"type,omitempty"` // compatibility alias for Profile
-	Profile string   `json:"profile,omitempty"`
-	Skills  []string `json:"skills,omitempty"`
-	Color   int      `json:"color,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	Status    string `json:"status,omitempty"`
+	Phase     string `json:"phase,omitempty"`
+	Prompt    string `json:"prompt,omitempty"`
+
+	ID         string   `json:"id"`
+	Type       string   `json:"type,omitempty"` // compatibility alias for Profile
+	Profile    string   `json:"profile,omitempty"`
+	Skills     []string `json:"skills,omitempty"`
+	Color      int      `json:"color,omitempty"`
+	AttemptID  string   `json:"attempt_id,omitempty"`
+	AttemptSeq int      `json:"attempt_seq,omitempty"`
 }
 
 type SessionPayload struct {

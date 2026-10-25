@@ -28,6 +28,88 @@ func TestChangeKindKeepsManifestJSONCompatible(t *testing.T) {
 	}
 }
 
+func TestFinalizeSkipsManifestWriteWhenChangeKindIsUnchanged(t *testing.T) {
+	m := New(t.TempDir())
+	m.Activate("session", nil, 0)
+	turn, err := m.BeginMessage("session", "create")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "created.txt")
+	if err := m.Capture(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("created"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := m.turnDir("session", turn)
+	manifestPath := filepath.Join(dir, manifestName)
+	savedPath := filepath.Join(dir, "saved-manifest")
+	if err := os.Rename(manifestPath, savedPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(manifestPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = os.Remove(manifestPath)
+		_ = os.Rename(savedPath, manifestPath)
+	}()
+	if err := m.Finalize(path); err != nil {
+		t.Fatalf("unchanged finalize rewrote manifest: %v", err)
+	}
+}
+
+func TestFinalizeNoOpFailureRetainsSnapshotAndCapture(t *testing.T) {
+	m := New(t.TempDir())
+	m.Activate("session", nil, 0)
+	turn, err := m.BeginMessage("session", "no-op")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "unchanged.txt")
+	if err := os.WriteFile(path, []byte("same"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Capture(path); err != nil {
+		t.Fatal(err)
+	}
+	dir := m.turnDir("session", turn)
+	manifestPath := filepath.Join(dir, manifestName)
+	savedPath := filepath.Join(dir, "saved-manifest")
+	if err := os.Rename(manifestPath, savedPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(manifestPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Finalize(path); err == nil {
+		t.Fatal("finalize unexpectedly succeeded with an unwritable manifest")
+	}
+	snapshotPath := filepath.Join(dir, snapshotName(path))
+	if _, err := os.Stat(snapshotPath); err != nil {
+		t.Fatalf("failed finalize removed snapshot: %v", err)
+	}
+	if len(m.active.Entries) != 1 {
+		t.Fatalf("failed finalize removed capture: %+v", m.active.Entries)
+	}
+	if err := os.Remove(manifestPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(savedPath, manifestPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Finalize(path); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.active.Entries) != 0 {
+		t.Fatalf("successful retry retained no-op capture: %+v", m.active.Entries)
+	}
+	if _, err := os.Stat(snapshotPath); !os.IsNotExist(err) {
+		t.Fatalf("successful retry retained snapshot: %v", err)
+	}
+}
+
 func TestRewindRestoresModifiedCreatedAndDeletedFiles(t *testing.T) {
 	root := t.TempDir()
 	work := t.TempDir()

@@ -1,10 +1,12 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 
@@ -14,7 +16,6 @@ import (
 	"nekocode/bot/extension/tool/runtime/taskbridge"
 	"nekocode/bot/policy"
 	"nekocode/bot/provider/types"
-	"nekocode/logger"
 	"nekocode/protocol"
 )
 
@@ -212,22 +213,12 @@ func (r *toolRunner) addToolResultsAndHints(calls []core.ToolCallItem, msgs []ty
 	}
 }
 
-type subSlotInfo struct {
-	subID string
-	start func(protocol.StepEvent)
-}
-
-var subSlotFullReason = fmt.Sprintf("task not started: subagent slot pool is full (%d/%d); retry after the current batch finishes", maxSubSlots, maxSubSlots)
-
-// prepareSubagentCallbacks reserves a sub-agent slot for each "task" call and
-// wires per-sub-agent event forwarding. When the slot pool is full (more than
-// maxSubSlots tasks in one batch) overflow tasks are denied fast — removed from
-// the returned allowed slice and reported in the denied map keyed by original
-// call index — instead of blocking the main goroutine until the batch finishes.
+// Reserve task identities before execution; workers acquire color slots only
+// when admitted. Queued tasks remain visible without occupying execution slots.
 func (r *toolRunner) prepareSubagentCallbacks(allowed []core.ToolCallItem, allowedIdx []int, callback RunCallback) (func(), map[int]string, []core.ToolCallItem) {
 	denied := make(map[int]string)
 	kept := make([]core.ToolCallItem, 0, len(allowed))
-	var taskInfos []subSlotInfo
+	var finishTasks []func(protocol.StepEvent)
 	for i, c := range allowed {
 		if c.Name != "task" {
 			kept = append(kept, c)
@@ -238,35 +229,113 @@ func (r *toolRunner) prepareSubagentCallbacks(allowed []core.ToolCallItem, allow
 			subProfile = "coder"
 		}
 		subID := uuid.New().String()
-		colorIdx, ok := r.agent.deps.subSlotMgr.Acquire(subID, subProfile)
-		if !ok {
-			logger.Log("subSlotMgr: Acquire failed for %s (all slots full)", subProfile)
-			denied[allowedIdx[i]] = subSlotFullReason
+		resumeID, _ := c.Args["resume_id"].(string)
+		if resumeID != "" {
+			subID = resumeID
+		}
+		if !r.agent.deps.subSlotMgr.Reserve(subID) {
+			denied[allowedIdx[i]] = "task not started: saved task is already queued or running; retry after it finishes"
 			continue
 		}
 		sid := subID
-		cid := colorIdx
+		var attemptMu sync.RWMutex
+		var attemptID string
+		var attemptSeq int
+		var cid atomic.Int64
+		cid.Store(-1)
 		fallback := protocol.StepEvent{
 			Action:       protocol.StepActionSubAgentStart,
 			SubAgentType: subProfile, SubAgentProfile: subProfile,
 			SubAgentSkills: stringSliceValue(c.Args["skills"]),
+			SubAgentPrompt: stringArgValue(c.Args["prompt"]),
+			SubAgentStatus: "running",
+		}
+		if callback != nil {
+			queued := fallback
+			queued.SubAgentID, queued.SubAgentColor, queued.SubAgentStatus = sid, -1, "queued"
+			callback(queued)
 		}
 		var started sync.Once
+		var didStart atomic.Bool
 		// Prefer resolved runner metadata. Retain a paired lifecycle for tasks
 		// that fail validation or runners that only forward tool events.
 		start := func(ev protocol.StepEvent) {
+			attemptMu.Lock()
+			if ev.SubAgentAttemptID != "" {
+				attemptID, attemptSeq = ev.SubAgentAttemptID, ev.SubAgentAttemptSeq
+			}
+			attemptMu.Unlock()
 			started.Do(func() {
+				didStart.Store(true)
 				if ev.Action != protocol.StepActionSubAgentStart {
 					ev = fallback
 				}
-				ev.SubAgentID, ev.SubAgentColor = sid, cid
+				ev.SubAgentID, ev.SubAgentColor = sid, int(cid.Load())
+				attemptMu.RLock()
+				ev.SubAgentAttemptID, ev.SubAgentAttemptSeq = attemptID, attemptSeq
+				attemptMu.RUnlock()
+				if ev.SubAgentPrompt == "" {
+					ev.SubAgentPrompt = fallback.SubAgentPrompt
+				}
+				if ev.SubAgentStatus == "" {
+					ev.SubAgentStatus = "running"
+				}
 				if callback != nil {
 					callback(ev)
 				}
 			})
 		}
-		taskInfos = append(taskInfos, subSlotInfo{sid, start})
-		c.Args["_sub_callback"] = taskbridge.TaskCallback{ID: sid, Callback: func(ev protocol.StepEvent) {
+		var ended sync.Once
+		finish := func(ev protocol.StepEvent) {
+			if ev.SubAgentAttemptID == "" {
+				attemptMu.RLock()
+				ev.SubAgentAttemptID, ev.SubAgentAttemptSeq = attemptID, attemptSeq
+				attemptMu.RUnlock()
+			}
+			ended.Do(func() {
+				r.agent.deps.subSlotMgr.Release(sid)
+				// A rejected resume must not overwrite the saved task's state.
+				if resumeID != "" && !didStart.Load() {
+					if callback != nil {
+						callback(protocol.StepEvent{Action: protocol.StepActionSubAgentEnd, SubAgentID: sid, SubAgentColor: -1, SubAgentStatus: "not_started"})
+					}
+					return
+				}
+				// Cancellation before admission has no running lifecycle.
+				if cid.Load() >= 0 {
+					start(protocol.StepEvent{})
+				}
+				ev.Action, ev.SubAgentID, ev.SubAgentColor = protocol.StepActionSubAgentEnd, sid, int(cid.Load())
+				if ev.SubAgentStatus == "" {
+					ev.SubAgentStatus = "interrupted"
+				}
+				if callback != nil {
+					callback(ev)
+				}
+			})
+		}
+		finishTasks = append(finishTasks, finish)
+		// Execution hooks must never mutate model arguments retained by audit
+		// records, including when validation or admission fails before execution.
+		c.Args = maps.Clone(c.Args)
+		if c.Args == nil {
+			c.Args = make(map[string]any)
+		}
+		c.Args["_sub_callback"] = taskbridge.TaskCallback{ID: sid, Finish: finish, Begin: func(ctx context.Context) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			color, ok := r.agent.deps.subSlotMgr.Acquire(sid, subProfile)
+			if !ok {
+				return fmt.Errorf("task execution slot unavailable")
+			}
+			cid.Store(int64(color))
+			return nil
+		}, Callback: func(ev protocol.StepEvent) {
+			if ev.Action == protocol.StepActionSubAgentEnd {
+				finish(ev)
+				return
+			}
 			start(ev)
 			if ev.Action == protocol.StepActionSubAgentStart {
 				return
@@ -275,22 +344,20 @@ func (r *toolRunner) prepareSubagentCallbacks(allowed []core.ToolCallItem, allow
 				return
 			}
 			ev.SubAgentID = sid
-			ev.SubAgentColor = cid
+			ev.SubAgentColor = int(cid.Load())
+			if ev.SubAgentAttemptID == "" {
+				attemptMu.RLock()
+				ev.SubAgentAttemptID, ev.SubAgentAttemptSeq = attemptID, attemptSeq
+				attemptMu.RUnlock()
+			}
 			callback(ev)
 		}}
 		kept = append(kept, c)
 	}
 
 	return func() {
-		for _, ti := range taskInfos {
-			ti.start(protocol.StepEvent{})
-			r.agent.deps.subSlotMgr.Release(ti.subID)
-			if callback != nil {
-				callback(protocol.StepEvent{
-					Action:     protocol.StepActionSubAgentEnd,
-					SubAgentID: ti.subID,
-				})
-			}
+		for _, finish := range finishTasks {
+			finish(protocol.StepEvent{})
 		}
 	}, denied, kept
 }
@@ -311,3 +378,5 @@ func stringSliceValue(value any) []string {
 		return nil
 	}
 }
+
+func stringArgValue(v any) string { s, _ := v.(string); return s }

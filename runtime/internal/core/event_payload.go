@@ -33,7 +33,7 @@ var payloadCodecs = map[EventType]payloadCodec{
 	EventAssistantDelta: codec[DeltaPayload](), EventReasoningDelta: codec[DeltaPayload](),
 	EventPhaseChanged: codec[PhasePayload](), EventCompaction: codec[protocol.CompactionEvent](),
 	EventToolStarted: codec[ToolPayload](), EventToolBlocked: codec[ToolPayload](), EventToolPreview: codec[ToolPayload](), EventToolCompleted: codec[ToolPayload](),
-	EventSubAgentStarted: codec[SubAgentPayload](), EventSubAgentEnded: codec[SubAgentPayload](), EventSubAgentOutput: codec[protocol.SubAgentOutput](),
+	EventSubAgentStarted: codec[SubAgentPayload](), EventSubAgentUpdated: codec[SubAgentPayload](), EventSubAgentEnded: codec[SubAgentPayload](), EventSubAgentOutput: codec[protocol.SubAgentOutput](),
 	EventTodosUpdated:      codec[[]protocol.TodoItem](),
 	EventApprovalRequested: codec[ApprovalView](), EventApprovalResolved: codec[ApprovalView](),
 	EventQuestionRequested: codec[QuestionView](), EventQuestionResolved: codec[QuestionView](),

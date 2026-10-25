@@ -72,6 +72,17 @@ func isEmptyOrNoise(s string) bool {
 	return true
 }
 
+// DisplayText suppresses intermediate messages containing only display noise.
+// Meaningful messages retain their markup; transcripts and tool output are untouched.
+func DisplayText(text string) string {
+	for line := range strings.SplitSeq(text, "\n") {
+		if strings.TrimSpace(line) != "" && !isEmptyOrNoise(line) {
+			return text
+		}
+	}
+	return ""
+}
+
 // wrapTail returns only the final wrapped lines. Earlier paragraphs are never
 // split or converted to runes. A very long final paragraph is counted once to
 // preserve the original wrap alignment, then only its visible suffix is copied.

@@ -7,7 +7,7 @@ undecided feature.
 
 ## Development environment
 
-- Go 1.25.12, as declared in `go.mod`
+- Go 1.26.10, as declared in `go.mod`
 - Zig for CI-compatible CGO builds
 - Node.js 20 or later for `interaction/gui/web` and `official`
 

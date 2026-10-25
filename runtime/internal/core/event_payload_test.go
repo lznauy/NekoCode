@@ -8,7 +8,7 @@ func TestEveryEventTypeHasOnePayloadContract(t *testing.T) {
 		EventInputAccepted, EventSystemMessage, EventAssistantDelta, EventAssistantMessage,
 		EventReasoningDelta, EventPhaseChanged, EventCompaction, EventToolStarted,
 		EventToolBlocked, EventToolPreview, EventToolCompleted, EventSubAgentStarted,
-		EventSubAgentEnded, EventSubAgentOutput, EventTodosUpdated, EventApprovalRequested,
+		EventSubAgentEnded, EventSubAgentUpdated, EventSubAgentOutput, EventTodosUpdated, EventApprovalRequested,
 		EventApprovalResolved, EventQuestionRequested, EventQuestionResolved, EventRunSummary,
 		EventRunDone, EventRunFailed, EventRunCancelled, EventSessionChanged,
 		EventConnectorStatus, EventMetricsUpdated, EventContextUpdated,
@@ -20,7 +20,7 @@ func TestEveryEventTypeHasOnePayloadContract(t *testing.T) {
 			t.Errorf("event %q has no payload codec", eventType)
 		}
 	}
-	if len(payloadCodecs) != 27 {
-		t.Fatalf("payload codec count = %d, want 27", len(payloadCodecs))
+	if len(payloadCodecs) != 28 {
+		t.Fatalf("payload codec count = %d, want 28", len(payloadCodecs))
 	}
 }

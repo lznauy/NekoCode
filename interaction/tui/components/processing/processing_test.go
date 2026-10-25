@@ -11,6 +11,45 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+func TestSubagentSummarySharesHeadingWithoutAddingHeight(t *testing.T) {
+	sty := styles.DefaultStyles()
+	p := NewProcessingItem(&sty)
+	for _, width := range []int{20, 40, 80} {
+		p.SetSubagentSummary("")
+		before := p.Height(width)
+		p.SetSubagentSummary("子任务 · 运行中 2 · 排队 3 · 完成 8 · Ctrl+G")
+		view := p.Render(width)
+		if p.Height(width) != before {
+			t.Fatal("task summary consumed an additional content row")
+		}
+		if !strings.Contains(ansi.Strip(view), "子任务") {
+			t.Fatal("task summary disappeared from heading")
+		}
+		for _, line := range strings.Split(view, "\n") {
+			if ansi.StringWidth(line) > width {
+				t.Fatal("compact heading overflowed card")
+			}
+		}
+	}
+}
+
+func TestStatusFitsAvailableWidthWithLongMetadata(t *testing.T) {
+	sty := styles.DefaultStyles()
+	p := NewProcessingItem(&sty)
+	p.SetStatusText("正在检查数据库迁移与接口兼容性")
+	p.SetSpinnerView("⠋")
+	p.SetTokens(999999, 999999)
+	p.SetSkill("long-workflow-name")
+	for _, width := range []int{6, 12, 20, 40, 80} {
+		if line := p.renderHeader(width); ansi.StringWidth(line) > width {
+			t.Fatalf("status overflow at %d: %q", width, line)
+		}
+		if line := sectionRule("── activity ", width); ansi.StringWidth(line) > width {
+			t.Fatal("section label overflowed narrow card")
+		}
+	}
+}
+
 func TestFinishEditResultIsNotError(t *testing.T) {
 	sty := styles.DefaultStyles()
 	p := NewProcessingItem(&sty)

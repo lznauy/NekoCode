@@ -344,15 +344,28 @@ func (m *Manager) Finalize(path string) error {
 		if err != nil {
 			return err
 		}
+		if changed && entry.Change == kind {
+			return nil
+		}
 		if !changed {
+			next := m.active
+			next.Entries = append(m.active.Entries[:i:i], m.active.Entries[i+1:]...)
+			if err := m.writeManifest(m.activeDir(), next); err != nil {
+				return err
+			}
+			m.active.Entries = next.Entries
 			if entry.Snapshot != "" {
 				_ = os.Remove(filepath.Join(m.activeDir(), entry.Snapshot))
 			}
-			m.active.Entries = append(m.active.Entries[:i], m.active.Entries[i+1:]...)
-		} else {
-			entry.Change = kind
+			return nil
 		}
-		return m.writeManifest(m.activeDir(), m.active)
+		previous := entry.Change
+		entry.Change = kind
+		if err := m.writeManifest(m.activeDir(), m.active); err != nil {
+			entry.Change = previous
+			return err
+		}
+		return nil
 	}
 	return nil
 }

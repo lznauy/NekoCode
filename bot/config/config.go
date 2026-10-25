@@ -94,16 +94,17 @@ type WorkspaceConfig struct {
 }
 
 type Config struct {
-	Active                string                     `json:"active"`                // name of the active model
-	FlashModel            string                     `json:"flash_model,omitempty"` // optional lightweight model; empty uses the active model
-	AutoCompactPercent    int                        `json:"auto_compact_percent,omitempty"`
-	Models                []ModelConfig              `json:"models"`
-	ImageGenModels        []ImageGenConfig           `json:"image_gen_models,omitempty"`        // text-to-image models
-	ImageUnderstandModels []ImageUnderstandConfig    `json:"image_understand_models,omitempty"` // image-to-text models
-	MCPServers            map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
-	Permissions           *PermissionsConfig         `json:"permissions,omitempty"`
-	Workspaces            []WorkspaceConfig          `json:"workspaces,omitempty"`
-	Jev                   *JevConfig                 `json:"jev,omitempty"` // optional "System One" decision engine (e.g. context-compaction relevance pruning)
+	Active                 string                     `json:"active"`                // name of the active model
+	FlashModel             string                     `json:"flash_model,omitempty"` // optional lightweight model; empty uses the active model
+	AutoCompactPercent     int                        `json:"auto_compact_percent,omitempty"`
+	MaxConcurrentSubagents int                        `json:"max_concurrent_subagents,omitempty"`
+	Models                 []ModelConfig              `json:"models"`
+	ImageGenModels         []ImageGenConfig           `json:"image_gen_models,omitempty"`        // text-to-image models
+	ImageUnderstandModels  []ImageUnderstandConfig    `json:"image_understand_models,omitempty"` // image-to-text models
+	MCPServers             map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
+	Permissions            *PermissionsConfig         `json:"permissions,omitempty"`
+	Workspaces             []WorkspaceConfig          `json:"workspaces,omitempty"`
+	Jev                    *JevConfig                 `json:"jev,omitempty"` // optional "System One" decision engine (e.g. context-compaction relevance pruning)
 }
 
 // JevConfig enables the optional Jev decision engine. Only api_key (or the
@@ -127,9 +128,12 @@ const DefaultContextWindow = 128000
 // context window is exhausted, leaving room for the summary request and output.
 const DefaultAutoCompactPercent = 80
 
+const DefaultMaxConcurrentSubagents = 8
+
 var Default = Config{
-	Active:             "default",
-	AutoCompactPercent: DefaultAutoCompactPercent,
+	Active:                 "default",
+	AutoCompactPercent:     DefaultAutoCompactPercent,
+	MaxConcurrentSubagents: DefaultMaxConcurrentSubagents,
 	Models: []ModelConfig{
 		{
 			Name:     "default",
@@ -209,6 +213,13 @@ func (c *Config) EffectiveAutoCompactPercent() int {
 		return c.AutoCompactPercent
 	}
 	return DefaultAutoCompactPercent
+}
+
+func (c *Config) EffectiveMaxConcurrentSubagents() int {
+	if c.MaxConcurrentSubagents > 0 {
+		return c.MaxConcurrentSubagents
+	}
+	return DefaultMaxConcurrentSubagents
 }
 
 // Clone returns an independently mutable configuration value.
@@ -351,6 +362,12 @@ func Validate(cfg *Config) error {
 	}
 	if cfg.AutoCompactPercent < 1 || cfg.AutoCompactPercent > 99 {
 		return fmt.Errorf("auto_compact_percent must be between 1 and 99")
+	}
+	if cfg.MaxConcurrentSubagents < 0 {
+		return fmt.Errorf("max_concurrent_subagents must be a positive integer (0 uses the default)")
+	}
+	if cfg.MaxConcurrentSubagents == 0 {
+		cfg.MaxConcurrentSubagents = DefaultMaxConcurrentSubagents
 	}
 
 	seen := make(map[string]bool, len(cfg.Models))

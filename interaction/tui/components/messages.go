@@ -16,19 +16,22 @@ import (
 
 type Messages struct {
 	*List
-	Processing       bool
-	Follow           bool
-	sty              *styles.Styles
-	processingItem   *processing.ProcessingItem
-	history          []message.ChatMessage
-	historyNotice    *message.SystemMessageItem
-	historyPageOlder bool
-	historyPageNewer bool
-	historyBefore    int
-	historyEnd       int
-	historyTotal     int
-	onHistoryPage    func(bool) tea.Cmd
-	mu               sync.Mutex
+	Processing         bool
+	Follow             bool
+	sty                *styles.Styles
+	processingItem     *processing.ProcessingItem
+	renderingSuspended bool
+	pendingFollow      bool
+	processingDirty    bool
+	history            []message.ChatMessage
+	historyNotice      *message.SystemMessageItem
+	historyPageOlder   bool
+	historyPageNewer   bool
+	historyBefore      int
+	historyEnd         int
+	historyTotal       int
+	onHistoryPage      func(bool) tea.Cmd
+	mu                 sync.Mutex
 }
 
 func NewMessages(width, height int, sty *styles.Styles) *Messages {
@@ -43,6 +46,41 @@ func NewMessages(width, height int, sty *styles.Styles) *Messages {
 	}
 }
 
+// SetRenderingSuspended keeps receiving data while an overlay displays a
+// snapshot. Resuming defers the accumulated scroll work until the next view.
+func (m *Messages) SetRenderingSuspended(suspended bool) {
+	m.renderingSuspended = suspended
+}
+
+func (m *Messages) followToBottom() {
+	if m.renderingSuspended || m.processingDirty {
+		m.pendingFollow = true
+		return
+	}
+	m.pendingFollow = false
+	m.List.ScrollToBottom()
+}
+
+func (m *Messages) flushPendingRendering() {
+	if m.processingDirty {
+		m.processingDirty = false
+		if idx := len(m.Items()) - 1; idx >= 0 {
+			m.InvalidateItem(idx)
+		}
+	}
+	if m.pendingFollow {
+		m.pendingFollow = false
+		if m.Follow {
+			m.List.ScrollToBottom()
+		}
+	}
+}
+
+func (m *Messages) Render() string {
+	m.flushPendingRendering()
+	return m.List.Render()
+}
+
 func (m *Messages) SetSize(width, height int) {
 	m.List.SetSize(width, height)
 }
@@ -55,7 +93,7 @@ func (m *Messages) SetProcessing(on bool) {
 		m.processingItem = processing.NewProcessingItem(m.sty)
 		m.AppendItems(m.processingItem)
 		if m.Follow {
-			m.ScrollToBottom()
+			m.followToBottom()
 		}
 	} else if !on && m.processingItem != nil {
 		items := m.Items()
@@ -71,7 +109,7 @@ func (m *Messages) SetProcessing(on bool) {
 		}
 		m.processingItem = nil
 		if follow {
-			m.ScrollToBottom()
+			m.followToBottom()
 		}
 	}
 	m.mu.Unlock()
@@ -84,8 +122,9 @@ func (m *Messages) MoveProcessingFrom(previous *Messages) {
 		return
 	}
 	previous.mu.Lock()
-	item := previous.processingItem
+	item, suspended := previous.processingItem, previous.renderingSuspended
 	previous.mu.Unlock()
+	m.SetRenderingSuspended(suspended)
 	if item == nil {
 		return
 	}
@@ -95,7 +134,7 @@ func (m *Messages) MoveProcessingFrom(previous *Messages) {
 	m.Processing = true
 	m.AppendItems(item)
 	if m.Follow {
-		m.ScrollToBottom()
+		m.followToBottom()
 	}
 	m.mu.Unlock()
 }
@@ -200,12 +239,12 @@ func (m *Messages) ProcessingBlocks() []block.ContentBlock {
 }
 
 func (m *Messages) invalidateProcessing() {
-	idx := len(m.Items()) - 1
-	if idx >= 0 {
-		m.InvalidateItem(idx)
-	}
+	m.processingDirty = true
 	if m.Follow {
-		m.ScrollToBottom()
+		m.pendingFollow = true
+	}
+	if !m.renderingSuspended {
+		m.flushPendingRendering()
 	}
 }
 
@@ -234,7 +273,7 @@ func (m *Messages) ReplaceMessages(messages []message.ChatMessage) {
 	m.processingItem = nil
 	m.SetItems(items...)
 	m.Follow = true
-	m.ScrollToBottom()
+	m.followToBottom()
 }
 
 func (m *Messages) updateHistoryNotice() {
@@ -291,7 +330,7 @@ func (m *Messages) AddMessage(msg message.ChatMessage) {
 		m.AppendItems(item)
 	}
 	if m.Follow {
-		m.ScrollToBottom()
+		m.followToBottom()
 	}
 }
 
@@ -341,7 +380,7 @@ func (m *Messages) SetFollow(follow bool) {
 }
 
 func (m *Messages) GotoBottom() {
-	m.ScrollToBottom()
+	m.followToBottom()
 	m.SetFollow(true)
 }
 
@@ -364,7 +403,7 @@ func (m *Messages) Update(msg tea.Msg) (*Messages, tea.Cmd) {
 				direction = 1
 			}
 		}
-		if direction < 0 && m.historyPageOlder && m.offsetIdx <= 1 && m.offsetLine == 0 {
+		if direction < 0 && m.historyPageOlder && m.offsetIdx == 0 && m.offsetLine == 0 {
 			return m, m.onHistoryPage(true)
 		}
 		if direction > 0 && m.historyPageNewer && m.AtBottom() {
@@ -423,22 +462,9 @@ func (m *Messages) ReplaceHistoryWindow(messages []message.ChatMessage, before, 
 	m.history = nil
 	m.historyNotice = nil
 	m.onHistoryPage = nil
-	items := make([]Item, 0, len(messages)+2)
-	if total > 0 {
-		hint := fmt.Sprintf("历史记录 %d–%d / %d", before, end, total)
-		if older {
-			hint += " · ↑ 向上加载更早记录"
-		}
-		if newer {
-			hint += " · ↓ 向下返回较新记录"
-		}
-		items = append(items, m.messageItem(message.ChatMessage{Role: "system", Content: hint}))
-	}
+	items := make([]Item, 0, len(messages))
 	for _, msg := range messages {
 		items = append(items, m.messageItem(msg))
-	}
-	if newer {
-		items = append(items, m.messageItem(message.ChatMessage{Role: "system", Content: "↓ 继续向下滚动返回较新记录"}))
 	}
 	m.Processing = false
 	m.processingItem = nil
@@ -446,15 +472,33 @@ func (m *Messages) ReplaceHistoryWindow(messages []message.ChatMessage, before, 
 	m.Follow = !newer
 	m.historyPageOlder = older
 	m.historyPageNewer = newer
-	m.ScrollToBottom()
+	m.followToBottom()
 }
 
 func (m *Messages) SetHistoryPageHandler(handler func(bool) tea.Cmd) { m.onHistoryPage = handler }
+
+// HistoryWindowHint describes navigation state, never conversation content.
+func (m *Messages) HistoryWindowHint() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.Processing || (!m.historyPageOlder && !m.historyPageNewer) || m.historyTotal <= 0 {
+		return ""
+	}
+	hint := fmt.Sprintf("记录 %d–%d，共 %d 条", m.historyBefore, m.historyEnd, m.historyTotal)
+	if m.historyPageOlder {
+		hint += " · ↑ 更早"
+	}
+	if m.historyPageNewer {
+		hint += " · ↓ 较新"
+	}
+	return hint
+}
 
 // ScrollbarMetrics projects the loaded window onto the whole transcript.
 // Unloaded line heights are unknown, so size is estimated from this window;
 // position uses stable raw sequence boundaries rather than restarting per page.
 func (m *Messages) ScrollbarMetrics() (totalHeight, viewportHeight int, percent float64) {
+	m.flushPendingRendering()
 	totalHeight, viewportHeight = m.TotalContentHeight(), m.Height()
 	percent = m.List.ScrollPercent()
 	span := m.historyEnd - m.historyBefore + 1

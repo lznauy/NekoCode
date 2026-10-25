@@ -4,7 +4,7 @@
 
 ## 开发环境
 
-- Go 1.25.12（版本以 `go.mod` 为准）
+- Go 1.26.10（版本以 `go.mod` 为准）
 - 可选：Zig（交叉编译 CGO 依赖时使用，见 CI 的 Zig CC wrapper）
 - 可选：Node.js 20+（GUI 前端和 `official` 官网需要）
 
@@ -16,6 +16,20 @@ go test ./...                       # 全量测试
 go vet ./...                        # 静态检查
 go test -race ./bot/... ./runtime/...  # 竞态检测（并发核心，CI 必跑）
 govulncheck ./...                   # 检查 Go 代码可达的已知漏洞
+```
+
+### 子任务验收
+
+子任务验收可单独运行：
+
+```bash
+go test ./interaction/tui -run 'Hundred|TaskListRefresh|TaskHistory' -count=1
+go test ./bot/extension/tool/runtime/runner -run TaskQueue -count=1
+# 可选：使用当前模型配置，只发送临时生成的样例文本，会产生模型调用费用。
+NEKOCODE_SUBAGENT_LIVE=1 go test ./bot/core -run '^TestSubagentLiveModelAcceptance$' -count=1 -v
+# 可选：在真实终端中检查 100 项列表、详情与主窗口摘要，Ctrl+G 切换，Ctrl+C 退出。
+go test -c -o /tmp/nekocode-tui-preview.test ./interaction/tui
+NEKOCODE_TASK_INTERACTIVE=1 NEKOCODE_TASK_PREVIEW_HUNDRED=1 /tmp/nekocode-tui-preview.test -test.run '^TestTaskOverlayTerminalPreview$' -test.v
 ```
 
 ## 代码规范

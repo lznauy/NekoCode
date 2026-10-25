@@ -147,6 +147,8 @@ func (m *Manager) clearCurrentIfID(id string) {
 // Load validates and reads a persisted session without changing the current
 // session identity. Callers can finish fail-closed cleanup before activation.
 func (m *Manager) Load(id string) (*Snapshot, error) {
+	m.persistMu.Lock()
+	defer m.persistMu.Unlock()
 	sess, err := load(id)
 	if err != nil {
 		return nil, fmt.Errorf("session: load: %w", err)
@@ -156,7 +158,11 @@ func (m *Manager) Load(id string) (*Snapshot, error) {
 
 // LoadLazy restores active context and history metadata without retaining old
 // transcript bodies. Load remains an explicit full-history compatibility API.
-func (m *Manager) LoadLazy(id string) (*Snapshot, error) { return loadMode(id, true) }
+func (m *Manager) LoadLazy(id string) (*Snapshot, error) {
+	m.persistMu.Lock()
+	defer m.persistMu.Unlock()
+	return loadMode(id, true)
+}
 
 // Activate replaces the current session with a previously loaded snapshot.
 func (m *Manager) Activate(sess *Snapshot) error {

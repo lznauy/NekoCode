@@ -69,6 +69,7 @@ const (
 )
 
 type QuestionView struct {
+	SubAgentID string                  `json:"subagent_id,omitempty"`
 	ID         string                  `json:"id"`
 	Questions  []protocol.QuestionItem `json:"questions"`
 	Status     QuestionStatus          `json:"status"`
@@ -78,5 +79,5 @@ type QuestionView struct {
 }
 
 func (v QuestionView) ToQuestionRequest() protocol.QuestionRequest {
-	return protocol.QuestionRequest{Questions: v.Questions}
+	return protocol.QuestionRequest{Questions: v.Questions, SubAgentID: v.SubAgentID}
 }

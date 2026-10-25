@@ -53,3 +53,30 @@ func TestSetProcessingOffKeepsBottomWhenFollowing(t *testing.T) {
 		t.Fatal("expected processing removal to remain at bottom")
 	}
 }
+
+func TestMoveProcessingFromPreservesRenderingSuspension(t *testing.T) {
+	for _, live := range []bool{false, true} {
+		sty := styles.DefaultStyles()
+		previous := NewMessages(80, 8, &sty)
+		if live {
+			previous.SetProcessing(true)
+			previous.ProcessStreamText("retained output")
+		}
+		previous.SetRenderingSuspended(true)
+		next := NewMessages(80, 8, &sty)
+		probe := &countingListItem{height: 2}
+		next.AppendItems(probe)
+		next.MoveProcessingFrom(previous)
+		if !live {
+			next.SetProcessing(true)
+			next.ProcessStreamText("retained output")
+		}
+		if probe.renders != 0 {
+			t.Fatalf("live=%v: migrating hidden messages rendered the history %d times", live, probe.renders)
+		}
+		next.SetRenderingSuspended(false)
+		if view := next.Render(); !strings.Contains(view, "retained output") || !next.AtBottom() {
+			t.Fatalf("live=%v: resuming lost output or follow position: %s", live, view)
+		}
+	}
+}

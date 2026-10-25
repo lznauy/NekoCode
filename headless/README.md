@@ -333,6 +333,8 @@ system prompt / JSON Schema / prompt suggestions（带非空值时 `initialize` 
 [完整方法表](../docs/STREAM_JSON.md#初始化与能力发现)。
 
 模型、权限、会话、回滚操作要求运行和队列均空闲。历史支持 offset/limit 分页。
+子代理生命周期通过 `system/nekocode_event` 转发 `subagent_started` / `subagent_ended`。同一任务可先有 `status=queued` 的 start，再有携带 `attempt_id`、`attempt_seq` 的 running start；宿主应合并 queued 占位，不重复计数。ended 的 `status` 区分完成、失败、中断和未开始，不能仅凭事件类型判断成功。
+
 子代理非空完整文本使用 `subagent/message` 帧；无文本步骤不发 message，不能将它视为每步结束标记。
 增量由 partial messages 开关控制。
 结果增加 `stop_reason`、可选真实 `step_count` 和 `permission_denials`。

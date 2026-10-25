@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/google/uuid"
+	"path/filepath"
 	"strings"
 
 	"nekocode/bot/agent/internal/llmstream"
@@ -88,13 +89,32 @@ func (e *Engine) newExecutor(cfg RunConfig) (*runner.Executor, func()) {
 	toolState := executor.ExecutionState()
 	if cfg.ToolState != nil {
 		if cfg.ToolState.OutputStore != nil {
-			toolState.OutputStore = cfg.ToolState.OutputStore.Child("agent-" + uuid.NewString())
+			if cfg.SubagentID != "" {
+				toolState.OutputStore = cfg.ToolState.OutputStore.Child("subagents").Child(cfg.SubagentID)
+			} else {
+				toolState.OutputStore = cfg.ToolState.OutputStore.Child("agent-" + uuid.NewString())
+			}
 		}
 		toolState.FileCache.Seed(cfg.ToolState.FileCache)
 		if cfg.ToolState.SnapshotStore != nil {
 			toolState.SnapshotStore = cfg.ToolState.SnapshotStore
 		}
 		toolState.Checkpoints = cfg.ToolState.Checkpoints
+	}
+	if cfg.ResumeContext != nil && cfg.SubagentID != "" && cfg.ToolState != nil && cfg.ToolState.OutputStore != nil {
+		// Restore only exact, regular artifacts in this task's namespace. Other
+		// persisted paths carry no authority, even when mentioned in history.
+		base, baseErr := cfg.ToolState.OutputStore.Directory()
+		base, resolveErr := filepath.EvalSymlinks(base)
+		actorDir, actorErr := toolState.OutputStore.Directory()
+		resolvedDir, dirErr := filepath.EvalSymlinks(actorDir)
+		if baseErr == nil && resolveErr == nil && actorErr == nil && dirErr == nil && resolvedDir == filepath.Join(base, "subagents", cfg.SubagentID) {
+			for _, msg := range cfg.ResumeContext.Messages {
+				if msg.ToolOutput.Path != "" && toolState.OutputStore.CheckArtifact(msg.ToolOutput) == nil {
+					_ = executor.AllowOutputFile(msg.ToolOutput.Path)
+				}
+			}
+		}
 	}
 	return executor, func() {
 		if cfg.ToolState != nil && cfg.ToolState.FileCache != nil {
@@ -235,13 +255,34 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 		return nil, "", err
 	}
 
+	base, tail, _ := mgr.TranscriptTail()
+	messageSeq := base + len(tail) + 1
+	emitOutput := func(action protocol.StepAction, text, reasoning string) {
+		if output.OnOutput != nil {
+			output.OnOutput(OutputEvent{Action: action, Text: text, Reasoning: reasoning, MessageSeq: messageSeq})
+		}
+	}
 	result, err := llmstream.CallLLMWithRetry(ctx, e.llmClient, func() llmstream.LLMCallOptions {
+		emitOutput(protocol.StepActionSubAgentReset, "", "")
 		return llmstream.LLMCallOptions{
 			Ctx:      ctx,
 			Messages: messages,
 			ToolDefs: toolDefs,
 			Callbacks: llmstream.StreamCallbacks{
-				OnPhase: phase, OnText: output.OnText, OnReasoning: output.OnReasoning,
+				OnPhase: phase,
+				OnText: func(text string) {
+					if output.OnText != nil {
+						output.OnText(text)
+					}
+					emitOutput(protocol.StepActionSubAgentText, text, "")
+				},
+				OnReasoning: func(text string) {
+					if output.OnReasoning != nil {
+						output.OnReasoning(text)
+					}
+					emitOutput(protocol.StepActionSubAgentReason, text, "")
+				},
+				OnTextReset: func() { emitOutput(protocol.StepActionSubAgentReset, "", "") },
 				AddTokens: func(p, c int) {
 					if addTokens != nil {
 						addTokens(p, c)
@@ -267,6 +308,7 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 	if result.Text != "" && output.OnMessage != nil {
 		output.OnMessage(result.Text)
 	}
+	emitOutput(protocol.StepActionSubAgentMessage, result.Text, result.Reasoning)
 	if result.Text != "" || len(result.ToolCalls) > 0 {
 		mgr.AddAssistant(types.Message{Role: "assistant", Content: result.Text,
 			ReasoningContent: result.Reasoning, ReasoningSignature: result.ReasoningSignature,

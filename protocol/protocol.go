@@ -37,6 +37,7 @@ const (
 	StepActionSubAgentText    StepAction = "subagent_text"
 	StepActionSubAgentReason  StepAction = "subagent_reasoning"
 	StepActionSubAgentMessage StepAction = "subagent_message"
+	StepActionSubAgentReset   StepAction = "subagent_reset"
 	StepActionThink           StepAction = "think"
 	StepActionToolStart       StepAction = "tool_start"
 	StepActionToolBlocked     StepAction = "tool_blocked"
@@ -44,6 +45,7 @@ const (
 	StepActionExecuteTool     StepAction = "execute_tool"
 	StepActionSubAgentStart   StepAction = "sub_agent_start"
 	StepActionSubAgentEnd     StepAction = "sub_agent_end"
+	StepActionSubAgentUpdate  StepAction = "sub_agent_update"
 )
 
 type RunSummary struct {
@@ -52,27 +54,38 @@ type RunSummary struct {
 }
 
 type SubAgentOutput struct {
-	ID   string `json:"subagent_id"`
-	Kind string `json:"kind"`
-	Text string `json:"text"`
+	ID         string `json:"subagent_id"`
+	Kind       string `json:"kind"`
+	Text       string `json:"text"`
+	Reasoning  string `json:"reasoning,omitempty"`
+	AttemptID  string `json:"attempt_id,omitempty"`
+	AttemptSeq int    `json:"attempt_seq,omitempty"`
+	MessageSeq int    `json:"message_seq,omitempty"`
 }
 
 type StepEvent struct {
-	Summary         *RunSummary
-	Compaction      *CompactionEvent
-	Action          StepAction
-	CallID          string
-	ToolName        string
-	ToolArgs        string
-	ToolInput       json.RawMessage
-	Output          string
-	Decision        ToolDecision
-	IsError         bool
-	SubAgentID      string
-	SubAgentType    string
-	SubAgentProfile string
-	SubAgentSkills  []string
-	SubAgentColor   int
+	Summary            *RunSummary
+	Compaction         *CompactionEvent
+	Action             StepAction
+	CallID             string
+	ToolName           string
+	ToolArgs           string
+	ToolInput          json.RawMessage
+	Output             string
+	Decision           ToolDecision
+	IsError            bool
+	SubAgentID         string
+	SubAgentType       string
+	SubAgentProfile    string
+	SubAgentSkills     []string
+	SubAgentColor      int
+	SubAgentStatus     string
+	SubAgentPhase      string
+	SubAgentPrompt     string
+	SubAgentAttemptID  string
+	SubAgentAttemptSeq int
+	SubAgentMessageSeq int
+	SubAgentReasoning  string
 }
 
 // CompactionEvent is a display-only projection of one summary operation.
@@ -287,7 +300,8 @@ type QuestionReply struct {
 }
 
 type QuestionRequest struct {
-	Questions []QuestionItem
+	SubAgentID string
+	Questions  []QuestionItem
 }
 
 func NewQuestionRequest(questions []QuestionItem) QuestionRequest {
@@ -389,4 +403,19 @@ type FileDeliverer interface {
 type ToolOutputArtifact struct {
 	Path       string `json:"path,omitempty"`
 	Incomplete bool   `json:"incomplete,omitempty"`
+}
+
+// SubagentTextPreview bounds task-list metadata without splitting UTF-8.
+// Full task inputs and results remain in the durable child transcript.
+func SubagentTextPreview(text string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if len(text) <= limit {
+		return text
+	}
+	for limit > 0 && text[limit]&0xc0 == 0x80 {
+		limit--
+	}
+	return text[:limit]
 }

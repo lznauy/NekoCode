@@ -20,7 +20,7 @@ import (
 	"nekocode/bot/extension/tool/builtin/web"
 )
 
-func registerAll(r *tools.Registry, imageGenModels []config.ImageGenConfig, imageUnderstandModels []config.ImageUnderstandConfig, shellTool *shell.ShellTool, lspTool *lsp.LSPTool, indexTool *index.IndexTool, taskTool *task.TaskTool, questionTool *question.Tool, todoTool *todo.TodoWriteTool) {
+func registerAll(r *tools.Registry, imageGenModels []config.ImageGenConfig, imageUnderstandModels []config.ImageUnderstandConfig, shellTool *shell.ShellTool, lspTool *lsp.LSPTool, indexTool *index.IndexTool, taskTool *task.TaskTool, taskListTool *task.TaskListTool, questionTool *question.Tool, todoTool *todo.TodoWriteTool) {
 	plan := tools.RegistrationOptions{PlanAllowed: true}
 	r.RegisterWithOptions(shellTool, tools.RegistrationOptions{
 		Privileged:     shellTool.ExecuteWithPermission,
@@ -42,6 +42,7 @@ func registerAll(r *tools.Registry, imageGenModels []config.ImageGenConfig, imag
 	r.Register(questionTool)
 	r.Register(todoTool)
 	r.Register(taskTool)
+	r.RegisterWithOptions(taskListTool, plan)
 	diffTool := diff.NewTool()
 	r.RegisterWithOptions(diffTool, tools.RegistrationOptions{Preview: diffTool.PreviewContext})
 	r.Register(indexTool)

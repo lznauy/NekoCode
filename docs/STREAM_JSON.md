@@ -248,7 +248,7 @@ ACK 不代表运行已经清理完成，必须继续读取 result。
 ## 扩展事件与暂未支持的能力
 
 `system/nekocode_event` 携带 `event_type` 与 `payload`，转发工具预览、phase、todos、
-子代理开始/结束事件。子代理结束仅表示生命周期结束，不保证成功。
+子代理开始/结束事件。`subagent_started` 可先携带 `status=queued` 预登记，再以相同任务 `id` 携带 `status=running`、`attempt_id` 和递增的 `attempt_seq`；queued 占位没有 attempt，宿主应将其合并到后续正式执行，不能计成两个任务。`subagent_ended` 通过 `status` 区分 `completed`、`partial`、`failed`、`interrupted`、`not_started` 等结果，仅表示生命周期结束，不保证成功；不同 attempt 以序号区分，不能用迟到的非终态覆盖已提交终态。
 
 子代理模型输出使用独立 `subagent` 帧，携带 `subagent_id`、`run_id`、
 `user_message_uuid`、`event`、`text`。`event` 为 text_delta、reasoning_delta 或 message。
@@ -258,7 +258,7 @@ ACK 不代表运行已经清理完成，必须继续读取 result。
 reasoning_delta 是独立的思考预览，不保证后续有 message 与之配对，可在子代理结束时结算。
 子代理消息不会合入主代理最终答案。
 
-统一后台任务进度/终态/独立取消、队列优先级、连接级工具限制和可配置运行预算仍未暴露。
+统一 shell/子代理后台任务视图与独立取消、队列优先级、连接级工具限制和可配置运行预算仍未暴露；子代理自身的稳定 ID、状态和 attempt 事件已按上文提供。
 运行中切换模型或会话也不支持，须等待空闲。
 
 已确认的核心范围已实现；剩余独立阶段和暂缓项见 [STREAM_JSON_GAPS.md](STREAM_JSON_GAPS.md)。

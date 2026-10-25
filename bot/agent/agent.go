@@ -26,14 +26,15 @@ import (
 
 // Config contains the dependencies and optional behavior of an Agent.
 type Config struct {
-	Context     *ctxmgr.Manager
-	Model       provider.LLM
-	Tools       *tools.Registry
-	Policy      *aggov.Policy
-	Output      Output
-	Interaction Interaction
-	Checkpoints *checkpoint.Manager
-	SessionID   func() string
+	MaxConcurrentSubagents int
+	Context                *ctxmgr.Manager
+	Model                  provider.LLM
+	Tools                  *tools.Registry
+	Policy                 *aggov.Policy
+	Output                 Output
+	Interaction            Interaction
+	Checkpoints            *checkpoint.Manager
+	SessionID              func() string
 }
 
 // Output contains optional streaming callbacks.
@@ -104,11 +105,12 @@ func New(ctx context.Context, cfg Config) *Agent {
 			toolExecutor: runner.NewExecutor(cfg.Tools),
 			checkpoints:  cfg.Checkpoints,
 			sessionID:    cfg.SessionID,
-			subSlotMgr:   newSlotManager(),
+			subSlotMgr:   newSlotManager(cfg.MaxConcurrentSubagents),
 		},
 		gate: kernel.NewGate(defaultMaxRetries),
 	}
 	a.deps.gov = cfg.Policy
+	a.deps.toolExecutor.SetMaxConcurrentTasks(cfg.MaxConcurrentSubagents)
 	a.deps.toolExecutor.ExecutionState().Checkpoints = cfg.Checkpoints
 	a.setOutput(cfg.Output)
 	a.interaction = cfg.Interaction

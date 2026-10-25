@@ -259,6 +259,10 @@ func (a *adapter) services() controlruntime.ServiceGroups {
 			ApplyConfig:         a.ApplyConfig,
 		},
 		Sessions: controlruntime.SessionsServices{
+			Subagents:           a.Subagents,
+			SubagentAttempts:    a.SubagentAttempts,
+			SubagentHistory:     a.SubagentHistory,
+			SubagentToolOutput:  a.SubagentToolOutput,
 			CurrentSessionID:    a.bot.CurrentSessionID,
 			ListSessions:        a.ListSessions,
 			SessionMessages:     a.SessionMessages,

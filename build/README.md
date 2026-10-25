@@ -8,7 +8,7 @@ make -f build/makefile help
 
 ## 环境要求
 
-- Go 1.25.12 或更高版本
+- Go 1.26.10 或更高版本
 - GNU Make
 - Zig，构建 daemon 或静态发布产物时需要
 - Node.js 和 npm，只有构建 GUI 时需要

@@ -5,8 +5,20 @@ import (
 	"strings"
 	"testing"
 
+	"nekocode/bot/extension/tool/runtime/taskbridge"
 	"nekocode/protocol"
 )
+
+func TestQuestionCarriesDelegatedTaskIdentity(t *testing.T) {
+	tool := NewTool()
+	tool.SetQuestionFunc(func(req protocol.QuestionRequest) protocol.QuestionReply {
+		if req.SubAgentID != "child" {
+			t.Fatalf("lost task identity: %+v", req)
+		}
+		return protocol.QuestionReply{Rejected: true}
+	})
+	_, _ = tool.Execute(taskbridge.WithTaskID(context.Background(), "child"), map[string]any{"questions": []any{map[string]any{"question": "Continue?"}}})
+}
 
 func TestQuestionToolExecutesWithAnswers(t *testing.T) {
 	tool := NewTool()

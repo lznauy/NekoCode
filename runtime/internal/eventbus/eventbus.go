@@ -19,19 +19,21 @@ const defaultEventHistoryLimit = 1000
 const defaultEventHistoryBytes = 8 << 20
 
 type EventBus struct {
-	mu           sync.Mutex
-	nextSubID    int
-	nextEventID  uint64
-	subscribers  map[int]*subscriber
-	observers    []func(core.Event)
-	observerWG   sync.WaitGroup
-	history      []core.Event
-	historySizes []int
-	historyLimit int
-	historyStart int
-	historyCount int
-	historyBytes int
-	closed       bool
+	publishMu        sync.Mutex
+	mu               sync.Mutex
+	nextSubID        int
+	nextEventID      uint64
+	subscribers      map[int]*subscriber
+	observers        []func(core.Event)
+	orderedObservers []func(core.Event)
+	observerWG       sync.WaitGroup
+	history          []core.Event
+	historySizes     []int
+	historyLimit     int
+	historyStart     int
+	historyCount     int
+	historyBytes     int
+	closed           bool
 }
 
 type subscriber struct {
@@ -59,6 +61,19 @@ func (b *EventBus) AddObserver(fn func(core.Event)) {
 	b.mu.Unlock()
 }
 
+// AddOrderedObserver registers a synchronous projection or recording sink.
+// Sinks run in publication order outside the history lock and may query History.
+// They must not reenter Publish, subscribe, or Close; use AddObserver for callbacks
+// that publish or subscribe.
+func (b *EventBus) AddOrderedObserver(fn func(core.Event)) {
+	if b == nil || fn == nil {
+		return
+	}
+	b.mu.Lock()
+	b.orderedObservers = append(b.orderedObservers, fn)
+	b.mu.Unlock()
+}
+
 func (b *EventBus) Subscribe(ctx context.Context, filter core.EventFilter) (<-chan core.Event, error) {
 	return b.subscribeHistory(ctx, filter, false, nil)
 }
@@ -77,6 +92,10 @@ func (b *EventBus) subscribeHistory(ctx context.Context, filter core.EventFilter
 	if b == nil {
 		return nil, fmt.Errorf("runtime: nil event bus")
 	}
+	// Register and seed replay between publications, after their synchronous
+	// projections finish, so no subscriber can observe an uncommitted event.
+	b.publishMu.Lock()
+	defer b.publishMu.Unlock()
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
@@ -85,12 +104,7 @@ func (b *EventBus) subscribeHistory(ctx context.Context, filter core.EventFilter
 	var history []core.Event
 	if recorded != nil {
 		for _, ev := range recorded {
-			if ev.Version == "" {
-				ev.Version = core.ProtocolVersion
-			}
-			if ev.Sequence == 0 {
-				ev.Sequence, _ = parseEventSequence(ev.ID)
-			}
+			ev = NormalizeRecordedEvent(ev)
 			if !isCompactionDelta(ev) && eventMatches(filter, ev) {
 				history = append(history, ev)
 			}
@@ -246,6 +260,10 @@ func (b *EventBus) Publish(ev core.Event) core.Event {
 	if b == nil {
 		return ev
 	}
+	// Allocate the replay cursor in delivery order. Parallel publishers must
+	// not enqueue a lower sequence after a subscriber has observed a higher one.
+	b.publishMu.Lock()
+	b.mu.Lock()
 	if ev.Sequence == 0 {
 		ev.Sequence = atomic.AddUint64(&b.nextEventID, 1)
 	}
@@ -259,9 +277,9 @@ func (b *EventBus) Publish(ev core.Event) core.Event {
 		ev.Time = time.Now()
 	}
 
-	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
+		b.publishMu.Unlock()
 		return ev
 	}
 	// Compaction deltas are excluded from history: a long compaction streams
@@ -271,14 +289,29 @@ func (b *EventBus) Publish(ev core.Event) core.Event {
 	if !isCompactionDelta(ev) {
 		b.appendHistoryLocked(ev)
 	}
-	for _, sub := range b.subscribers {
-		if eventMatches(sub.filter, ev) {
-			sub.enqueue(ev)
-		}
-	}
 	observers := append([]func(core.Event){}, b.observers...)
-	b.observerWG.Add(len(observers))
+	ordered := append([]func(core.Event){}, b.orderedObservers...)
+	b.observerWG.Add(len(observers) + len(ordered))
 	b.mu.Unlock()
+	func() {
+		defer b.publishMu.Unlock()
+		for _, observer := range ordered {
+			func() {
+				defer b.observerWG.Done()
+				observer(ev)
+			}()
+		}
+		// Consumers may query the projections as soon as they receive an event.
+		// New subscriptions share publishMu and cannot replay this event while
+		// these sinks are pending, or receive it once from each delivery path.
+		b.mu.Lock()
+		for _, sub := range b.subscribers {
+			if eventMatches(sub.filter, ev) {
+				sub.enqueue(ev)
+			}
+		}
+		b.mu.Unlock()
+	}()
 
 	for _, observer := range observers {
 		func() {
@@ -351,6 +384,7 @@ func (b *EventBus) Close() {
 	subscribers := b.subscribers
 	b.subscribers = nil
 	b.observers = nil
+	b.orderedObservers = nil
 	b.mu.Unlock()
 	for _, sub := range subscribers {
 		sub.close()
@@ -379,12 +413,7 @@ func (b *EventBus) ImportHistory(events []core.Event) {
 	}
 	for i := range events {
 		ev := &events[i]
-		if ev.Version == "" {
-			ev.Version = core.ProtocolVersion
-		}
-		if ev.Sequence == 0 {
-			ev.Sequence, _ = parseEventSequence(ev.ID)
-		}
+		*ev = NormalizeRecordedEvent(*ev)
 		if ev.Sequence > maxID {
 			maxID = ev.Sequence
 		}
@@ -400,6 +429,18 @@ func (b *EventBus) ImportHistory(events []core.Event) {
 	}
 }
 
+// NormalizeRecordedEvent fills fields absent from older archive formats before
+// cursor filtering. Explicit sequences remain authoritative.
+func NormalizeRecordedEvent(ev core.Event) core.Event {
+	if ev.Version == "" {
+		ev.Version = core.ProtocolVersion
+	}
+	if ev.Sequence == 0 {
+		ev.Sequence, _ = parseEventSequence(ev.ID)
+	}
+	return ev
+}
+
 func parseEventSequence(id string) (uint64, bool) {
 	raw := strings.TrimPrefix(id, "evt_")
 	if raw == id || raw == "" {
@@ -410,6 +451,34 @@ func parseEventSequence(id string) (uint64, bool) {
 }
 
 func eventMatches(filter core.EventFilter, ev core.Event) bool {
+	if filter.ExcludeSubagentDetails {
+		switch p := ev.Payload.(type) {
+		case core.ToolPayload:
+			if p.SubAgentID != "" {
+				return false
+			}
+		case protocol.SubAgentOutput:
+			return false
+		}
+	}
+	if filter.SubAgentID != "" {
+		id := ""
+		switch p := ev.Payload.(type) {
+		case core.ToolPayload:
+			id = p.SubAgentID
+		case core.SubAgentPayload:
+			id = p.ID
+		case protocol.SubAgentOutput:
+			id = p.ID
+		case core.ApprovalView:
+			id = p.SubAgentID
+		case core.QuestionView:
+			id = p.SubAgentID
+		}
+		if id != filter.SubAgentID {
+			return false
+		}
+	}
 	if filter.After > 0 && ev.Sequence <= filter.After {
 		return false
 	}
@@ -442,3 +511,6 @@ func eventMatches(filter core.EventFilter, ev core.Event) bool {
 	}
 	return true
 }
+
+// Matches lets recorded replay apply the same filtering before cache budgeting.
+func Matches(filter core.EventFilter, ev core.Event) bool { return eventMatches(filter, ev) }

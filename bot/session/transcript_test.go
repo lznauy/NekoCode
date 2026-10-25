@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -46,19 +47,86 @@ func TestLoadRejectsLegacyFormat(t *testing.T) {
 	if err := manager.Save(snapshot); err != nil {
 		t.Fatal(err)
 	}
-	// Rewrite the file as v1: strip format_version and transcript_seq.
+	// Rewrite the file as self-contained v1: inline messages and strip v2 fields.
 	path := filepath.Join(dir(), snapshot.ID, "session.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data = []byte(strings.Replace(string(data), `"format_version": 2,`, ``, 1))
+	var header snapshotHeader
+	if err := json.Unmarshal(data, &header); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := readMessages(filepath.Dir(path), header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messageData, err := json.Marshal(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	fields["messages"] = messageData
+	delete(fields, "format_version")
+	delete(fields, "transcript_seq")
+	data, err = json.MarshalIndent(fields, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err = load(snapshot.ID)
 	if err == nil || !strings.Contains(err.Error(), "session-migrate") {
 		t.Fatalf("v1 session should be rejected with a migration hint: %v", err)
+	}
+}
+
+func TestLoadV2AndMigrateOnNextSave(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	manager := New("/tmp/work")
+	snapshot := manager.Current()
+	snapshot.Messages = []types.Message{{Role: "user", Content: "v2 context"}}
+	snapshot.Transcript = append([]types.Message(nil), snapshot.Messages...)
+	if err := manager.Save(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	backup, err := manager.BackupCurrent("v2-fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2Data, err := os.ReadFile(backup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir(), snapshot.ID, "session.json")
+	if err := os.WriteFile(path, v2Data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := manager.Load(snapshot.ID)
+	if err != nil || len(loaded.Messages) != 1 || loaded.Messages[0].Content != "v2 context" {
+		t.Fatalf("v2 load = %+v err=%v", loaded, err)
+	}
+	if err := manager.Save(loaded); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var header snapshotHeader
+	if err := json.Unmarshal(data, &header); err != nil {
+		t.Fatal(err)
+	}
+	if header.FormatVersion != currentSnapshotVersion {
+		t.Fatalf("next save did not migrate v2: version %d", header.FormatVersion)
+	}
+	reloaded, err := manager.Load(snapshot.ID)
+	if err != nil || len(reloaded.Messages) != 1 || reloaded.Messages[0].Content != "v2 context" {
+		t.Fatalf("migrated load = %+v err=%v", reloaded, err)
 	}
 }
 
@@ -106,9 +174,101 @@ func TestBackupCurrentPreservesPreCompactionSnapshot(t *testing.T) {
 	if string(data) == "" || !strings.Contains(backup, "pre-compact-") || !strings.Contains(backup, "-compact-1.session.json") {
 		t.Fatalf("invalid backup %q", backup)
 	}
+	var backupSnapshot struct {
+		FormatVersion int             `json:"format_version"`
+		Messages      []types.Message `json:"messages"`
+	}
+	if err := json.Unmarshal(data, &backupSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if backupSnapshot.FormatVersion != 2 || len(backupSnapshot.Messages) != 1 || backupSnapshot.Messages[0].Content != "before" {
+		t.Fatalf("backup is not self-contained: %+v", backupSnapshot)
+	}
 	second, err := manager.BackupCurrent("compact-1")
 	if err != nil || second == backup {
 		t.Fatalf("second backup = %q, %v", second, err)
+	}
+}
+
+func TestSnapshotSaveSkipsUnchangedAndReusesMessagesForMetadata(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	manager := New("/tmp/work")
+	snapshot := manager.Current()
+	snapshot.Messages = []types.Message{{Role: "user", Content: "context"}}
+	snapshot.Transcript = append([]types.Message(nil), snapshot.Messages...)
+	if err := manager.Save(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	d := filepath.Join(dir(), snapshot.ID)
+	manifestPath := filepath.Join(d, "session.json")
+	manifestInfo, err := os.Stat(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messagesInfo, err := os.Stat(messagesPath(d, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatedAt := snapshot.UpdatedAt
+	if err := manager.Save(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	afterManifest, _ := os.Stat(manifestPath)
+	afterMessages, _ := os.Stat(messagesPath(d, 0))
+	if !os.SameFile(manifestInfo, afterManifest) || !os.SameFile(messagesInfo, afterMessages) || snapshot.UpdatedAt != updatedAt {
+		t.Fatal("unchanged save replaced durable files or changed updated_at")
+	}
+
+	snapshot.PromptTokens = 123
+	if err := manager.Save(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	afterManifest, _ = os.Stat(manifestPath)
+	afterMessages, _ = os.Stat(messagesPath(d, 0))
+	if os.SameFile(manifestInfo, afterManifest) {
+		t.Fatal("metadata-only save did not update session.json")
+	}
+	if !os.SameFile(messagesInfo, afterMessages) {
+		t.Fatal("metadata-only save rewrote active messages")
+	}
+	if _, err := os.Stat(messagesPath(d, 1)); !os.IsNotExist(err) {
+		t.Fatalf("metadata-only save created another messages slot: %v", err)
+	}
+	loaded, err := manager.Load(snapshot.ID)
+	if err != nil || loaded.PromptTokens != 123 || len(loaded.Messages) != 1 || loaded.Messages[0].Content != "context" {
+		t.Fatalf("metadata-only reload = %+v err=%v", loaded, err)
+	}
+}
+
+func TestSnapshotMessageSlotsIgnoreUncommittedAndRejectCorruption(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	manager := New("/tmp/work")
+	snapshot := manager.Current()
+	snapshot.Messages = []types.Message{{Role: "user", Content: "old"}}
+	if err := manager.Save(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.Messages = []types.Message{{Role: "user", Content: "committed"}}
+	if err := manager.Save(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	d := filepath.Join(dir(), snapshot.ID)
+	orphan, err := json.Marshal([]types.Message{{Role: "user", Content: "uncommitted"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(messagesPath(d, 0), orphan, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := manager.Load(snapshot.ID)
+	if err != nil || len(loaded.Messages) != 1 || loaded.Messages[0].Content != "committed" {
+		t.Fatalf("uncommitted slot replaced active context: %+v err=%v", loaded, err)
+	}
+	if err := os.WriteFile(messagesPath(d, 1), []byte("corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Load(snapshot.ID); err == nil || !strings.Contains(err.Error(), "digest mismatch") {
+		t.Fatalf("corrupt active slot should fail despite complete inactive slot: %v", err)
 	}
 }
 

@@ -3,6 +3,7 @@ package question
 import (
 	"context"
 	"fmt"
+	"nekocode/bot/extension/tool/runtime/taskbridge"
 	"strings"
 	"sync"
 
@@ -83,6 +84,7 @@ func (t *Tool) Execute(ctx context.Context, args map[string]any) (core.ToolOutpu
 	}
 
 	req := protocol.NewQuestionRequest(questions)
+	req.SubAgentID = taskbridge.TaskIDFromCtx(ctx)
 	reply := fn(req)
 	if reply.Rejected {
 		return core.ToolOutput{}, fmt.Errorf("question rejected")

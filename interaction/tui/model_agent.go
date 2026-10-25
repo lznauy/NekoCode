@@ -83,6 +83,9 @@ func isCompactCommand(value string) bool {
 // task is in progress. The returned command runs after the message lands
 // (e.g. copying an emitted authorization link to the clipboard).
 func (m *Model) tryLocalCommand(value string) (bool, tea.Cmd) {
+	if handled, cmd := m.taskCommand(value); handled {
+		return true, cmd
+	}
 	out, status := m.Runtime.ExecuteLocalCommand(context.Background(), value)
 	addSystem := func(content string) {
 		m.Messages.AddMessage(message.ChatMessage{Role: "system", Content: content, RenderedContent: content})
@@ -311,12 +314,16 @@ func restoredChatMessages(history []controlruntime.DisplayMessage) []message.Cha
 	for _, dm := range history {
 		var blocks []block.ContentBlock
 		for _, b := range dm.Blocks {
+			brief, content := interaction.ToolBrief(b.ToolName, b.Args), b.Content
+			if b.ToolName == "子任务" {
+				brief, content = b.Content, "Ctrl+G 查看任务记录"
+			}
 			blocks = append(blocks, block.ContentBlock{
 				Type:       block.BlockTool,
 				ToolName:   b.ToolName,
-				ToolArgs:   interaction.ToolBrief(b.ToolName, b.Args),
+				ToolArgs:   brief,
 				ToolAction: interaction.ToolAction(b.ToolName, b.Args),
-				Content:    b.Content,
+				Content:    content,
 				Done:       true,
 				IsError:    b.IsError,
 			})

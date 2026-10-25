@@ -1,6 +1,7 @@
 package components
 
 import (
+	tea "charm.land/bubbletea/v2"
 	"math"
 	"strings"
 	"testing"
@@ -8,6 +9,36 @@ import (
 	"nekocode/interaction/tui/components/message"
 	"nekocode/interaction/tui/styles"
 )
+
+func TestHistoryUpDoesNotSkipFirstRealMessage(t *testing.T) {
+	sty := styles.DefaultStyles()
+	m := NewMessages(80, 10, &sty)
+	m.ReplaceHistoryWindow([]message.ChatMessage{{Role: "user", Content: "first\nmessage"}, {Role: "assistant", Content: "second\nmessage"}}, 10, 11, 20, true, false)
+	called := false
+	m.SetHistoryPageHandler(func(bool) tea.Cmd { called = true; return nil })
+	m.RestoreViewportAnchor(1, 0)
+	m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if called {
+		t.Fatal("Up skipped the first real message to load an older page")
+	}
+}
+
+func TestHistoryNavigationIsNotInsertedIntoConversation(t *testing.T) {
+	sty := styles.DefaultStyles()
+	m := NewMessages(80, 10, &sty)
+	messages := []message.ChatMessage{{Role: "user", Content: "actual conversation"}}
+	m.ReplaceHistoryWindow(messages, 1, 8, 8, false, false)
+	if m.Len() != 1 || m.HistoryWindowHint() != "" {
+		t.Fatal("fully loaded conversation contains navigation metadata")
+	}
+	m.ReplaceHistoryWindow(messages, 9, 16, 24, true, true)
+	if m.Len() != 1 || !strings.Contains(m.HistoryWindowHint(), "记录 9–16，共 24 条") {
+		t.Fatal("page navigation must be separate from messages")
+	}
+	if strings.Contains(m.Render(), "记录") || strings.Contains(m.Render(), "较新") {
+		t.Fatal("history status leaked into conversation")
+	}
+}
 
 func TestHistoryScrollbarStaysContinuousAcrossWindows(t *testing.T) {
 	sty := styles.DefaultStyles()

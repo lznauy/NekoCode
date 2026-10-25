@@ -31,9 +31,11 @@ type ProcessingItem struct {
 	thinkingText strings.Builder
 	outputText   strings.Builder
 
-	cachedRender  string
-	cachedRenderW int
-	cachedHeight  int
+	cachedRender                           string
+	cachedRenderW                          int
+	cachedHeight                           int
+	cachedConstrained                      string
+	cachedConstrainedW, cachedConstrainedH int
 
 	cachedOutput    string
 	cachedOutputW   int
@@ -51,7 +53,15 @@ type ProcessingItem struct {
 	cachedTodos  string
 	cachedTodosW int
 
-	subSlots []subSlot
+	subSlots        []subSlot
+	subagentSummary string
+}
+
+func (p *ProcessingItem) SetSubagentSummary(summary string) {
+	if p.subagentSummary != summary {
+		p.subagentSummary = summary
+		p.invalidateLight()
+	}
 }
 
 type subSlot struct {
@@ -60,14 +70,24 @@ type subSlot struct {
 	ColorIdx int
 }
 
-func (p *ProcessingItem) SetSkill(s string) { p.skill = s; p.invalidate() }
+func (p *ProcessingItem) SetSkill(s string) {
+	if p.skill != s {
+		p.skill = s
+		p.invalidate()
+	}
+}
 
 func NewProcessingItem(sty *styles.Styles) *ProcessingItem {
 	return &ProcessingItem{sty: sty, cachedTodosW: -1, cachedOutputW: -1, cachedThinkingW: -1}
 }
 
 func (p *ProcessingItem) SetSpinnerView(view string) { p.spinnerView = view; p.invalidateLight() }
-func (p *ProcessingItem) SetStatusText(text string)  { p.statusText = text; p.invalidateLight() }
+func (p *ProcessingItem) SetStatusText(text string) {
+	if p.statusText != text {
+		p.statusText = text
+		p.invalidateLight()
+	}
+}
 func (p *ProcessingItem) SetTokens(prompt, completion int) {
 	p.tokenPrompt = prompt
 	p.tokenCompl = completion
@@ -102,6 +122,23 @@ func (p *ProcessingItem) AppendStreamText(delta string) {
 	p.outputText.WriteString(delta)
 	p.cachedOutputW = -1
 	p.invalidateLight()
+}
+
+// SetStreamText projects a persisted/live snapshot into the same sections used
+// by the main conversation, without accumulating duplicate deltas on refresh.
+func (p *ProcessingItem) SetStreamText(output, thinking string) {
+	if p.outputText.String() != output {
+		p.outputText.Reset()
+		p.outputText.WriteString(output)
+		p.cachedOutputW = -1
+		p.invalidateLight()
+	}
+	if p.thinkingText.String() != thinking {
+		p.thinkingText.Reset()
+		p.thinkingText.WriteString(thinking)
+		p.cachedThinkingW = -1
+		p.invalidateLight()
+	}
 }
 
 // DiscardStreamText drops text streamed for the current turn that turned out
@@ -166,11 +203,11 @@ func (p *ProcessingItem) Clear() {
 func (p *ProcessingItem) invalidate() {
 	p.cachedOutputW = -1
 	p.cachedThinkingW = -1
-	p.cachedRenderW = -1
+	p.invalidateLight()
 	p.cachedActivityN = -1
 	p.cachedChangesN = -1
 }
-func (p *ProcessingItem) invalidateLight() { p.cachedRenderW = -1 }
+func (p *ProcessingItem) invalidateLight() { p.cachedRenderW = -1; p.cachedConstrained = "" }
 
 func (p *ProcessingItem) Height(width int) int {
 	if p.cachedRenderW != width {

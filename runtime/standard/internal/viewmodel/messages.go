@@ -1,6 +1,7 @@
 package viewmodel
 
 import (
+	"encoding/json"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -99,6 +100,7 @@ func displayAssistantTurn(msgs []types.Message, idx int, toolNames, toolArgs map
 	var contentParts []string
 	var blocks []controlruntime.DisplayBlock
 	var images []controlruntime.ImageRef
+	tasks := make(map[string]types.Message)
 
 	next := idx
 	for next < len(msgs) && msgs[next].Role == "assistant" {
@@ -117,6 +119,31 @@ func displayAssistantTurn(msgs []types.Message, idx int, toolNames, toolArgs map
 
 		for next < len(msgs) && msgs[next].Role == "tool" {
 			name := toolNames[msgs[next].ToolCallID]
+			if name == "task" {
+				visible = true
+				if materialize {
+					result := msgs[next]
+					identity := result.ToolCallID
+					var args struct {
+						ResumeID string `json:"resume_id"`
+					}
+					_ = json.Unmarshal([]byte(toolArgs[identity]), &args)
+					if args.ResumeID != "" {
+						identity = args.ResumeID
+					}
+					text := strings.TrimPrefix(result.Content, "[Subagent returned a partial result]\n")
+					if strings.HasPrefix(text, "[Subagent ID: ") {
+						if id, _, ok := strings.Cut(strings.TrimPrefix(text, "[Subagent ID: "), "]"); ok {
+							identity = id
+						}
+					}
+					tasks[identity] = result
+					partial := strings.HasPrefix(result.Content, "[Subagent returned a partial result]")
+					if result.IsError && !partial {
+						blocks = append(blocks, controlruntime.DisplayBlock{ToolName: "子任务失败", Content: textutil.NormalizeTerminalOutput(result.Content), IsError: true})
+					}
+				}
+			}
 			if materialize {
 				blocks, images = appendDisplayToolResult(blocks, images, name, toolArgs[msgs[next].ToolCallID], msgs[next])
 			} else if isPersistentTool(name) {
@@ -126,6 +153,28 @@ func displayAssistantTurn(msgs []types.Message, idx int, toolNames, toolArgs map
 			}
 			next++
 		}
+	}
+	if len(tasks) > 0 {
+		var completed, partial, failed int
+		for _, result := range tasks {
+			if strings.HasPrefix(result.Content, "[Subagent returned a partial result]") {
+				partial++
+			} else if result.IsError {
+				failed++
+			} else {
+				completed++
+			}
+		}
+		var parts []string
+		for _, count := range []struct {
+			name string
+			n    int
+		}{{"完成", completed}, {"失败", failed}, {"未完成", partial}} {
+			if count.n > 0 {
+				parts = append(parts, fmt.Sprintf("%s %d", count.name, count.n))
+			}
+		}
+		blocks = append(blocks, controlruntime.DisplayBlock{ToolName: "子任务", Content: strings.Join(parts, " · ")})
 	}
 
 	return controlruntime.DisplayMessage{

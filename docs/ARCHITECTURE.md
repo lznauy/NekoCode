@@ -463,9 +463,11 @@ ag.Run()  →  ctxMgr.SetSystemPrompt()  →  ctxMgr.Summarize()（按需）  �
 ```
 
 - `bot.saveSession()` 显式收集 Context、token、Skill 和 ledger，再交给
-  `session.Manager.Save(snapshot)`。`session.json` 只保存可继续推理的活动上下文；完整的用户、助手和
-  工具消息按序追加到 `transcript.jsonl`，压缩不会改写它。恢复后的 UI 和导出读取 transcript，LLM
-  只读取活动上下文。每次自动或手动压缩前都会先保存当前快照，并在 `backups/` 中创建不可覆盖的
+  `session.Manager.Save(snapshot)`。v3 的 `session.json` 保存元数据、transcript 水位和活动上下文描述符；
+  活动正文位于 `messages.0.json` / `messages.1.json`，通过摘要选择未变化的消息文件，内容变化时先写
+  非活动槽再原子提交描述符。完整的用户、助手和工具消息按序追加到 `transcript.jsonl`，压缩不会改写它。
+  恢复后的 UI 和导出读取 transcript，LLM 只读取活动上下文。加载器保留 v2 内联正文兼容，下一次保存
+  自动迁移。每次自动或手动压缩前都会先保存当前快照，并在 `backups/` 中创建不可覆盖、正文内联的
   `pre-compact-*.session.json`；备份失败时不调用摘要模型。
   Session 包不通过回调访问 Agent、Extension 或 Policy。
 - `Snapshot()`（`bot/contextmgr/contextmgr_snapshot.go`）**深拷贝** `Messages` 后再返回，避免后续 `append` 共享 backing array 导致已捕获内容被覆盖
@@ -500,7 +502,7 @@ type Tool interface {
 
 ### 工具注册
 
-`bot/extension/tool/builtin/catalog/toolbox.go` 中的 `Toolbox` 注册内置工具（shell/process/read/write/list/tree/glob/edit/grep/web_search/web_fetch/web_extract/question/todo_write/task/diff/index）。`image_gen` 与 `image_understand` 按各自模型配置条件注册；Extension manager 统一注册 `skill` 和 constant-schema `capability` 工具。`bot/core/bot.go` 只负责 Extension、Agent 和 command parser 的顶层组装。
+`bot/extension/tool/builtin/catalog/toolbox.go` 中的 `Toolbox` 注册内置工具（shell/process/read/write/list/tree/glob/edit/grep/web_search/web_fetch/web_extract/question/todo_write/task/task_list/diff/index）。`image_gen` 与 `image_understand` 按各自模型配置条件注册；Extension manager 统一注册 `skill` 和 constant-schema `capability` 工具。`bot/core/bot.go` 只负责 Extension、Agent 和 command parser 的顶层组装。
 
 `Registry` 除了保存 `Tool`，还集中保存 preview 与 delegated-call target 等执行元数据。模型侧名称仍是固定的 `capability`，但解析后的 canonical identity 会随 `ToolCallItem` 贯穿权限、Pre/Post Hook、Ledger、audit、结果和 UI 回调。canonical identity 会转义 server/tool 名称中的 `%` 和 `__`，避免不同 server.tool 组合碰撞到同一条权限规则。Runner 和 Policy 都不通过 optional interface 或硬编码 MCP 参数来推断行为。
 
@@ -645,7 +647,7 @@ Policy 只生成工具调用结果、目标文件是否存在/已读、乱码计
 | `check` | diff/PR/issue 审查、非平凡实现后的交付检查 | 范围核对 → 风险审查 → 独立复核 → 验证 |
 | `skill-creator` | 创建、审查或更新技能 | 收集需求 → 编写 SKILL.md → 校验 |
 
-Skill frontmatter 中的 `context`、`agent`、`allowed-tools`、`max_steps` 和 `context_window` 会被解析并保存在 `Skill`；主 Agent 仍可按需 inline 加载正文。委托任务通过 `task(profile, skills, prompt)` 显式选择 profile 和 task-scoped skills，skill 只提供工作流，不能扩展 profile 的工具权限。
+Skill frontmatter 中的 `context`、`agent`、`allowed-tools`、`max_steps` 和 `context_window` 会被解析并保存在 `Skill`；主 Agent 仍可按需 inline 加载正文。委托任务通过 `task(profile, skills, prompt, title?, resume_id?)` 显式选择 profile 和 task-scoped skills，可用独立标题显示任务，并通过 `resume_id` 续跑当前父会话的已保存任务；只读 `task_list` 用于查找任务。skill 只提供工作流，不能扩展 profile 的工具权限。
 
 ## 子 Agent 系统
 
@@ -671,7 +673,7 @@ Skill frontmatter 中的 `context`、`agent`、`allowed-tools`、`max_steps` 和
 - Partial result 恢复（中断/错误时返回部分结果）
 - Metadata 追踪（totalTokens、toolUseCount、durationMs、cacheHitTokens、cacheMissTokens）
 - Phase 回调（cfg.OnPhase 通知阶段变化）
-- 子 Agent 并发通过 `agent` 的 `slotManager` 管理（最大 8 并发 + 颜色分配）
+- `slotManager` 只预留子任务身份和执行颜色槽；实际并发与进程内等待队列由工具批量执行器的独立 worker 池管理，默认 8，可由 `max_concurrent_subagents` 配置
 
 ### AgentMD 解析
 
@@ -741,7 +743,7 @@ TUI 和 GUI 直接渲染菜单；Telegram 渲染 inline keyboard 并同步平台
 | 推理格式 | `bot/agent/model.go` | LLM 响应分类 + GarbledToolCall 检测 |
 | 工具策略 | `bot/policy/` | 确定性工具前后决策、事件收集、hook 注入 |
 | 子 Agent | `bot/agent/subagent/` | 通用独立循环，coder/explore profile + task-scoped skills + 插件扩展 |
-| 子槽位 | `bot/agent/slots.go` | 并发控制（8 槽位 + 颜色） |
+| 子槽位 | `bot/agent/slots.go` | 子任务身份预留与执行颜色槽位 |
 | LLM 网关 | `bot/provider/` | OpenAI/Anthropic 双协议，统一接口 |
 | 工具系统 | `bot/extension/tool/` | Registry + builtin 实现 + runtime 执行编排 |
 | 工具注册 | `bot/extension/tool/builtin/catalog/` | Toolbox 内置工具组装与关闭 |

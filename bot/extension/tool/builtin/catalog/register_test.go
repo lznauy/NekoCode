@@ -52,6 +52,7 @@ func TestInterface(t *testing.T) {
 		{&treetool.TreeTool{}, "tree", core.ModeParallel, 1},
 		{&todo.TodoWriteTool{}, "todo_write", core.ModeSequential, 1},
 		{task.NewTaskTool(), "task", core.ModeParallel, 1},
+		{task.NewTaskListTool(), "task_list", core.ModeParallel, 1},
 		{web.NewWebSearchTool(), "web_search", core.ModeParallel, 1},
 		{web.NewWebFetchTool(), "web_fetch", core.ModeParallel, 1},
 		{web.NewWebExtractTool(), "web_extract", core.ModeParallel, 1},

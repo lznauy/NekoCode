@@ -17,6 +17,18 @@ func (m *Model) View() tea.View {
 		return tea.NewView("Loading...")
 	}
 
+	overlay := m.tasks != nil && m.tasks.open && m.state != stateConfirming && m.state != stateQuestioning
+	if overlay && m.tasks.background != "" && m.tasks.backgroundWidth == m.Width && m.tasks.backgroundHeight == m.Height {
+		m.Messages.SetRenderingSuspended(true)
+		return m.taskOverlayTeaView(m.tasks.background)
+	}
+	// Refresh the background once on opening/resize, and render the live main
+	// view whenever approval or question controls temporarily own focus.
+	m.Messages.SetRenderingSuspended(false)
+	if !overlay && m.tasks != nil {
+		m.tasks.background = ""
+	}
+
 	var parts []string
 
 	if m.Messages.Len() == 0 {
@@ -59,6 +71,14 @@ func (m *Model) View() tea.View {
 
 	view := lipgloss.JoinVertical(lipgloss.Left, parts...)
 
+	if overlay {
+		m.tasks.renderedView = ""
+		m.tasks.background = view
+		m.tasks.backgroundWidth, m.tasks.backgroundHeight = m.Width, m.Height
+		m.Messages.SetRenderingSuspended(true)
+		return m.taskOverlayTeaView(view)
+	}
+
 	v := tea.NewView(view)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
@@ -92,11 +112,27 @@ func (m *Model) View() tea.View {
 	return v
 }
 
+func (m *Model) taskOverlayTeaView(background string) tea.View {
+	content := m.tasks.renderedView
+	if !m.tasks.reuseView || content == "" {
+		content = m.taskOverlayView(background)
+		m.tasks.renderedView = content
+	}
+	v := tea.NewView(content)
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
+	return v
+}
+
 const sessionLoadHintDelay = 200 * time.Millisecond
 
 func (m *Model) sessionHeaderView(now time.Time) string {
 	header := m.Header.View()
 	if !m.sessionLoading || m.sessionLoadStarted.IsZero() || now.Sub(m.sessionLoadStarted) < sessionLoadHintDelay {
+		if hint := m.Messages.HistoryWindowHint(); hint != "" {
+			firstLine, _, _ := strings.Cut(header, "\n")
+			return firstLine + "\n" + styles.MutedStyle.Render(ansi.Truncate(hint, max(1, m.Width), "…")) + "\n"
+		}
 		return header
 	}
 	// Reuse the header's separator row so showing the hint never resizes or

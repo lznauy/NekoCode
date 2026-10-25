@@ -16,6 +16,12 @@ func (s *Snapshot) Clone() *Snapshot {
 		return nil
 	}
 	out := *s
+	if s.Subagent != nil {
+		metadata := *s.Subagent
+		metadata.Skills = slices.Clone(s.Subagent.Skills)
+		metadata.Attempts = slices.Clone(s.Subagent.Attempts)
+		out.Subagent = &metadata
+	}
 	out.Messages = cloneMessages(s.Messages)
 	out.Transcript = cloneMessages(s.Transcript)
 	out.LoadedSkills = slices.Clone(s.LoadedSkills)

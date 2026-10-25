@@ -90,8 +90,8 @@ func New(runner Runner, services ServiceGroups) *Runtime {
 		status:    RunIdle,
 		cancelled: make(map[RunID]struct{}),
 	}
-	events.AddObserver(rt.runs.Record)
-	events.AddObserver(rt.recordMetrics)
+	events.AddOrderedObserver(rt.runs.Record)
+	events.AddOrderedObserver(rt.recordMetrics)
 	rt.approvals = broker.NewApprovalBroker(events, SourceRef{Kind: "runtime"}, rt.currentRunID)
 	rt.questions = broker.NewQuestionBroker(events, SourceRef{Kind: "runtime"}, rt.currentRunID)
 	rt.connectors = connectors.NewManager(rt)

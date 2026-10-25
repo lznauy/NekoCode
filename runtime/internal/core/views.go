@@ -50,6 +50,12 @@ type ToolView struct {
 }
 
 type SubAgentView struct {
+	SessionID string    `json:"session_id,omitempty"`
+	Status    string    `json:"status,omitempty"`
+	Phase     string    `json:"phase,omitempty"`
+	Prompt    string    `json:"prompt,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+
 	ID         string     `json:"id"`
 	Type       string     `json:"type,omitempty"` // compatibility alias for Profile
 	Profile    string     `json:"profile,omitempty"`
@@ -58,6 +64,8 @@ type SubAgentView struct {
 	Active     bool       `json:"active"`
 	StartedAt  time.Time  `json:"started_at"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	AttemptID  string     `json:"attempt_id,omitempty"`
+	AttemptSeq int        `json:"attempt_seq,omitempty"`
 }
 
 type ConnectorStatusPayload struct {

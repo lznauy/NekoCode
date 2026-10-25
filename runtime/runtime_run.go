@@ -463,6 +463,7 @@ func (r *Runtime) publishStep(runID RunID, step protocol.StepEvent) {
 		Input:    append([]byte(nil), step.ToolInput...),
 		Decision: step.Decision,
 		IsError:  step.IsError, SubAgentID: step.SubAgentID, SubAgentColor: step.SubAgentColor,
+		AttemptID: step.SubAgentAttemptID, AttemptSeq: step.SubAgentAttemptSeq,
 	}
 	switch step.Action {
 	case protocol.StepActionRunSummary:
@@ -470,7 +471,7 @@ func (r *Runtime) publishStep(runID RunID, step protocol.StepEvent) {
 			r.events.Publish(Event{RunID: runID, Type: EventRunSummary, Source: SourceRef{Kind: "bot"}, Payload: *step.Summary})
 		}
 		return
-	case protocol.StepActionSubAgentText, protocol.StepActionSubAgentReason, protocol.StepActionSubAgentMessage:
+	case protocol.StepActionSubAgentText, protocol.StepActionSubAgentReason, protocol.StepActionSubAgentMessage, protocol.StepActionSubAgentReset:
 		kind := "text_delta"
 		if step.Action == protocol.StepActionSubAgentReason {
 			kind = "reasoning_delta"
@@ -478,7 +479,10 @@ func (r *Runtime) publishStep(runID RunID, step protocol.StepEvent) {
 		if step.Action == protocol.StepActionSubAgentMessage {
 			kind = "message"
 		}
-		r.events.Publish(Event{RunID: runID, Type: EventSubAgentOutput, Source: SourceRef{Kind: "bot"}, Payload: SubAgentOutput{ID: step.SubAgentID, Kind: kind, Text: step.Output}})
+		if step.Action == protocol.StepActionSubAgentReset {
+			kind = "reset"
+		}
+		r.events.Publish(Event{RunID: runID, Type: EventSubAgentOutput, Source: SourceRef{Kind: "bot"}, Payload: SubAgentOutput{ID: step.SubAgentID, Kind: kind, Text: step.Output, Reasoning: step.SubAgentReasoning, AttemptID: step.SubAgentAttemptID, AttemptSeq: step.SubAgentAttemptSeq, MessageSeq: step.SubAgentMessageSeq}})
 		return
 
 	case protocol.StepActionChat, protocol.StepActionThink:
@@ -503,16 +507,21 @@ func (r *Runtime) publishStep(runID RunID, step protocol.StepEvent) {
 		r.events.Publish(Event{
 			RunID: runID, Type: EventSubAgentStarted, Source: SourceRef{Kind: "bot"},
 			Payload: SubAgentPayload{
-				ID: step.SubAgentID, Type: step.SubAgentType, Profile: step.SubAgentProfile,
+				ID: step.SubAgentID, Type: step.SubAgentType, Profile: step.SubAgentProfile, SessionID: r.CurrentSessionID(),
 				Skills: append([]string(nil), step.SubAgentSkills...), Color: step.SubAgentColor,
+				Status: step.SubAgentStatus, Prompt: step.SubAgentPrompt,
+				AttemptID: step.SubAgentAttemptID, AttemptSeq: step.SubAgentAttemptSeq,
 			},
 		})
 		r.publishMetrics(runID)
 		return
+	case protocol.StepActionSubAgentUpdate:
+		r.events.Publish(Event{RunID: runID, Type: EventSubAgentUpdated, Source: SourceRef{Kind: "bot"}, Payload: SubAgentPayload{ID: step.SubAgentID, Status: step.SubAgentStatus, Phase: step.SubAgentPhase, AttemptID: step.SubAgentAttemptID, AttemptSeq: step.SubAgentAttemptSeq}})
+		return
 	case protocol.StepActionSubAgentEnd:
 		r.events.Publish(Event{
 			RunID: runID, Type: EventSubAgentEnded, Source: SourceRef{Kind: "bot"},
-			Payload: SubAgentPayload{ID: step.SubAgentID},
+			Payload: SubAgentPayload{ID: step.SubAgentID, Status: step.SubAgentStatus, AttemptID: step.SubAgentAttemptID, AttemptSeq: step.SubAgentAttemptSeq},
 		})
 		r.publishMetrics(runID)
 		return

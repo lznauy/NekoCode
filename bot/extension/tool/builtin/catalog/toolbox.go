@@ -24,6 +24,7 @@ type Toolbox struct {
 	lsp       *lsp.LSPTool
 	index     *index.IndexTool
 	task      *task.TaskTool
+	taskList  *task.TaskListTool
 	question  *question.Tool
 	todo      *todo.TodoWriteTool
 	workspace *workspace.Manager
@@ -80,6 +81,9 @@ func (e *Toolbox) RebuildRegistryWithConfig(cfg ToolboxConfig) {
 	if e.task == nil {
 		e.task = task.NewTaskTool()
 	}
+	if e.taskList == nil {
+		e.taskList = task.NewTaskListTool()
+	}
 	if e.question == nil {
 		e.question = question.NewTool()
 	}
@@ -91,7 +95,7 @@ func (e *Toolbox) RebuildRegistryWithConfig(cfg ToolboxConfig) {
 	}
 	e.Registry = tools.New()
 	e.Registry.SetWorkspace(e.workspace)
-	registerAll(e.Registry, cfg.ImageGenModels, cfg.ImageUnderstandModels, e.shell, e.lsp, e.index, e.task, e.question, e.todo)
+	registerAll(e.Registry, cfg.ImageGenModels, cfg.ImageUnderstandModels, e.shell, e.lsp, e.index, e.task, e.taskList, e.question, e.todo)
 	for _, t := range cfg.ExtraTools {
 		e.Registry.Register(t)
 	}
@@ -178,6 +182,12 @@ func (e *Toolbox) SetSandboxEngine(engine *permission.Engine) {
 func (e *Toolbox) WireTaskRunner(run taskbridge.TaskRunner) {
 	if e.task != nil {
 		e.task.Wire(run)
+	}
+}
+
+func (e *Toolbox) WireTaskLister(list taskbridge.TaskLister) {
+	if e.taskList != nil {
+		e.taskList.Wire(list)
 	}
 }
 

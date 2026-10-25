@@ -9,13 +9,14 @@ import (
 	"nekocode/interaction/tui/styles"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const toolOutputEdgeLines = 5
 
 func renderToolLine(b ContentBlock, width int, sty *styles.Styles) string {
 	summary := b.ToolArgs
-	if b.Content != "" {
+	if b.Content != "" && !b.FullOutput {
 		summary = toolSummary(b)
 	}
 
@@ -416,6 +417,9 @@ func pad4(n int) string {
 }
 
 func renderToolContent(b ContentBlock, contentW int, sty *styles.Styles) string {
+	if b.FullOutput {
+		return sty.Muted.Render(ansi.Hardwrap(ansi.Strip(b.Content), contentW, true))
+	}
 	switch b.ToolName {
 	case "read":
 		return sty.Muted.MaxWidth(contentW).Render(ParseReadOutput(b.Content))

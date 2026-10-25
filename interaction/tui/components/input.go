@@ -46,6 +46,7 @@ type inputDraft struct {
 }
 
 type Input struct {
+	taskObserver    bool
 	textarea        textarea.Model
 	width           int
 	follow          bool
@@ -87,6 +88,8 @@ func NewInput(width int) *Input {
 
 	return &Input{textarea: ta, width: width, follow: true}
 }
+
+func (i *Input) SetTaskObserver(enabled bool) { i.taskObserver = enabled }
 
 func (i *Input) SetWidth(width int) { i.width = width; i.textarea.SetWidth(max(1, width)) }
 func (i *Input) Width() int         { return i.width }
@@ -669,6 +672,10 @@ func (i *Input) View() string {
 				styles.SubtleStyle.Render(" · P:") + permissionStyle.Render(permission) +
 				styles.SubtleStyle.Render(" · ") + styles.CatEyeStyle.Render(i.model)
 		}
+	}
+	hint := styles.SubtleStyle.Render(" · Ctrl+G 子任务")
+	if i.taskObserver && lipgloss.Width(footer)+lipgloss.Width(hint) < w-1 {
+		footer += hint
 	}
 	footer = ansi.Truncate(footer, max(1, w-1), "")
 	pad := max(0, w-lipgloss.Width(footer)-1)

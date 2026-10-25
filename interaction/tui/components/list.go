@@ -60,6 +60,19 @@ func (l *List) Len() int    { return len(l.items) }
 
 func (l *List) Items() []Item { return l.items }
 
+// ViewportAnchor identifies the item and line at the top of the viewport.
+// Hosts can preserve it when replacing a paged or live projection.
+func (l *List) ViewportAnchor() (int, int) { return l.offsetIdx, l.offsetLine }
+
+func (l *List) RestoreViewportAnchor(index, line int) {
+	if len(l.items) == 0 {
+		return
+	}
+	l.offsetIdx = max(0, min(index, len(l.items)-1))
+	l.offsetLine = max(0, min(line, l.getItem(l.offsetIdx).height-1))
+	l.pixelsAbove = -1
+}
+
 func (l *List) SetItems(items ...Item) {
 	l.items = items
 	l.offsetIdx = 0
@@ -70,9 +83,21 @@ func (l *List) SetItems(items ...Item) {
 }
 
 func (l *List) AppendItems(items ...Item) {
+	if len(items) == 0 {
+		return
+	}
 	l.items = append(l.items, items...)
 	l.totalHeight = -1
 	l.pixelsAbove = -1
+}
+
+// ReplaceItem preserves the scroll anchor and cached renders of other items.
+func (l *List) ReplaceItem(index int, item Item) {
+	if index < 0 || index >= len(l.items) {
+		return
+	}
+	l.items[index] = item
+	l.InvalidateItem(index)
 }
 
 // InsertItem inserts item at index idx without resetting the scroll offset.
@@ -228,7 +253,7 @@ func (l *List) ScrollToBottom() {
 			h += l.gap
 		}
 		remaining -= h
-		if remaining >= 0 {
+		if remaining > 0 {
 			idx--
 		}
 	}
@@ -248,6 +273,9 @@ func (l *List) ScrollToBottom() {
 func (l *List) ScrollBy(lines int) {
 	if len(l.items) == 0 || lines == 0 {
 		return
+	}
+	if l.pixelsAbove < 0 {
+		l.recomputePixelsAbove()
 	}
 
 	if lines > 0 {
