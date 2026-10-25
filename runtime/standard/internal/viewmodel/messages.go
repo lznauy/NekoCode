@@ -139,7 +139,9 @@ func displayAssistantTurn(msgs []types.Message, idx int, toolNames, toolArgs map
 					}
 					tasks[identity] = result
 					partial := strings.HasPrefix(result.Content, "[Subagent returned a partial result]")
-					if result.IsError && !partial {
+					if partial {
+						blocks = append(blocks, controlruntime.DisplayBlock{ToolName: "子任务未完成", Content: textutil.NormalizeTerminalOutput(result.Content), IsError: true})
+					} else if result.IsError {
 						blocks = append(blocks, controlruntime.DisplayBlock{ToolName: "子任务失败", Content: textutil.NormalizeTerminalOutput(result.Content), IsError: true})
 					}
 				}

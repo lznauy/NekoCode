@@ -401,3 +401,17 @@ func TestSkillLoadedStateFollowsContextDelivery(t *testing.T) {
 		})
 	}
 }
+
+func TestCanonicalStopCancelsEntireToolBatch(t *testing.T) {
+	a := newTestAgent()
+	a.deps.gov.Register(policy.Hook{Name: "terminate", Point: policy.PreToolUse, On: func(s policy.State) *policy.Result {
+		if s.Facts().Tool.Name == "write" {
+			return &policy.Result{Decision: &policy.Decision{Action: policy.Terminate, Reason: "stop now"}}
+		}
+		return nil
+	}})
+	out := a.toolRunner.filterToolCalls([]core.ToolCallItem{{Name: "read"}, {Name: "write"}, {Name: "edit"}})
+	if !out.Terminated || len(out.Allowed) != 0 || len(out.Blocked) != 3 || a.run.err == nil {
+		t.Fatalf("filter=%+v error=%v", out, a.run.err)
+	}
+}

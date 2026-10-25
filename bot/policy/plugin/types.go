@@ -1,61 +1,40 @@
 package plugin
 
-type Point string
-
-const (
-	PreModel    Point = "pre_model"
-	PreToolUse  Point = "pre_tool_use"
-	PostToolUse Point = "post_tool_use"
-	UserSubmit  Point = "user_submit"
-	Stop        Point = "stop"
+import (
+	"nekocode/bot/policy/contract"
+	"time"
 )
 
-type Event struct {
-	Tool  string
-	Error bool
-}
+type Point = contract.Point
 
-type Hint struct {
-	Type     string
-	Severity string
-	Content  string
-}
+const (
+	SessionStart  = contract.SessionStart
+	SessionEnd    = contract.SessionEnd
+	RunStart      = contract.RunStart
+	RunEnd        = contract.RunEnd
+	PreCompact    = contract.PreCompact
+	PostCompact   = contract.PostCompact
+	SubagentStart = contract.SubagentStart
+	SubagentStop  = contract.SubagentStop
+	UserSubmit    = contract.UserSubmit
+	PreModel      = contract.PreModel
+	PreToolUse    = contract.PreToolUse
+	PostToolUse   = contract.PostToolUse
+	PostToolBatch = contract.PostToolBatch
+	Stop          = contract.Stop
+)
 
-type Result struct {
-	Hint        *Hint
-	Stop        *StopResult
-	BlockTool   *BlockToolResult
-	RequireTool *RequireToolResult
-	BlockFinal  *BlockFinalResult
-	StatePatch  *StatePatchResult
-}
-
-type StopResult struct {
-	Reason string
-}
-
-type BlockToolResult struct {
-	Tool   string
-	Reason string
-}
-
-type RequireToolResult struct {
-	Tool   string
-	Reason string
-}
-
-type BlockFinalResult struct {
-	Reason string
-}
-
-type StatePatchResult struct {
-	Ints    map[string]int64  `json:"ints"`
-	Strings map[string]string `json:"strings"`
-}
+type Event = contract.Event
+type Hint = contract.Hint
+type Result = contract.Result
+type StatePatchResult = contract.StatePatch
 
 type Hook struct {
-	Name  string
-	Point Point
-	Once  bool
-	On    func(Event) *Result
+	Name          string
+	Point         Point
+	Once          bool
+	SessionScoped bool
+	Guard         bool
+	Timeout       time.Duration
+	On            func(Event) *Result
 }

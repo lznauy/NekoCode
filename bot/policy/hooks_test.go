@@ -3,6 +3,7 @@ package policy
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHookStatePersistsAndIsPrivate(t *testing.T) {
@@ -107,5 +108,87 @@ func TestRegisterReplacesHookWithSameName(t *testing.T) {
 	hooks := engine.hooks
 	if len(hooks) != 1 || hooks[0].Point != Stop {
 		t.Fatalf("hooks = %+v, want replacement", hooks)
+	}
+}
+
+func TestHookNestedFactsAreIsolated(t *testing.T) {
+	e := newHookEngine()
+	facts := Facts{Tool: ToolFacts{Args: map[string]any{"nested": map[string]any{"value": "original"}, "list": []any{"original"}}}}
+	e.register(Hook{Name: "mutate", Point: PreModel, On: func(s State) *Result {
+		s.Facts().Tool.Args["nested"].(map[string]any)["value"] = "changed"
+		s.Facts().Tool.Args["list"].([]any)[0] = "changed"
+		return nil
+	}})
+	e.register(Hook{Name: "observe", Point: PreModel, On: func(s State) *Result {
+		if s.Facts().Tool.Args["nested"].(map[string]any)["value"] != "original" || s.Facts().Tool.Args["list"].([]any)[0] != "original" {
+			t.Error("nested facts leaked between hooks")
+		}
+		return nil
+	}})
+	e.evaluate(PreModel, facts)
+	if facts.Tool.Args["nested"].(map[string]any)["value"] != "original" {
+		t.Error("source facts mutated")
+	}
+}
+
+func TestReplacingInFlightHookDoesNotRestoreOldState(t *testing.T) {
+	e := newHookEngine()
+	entered, release := make(chan struct{}), make(chan struct{})
+	e.register(Hook{Name: "replace", Point: PreModel, On: func(s State) *Result { close(entered); <-release; s.SetInt("old", 1); return nil }})
+	done := make(chan struct{})
+	go func() { defer close(done); e.evaluate(PreModel, Facts{}) }()
+	<-entered
+	e.register(Hook{Name: "replace", Point: PreModel, On: func(s State) *Result {
+		if s.Int("old") != 0 {
+			t.Error("old callback restored state")
+		}
+		return nil
+	}})
+	close(release)
+	<-done
+	e.evaluate(PreModel, Facts{})
+}
+
+func TestResolvePrioritizesStopOverEarlierHint(t *testing.T) {
+	e := newHookEngine()
+	e.register(Hook{Name: "hint", Point: Stop, On: func(State) *Result { return &Result{Hint: &Hint{Content: "revise"}} }})
+	reason := StopFormatError
+	e.register(Hook{Name: "stop", Point: Stop, On: func(State) *Result { return &Result{Stop: &reason} }})
+	got := e.evaluate(Stop, Facts{})
+	if len(got) != 2 || Resolve(got).Action != Terminate {
+		t.Fatalf("stop must precede hint: %+v", got)
+	}
+}
+
+func TestUnsupportedActionsProduceDiagnostic(t *testing.T) {
+	for _, point := range []HookPoint{UserSubmit, PreModel, PreToolUse, PostToolUse, PostToolBatch, Stop} {
+		t.Run(string(point), func(t *testing.T) {
+			e := newHookEngine()
+			e.register(Hook{Name: "invalid", Point: point, On: func(State) *Result {
+				if point == UserSubmit || point == PreModel {
+					return &Result{BlockTool: &BlockTool{Reason: "invalid"}}
+				}
+				if point == PreToolUse {
+					return &Result{BlockFinal: &BlockFinal{Reason: "invalid"}}
+				}
+				return &Result{BlockTool: &BlockTool{Reason: "invalid"}}
+			}})
+			got := e.evaluate(point, Facts{})
+			if len(got) != 1 || got[0].Hint == nil || got[0].Hint.Type != "hook_error" || got[0].Stop != nil || got[0].BlockTool != nil || got[0].BlockFinal != nil {
+				t.Fatalf("invalid action must be diagnosed: %+v", got)
+			}
+		})
+	}
+}
+
+func TestDescribeTriggerMayReadRegistry(t *testing.T) {
+	e := newHookEngine()
+	e.register(Hook{Name: "audit", Point: PreModel, On: func(State) *Result { return &Result{Hint: &Hint{Content: "test"}} }, DescribeTrigger: func(State) string { return e.summary() }})
+	done := make(chan struct{})
+	go func() { defer close(done); e.evaluate(PreModel, Facts{}) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("DescribeTrigger deadlocked on registry lock")
 	}
 }

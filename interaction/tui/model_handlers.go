@@ -38,7 +38,7 @@ func (m *Model) handleDone(msg doneMsg) tea.Cmd {
 	}
 	finalBlocks := block.FilterFinalBlocks(m.Messages.ProcessingBlocks())
 	for _, b := range m.Messages.ProcessingBlocks() {
-		if b.ToolName == "子任务失败" {
+		if b.ToolName == "子任务失败" || b.ToolName == "子任务未完成" {
 			finalBlocks = append(finalBlocks, b)
 		}
 	}
@@ -900,6 +900,8 @@ func (m *Model) applyRuntimeToolEvent(ev controlruntime.Event) {
 		// delegation into a separate activity/tool-output box.
 		if ev.Type == controlruntime.EventToolBlocked || (ev.Type == controlruntime.EventToolCompleted && p.IsError) {
 			m.Messages.ProcessToolBlock(block.ContentBlock{Type: block.BlockTool, ToolName: "子任务失败", CallID: p.CallID, Content: p.Output, Done: true, IsError: true})
+		} else if ev.Type == controlruntime.EventToolCompleted && strings.HasPrefix(p.Output, "[Subagent returned a partial result]") {
+			m.Messages.ProcessToolBlock(block.ContentBlock{Type: block.BlockTool, ToolName: "子任务未完成", CallID: p.CallID, Content: p.Output, Done: true, IsError: true})
 		}
 		return
 	}

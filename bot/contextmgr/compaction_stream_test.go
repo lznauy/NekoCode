@@ -33,6 +33,14 @@ func TestCompactionEmitsBeforeStreamFinishes(t *testing.T) {
 				m.Add("user", "old question")
 				m.Add("assistant", "old answer")
 			}
+			var phases []string
+			m.SetCompactionLifecycle(func(ctx context.Context, phase string) {
+				_ = m.Status()
+				if ctx.Err() != nil {
+					t.Error("lifecycle callback received canceled context")
+				}
+				phases = append(phases, phase)
+			})
 			events := make(chan protocol.CompactionEvent, 20)
 			m.SetCompactionObserver(func(event protocol.CompactionEvent) { _ = m.Status(); events <- event })
 			ctx, cancel := context.WithCancel(context.Background())
@@ -92,6 +100,13 @@ func TestCompactionEmitsBeforeStreamFinishes(t *testing.T) {
 			terminal := next()
 			select {
 			case err := <-done:
+				want := "completed"
+				if mode == "cancel" || mode == "error" {
+					want = "failed"
+				}
+				if len(phases) != 2 || phases[0] != "started" || phases[1] != want {
+					t.Fatalf("lifecycle=%v", phases)
+				}
 				if mode == "cancel" || mode == "error" {
 					if err == nil || terminal.Status != "failed" || m.Status().Messages != 16 || terminal.Summary != text {
 						t.Fatalf("failure: %+v, %v", terminal, err)

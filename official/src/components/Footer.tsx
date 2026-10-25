@@ -36,7 +36,7 @@ export function Footer() {
               GitHub
             </a>
             <a
-              href="https://github.com/lznauy/NekoCode/blob/master/docs/ARCHITECTURE.md"
+              href="https://github.com/lznauy/NekoCode/blob/master/docs/maintainers/ARCHITECTURE.md"
               target="_blank"
               rel="noopener noreferrer"
               className="hover:text-[var(--foreground)] transition-colors"

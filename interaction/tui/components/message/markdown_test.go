@@ -17,7 +17,7 @@ var problemText = `所有文档链接和图片文件都存在。
 |------|------|------|
 | README 第 107 行 | BotInterface 方法数写 11，实际 10 | 11 → 10 |
 | README 第 151 行 | 同上 | 11 → 10 |
-| docs/ARCHITECTURE.md 第 181 行 | 同上 | 11 → 10 |
+| docs/maintainers/ARCHITECTURE.md 第 181 行 | 同上 | 11 → 10 |
 | README 第 54 行 | 工具名 ` + "`fetch`/`todo`" + ` 不准确 | → ` + "`web_fetch`/`todo_write`" + ` |
 
 其余内容（安全分级、Hook 数量、事件点数量、子 Agent 类型、Project Info 查询格式、Go 版本、文档链接、图片路径）均与代码一致，没有问题喵~`

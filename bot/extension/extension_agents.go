@@ -76,7 +76,7 @@ func (m *Manager) agentInfosLocked() []AgentInfo {
 			info.Plugin, info.Name = owner, short
 		}
 		if info.MaxSteps == 0 {
-			info.MaxSteps = agentprofile.MaxSteps
+			info.MaxSteps = agentprofile.DefaultMaxSteps
 		}
 		out = append(out, info)
 	}

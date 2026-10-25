@@ -1,7 +1,7 @@
 # acp — ACP v1 Agent 适配层
 
 `acp/` 是一个纯 Go 包，把 NekoCode 的运行时（`runtime`）暴露成 **Agent Client Protocol（ACP）v1** Agent。
-协议标准总览与实现状态见 [`docs/ACP.md`](../docs/ACP.md)；本文聚焦包内实现细节。
+协议标准总览与实现状态见 [`docs/developers/ACP.md`](../docs/developers/ACP.md)；本文聚焦包内实现细节。
 它负责：
 
 - 在一条 **stdio** 上维护一个按行（newline-delimited）的 JSON-RPC 2.0 连接；

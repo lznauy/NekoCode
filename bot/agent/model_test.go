@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"nekocode/bot/contextmgr"
+	"nekocode/bot/policy"
 	"nekocode/bot/provider/types"
 	"nekocode/bot/reasoning"
 )
@@ -452,5 +453,84 @@ func TestRunCompactsAtMostOnceBeforeInference(t *testing.T) {
 	var budget *contextmgr.RequestBudgetError
 	if !errors.As(result.Error, &budget) || summaries != 1 || llm.calls != 0 {
 		t.Fatalf("request retried compaction or escaped admission: %v summaries=%d calls=%d", result.Error, summaries, llm.calls)
+	}
+}
+
+func TestSynthesisCannotBypassPreModelGuard(t *testing.T) {
+	a, llm := newTestAgentWithLLM(types.StreamToken{Content: "must not generate"})
+	a.deps.gov.Register(policy.Hook{Name: "deny-model", Point: policy.PreModel, Guard: true, On: func(policy.State) *policy.Result {
+		return &policy.Result{Decision: &policy.Decision{Action: policy.Reject, Reason: "model denied"}}
+	}})
+	before := a.deps.ctxMgr.Len()
+	result := a.loopRunner.finishRun(nil)
+	if result.Error == nil || result.FinalOutput != "" || llm.calls != 0 || a.deps.ctxMgr.Len() != before {
+		t.Fatalf("synthesis bypassed pre-model guard: %+v calls=%d", result, llm.calls)
+	}
+}
+
+func TestSynthesisCannotPublishRejectedFinal(t *testing.T) {
+	a, llm := newTestAgentWithLLM(types.StreamToken{Content: "must not publish"})
+	a.deps.gov.Register(policy.Hook{Name: "deny-final", Point: policy.Stop, Guard: true, On: func(s policy.State) *policy.Result {
+		if s.Facts().Response.Text != "must not publish" {
+			t.Error("synthesis text missing from facts")
+		}
+		return &policy.Result{Decision: &policy.Decision{Action: policy.Reject, Reason: "final denied"}}
+	}})
+	before := a.deps.ctxMgr.Len()
+	result := a.loopRunner.finishRun(nil)
+	if result.Error == nil || result.FinalOutput != "" || llm.calls != 1 || a.deps.ctxMgr.Len() != before {
+		t.Fatalf("synthesis bypassed final guard: %+v calls=%d", result, llm.calls)
+	}
+}
+
+func TestSynthesisFallbackStillPassesFinalGuard(t *testing.T) {
+	a, _ := newTestAgentWithLLM()
+	a.deps.gov.Register(policy.Hook{Name: "fallback-guard", Point: policy.Stop, Guard: true, On: func(s policy.State) *policy.Result {
+		if s.Facts().Response.Intent != policy.FinalIntentError || s.Facts().Response.Text != fallbackSynthesize {
+			t.Error("fallback facts not exposed")
+		}
+		return &policy.Result{Decision: &policy.Decision{Action: policy.Reject, Reason: "no fallback"}}
+	}})
+	if got := a.loopRunner.finishRun(nil); got.Error == nil || got.FinalOutput != "" {
+		t.Fatalf("fallback bypassed guard: %+v", got)
+	}
+}
+
+func TestSynthesisStopsWhenFinalHookInterrupts(t *testing.T) {
+	a, _ := newTestAgentWithLLM(types.StreamToken{Content: "interrupted"})
+	a.deps.gov.Register(policy.Hook{Name: "interrupt", Point: policy.Stop, On: func(policy.State) *policy.Result {
+		reason := policy.StopInterrupted
+		return &policy.Result{Stop: &reason}
+	}})
+	if got := a.loopRunner.finishRun(nil); !got.Interrupted || a.run.finalPersisted {
+		t.Fatalf("synthesis ignored interruption: %+v", got)
+	}
+}
+
+func TestSteeringDuringPreModelDoesNotBecomeGuardRejection(t *testing.T) {
+	a, llm := newTestAgentWithLLM(types.StreamToken{Content: "continued"})
+	calls := 0
+	a.deps.gov.Register(policy.Hook{Name: "steer", Point: policy.PreModel, Run: func(ctx context.Context, _ policy.State) (*policy.Result, error) {
+		calls++
+		if calls == 1 {
+			if err := a.TrySteer("updated task"); err != nil {
+				t.Fatal(err)
+			}
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return nil, nil
+	}})
+	before := a.deps.ctxMgr.Len()
+	first := a.modelRunner.reason("initial task")
+	if !first.Interrupted || a.run.err != nil || llm.calls != 0 {
+		t.Fatalf("steering became rejection: %+v err=%v calls=%d", first, a.run.err, llm.calls)
+	}
+	if !a.turnRunner.retryAfterInterruptedReasoning(first, before) {
+		t.Fatal("steering did not resume")
+	}
+	next := a.modelRunner.reason("updated task")
+	if next.Interrupted || next.IsError || next.ActionInput != "continued" || llm.calls != 1 {
+		t.Fatalf("resume failed: %+v calls=%d", next, llm.calls)
 	}
 }

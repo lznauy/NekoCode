@@ -1,6 +1,7 @@
 package viewmodel
 
 import (
+	"strings"
 	"testing"
 
 	"nekocode/bot/provider/types"
@@ -28,18 +29,22 @@ func TestDisplayMessagesKeepsPersistentToolBlocks(t *testing.T) {
 	}
 }
 
-func TestDisplayMessagesTreatsPartialTaskWithErrorAsPartial(t *testing.T) {
+func TestDisplayMessagesKeepsPartialTaskDetailsVisible(t *testing.T) {
 	msgs := []types.Message{
 		{Role: "assistant", ToolCalls: []types.ToolCall{{ID: "task-call", Function: types.FunctionCall{Name: "task"}}}},
 		{Role: "tool", ToolCallID: "task-call", Content: "[Subagent returned a partial result]\ncompleted evidence\nremaining error", IsError: true},
 	}
 	got := DisplayMessages(msgs)
-	if len(got) != 1 || len(got[0].Blocks) != 1 {
-		t.Fatalf("partial task produced failure blocks: %+v", got)
+	if len(got) != 1 || len(got[0].Blocks) != 2 {
+		t.Fatalf("partial task display = %+v, want detail and summary", got)
 	}
-	block := got[0].Blocks[0]
-	if block.ToolName != "子任务" || block.Content != "未完成 1" || block.IsError {
-		t.Fatalf("partial task summary = %+v", block)
+	detail := got[0].Blocks[0]
+	if detail.ToolName != "子任务未完成" || !strings.Contains(detail.Content, "completed evidence") || !detail.IsError {
+		t.Fatalf("partial task detail = %+v", detail)
+	}
+	summary := got[0].Blocks[1]
+	if summary.ToolName != "子任务" || summary.Content != "未完成 1" || summary.IsError {
+		t.Fatalf("partial task summary = %+v", summary)
 	}
 }
 
@@ -247,15 +252,18 @@ func TestTaskHistoryPreservesSummaryFailuresAndResumeIdentity(t *testing.T) {
 		{Role: "tool", ToolCallID: "resume", Content: "[Subagent ID: child]\ncompleted content"},
 	}
 	got := DisplayMessages(msgs)
-	if len(got) != 2 || len(got[1].Blocks) != 2 {
+	if len(got) != 2 || len(got[1].Blocks) != 3 {
 		t.Fatalf("history = %+v", got)
 	}
 	blocks := got[1].Blocks
-	if blocks[0].ToolName != "子任务失败" || !blocks[0].IsError || blocks[0].Content != "could not start" {
-		t.Fatalf("failure = %+v", blocks[0])
+	if blocks[0].ToolName != "子任务未完成" || !blocks[0].IsError || !strings.Contains(blocks[0].Content, "partial content") {
+		t.Fatalf("partial = %+v", blocks[0])
 	}
-	if blocks[1].ToolName != "子任务" || blocks[1].Content != "完成 1 · 失败 1" {
-		t.Fatalf("summary = %+v", blocks[1])
+	if blocks[1].ToolName != "子任务失败" || !blocks[1].IsError || blocks[1].Content != "could not start" {
+		t.Fatalf("failure = %+v", blocks[1])
+	}
+	if blocks[2].ToolName != "子任务" || blocks[2].Content != "完成 1 · 失败 1" {
+		t.Fatalf("summary = %+v", blocks[2])
 	}
 	for offset := 0; offset < 2; offset++ {
 		page, err := DisplayMessagesPage(msgs, offset, 1)

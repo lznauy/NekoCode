@@ -210,15 +210,7 @@ func (a *Agent) injectHint(h *aggov.Hint) {
 	}
 }
 
-func collectHints(results []aggov.Result) []aggov.Hint {
-	var hints []aggov.Hint
-	for _, result := range results {
-		if result.Hint != nil {
-			hints = append(hints, *result.Hint)
-		}
-	}
-	return hints
-}
+func collectHints(results []aggov.Result) []aggov.Hint { return aggov.Resolve(results).Hints }
 
 func (a *Agent) applyTurnHints(hints []aggov.Hint) {
 	if len(a.run.pendingHints) > 0 {

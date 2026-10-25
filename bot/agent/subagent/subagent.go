@@ -23,7 +23,7 @@ import (
 const (
 	taskToolName                 = "task"
 	submitResultToolName         = "nekocode_submit_result"
-	maxSubAgentSteps             = agentprofile.MaxSteps
+	maxSubAgentSteps             = agentprofile.DefaultMaxSteps
 	maxCompletionProtocolRetries = 2
 )
 
@@ -92,8 +92,8 @@ func (s *runState) recordCalls(calls []core.ToolCallItem) {
 }
 
 func (e *Engine) Run(ctx context.Context, cfg RunConfig) (result *Result, runErr error) {
-	if cfg.Profile.MaxSteps < 0 || cfg.Profile.MaxSteps > maxSubAgentSteps {
-		return nil, fmt.Errorf("max_steps must be between 0 and %d", maxSubAgentSteps)
+	if cfg.Profile.MaxSteps < 0 || cfg.Profile.MaxSteps > agentprofile.MaxSteps {
+		return nil, fmt.Errorf("max_steps must be between 0 and %d", agentprofile.MaxSteps)
 	}
 	cfg.Profile = agentprofile.Clone(cfg.Profile)
 	if e.toolRegistry.Has(submitResultToolName) {
@@ -217,9 +217,10 @@ type engineRun struct {
 	checkpoint func(string, string) error
 	log        func(string, ...any)
 
-	step   int
-	result *Result
-	err    error
+	step       int
+	finalizing bool
+	result     *Result
+	err        error
 }
 
 func (r *engineRun) stepLimitReached() bool {
@@ -228,6 +229,15 @@ func (r *engineRun) stepLimitReached() bool {
 		limit = maxSubAgentSteps
 	}
 	if r.step < limit {
+		return false
+	}
+	if !r.finalizing {
+		r.finalizing = true
+		r.ctxMgr.Add("user",
+			"[Sub-agent completion protocol]\nThe tool-use step limit has been reached. Do not call ordinary tools or continue investigation. Submit the work already completed by calling "+submitResultToolName+" as the only tool call with every required handoff field. List any remaining work in unfinished.",
+			providertypes.MessageSourceRuntimeEvent,
+		)
+		r.phase("Waiting")
 		return false
 	}
 	r.log("max steps reached: step=%d", r.step)
@@ -244,7 +254,11 @@ func (r *engineRun) stepOnce() bool {
 	}
 
 	profile := r.cfg.Profile
-	calls, text, err := r.engine.reason(r.ctx, r.ctxMgr, profile.Tools, buildSkillWorkflow(r.cfg), r.state.addTokens(r.cfg), r.cfg.RecordLLMUsage, r.cfg.SessionID, r.phase, r.cfg)
+	allowedTools := profile.Tools
+	if r.finalizing {
+		allowedTools = nil
+	}
+	calls, text, err := r.engine.reason(r.ctx, r.ctxMgr, allowedTools, buildSkillWorkflow(r.cfg), r.state.addTokens(r.cfg), r.cfg.RecordLLMUsage, r.cfg.SessionID, r.phase, r.cfg)
 	r.ctxMgr.SetHints("")
 	if err != nil {
 		r.log("error: %v", err)
@@ -279,10 +293,21 @@ func (r *engineRun) stepOnce() bool {
 	if len(calls) == 0 {
 		return r.retryCompletionProtocol("response ended without submit_result")
 	}
+	if r.finalizing {
+		const reason = "tool-use step limit reached; only submit_result is allowed"
+		r.rejectToolBatch(calls, reason)
+		r.result = buildProtocolPartialResult(r.state.lastText, reason, r.state.meta(r.ctxMgr))
+		r.phase("done")
+		return true
+	}
 
 	r.state.completionRetries = 0
 	r.state.recordCalls(calls)
-	r.engine.executeToolBatch(r.ctx, r.cfg, r.ctxMgr, r.executor, calls, r.state, r.phase, r.log)
+	if err := r.engine.executeToolBatch(r.ctx, r.cfg, r.ctxMgr, r.executor, calls, r.state, r.phase, r.log); err != nil {
+		r.err = err
+		r.result = buildFailedResult(err.Error(), r.state.meta(r.ctxMgr))
+		return true
+	}
 	r.phase("Waiting")
 	r.step++
 	return false

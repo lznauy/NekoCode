@@ -5,7 +5,7 @@
 编辑器插件、CI 脚本、IM/机器人后端或自研客户端。
 
 - 协议版本：`nekocode-headless/2`（NekoCode 自有的双向 NDJSON 协议）。
-- 完整线协议契约见 [`docs/STREAM_JSON.md`](../docs/STREAM_JSON.md)。
+- 完整线协议契约见 [`docs/developers/STREAM_JSON.md`](../docs/developers/STREAM_JSON.md)。
 - 本 README 面向**接入开发**：怎么起、怎么发、怎么收、怎么处理审批与错误。
 
 > 本包当前是仓库内部包（`module nekocode`），第三方主要应通过**子进程**方式接入；
@@ -330,7 +330,7 @@ system prompt / JSON Schema / prompt suggestions（带非空值时 `initialize` 
 标准 runtime 自动填充这些标志。
 
 各方法是否可用以 capabilities 为准；字段与限制见
-[完整方法表](../docs/STREAM_JSON.md#初始化与能力发现)。
+[完整方法表](../docs/developers/STREAM_JSON.md#初始化与能力发现)。
 
 模型、权限、会话、回滚操作要求运行和队列均空闲。历史支持 offset/limit 分页。
 子代理生命周期通过 `system/nekocode_event` 转发 `subagent_started` / `subagent_ended`。同一任务可先有 `status=queued` 的 start，再有携带 `attempt_id`、`attempt_seq` 的 running start；宿主应合并 queued 占位，不重复计数。ended 的 `status` 区分完成、失败、中断和未开始，不能仅凭事件类型判断成功。
@@ -394,7 +394,7 @@ Unix 标准流阻塞模式恢复）。
 
 ## 参考
 
-- [`docs/STREAM_JSON.md`](../docs/STREAM_JSON.md) —— 完整线协议契约（以该文档为准）
-- [`docs/STREAM_JSON_GAPS.md`](../docs/STREAM_JSON_GAPS.md) —— 对标 Claude Code 的能力差距与借鉴优先级
+- [`docs/developers/STREAM_JSON.md`](../docs/developers/STREAM_JSON.md) —— 完整线协议契约（以该文档为准）
+- [`docs/plan/STREAM_JSON_GAPS.md`](../docs/plan/STREAM_JSON_GAPS.md) —— 协议尚未暴露的能力与后续阶段
 - [`runtime/`](../runtime) —— `Backend` 背后的运行时：run、事件、审批、提问
 - [`acp/`](../acp) —— 另一套 stdio 适配（ACP v1 / JSON-RPC），可作为对照实现

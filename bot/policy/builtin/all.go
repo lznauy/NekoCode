@@ -33,7 +33,7 @@ func Register(p *policy.Policy) {
 // existing file. It deliberately does not infer reads from shell command text
 // or accept an edit anchor as equivalent evidence.
 func ReadBeforeWriteHook() policy.Hook {
-	return policy.Hook{
+	return policy.Hook{Guard: true,
 		Name: "read_before_write", Point: policy.PreToolUse,
 		On: func(s policy.State) *policy.Result {
 			tool := s.Facts().Tool
@@ -59,7 +59,7 @@ func ReadBeforeWriteHook() policy.Hook {
 }
 
 func GarbledCircuitBreaker() policy.Hook {
-	return policy.Hook{
+	return policy.Hook{Guard: true,
 		Name: "garbled_circuit_breaker", Point: policy.Stop,
 		On: func(s policy.State) *policy.Result {
 			if s.Facts().Response.GarbledCount >= 5 {

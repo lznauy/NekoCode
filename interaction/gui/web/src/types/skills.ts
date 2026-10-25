@@ -26,6 +26,7 @@ export interface PluginView {
   hasHooks?: boolean
   activeAgents?: string[]
   agentError?: string
+ hookError?: string
 }
 
 export interface MCPServerView {

@@ -1,10 +1,10 @@
 package agent
 
 import (
+	"fmt"
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/policy"
 	"nekocode/bot/provider/types"
-	"nekocode/logger"
 	"nekocode/protocol"
 )
 
@@ -155,16 +155,9 @@ func (r *turnRunner) applyStopHooks(reasoning *reasoningResult, recordable bool,
 		intent = finalIntentForReasoning(reasoning)
 	}
 
-	for _, result := range a.deps.gov.BeforeStop(policy.TurnResult{
-		Intent:  intent,
-		Garbled: reasoning.GarbledToolCall,
-	}) {
-		handled, finished := r.applyStopHookResult(result, reasoning, recordable, callback)
-		if handled {
-			return true, finished
-		}
-	}
-	return false, false
+	out := policy.Resolve(a.deps.gov.BeforeStop(policy.TurnResult{Intent: intent, Garbled: reasoning.GarbledToolCall, Text: reasoning.ActionInput}, a.getCtx()))
+	return r.applyStopOutcome(out, reasoning, recordable, callback)
+
 }
 
 // finalIntentForReasoning maps a non-recordable response to the final-intent
@@ -220,26 +213,18 @@ func stepActionForReasoning(action actionType) protocol.StepAction {
 	}
 }
 
-// applyFinalPolicyBlock handles a policy-blocked final answer: it keeps
-// finalText in sync (leaving persistence to finishRun) and, if the retry
-// gate allows, injects a hint so the model answers within policy. Returns
-// true when a retry was scheduled.
+// A rejected answer is never committed as an accepted final response.
 func (r *turnRunner) applyFinalPolicyBlock(reasoning *reasoningResult, reason string) bool {
 	a := r.agent
 	if reason == "" {
 		reason = policyBlockFinal
 	}
-	a.run.lastText = reasoning.ActionInput
-	// Keep finalText in sync so finishRun won't fall through to Synthesize
-	// (which would otherwise append a spurious synthesized answer on top of
-	// the real final text the user already saw). finalPersisted stays false:
-	// the blocked text has NOT been appended to the context yet, so finishRun
-	// must persist it before returning (otherwise it vanishes on reload).
-	a.run.finalText = reasoning.ActionInput
-	a.run.finalPersisted = false
-
+	a.stream.discardText()
+	a.clearFinalState()
+	a.run.lastText = ""
 	if !a.gate.Try() {
-		logger.Log("[GOVERNANCE] response gate: retries exhausted, allowing through: %s", reason)
+		a.run.stopReason = policy.StopPolicyBlocked
+		a.run.err = fmt.Errorf("final answer rejected after retries: %s", reason)
 		return false
 	}
 	a.injectHint(&policy.Hint{Type: "policy_block", Severity: "critical", Content: reason})
@@ -252,60 +237,39 @@ func (r *turnRunner) applyFinalPolicyBlock(reasoning *reasoningResult, reason st
 // and BlockFinal inject critical hints, and a plain Hint is queued for the
 // next turn. Returns true when the run should finish.
 func (a *Agent) applyPostToolHookResult(result policy.Result) bool {
-	if result.Stop != nil {
-		a.run.stopReason = *result.Stop
-		a.clearFinalState()
-		return true
-	}
-	if result.RequireTool != nil {
-		a.injectHint(&policy.Hint{
-			Type:     "require_tool",
-			Severity: "critical",
-			Content:  policyRequireTool(result.RequireTool.Tool, result.RequireTool.Reason),
-		})
-	}
-	if result.BlockFinal != nil {
-		a.injectHint(&policy.Hint{Type: "block_final", Severity: "critical", Content: result.BlockFinal.Reason})
-	}
-	a.injectHint(result.Hint)
-	return false
+	return a.toolRunner.applyPolicyResults([]policy.Result{result})
 }
 
-// applyStopHookResult applies a single Stop hook result to the
-// current text turn: Stop ends the run keeping the recorded text,
-// BlockFinal/RequireTool go through the policy-block retry gate, and Hint
-// makes the model revise its answer. Returns handled=true when the result
-// took over the turn outcome.
-func (r *turnRunner) applyStopHookResult(result policy.Result, reasoning *reasoningResult, recordable bool, callback RunCallback) (handled, finished bool) {
+func (r *turnRunner) applyStopHookResult(result policy.Result, reasoning *reasoningResult, recordable bool, callback RunCallback) (bool, bool) {
+	return r.applyStopOutcome(policy.Resolve([]policy.Result{result}), reasoning, recordable, callback)
+}
+
+func (r *turnRunner) applyStopOutcome(out policy.Outcome, reasoning *reasoningResult, recordable bool, callback RunCallback) (bool, bool) {
 	a := r.agent
-	if result.Stop != nil {
-		a.run.stopReason = *result.Stop
-		r.recordReasoningText(reasoning, recordable)
+	switch out.Action {
+	case policy.Terminate:
+		a.run.hookStopped = true
+		a.run.stopReason = out.StopReason
+		if out.StopReason == policy.StopPolicyBlocked {
+			a.stream.discardText()
+			a.run.err = fmt.Errorf("hook stopped run: %s", out.Reason)
+			a.clearFinalState()
+		} else {
+			r.recordReasoningText(reasoning, recordable)
+		}
 		return true, true
-	}
-	if result.BlockFinal != nil {
-		if r.applyFinalPolicyBlock(reasoning, result.BlockFinal.Reason) {
-			return true, false
+	case policy.Reject:
+		for i := range out.Hints {
+			a.injectHint(&out.Hints[i])
 		}
-		return false, false
+		return true, !r.applyFinalPolicyBlock(reasoning, out.Reason)
 	}
-	if result.RequireTool != nil {
-		reason := policyRequireTool(result.RequireTool.Tool, result.RequireTool.Reason)
-		if r.applyFinalPolicyBlock(reasoning, reason) {
-			return true, false
+	if len(out.Hints) > 0 {
+		// One retry for the entire hint set, preserving every hook's guidance.
+		for i := 1; i < len(out.Hints); i++ {
+			a.injectHint(&out.Hints[i])
 		}
-		return false, false
-	}
-	if result.Hint != nil {
-		return true, r.applyStopHint(reasoning, result.Hint, recordable, callback)
+		return true, r.applyStopHint(reasoning, &out.Hints[0], recordable, callback)
 	}
 	return false, false
-}
-
-// policyRequireTool renders the hint text for a RequireTool hook result.
-func policyRequireTool(tool, reason string) string {
-	if tool != "" {
-		return "必须先调用 " + tool + "：" + reason
-	}
-	return reason
 }

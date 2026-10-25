@@ -58,15 +58,19 @@ func (r *modelRunner) reason(input string) *reasoningResult {
 func (r *modelRunner) callLLMForTool() (*llmstream.LLMCallResult, error) {
 	a := r.agent
 	toolDefs := core.ToToolDefs(a.deps.toolRegistry.Descriptors())
-	policyHints := r.preModelHints()
-	messages, err := a.deps.ctxMgr.PrepareRequest(a.getCtx(), contextmgr.ModelRequest{Tools: toolDefs, PolicyHints: policyHints, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient)})
+	ctx := a.getCtx()
+	policyHints, err := r.preModelHints(ctx)
+	if err != nil {
+		return nil, err
+	}
+	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{Tools: toolDefs, PolicyHints: policyHints, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient)})
 	if err != nil {
 		return nil, err
 	}
 
-	result, err := llmstream.CallLLMWithRetry(a.getCtx(), a.deps.llmClient, func() llmstream.LLMCallOptions {
+	result, err := llmstream.CallLLMWithRetry(ctx, a.deps.llmClient, func() llmstream.LLMCallOptions {
 		return llmstream.LLMCallOptions{
-			Ctx:         a.getCtx(),
+			Ctx:         ctx,
 			Messages:    messages,
 			ToolDefs:    toolDefs,
 			Callbacks:   r.streamCallbacks(),
@@ -101,18 +105,59 @@ func (r *modelRunner) callLLMForTool() (*llmstream.LLMCallResult, error) {
 // an unanswered run as answered, stranding the user message in the context.
 func (r *modelRunner) synthesize() string {
 	a := r.agent
+	if a.run.err != nil {
+		return ""
+	}
 	text, err := r.streamSynthesize(a.getCtx())
-	if err != nil || !usableFinalText(text) {
+	if a.run.err != nil {
 		a.stream.discardText()
+		return ""
+	}
+	usable := err == nil && usableFinalText(text)
+	garbled := isGarbledToolCall(text)
+	if !usable {
+		a.stream.discardText()
+		if a.getCtx().Err() != nil || errors.Is(err, context.Canceled) {
+			a.run.stopReason = policy.StopInterrupted
+			return ""
+		}
 		var budgetErr *contextmgr.RequestBudgetError
 		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && errors.As(err, &budgetErr) {
 			a.run.err = err
 			return ""
 		}
 		logger.Log("synthesize: LLM summary failed (err=%v), using fallback", err)
-		return fallbackSynthesize
+		text = fallbackSynthesize
 	}
-	a.deps.ctxMgr.AddAssistant(types.Message{Role: "assistant", Content: text})
+	if a.deps.gov != nil {
+		intent := policy.FinalIntentFinal
+		if !usable {
+			intent = policy.FinalIntentError
+		}
+		out := policy.Resolve(a.deps.gov.BeforeStop(policy.TurnResult{Intent: intent, Text: text, Garbled: garbled}, a.getCtx()))
+		// This is the terminal recovery path: no further generation or tool retries.
+		// Advisory hints remain observable; rejection must never become a fallback.
+		if out.Action == policy.Reject || (out.Action == policy.Terminate && out.StopReason == policy.StopPolicyBlocked) {
+			a.run.err = fmt.Errorf("final synthesis rejected by hook: %s", out.Reason)
+			a.run.stopReason = policy.StopPolicyBlocked
+			a.stream.discardText()
+			a.clearFinalState()
+			return ""
+		}
+		if out.Action == policy.Terminate {
+			a.run.hookStopped = true
+			a.run.stopReason = out.StopReason
+			if out.StopReason == policy.StopInterrupted {
+				a.stream.discardText()
+				return ""
+			}
+		}
+	}
+	if usable {
+		a.deps.ctxMgr.AddAssistant(types.Message{Role: "assistant", Content: text})
+		a.run.finalText = text
+		a.run.finalPersisted = true
+	}
 	return text
 }
 
@@ -123,7 +168,11 @@ func usableFinalText(text string) bool {
 
 func (r *modelRunner) streamSynthesize(ctx context.Context) (string, error) {
 	a := r.agent
-	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient), ExtraMessages: []types.Message{{Role: "user", Content: synthesizePrompt}}})
+	policyHints, err := r.preModelHints(ctx)
+	if err != nil {
+		return "", err
+	}
+	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{PolicyHints: policyHints, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient), ExtraMessages: []types.Message{{Role: "user", Content: synthesizePrompt}}})
 	if err != nil {
 		return "", err
 	}
@@ -142,16 +191,24 @@ func (r *modelRunner) streamSynthesize(ctx context.Context) (string, error) {
 	return result.Text, nil
 }
 
-func (r *modelRunner) preModelHints() string {
+func (r *modelRunner) preModelHints(ctx context.Context) (string, error) {
 	gov := r.agent.deps.gov
 	if gov == nil {
-		return ""
+		return "", nil
 	}
-	hints := collectHints(gov.BeforeModel())
+	out := policy.Resolve(gov.BeforeModel(ctx))
+	if out.StopReason == policy.StopInterrupted {
+		return "", context.Canceled
+	}
+	if out.Action != policy.Continue {
+		r.agent.run.err = fmt.Errorf("model request rejected by hook: %s", out.Reason)
+		return "", r.agent.run.err
+	}
+	hints := out.Hints
 	if len(hints) == 0 {
-		return ""
+		return "", nil
 	}
-	return policy.FormatHints(hints)
+	return policy.FormatHints(hints), nil
 }
 
 func (r *modelRunner) streamCallbacks() llmstream.StreamCallbacks {

@@ -1,5 +1,5 @@
 // Package headless implements NekoCode's versioned, bidirectional NDJSON
-// protocol for NekoCode hosts. See docs/STREAM_JSON.md for the supported contract.
+// protocol for NekoCode hosts. See docs/developers/STREAM_JSON.md for the supported contract.
 package headless
 
 import (

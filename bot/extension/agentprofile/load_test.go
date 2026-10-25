@@ -28,7 +28,9 @@ func TestAgentMDValidation(t *testing.T) {
 		{"lifecycle", "tools: [nekocode_submit_result]", "reserved", nil},
 		{"expansion", "base: explore\ntools: [Bash]", "exceeds base", nil},
 		{"unknown base", "base: root", "unknown base", nil},
-		{"limit", "max_steps: 51", "max_steps", nil},
+		{"raised limit", "max_steps: 120", "", nil},
+		{"maximum limit", "max_steps: 200", "", nil},
+		{"limit", "max_steps: 201", "max_steps", nil},
 		{"negative", "max_steps: -1", "max_steps", nil},
 		{"ignored field", "permissionMode: bypassPermissions", "field permissionMode", nil},
 		{"typo", "tool: [Read]", "field tool", nil},
@@ -52,6 +54,18 @@ func TestAgentMDValidation(t *testing.T) {
 				t.Fatalf("tools=%#v, want %#v", p.Tools, tc.tools)
 			}
 		})
+	}
+}
+
+func TestAgentMDRaisedStepLimit(t *testing.T) {
+	for _, tc := range []struct {
+		fields string
+		want   int
+	}{{"max_steps: 120", 120}, {"max_steps: 200", 200}} {
+		p, err := parse("---\nname: reviewer\n"+tc.fields+"\n---\nReview code.", knownTool)
+		if err != nil || p.MaxSteps != tc.want {
+			t.Fatalf("max_steps=%d, want %d, err=%v", p.MaxSteps, tc.want, err)
+		}
 	}
 }
 

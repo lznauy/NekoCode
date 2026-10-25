@@ -14,19 +14,15 @@ const defaultMaxRetries = 2
 
 // runState holds the mutable state of a single Run.
 type runState struct {
+	hookStopped bool
 	// Progress and termination.
 	step       int               // current iteration, capped by maxAgentSteps
 	stopReason policy.StopReason // why the run stopped; finishRun branches on it
 	err        error             // unrecoverable preparation failure
 
-	// Final-answer tri-state. lastText is the model's latest text of any
-	// kind (including errors) — finishRun's display fallback. finalText is
-	// the final-answer candidate (recordable text, or policy-blocked text).
-	// finalPersisted tracks whether finalText has already been appended to
-	// the context manager (via AddAssistantResponse). finishRun uses this to
-	// decide whether the returned FinalOutput still needs persisting — paths
-	// like applyFinalPolicyBlock set finalText without persisting, which used
-	// to lose the final answer on session reload.
+	// lastText is the latest model text. finalText holds an accepted final
+	// answer; rejected candidates are cleared. finalPersisted tracks whether
+	// that answer has already been appended to the context manager.
 	lastText       string
 	finalText      string
 	finalPersisted bool

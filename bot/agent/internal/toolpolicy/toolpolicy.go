@@ -3,6 +3,7 @@
 package toolpolicy
 
 import (
+	"context"
 	"os"
 
 	"nekocode/bot/extension/tool/runtime/core"
@@ -14,32 +15,30 @@ const defaultBlockReason = "blocked by policy"
 
 // Decision is the complete PreToolUse projection for one tool call.
 type Decision struct {
+	Terminated  bool
+	StopReason  policy.StopReason
 	BlockReason string
 	Hints       []policy.Hint
 }
 
 // Check evaluates one governance handle using the call's effective identity.
-func Check(gov *policy.Policy, call core.ToolCallItem) Decision {
+func Check(gov *policy.Policy, call core.ToolCallItem, contexts ...context.Context) Decision {
 	if gov == nil {
 		return Decision{}
 	}
 	name, args := call.Effective()
 	request := policy.ToolRequest{Name: name, Args: args, TargetExists: targetExists(name, args)}
-	var decision Decision
-	for _, result := range gov.BeforeTool(request) {
-		if result.Hint != nil {
-			decision.Hints = append(decision.Hints, *result.Hint)
-		}
-		if result.BlockTool != nil && (result.BlockTool.Tool == "" || result.BlockTool.Tool == name) {
-			decision.BlockReason = result.BlockTool.Reason
-			if decision.BlockReason == "" {
-				decision.BlockReason = defaultBlockReason
-			}
-		}
-		if result.Stop != nil {
-			decision.BlockReason = "blocked by stop policy: " + result.Stop.String()
+	results := gov.BeforeTool(request, contexts...)
+
+	outcome := policy.Resolve(results)
+	decision := Decision{Hints: outcome.Hints, Terminated: outcome.Action == policy.Terminate, StopReason: outcome.StopReason}
+	if outcome.Action != policy.Continue {
+		decision.BlockReason = outcome.Reason
+		if decision.BlockReason == "" {
+			decision.BlockReason = defaultBlockReason
 		}
 	}
+
 	return decision
 }
 

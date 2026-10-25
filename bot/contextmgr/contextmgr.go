@@ -33,6 +33,7 @@ type Manager struct {
 	usageRecorder       func(types.StreamUsage)
 	skillLoadedRecorder func(string)
 	compactionObserver  func(protocol.CompactionEvent)
+	compactionLifecycle func(context.Context, string)
 	sessionIDProvider   func() string
 	beforeCompaction    func(string) error
 	afterCompaction     func()

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"nekocode/bot/agent/internal/kernel"
 	"nekocode/bot/contextmgr"
@@ -76,7 +77,17 @@ func (r *loopRunner) runContext(ctx context.Context, input string, images []type
 		a.Abort()
 	}
 	defer r.logGovernanceSummary()
-	if ctx.Err() == nil {
+	if a.deps.gov != nil {
+		r.applyEntryOutcome(policy.Resolve(a.deps.gov.StartRun(a.getCtx(), input)))
+		defer func() {
+			intent := policy.FinalIntentFinal
+			if a.run.err != nil || a.getCtx().Err() != nil {
+				intent = policy.FinalIntentError
+			}
+			a.deps.gov.EndRun(a.getCtx(), policy.TurnResult{Intent: intent, Text: a.run.finalText})
+		}()
+	}
+	if ctx.Err() == nil && !a.life.Finished().Load() {
 		r.applyUserSubmitHooks()
 	}
 
@@ -199,10 +210,7 @@ func (r *loopRunner) applyUserSubmitHooks() {
 	if a.deps.gov == nil {
 		return
 	}
-	for _, h := range collectHints(a.deps.gov.OnUserSubmit()) {
-		h := h
-		a.injectHint(&h)
-	}
+	r.applyEntryOutcome(policy.Resolve(a.deps.gov.OnUserSubmit(a.getCtx())))
 }
 
 func (r *loopRunner) logGovernanceSummary() {
@@ -252,7 +260,13 @@ func (r *loopRunner) finishRun(callback RunCallback) *RunResult {
 	if a.run.err != nil {
 		return &RunResult{Error: a.run.err, Steps: a.run.step}
 	}
+	if a.run.hookStopped && a.run.finalText == "" {
+		return &RunResult{Steps: a.run.step}
+	}
 	output := r.resolveFinalOutput(callback)
+	if a.getCtx().Err() != nil || a.run.stopReason == policy.StopInterrupted {
+		return &RunResult{FinalOutput: msgInterrupted, Steps: a.run.step, Interrupted: true}
+	}
 	if a.run.err != nil {
 		return &RunResult{Error: a.run.err, Steps: a.run.step}
 	}
@@ -265,10 +279,8 @@ func (r *loopRunner) resolveFinalOutput(callback RunCallback) string {
 	a := r.agent
 	if a.run.stopReason == policy.StopCompleted {
 		if a.run.finalText != "" {
-			// Persist the final answer if it hasn't been already. Recordable
-			// chat turns set finalPersisted=true; policy-block paths leave it
-			// false, so the text the user saw would otherwise be absent from
-			// the saved session.
+			// Persist an accepted answer if its producing path has not already
+			// appended it. Rejected candidates are never stored in finalText.
 			if !a.run.finalPersisted {
 				a.deps.ctxMgr.AddAssistant(types.Message{Role: "assistant", Content: a.run.finalText})
 				a.run.finalPersisted = true
@@ -280,12 +292,23 @@ func (r *loopRunner) resolveFinalOutput(callback RunCallback) string {
 		}
 	}
 	output := a.modelRunner.synthesize()
-	if a.run.err != nil {
+	if a.run.err != nil || a.run.stopReason == policy.StopInterrupted || a.getCtx().Err() != nil {
 		return ""
 	}
-	a.run.finalPersisted = true
 	if callback != nil {
 		callback(protocol.StepEvent{Action: protocol.StepActionChat, Output: output})
 	}
 	return output
+}
+
+func (r *loopRunner) applyEntryOutcome(out policy.Outcome) {
+	for i := range out.Hints {
+		r.agent.injectHint(&out.Hints[i])
+	}
+	if out.Action != policy.Continue {
+		r.agent.run.err = fmt.Errorf("hook stopped run: %s", out.Reason)
+		r.agent.run.stopReason = policy.StopPolicyBlocked
+		r.agent.clearFinalState()
+		r.agent.life.Finished().Store(true)
+	}
 }

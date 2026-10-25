@@ -692,7 +692,7 @@ func TestRuntimeHTTPAPIDocCoversRegisteredRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read httpapi.go: %v", err)
 	}
-	doc, err := os.ReadFile("../../docs/RUNTIME_HTTP_API.md")
+	doc, err := os.ReadFile("../../docs/developers/RUNTIME_HTTP_API.md")
 	if err != nil {
 		t.Fatalf("read api doc: %v", err)
 	}
@@ -701,7 +701,7 @@ func TestRuntimeHTTPAPIDocCoversRegisteredRoutes(t *testing.T) {
 	documented := parseDocumentedRoutes(string(doc))
 	for _, route := range registered {
 		if !documented[route] {
-			t.Fatalf("route %s is registered but missing from docs/RUNTIME_HTTP_API.md", route)
+			t.Fatalf("route %s is registered but missing from docs/developers/RUNTIME_HTTP_API.md", route)
 		}
 	}
 }

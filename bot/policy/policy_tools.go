@@ -1,13 +1,14 @@
 package policy
 
 import (
+	"context"
 	"nekocode/bot/policy/ledger"
 )
 
 // BeforeTool evaluates deterministic tool guards before execution. Resource
 // usage remains observable but is not promoted to a hard limit because whether
 // another read is useful depends on the task.
-func (p *Policy) BeforeTool(request ToolRequest) []Result {
+func (p *Policy) BeforeTool(request ToolRequest, contexts ...context.Context) []Result {
 	if p == nil {
 		return nil
 	}
@@ -20,7 +21,7 @@ func (p *Policy) BeforeTool(request ToolRequest) []Result {
 		TargetExists:  request.TargetExists,
 		TargetWasRead: target != "" && p.ledger.WasRead(target),
 	}
-	return p.evaluate(PreToolUse, tool)
+	return p.evaluate(PreToolUse, tool, contexts...)
 }
 
 // RecordTool records one event without evaluating batch hooks. Subagents use
@@ -52,7 +53,7 @@ func (p *Policy) RecordAuditTool(result ToolResult) {
 }
 
 // RecordTools records one executed batch and evaluates post-tool hooks.
-func (p *Policy) RecordTools(results []ToolResult) []Result {
+func (p *Policy) RecordTools(results []ToolResult, contexts ...context.Context) []Result {
 	if p == nil {
 		return nil
 	}
@@ -63,14 +64,17 @@ func (p *Policy) RecordTools(results []ToolResult) []Result {
 			continue
 		}
 		tool := ToolFacts{
-			Name:  result.Name,
-			Args:  result.Args,
-			Error: result.Error != "",
+			Name:   result.Name,
+			Args:   result.Args,
+			Error:  result.Error != "",
+			Output: result.Output, ErrorMessage: result.Error,
 		}
-		decisions = append(decisions, p.evaluate(PostToolUse, tool)...)
+		decisions = append(decisions, p.evaluate(PostToolUse, tool, contexts...)...)
 	}
 
-	return append(decisions, p.evaluate(PostToolBatch, ToolFacts{})...)
+	facts := p.facts(ToolFacts{})
+	facts.Batch = results
+	return append(decisions, p.hooks.evaluate(PostToolBatch, facts, contexts...)...)
 }
 
 func targetPath(toolName string, args map[string]any) string {

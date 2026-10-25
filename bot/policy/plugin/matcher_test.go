@@ -2,29 +2,32 @@ package plugin
 
 import "testing"
 
-func TestMatchToolRegexAndInvalidPattern(t *testing.T) {
-	if !matchTool("web_.*", "web_search") {
-		t.Fatal("regex matcher should match web_search")
+func TestCompileMatcher(t *testing.T) {
+	for _, tc := range []struct {
+		pattern, tool string
+		want          bool
+	}{
+		{"", "anytool", true},
+		{".*", "anytool", true},
+		{"web_.*", "web_search", true},
+		{"read", "read", true},
+		{"read", "write", false},
+		{"read|write", "write", true},
+		{"read|write", "overwrite", false},
+		{"read_(file|dir)", "read_file", true},
+		{"read_(file|dir)", "read_dir", true},
+	} {
+		t.Run(tc.pattern+"/"+tc.tool, func(t *testing.T) {
+			matcher, err := compileMatcher(tc.pattern)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := matcher.MatchString(tc.tool); got != tc.want {
+				t.Fatalf("match=%v, want %v", got, tc.want)
+			}
+		})
 	}
-	if matchTool("[", "read") {
-		t.Fatal("invalid regex matcher should not match")
-	}
-}
-
-func TestMatchTool(t *testing.T) {
-	if !matchTool("", "anytool") {
-		t.Error("empty matcher should match all")
-	}
-	if !matchTool(".*", "anytool") {
-		t.Error(".* should match all")
-	}
-	if !matchTool("read", "read") {
-		t.Error("exact name should match")
-	}
-	if !matchTool("read|write", "write") {
-		t.Error("alt pattern should match")
-	}
-	if matchTool("read", "write") {
-		t.Error("exact name should not mismatch")
+	if _, err := compileMatcher("["); err == nil {
+		t.Fatal("invalid pattern accepted")
 	}
 }

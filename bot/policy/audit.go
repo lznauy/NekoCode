@@ -3,7 +3,6 @@ package policy
 import (
 	"fmt"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -12,33 +11,47 @@ import (
 
 const maxHookAuditEvents = 64
 
-type hookAudit struct {
-	Session string
-	Hook    string
-	Point   HookPoint
-	Tool    string
-	Action  string
-	Detail  string
-	Trigger string
+// HookEvent is one bounded audit record; it contains no private state values.
+type HookEvent struct {
+	EvaluationID   uint64    `json:"evaluation_id"`
+	RunID          string    `json:"run_id"`
+	ActorID        string    `json:"actor_id"`
+	StateCommitted bool      `json:"state_committed"`
+	StateEntries   int       `json:"state_entries"`
+	StateBytes     int       `json:"state_bytes"`
+	DurationMS     int64     `json:"duration_ms"`
+	SessionID      string    `json:"session_id"`
+	Hook           string    `json:"hook"`
+	Point          HookPoint `json:"point"`
+	Tool           string    `json:"tool"`
+	Action         string    `json:"action"`
+	Detail         string    `json:"detail"`
+	Trigger        string    `json:"trigger"`
 }
 
-func (e hookAudit) String() string {
+func (e HookEvent) String() string {
 	if e.Detail == "" {
 		return fmt.Sprintf("%s@%s:%s", e.Hook, e.Point, e.Action)
 	}
 	return fmt.Sprintf("%s@%s:%s(%s)", e.Hook, e.Point, e.Action, truncateAuditDetail(e.Detail))
 }
 
-func hookAuditEvent(h Hook, point HookPoint, state State, result *Result, session string) hookAudit {
+func hookAuditEvent(h Hook, point HookPoint, state State, result *Result, session string) HookEvent {
 	facts := state.Facts()
-	event := hookAudit{
-		Session: session,
-		Hook:    h.Name,
-		Point:   point,
-		Tool:    facts.Tool.Name,
-		Trigger: hookTrigger(h, state),
+	event := HookEvent{
+		SessionID: session,
+		Hook:      h.Name,
+		Point:     point,
+		Tool:      facts.Tool.Name,
+		Trigger:   hookTrigger(h, state),
 	}
 	switch {
+	case result.Decision != nil:
+		event.Action = string(result.Decision.Action)
+		event.Detail = result.Decision.Reason
+	case len(result.Hints) > 0:
+		event.Action = "hints"
+		event.Detail = strconv.Itoa(len(result.Hints))
 	case result.Stop != nil:
 		event.Action = "stop"
 		event.Detail = result.Stop.String()
@@ -58,65 +71,34 @@ func hookAuditEvent(h Hook, point HookPoint, state State, result *Result, sessio
 			event.Detail += "/" + result.Hint.Severity
 		}
 	default:
-		event.Action = "state_patch"
+		event.Action = "continue"
 	}
 	return event
 }
 
-func logHookAudit(event hookAudit) {
-	logger.Log("hook_audit session=%s point=%s hook=%s action=%s tool=%s trigger={%s} detail=%q",
-		emptyAsDash(event.Session), event.Point, event.Hook, event.Action, emptyAsDash(event.Tool), event.Trigger, event.Detail)
-}
-
-func emptyAsDash(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
+func logHookAudit(event HookEvent) {
+	logger.Log("hook_audit session=%q run=%q actor=%q evaluation_id=%d point=%s hook=%q action=%s tool=%q trigger={%s} detail=%q duration_ms=%d state_committed=%t state_entries=%d state_bytes=%d",
+		event.SessionID, event.RunID, event.ActorID, event.EvaluationID, event.Point, event.Hook, event.Action, event.Tool, event.Trigger, event.Detail, event.DurationMS, event.StateCommitted, event.StateEntries, event.StateBytes)
 }
 
 // hookTrigger renders the audit trigger context for a fired hook. Hooks that
 // carry a DescribeTrigger describe themselves (keeping trigger details and
-// thresholds next to the hook logic); anything else falls back to tool args.
+// thresholds next to the hook logic); other hooks expose counts, never raw args.
 func hookTrigger(h Hook, state State) string {
 	if h.DescribeTrigger != nil {
 		return h.DescribeTrigger(state)
 	}
-	return formatToolArgs(state.Facts().Tool.Args)
+	return fmt.Sprintf("args_count=%d", len(state.Facts().Tool.Args))
 }
 
-func quoteArg(v any) string {
-	s, ok := v.(string)
-	if !ok || s == "" {
-		return "-"
-	}
-	return strconv.Quote(truncateAuditDetail(s))
-}
-
-func formatToolArgs(args map[string]any) string {
-	if len(args) == 0 {
-		return "args=-"
-	}
-	keys := make([]string, 0, len(args))
-	for k := range args {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, k+"="+quoteArg(args[k]))
-	}
-	return "args=" + strings.Join(parts, ",")
-}
-
-func recentHookAudit(events []hookAudit, n int) []hookAudit {
+func recentHookAudit(events []HookEvent, n int) []HookEvent {
 	if len(events) > n {
 		events = events[len(events)-n:]
 	}
 	return slices.Clone(events)
 }
 
-func formatHookAudit(events []hookAudit) string {
+func formatHookAudit(events []HookEvent) string {
 	parts := make([]string, 0, len(events))
 	for _, event := range events {
 		parts = append(parts, event.String())
@@ -124,7 +106,7 @@ func formatHookAudit(events []hookAudit) string {
 	return strings.Join(parts, ", ")
 }
 
-func formatHookEventSummary(events []hookAudit) string {
+func formatHookEventSummary(events []HookEvent) string {
 	counts := make(map[string]int)
 	var order []string
 	for _, event := range events {
@@ -170,4 +152,19 @@ func FormatHints(hints []Hint) string {
 	}
 	b.WriteString("</runtime_policy_hints>")
 	return b.String()
+}
+
+// Proposals and the resolved control are distinct audit records. Runtime
+// consumers execute the resolved control; lifecycle observers never control.
+func logHookResolution(session, runID string, evaluationID uint64, point HookPoint, out Outcome) {
+	logger.Log("hook_resolved session=%q run=%q evaluation_id=%d point=%s action=%s stop_reason=%s hints=%d reason=%q", session, runID, evaluationID, point, out.Action, out.StopReason, len(out.Hints), out.Reason)
+}
+
+func safeHookAuditEvent(h Hook, point HookPoint, s State, r *Result, session string) (event HookEvent) {
+	defer func() {
+		if recover() != nil {
+			event = HookEvent{SessionID: session, Hook: h.Name, Point: point, Action: "audit_error"}
+		}
+	}()
+	return hookAuditEvent(h, point, s, r, session)
 }

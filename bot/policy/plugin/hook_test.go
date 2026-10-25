@@ -15,9 +15,9 @@ func TestValidatePluginOutputRejectsSchemaFailures(t *testing.T) {
 	}
 }
 
-func TestRunFirstPluginActionSkipsUnsupportedActionTypes(t *testing.T) {
-	got := runFirstPluginAction(t.TempDir(), "PreToolUse", Event{}, []hookAction{{Type: "unknown", Command: "echo bad"}})
-	if got != nil {
-		t.Fatalf("unsupported action result = %+v, want nil", got)
+func TestRunFirstPluginActionRejectsUnsupportedActionTypes(t *testing.T) {
+	got := runPluginActions(t.TempDir(), "PreToolUse", Event{}, []hookAction{{Type: "unknown", Command: "echo bad"}})
+	if got == nil || got.Err == nil {
+		t.Fatalf("unsupported action result = %+v, want error", got)
 	}
 }

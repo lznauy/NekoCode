@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -54,6 +53,9 @@ func (r *toolRunner) executeAndFeedback(calls []core.ToolCallItem, textContent s
 	msgs := emitResultCallbacks(calls, filtered.Blocked, results, callback)
 	r.addToolResultsAndHints(calls, msgs, filtered.PreToolHints)
 
+	if filtered.Terminated {
+		return true
+	}
 	if r.applyPolicyResults(policyResults) {
 		return true
 	}
@@ -62,10 +64,24 @@ func (r *toolRunner) executeAndFeedback(calls []core.ToolCallItem, textContent s
 }
 
 func (r *toolRunner) applyPolicyResults(results []policy.Result) bool {
-	return slices.ContainsFunc(results, r.agent.applyPostToolHookResult)
+	out := policy.Resolve(results)
+	for i := range out.Hints {
+		r.agent.injectHint(&out.Hints[i])
+	}
+	if out.Action == policy.Terminate {
+		r.agent.run.hookStopped = true
+		r.agent.run.stopReason = out.StopReason
+		if out.StopReason == policy.StopPolicyBlocked {
+			r.agent.run.err = fmt.Errorf("hook stopped run: %s", out.Reason)
+		}
+		r.agent.clearFinalState()
+		return true
+	}
+	return false
 }
 
 type filteredCalls struct {
+	Terminated   bool
 	Allowed      []core.ToolCallItem
 	AllowedIdx   []int // original index in the caller's calls slice, parallel to Allowed
 	Blocked      map[int]string
@@ -78,13 +94,31 @@ func (r *toolRunner) filterToolCalls(calls []core.ToolCallItem) filteredCalls {
 		Blocked: make(map[int]string),
 	}
 	for i, c := range calls {
-		if r.applyPreToolPolicy(effectiveToolCall(c), out.Blocked, i, &out.PreToolHints) {
+		decision := toolpolicy.Check(r.agent.deps.gov, effectiveToolCall(c), r.agent.getCtx())
+		for j := range decision.Hints {
+			hint := decision.Hints[j]
+			out.PreToolHints = append(out.PreToolHints, &hint)
+		}
+		if decision.Terminated {
+			out.Terminated = true
+			r.agent.run.stopReason = decision.StopReason
+			r.agent.run.err = fmt.Errorf("tool execution stopped by hook: %s", decision.BlockReason)
+			r.agent.clearFinalState()
+			for j := range calls {
+				out.Blocked[j] = decision.BlockReason
+			}
+			out.Allowed = nil
+			out.AllowedIdx = nil
+			break
+		}
+		if decision.BlockReason != "" {
+			out.Blocked[i] = decision.BlockReason
 			continue
 		}
-
 		out.Allowed = append(out.Allowed, c)
 		out.AllowedIdx = append(out.AllowedIdx, i)
 	}
+
 	return out
 }
 
@@ -93,19 +127,6 @@ func effectiveToolCall(call core.ToolCallItem) core.ToolCallItem {
 	call.Name = name
 	call.Args = args
 	return call
-}
-
-func (r *toolRunner) applyPreToolPolicy(c core.ToolCallItem, blocked map[int]string, idx int, hints *[]*policy.Hint) bool {
-	decision := toolpolicy.Check(r.agent.deps.gov, c)
-	for i := range decision.Hints {
-		hint := decision.Hints[i]
-		*hints = append(*hints, &hint)
-	}
-	if decision.BlockReason != "" {
-		blocked[idx] = decision.BlockReason
-		return true
-	}
-	return false
 }
 
 func emitStartCallbacks(calls []core.ToolCallItem, blocked map[int]string, callback RunCallback) {
@@ -194,7 +215,7 @@ func (r *toolRunner) recordToolResults(calls []core.ToolCallItem, blocked map[in
 			Error:  results[i].Error,
 		})
 	}
-	return gov.RecordTools(events)
+	return gov.RecordTools(events, r.agent.getCtx())
 }
 
 func (r *toolRunner) addToolResultsAndHints(calls []core.ToolCallItem, msgs []types.Message, preToolHints []*policy.Hint) {

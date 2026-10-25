@@ -123,7 +123,7 @@ func (e *Engine) newExecutor(cfg RunConfig) (*runner.Executor, func()) {
 	}
 }
 
-func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ctxmgr.Manager, executor *runner.Executor, calls []core.ToolCallItem, state *runState, phase func(string), subLog func(string, ...any)) {
+func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ctxmgr.Manager, executor *runner.Executor, calls []core.ToolCallItem, state *runState, phase func(string), subLog func(string, ...any)) error {
 	profile := cfg.Profile
 	allowedNames := make(map[string]struct{}, len(profile.Tools))
 	for _, name := range profile.Tools {
@@ -134,6 +134,7 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 	allowed := make([]core.ToolCallItem, 0, len(calls))
 	var preToolHints []policy.Hint
 	var toolNames []string
+	var terminal error
 	for i, c := range calls {
 		c = e.toolRegistry.EnrichCall(c)
 		calls[i] = c
@@ -143,8 +144,16 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 			blocked[i] = fmt.Sprintf("tool %q is disabled by sub-agent profile %q", name, profile.Name)
 			continue
 		}
-		guardDecision := toolpolicy.Check(cfg.guard, c)
+		guardDecision := toolpolicy.Check(cfg.guard, c, ctx)
 		preToolHints = append(preToolHints, guardDecision.Hints...)
+		if guardDecision.Terminated {
+			terminal = fmt.Errorf("subagent stopped by hook: %s", guardDecision.BlockReason)
+			for j := range calls {
+				blocked[j] = terminal.Error()
+			}
+			allowed = nil
+			break
+		}
 		if guardDecision.BlockReason != "" {
 			blocked[i] = guardDecision.BlockReason
 			continue
@@ -224,6 +233,8 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 			cfg.Policy.RecordAuditTool(result)
 		}
 	}
+
+	return terminal
 }
 
 func profileAllowsCall(allowed map[string]struct{}, call core.ToolCallItem) bool {

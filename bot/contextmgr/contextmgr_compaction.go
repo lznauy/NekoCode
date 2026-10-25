@@ -139,6 +139,7 @@ func (m *Manager) compact(ctx context.Context, force bool) (applied bool, result
 	var streamed strings.Builder
 	m.usageMu.RLock()
 	observer := m.compactionObserver
+	lifecycle := m.compactionLifecycle
 	m.usageMu.RUnlock()
 	emit := func() {
 		if observer != nil {
@@ -148,6 +149,15 @@ func (m *Manager) compact(ctx context.Context, force bool) (applied bool, result
 	defer func() {
 		if !started {
 			return
+		}
+		if lifecycle != nil {
+			phase := "failed"
+			if applied {
+				phase = "completed"
+			}
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+			lifecycle(cleanup, phase)
+			cancel()
 		}
 		ev.Delta = ""
 		ev.ElapsedMs = time.Since(start).Milliseconds()
@@ -191,6 +201,9 @@ func (m *Manager) compact(ctx context.Context, force bool) (applied bool, result
 		// replay its stale Started event.
 		inner := summarizer
 		summarizer = func(messages []types.Message, previous string) (string, error) {
+			if !started && lifecycle != nil {
+				lifecycle(ctx, "started")
+			}
 			started = true
 			ev.Status = protocol.CompactionStarted
 			emit()
@@ -417,4 +430,12 @@ func cloneCompactor(src *replacementCompactor) *replacementCompactor {
 	}
 	copy := *src
 	return &copy
+}
+
+// SetCompactionLifecycle observes actual summary attempts, including failures.
+// The callback runs outside state locks, using the caller's cancellation.
+func (m *Manager) SetCompactionLifecycle(fn func(context.Context, string)) {
+	m.usageMu.Lock()
+	defer m.usageMu.Unlock()
+	m.compactionLifecycle = fn
 }

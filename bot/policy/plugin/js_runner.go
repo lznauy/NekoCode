@@ -1,9 +1,10 @@
 package plugin
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"os"
+	"nekocode/bot/policy/contract"
 	"path/filepath"
 	"strings"
 	"time"
@@ -13,14 +14,18 @@ import (
 
 const maxPluginReadFileBytes = 64 * 1024
 
-type pluginSchemaError struct{ err error }
-
-func (e pluginSchemaError) Error() string { return e.err.Error() }
-
 func runPluginJS(pluginRoot string, event Event, action hookAction) (*Result, error) {
-	source, name, err := jsSource(pluginRoot, action)
-	if err != nil {
-		return nil, err
+	event = contract.NormalizeEvent(event)
+	program := action.program
+	if program == nil {
+		source, name, err := jsSource(pluginRoot, action)
+		if err != nil {
+			return nil, err
+		}
+		program, err = goja.Compile(name, source, false)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	timeout := action.Timeout
@@ -28,14 +33,21 @@ func runPluginJS(pluginRoot string, event Event, action hookAction) (*Result, er
 		timeout = 5000
 	}
 
+	ctx, cancel := context.WithTimeout(eventContext(event), time.Duration(timeout)*time.Millisecond)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	vm := goja.New()
-	timer := time.AfterFunc(time.Duration(timeout)*time.Millisecond, func() {
-		vm.Interrupt("plugin JS hook timed out")
-	})
-	defer timer.Stop()
+	stop := context.AfterFunc(ctx, func() { vm.Interrupt(ctx.Err()) })
+	defer stop()
 
 	var logs []string
-	jsEvent := eventObject(event)
+	jsEvent, err := eventObject(event)
+	if err != nil {
+		return nil, fmt.Errorf("encode hook event: %w", err)
+	}
+	jsEvent["pluginRoot"] = pluginRoot
 	if err := vm.Set("event", jsEvent); err != nil {
 		return nil, fmt.Errorf("set event: %w", err)
 	}
@@ -55,7 +67,7 @@ func runPluginJS(pluginRoot string, event Event, action hookAction) (*Result, er
 		return nil, fmt.Errorf("set readFile: %w", err)
 	}
 
-	value, err := vm.RunScript(name, source)
+	value, err := vm.RunProgram(program)
 	if err != nil {
 		return nil, err
 	}
@@ -85,19 +97,22 @@ func runPluginJS(pluginRoot string, event Event, action hookAction) (*Result, er
 	return result, nil
 }
 
-func eventObject(event Event) map[string]any {
-	return map[string]any{
-		"tool":       event.Tool,
-		"error":      event.Error,
-		"pluginRoot": "",
-		"state": map[string]any{
-			"ints":    map[string]int{},
-			"strings": map[string]string{},
-		},
+func eventObject(event Event) (map[string]any, error) {
+	// JSON-shaped values give JS and command handlers identical field names.
+	event = contract.NormalizeEvent(event)
+	raw, err := json.Marshal(event)
+	if err != nil {
+		return nil, err
 	}
+	var out map[string]any
+	err = json.Unmarshal(raw, &out)
+	return out, err
 }
 
 func jsSource(pluginRoot string, action hookAction) (source, name string, err error) {
+	if len(action.Code) > maxPluginSourceBytes {
+		return "", "", fmt.Errorf("JS source exceeds 1 MiB")
+	}
 	if action.Code != "" {
 		return action.Code, "inline-plugin-hook.js", nil
 	}
@@ -108,9 +123,9 @@ func jsSource(pluginRoot string, action hookAction) (source, name string, err er
 	if err != nil {
 		return "", "", err
 	}
-	data, err := os.ReadFile(path)
+	data, err := readLimitedFile(path, maxPluginSourceBytes)
 	if err != nil {
-		return "", "", fmt.Errorf("read js hook: %w", err)
+		return "", "", err
 	}
 	return string(data), filepath.Clean(action.Path), nil
 }
@@ -121,11 +136,14 @@ func decodeJSResult(value goja.Value, schema []byte) (*Result, error) {
 	}
 	exported := value.Export()
 	if s, ok := exported.(string); ok {
+		if len(s) > maxPluginOutputBytes {
+			return nil, fmt.Errorf("JS result exceeds %d bytes", maxPluginOutputBytes)
+		}
 		if strings.TrimSpace(s) == "" {
 			return nil, nil
 		}
 		if err := validatePluginOutput(schema, s); err != nil {
-			return nil, pluginSchemaError{err: err}
+			return nil, err
 		}
 		return &Result{Hint: &Hint{Type: "plugin_output", Severity: "info", Content: s}}, nil
 	}
@@ -135,63 +153,47 @@ func decodeJSResult(value goja.Value, schema []byte) (*Result, error) {
 		return nil, fmt.Errorf("marshal js result: %w", err)
 	}
 	if err := validatePluginOutput(schema, string(raw)); err != nil {
-		return nil, pluginSchemaError{err: err}
+		return nil, err
+	}
+	if len(raw) > maxPluginOutputBytes {
+		return nil, fmt.Errorf("JS result exceeds %d bytes", maxPluginOutputBytes)
 	}
 	return decodeStructuredResult(raw)
 }
 
 func decodeStructuredResult(raw []byte) (*Result, error) {
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil, fmt.Errorf("js result must be an object: %w", err)
+	var fields map[string]json.RawMessage
+	if err := strictJSON(raw, &fields); err != nil || fields == nil {
+		return nil, fmt.Errorf("hook result must be an object")
 	}
-	if len(m) == 0 {
-		return nil, nil
+	for _, pair := range [][2]string{{"blockTool", "block_tool"}, {"requireTool", "require_tool"}, {"blockFinal", "block_final"}, {"statePatch", "state_patch"}} {
+		if value, ok := fields[pair[0]]; ok {
+			if _, exists := fields[pair[1]]; exists {
+				return nil, fmt.Errorf("duplicate result field %s", pair[1])
+			}
+			fields[pair[1]] = value
+			delete(fields, pair[0])
+		}
 	}
-
-	var out Result
-	if err := decodeField(m, "hint", "hint", &out.Hint); err != nil {
+	// Legacy JS hooks returned stop:{reason:...}; canonical stop is a decision.
+	if stop, ok := fields["stop"]; ok && len(stop) > 0 && stop[0] == '{' {
+		var legacy struct {
+			Reason string `json:"reason"`
+		}
+		if err := strictJSON(stop, &legacy); err != nil {
+			return nil, err
+		}
+		fields["stop"], _ = json.Marshal(legacy.Reason)
+	}
+	encoded, _ := json.Marshal(fields)
+	var result Result
+	if err := strictJSON(encoded, &result); err != nil {
+		return nil, fmt.Errorf("decode hook result: %w", err)
+	}
+	if _, err := contract.Control(result); err != nil {
 		return nil, err
 	}
-	if err := decodeField(m, "stop", "stop", &out.Stop); err != nil {
-		return nil, err
-	}
-	if err := decodeField(m, "block_tool", "blockTool", &out.BlockTool); err != nil {
-		return nil, err
-	}
-	if err := decodeField(m, "require_tool", "requireTool", &out.RequireTool); err != nil {
-		return nil, err
-	}
-	if err := decodeField(m, "block_final", "blockFinal", &out.BlockFinal); err != nil {
-		return nil, err
-	}
-	if err := decodeField(m, "state_patch", "statePatch", &out.StatePatch); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-func decodeField[T any](m map[string]json.RawMessage, snake, camel string, dst **T) error {
-	raw, ok := m[snake]
-	if !ok {
-		raw, ok = m[camel]
-	}
-	if !ok || string(raw) == "null" {
-		return nil
-	}
-	var v T
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return fmt.Errorf("decode %s: %w", snake, err)
-	}
-	*dst = &v
-	return nil
-}
-
-func jsActionName(action hookAction) string {
-	if action.Path != "" {
-		return action.Path
-	}
-	return "inline js"
+	return &result, nil
 }
 
 func appendConsoleLog(logs *[]string, level string, args ...goja.Value) {
@@ -215,17 +217,7 @@ func readPluginFile(pluginRoot, relPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return "", fmt.Errorf("stat file: %w", err)
-	}
-	if info.IsDir() {
-		return "", fmt.Errorf("readFile requires a file path")
-	}
-	if info.Size() > maxPluginReadFileBytes {
-		return "", fmt.Errorf("file exceeds %d byte read limit", maxPluginReadFileBytes)
-	}
-	data, err := os.ReadFile(path)
+	data, err := readLimitedFile(path, maxPluginReadFileBytes)
 	if err != nil {
 		return "", fmt.Errorf("read file: %w", err)
 	}

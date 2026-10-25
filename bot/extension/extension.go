@@ -41,6 +41,7 @@ type Manager struct {
 	sessionConfigs map[string]map[string]mcp.ServerConfig
 	tools          *tools.Registry
 	agentErrors    map[string]string
+	hookErrors     map[string]string
 	configMCP      map[string]mcp.ServerConfig
 	configuredMCP  []ConfiguredMCP
 }
@@ -52,6 +53,7 @@ type Snapshot struct {
 	Plugins       []*plugin.Plugin
 	MCPHealth     map[string]mcp.Health
 	AgentErrors   map[string]string
+	HookErrors    map[string]string
 	Agents        []AgentInfo
 	ConfiguredMCP []ConfiguredMCP
 }
@@ -106,6 +108,7 @@ func New(config Config) *Manager {
 		sessionConfigs: make(map[string]map[string]mcp.ServerConfig),
 		tools:          config.Tools,
 		agentErrors:    make(map[string]string),
+		hookErrors:     make(map[string]string),
 		configMCP:      make(map[string]mcp.ServerConfig),
 	}
 	// MCP tools reach the model through one constant-schema proxy registered
@@ -218,6 +221,7 @@ func (m *Manager) Snapshot() Snapshot {
 		Plugins:       m.plugins.PluginSnapshots(),
 		MCPHealth:     m.mcp.Health(),
 		AgentErrors:   m.agentErrorsLocked(),
+		HookErrors:    maps.Clone(m.hookErrors),
 		Agents:        m.agentInfosLocked(),
 		ConfiguredMCP: cloneConfiguredMCP(m.configuredMCP),
 	}
@@ -307,7 +311,7 @@ func (m *Manager) setPluginEnabled(ctx context.Context, name string, enabled boo
 	if !ok {
 		return false, fmt.Errorf("plugin not found: %s", name)
 	}
-	if current.Enabled == enabled && (!enabled || m.agentErrors[name] == "") {
+	if current.Enabled == enabled && (!enabled || m.agentErrors[name] == "" && m.hookErrors[name] == "") {
 		return false, nil
 	}
 	next, err := m.plugins.SetEnabled(name, enabled)
@@ -492,6 +496,19 @@ func (m *Manager) activateLocked(ctx context.Context, p *plugin.Plugin) error {
 		seen[profile.Name] = true
 		state.agents = append(state.agents, profile)
 	}
+	var hooks []policy.Hook
+	if hooksPath, ok := p.HooksPath(); ok && m.policy != nil {
+		var err error
+		hooks, err = policy.LoadPluginHooks(p.Dir, hooksPath)
+		if err != nil {
+			if m.hookErrors == nil {
+				m.hookErrors = map[string]string{}
+			}
+			m.hookErrors[p.Name] = err.Error()
+			return fmt.Errorf("plugin %s hooks: %w", p.Name, err)
+		}
+	}
+	delete(m.hookErrors, p.Name)
 	delete(m.agentErrors, p.Name)
 	m.active[p.Name] = state
 
@@ -499,15 +516,8 @@ func (m *Manager) activateLocked(ctx context.Context, p *plugin.Plugin) error {
 		m.deactivateLocked(p.Name)
 		return err
 	}
-	if hooksPath, ok := p.HooksPath(); ok && m.policy != nil {
-		hooks, err := policy.LoadPluginHooks(p.Dir, hooksPath)
-		if err != nil {
-			logger.Log("plugin: hooks %s: %v", hooksPath, err)
-		} else {
-			for _, hook := range hooks {
-				m.policy.Register(hook)
-			}
-		}
+	for _, hook := range hooks {
+		m.policy.Register(hook)
 	}
 
 	for name, cfg := range p.MCPServers() {
@@ -532,6 +542,7 @@ func (m *Manager) activateLocked(ctx context.Context, p *plugin.Plugin) error {
 
 func (m *Manager) deactivateLocked(name string) {
 	delete(m.agentErrors, name)
+	delete(m.hookErrors, name)
 	state, ok := m.active[name]
 	if !ok {
 		return
@@ -547,6 +558,7 @@ func (m *Manager) deactivateLocked(name string) {
 
 func (m *Manager) deactivateAllLocked() {
 	clear(m.agentErrors)
+	clear(m.hookErrors)
 	for name := range m.active {
 		m.deactivateLocked(name)
 	}

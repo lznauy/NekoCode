@@ -305,6 +305,7 @@ type PluginView struct {
 	MCPServers   []string `json:"mcpServers,omitempty"`
 	HasHooks     bool     `json:"hasHooks,omitempty"`
 	ActiveAgents []string `json:"activeAgents,omitempty"`
+	HookError    string   `json:"hookError,omitempty"`
 	AgentError   string   `json:"agentError,omitempty"`
 }
 

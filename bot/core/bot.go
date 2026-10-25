@@ -123,6 +123,9 @@ func NewAt(cwd string) (*Bot, error) {
 func (b *Bot) Close() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.policy != nil {
+		b.policy.EndSession(context.Background())
+	}
 	if b.ext != nil {
 		b.ext.Close()
 	}
@@ -177,6 +180,16 @@ func (b *Bot) initCtxMgr() error {
 		Memory:             memFile,
 		RuntimePrompt:      b.promptBuilder.BuildEnvironment,
 	})
+	b.ctxMgr.SetCompactionLifecycle(func(ctx context.Context, phase string) {
+		if b.policy == nil {
+			return
+		}
+		point := policy.PostCompact
+		if phase == "started" {
+			point = policy.PreCompact
+		}
+		b.policy.Observe(ctx, point, policy.Facts{Tool: policy.ToolFacts{Args: map[string]any{"status": phase}}})
+	})
 	b.ctxMgr.SetCompactionObserver(func(event protocol.CompactionEvent) {
 		if host := b.currentHost(); host != nil {
 			host.Step(protocol.StepEvent{Action: protocol.StepActionCompaction, Compaction: &event})
@@ -189,6 +202,9 @@ func (b *Bot) initCtxMgr() error {
 // Keep this order: tools and policy are dependencies of extensions and agent;
 // commands consume all of them.
 func (b *Bot) rebuildRuntime() {
+	if b.policy != nil {
+		b.policy.EndSession(context.Background())
+	}
 	if b.ext != nil {
 		b.ext.Close()
 	}

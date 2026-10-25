@@ -1,58 +1,59 @@
 package policy
 
+import (
+	"context"
+	"nekocode/bot/policy/contract"
+	"time"
+)
+
 // HookPoint identifies one concrete place in the agent lifecycle.
-type HookPoint string
+type HookPoint = contract.Point
 
 const (
-	UserSubmit    HookPoint = "user_submit"
-	PreModel      HookPoint = "pre_model"
-	PreToolUse    HookPoint = "pre_tool_use"
-	PostToolUse   HookPoint = "post_tool_use"
-	PostToolBatch HookPoint = "post_tool_batch"
-	Stop          HookPoint = "stop"
+	SessionStart  = contract.SessionStart
+	SessionEnd    = contract.SessionEnd
+	RunStart      = contract.RunStart
+	RunEnd        = contract.RunEnd
+	PreCompact    = contract.PreCompact
+	PostCompact   = contract.PostCompact
+	SubagentStart = contract.SubagentStart
+	SubagentStop  = contract.SubagentStop
+	UserSubmit    = contract.UserSubmit
+	PreModel      = contract.PreModel
+	PreToolUse    = contract.PreToolUse
+	PostToolUse   = contract.PostToolUse
+	PostToolBatch = contract.PostToolBatch
+	Stop          = contract.Stop
 )
 
-type Hint struct {
-	Type     string
-	Severity string
-	Content  string
-}
-
-type StopReason string
+type Hint = contract.Hint
+type StopReason = contract.StopReason
+type Result = contract.Result
+type BlockTool = contract.BlockTool
+type RequireTool = contract.RequireTool
+type BlockFinal = contract.BlockFinal
+type Decision = contract.Decision
+type Action = contract.Action
 
 const (
-	StopFormatError StopReason = "format_error"
-	StopInterrupted StopReason = "interrupted"
-	StopCompleted   StopReason = "completed"
+	StopFormatError   = contract.StopFormatError
+	StopInterrupted   = contract.StopInterrupted
+	StopCompleted     = contract.StopCompleted
+	StopPolicyBlocked = contract.StopPolicyBlocked
+	Continue          = contract.Continue
+	Reject            = contract.Reject
+	Terminate         = contract.Terminate
 )
-
-func (s StopReason) String() string { return string(s) }
-
-type Result struct {
-	Hint        *Hint
-	Stop        *StopReason
-	BlockTool   *BlockTool
-	RequireTool *RequireTool
-	BlockFinal  *BlockFinal
-}
-
-type BlockTool struct {
-	Tool   string
-	Reason string
-}
-
-type RequireTool struct {
-	Tool   string
-	Reason string
-}
-
-type BlockFinal struct {
-	Reason string
-}
 
 // Hook is the extension contract exposed by policy. Facts are read-only;
 // Int/String store state private to this hook for deduplication and latches.
 type Hook struct {
+	// Guard failures reject the current action; observer failures only diagnose.
+	Guard           bool
+	Timeout         time.Duration
+	SessionScoped   bool
+	Once            bool
+	Run             func(context.Context, State) (*Result, error)
 	Name            string
 	Point           HookPoint
 	On              func(State) *Result

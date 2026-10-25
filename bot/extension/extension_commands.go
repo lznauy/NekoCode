@@ -97,7 +97,7 @@ func (m *Manager) pluginMenu(_ context.Context, cmd *command.Command) (protocol.
 	plugins := m.plugins.ListPlugins()
 	items := make([]protocol.CommandMenuItem, 0, len(plugins))
 	for _, item := range plugins {
-		failed := m.agentErrors[item.Name] != ""
+		failed := m.agentErrors[item.Name] != "" || m.hookErrors[item.Name] != ""
 		if action == "enable" && item.Enabled && !failed || action == "disable" && !item.Enabled {
 			continue
 		}
@@ -201,7 +201,12 @@ func (m *Manager) install(ctx context.Context, source string) string {
 	m.mu.Lock()
 	previous, wasActive := m.active[p.Name]
 	previousError := m.agentErrors[p.Name]
+	previousHookError := m.hookErrors[p.Name]
 	restore := func() {
+		delete(m.hookErrors, p.Name)
+		if previousHookError != "" {
+			m.hookErrors[p.Name] = previousHookError
+		}
 		delete(m.agentErrors, p.Name)
 		if wasActive {
 			_ = m.activateLocked(context.Background(), previous.plugin)
@@ -241,6 +246,9 @@ func (m *Manager) listPlugins() string {
 	defer m.mu.Unlock()
 	text := m.plugins.ListText()
 	for _, p := range m.plugins.ListPlugins() {
+		if err := m.hookErrors[p.Name]; err != "" {
+			text += "\n" + p.Name + ": " + err
+		}
 		if err := m.agentErrors[p.Name]; err != "" {
 			text += "\n" + p.Name + ": " + err
 		}
@@ -261,6 +269,9 @@ func (m *Manager) pluginInfo(args []string) string {
 	}
 	if err := m.agentErrors[name]; err != "" {
 		info += "\nAgent load error: " + err
+	}
+	if err := m.hookErrors[name]; err != "" {
+		info += "\nHook load error: " + err
 	}
 	for _, agent := range m.agentInfosLocked() {
 		if agent.Plugin == name {

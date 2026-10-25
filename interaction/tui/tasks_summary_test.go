@@ -65,6 +65,19 @@ func TestHundredTasksProduceOneMainSummary(t *testing.T) {
 	}
 }
 
+func TestPartialTaskDetailsSurviveEmptyParentResponse(t *testing.T) {
+	m := openedTaskModel(t)
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunStarted})
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventSubAgentStarted, Payload: controlruntime.SubAgentPayload{ID: "partial", Status: "running"}})
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventSubAgentEnded, Payload: controlruntime.SubAgentPayload{ID: "partial", Status: "partial"}})
+	m.applyRuntimeToolEvent(controlruntime.Event{Type: controlruntime.EventToolCompleted, Payload: controlruntime.ToolPayload{CallID: "partial", ToolName: "task", Output: "[Subagent returned a partial result]\nstep limit reached"}})
+	m.handleDone(doneMsg{})
+	view := ansi.Strip(m.Messages.Render())
+	if !strings.Contains(view, "子任务未完成") || !strings.Contains(view, "step limit reached") {
+		t.Fatalf("partial task details were hidden after completion: %s", view)
+	}
+}
+
 func TestTaskListRefreshUsesEventsAndLowFrequencyFallback(t *testing.T) {
 	m := openedTaskModel(t)
 	s := m.tasks

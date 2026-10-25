@@ -26,7 +26,7 @@ func (t *TaskTool) Wire(run taskbridge.TaskRunner) {
 
 func (t *TaskTool) Name() string { return "task" }
 func (t *TaskTool) Description() string {
-	return "Delegate independent, multi-step work to an isolated general-purpose sub-agent. Give the task a short title; the prompt is detailed instructions, not its display name. Choose a capability profile, then compose task-scoped skills: coder may modify the workspace; explore is strictly read-only. Custom plugin profiles are also accepted. Skills define workflow only and cannot expand the profile's tools. Include the exact goal, scope, relevant paths, constraints, and expected evidence. Use direct tools for simple or tightly coupled work, and verify returned claims before relying on them."
+	return "Delegate independent, multi-step work to an isolated general-purpose sub-agent. Give the task a short title; the prompt is detailed instructions, not its display name. Choose a capability profile, then compose task-scoped skills: coder may modify the workspace; explore is strictly read-only. Custom plugin profiles are also accepted. Skills define workflow only and cannot expand the profile's tools. Include the exact goal, scope, relevant paths, constraints, and expected evidence. Use direct tools for simple or tightly coupled work, and verify returned claims before relying on them. Sub-agents cannot delegate further tasks: when parallel fan-out is needed, invoke multiple task tools directly from the parent agent instead of asking one sub-agent to dispatch child tasks."
 }
 
 func (t *TaskTool) Parameters() []core.Parameter {

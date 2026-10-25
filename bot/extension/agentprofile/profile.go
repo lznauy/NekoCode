@@ -4,7 +4,10 @@ package agentprofile
 
 import "slices"
 
-const MaxSteps = 50
+const (
+	DefaultMaxSteps = 150
+	MaxSteps        = 200
+)
 
 // Profile is the resolved input to a run. Tools is an exact ceiling; Skills
 // supplies workflow only. Zero MaxSteps inherits the engine default.

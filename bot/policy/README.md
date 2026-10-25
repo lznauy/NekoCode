@@ -69,4 +69,22 @@
 - `builtin/`：少量默认确定性 hook。
 - `ledger/`：工具事实与当前 run 授权证据。
 - `plugin/`：用户显式配置的扩展 hook；不代表默认治理原则可以放宽。
-- `audit.go`：hook 决策的可观察记录。
+- `contract/point.go`：事件名称、控制能力和插件默认行为的统一定义；配置别名由插件适配层派生。
+- `hooks.go`：注册、事件调度、版本检查与状态提交。
+- `hook_execution.go`：单个回调的超时、执行、结果归一化及候选状态校验。
+- `hook_state.go`：私有状态与输入事实的隔离快照。
+- `audit.go`、`inspect.go`：hook 决策记录与只读诊断。
+
+## Hook 扩展契约
+
+共享类型和结果合并位于 `contract/`。核心控制决定为 continue/reject/stop；
+插件执行方式只负责把 JSON 事件转换为共享结果，运行时通过统一 Outcome 执行。
+配置、生命周期、失败策略、兼容字段和进程内 Go 回调的协作取消边界见
+[Hook 插件协议](plugin/README.md)。
+
+父 policy 观察 SubagentStart/SubagentStop，但不会因此执行子 Agent 的工具 hooks，
+也不会改变执行者之间的读取授权隔离。PostCompact 包含失败通知，不表示一定成功压缩。
+
+`Policy.Inspect()` 提供不执行回调的只读快照，包含注册信息、状态用量、当前执行、计数和最近审计；私有状态值不对外暴露。执行记录通过 run_id 与 evaluation_id 关联，详见插件协议中的只读诊断。
+
+新增触发点时，先在 `contract/` 声明 Point 常量并补充 `point.go` 的能力定义；插件名称及默认模式随之派生。再接入实际生命周期，并更新控制能力与插件行为的兼容性测试。`PostToolUseFailure` 仅是失败过滤别名，不能新增为核心触发点。旧字段的事件专属转换继续集中在 `contract.Normalize`，不进入调度或适配器重复实现。

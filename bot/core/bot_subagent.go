@@ -12,10 +12,12 @@ import (
 	"nekocode/bot/config"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/extension/tool/runtime/taskbridge"
+	"nekocode/bot/policy"
 	"nekocode/bot/prompt"
 	"nekocode/bot/provider"
 	"nekocode/bot/session"
 	"nekocode/protocol"
+	"time"
 )
 
 func (b *Bot) wireTaskTool(fm config.ModelConfig, compactionModel provider.LLM, ag *agentcore.Agent) {
@@ -112,7 +114,28 @@ func (b *Bot) wireTaskTool(fm config.ModelConfig, compactionModel provider.LLM, 
 				ToolUseCount: usage.ToolUseCount, DurationMs: usage.DurationMs, ContextTokens: usage.ContextTokens, ContextWindow: usage.ContextWindow,
 			})
 		}
+		started := false
+		originalStarted := cfg.OnStarted
+		cfg.OnStarted = func() {
+			started = true
+			ag.Governance().Observe(ctx, policy.SubagentStart, policy.Facts{ActorID: id, Tool: policy.ToolFacts{Args: map[string]any{"profile": profile.Name, "attempt_id": attempt.ID}}})
+			if originalStarted != nil {
+				originalStarted()
+			}
+		}
 		result, err := engine.Run(ctx, cfg)
+		if started {
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+			status := "completed"
+			if err != nil {
+				status = "failed"
+			}
+			if ctx.Err() != nil {
+				status = "interrupted"
+			}
+			ag.Governance().Observe(cleanup, policy.SubagentStop, policy.Facts{ActorID: id, Tool: policy.ToolFacts{Args: map[string]any{"profile": profile.Name, "attempt_id": attempt.ID, "status": status}}})
+			cancel()
+		}
 		if result != nil && (result.CacheHitTokens > 0 || result.CacheMissTokens > 0) {
 			ctxMgr.RecordSubagent(result.TotalTokens, result.CacheHitTokens, result.CacheMissTokens)
 		}

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	ctxmgr "nekocode/bot/contextmgr"
@@ -228,5 +229,73 @@ func TestTurnTreatsCanceledContextAsInterrupt(t *testing.T) {
 	a.life.Cancel()
 	if !a.loopRunner.runTurn("", nil) || a.run.err != nil || a.run.stopReason != policy.StopInterrupted {
 		t.Fatalf("cancellation was not reported as interruption: %v %v", a.run.err, a.run.stopReason)
+	}
+}
+
+func TestRejectedFinalNeverPassesAfterRetryExhaustion(t *testing.T) {
+	a := newTestAgent()
+	resets := 0
+	a.stream.resetText = func() { resets++ }
+	a.deps.gov.Register(policy.Hook{Name: "deny", Point: policy.Stop, Guard: true, On: func(policy.State) *policy.Result {
+		return &policy.Result{Decision: &policy.Decision{Action: policy.Reject, Reason: "not allowed"}}
+	}})
+	rr := &reasoningResult{Action: actionChat, ActionInput: "blocked answer"}
+	finished := false
+	for i := 0; i < 10; i++ {
+		if a.turnRunner.handleText(rr, nil) {
+			finished = true
+			break
+		}
+	}
+	if resets == 0 {
+		t.Fatal("rejected streamed text was not discarded")
+	}
+	if !finished || a.run.err == nil {
+		t.Fatal("expected explicit failure when rejection retries exhaust")
+	}
+	result := a.loopRunner.finishRun(nil)
+	if result.Error == nil || result.FinalOutput != "" || a.run.finalText != "" {
+		t.Fatalf("blocked answer accepted: %+v", result)
+	}
+	for _, m := range a.deps.ctxMgr.Build() {
+		if m.Role == "assistant" && m.Content == "blocked answer" {
+			t.Fatal("blocked answer persisted")
+		}
+	}
+}
+
+func TestCompletedStopCannotApproveRejectedAnswer(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		t.Run(fmt.Sprint(reverse), func(t *testing.T) {
+			a := newTestAgent()
+			completed := policy.StopCompleted
+			hooks := []policy.Hook{
+				{Name: "deny", Point: policy.Stop, Guard: true, On: func(policy.State) *policy.Result {
+					return &policy.Result{Decision: &policy.Decision{Action: policy.Reject, Reason: "must not publish"}}
+				}},
+				{Name: "finish", Point: policy.Stop, On: func(policy.State) *policy.Result { return &policy.Result{Stop: &completed} }},
+			}
+			if reverse {
+				hooks[0], hooks[1] = hooks[1], hooks[0]
+			}
+			for _, h := range hooks {
+				if err := a.deps.gov.Register(h); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rr := &reasoningResult{Action: actionChat, ActionInput: "rejected content"}
+			if !a.turnRunner.handleText(rr, nil) {
+				t.Fatal("terminal decision did not finish")
+			}
+			result := a.loopRunner.finishRun(nil)
+			if result.Error == nil || result.FinalOutput != "" {
+				t.Fatalf("rejected output was accepted: %+v", result)
+			}
+			for _, m := range a.deps.ctxMgr.Build() {
+				if m.Role == "assistant" && m.Content == rr.ActionInput {
+					t.Fatal("rejected output persisted")
+				}
+			}
+		})
 	}
 }
