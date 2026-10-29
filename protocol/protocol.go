@@ -214,15 +214,16 @@ const (
 // these facts separate from tool Args gives policy enforcement and every UI a
 // single typed contract; Args remains the original tool invocation only.
 type ApprovalContext struct {
-	Risk         string        `json:"risk,omitempty"`
-	Reason       string        `json:"reason,omitempty"`
-	Structures   []string      `json:"structures,omitempty"`
-	Capabilities []string      `json:"capabilities,omitempty"`
-	Scope        ApprovalScope `json:"scope,omitempty"`
-	Workspace    string        `json:"workspace,omitempty"`
-	Sandbox      string        `json:"sandbox,omitempty"`
-	WritePaths   []string      `json:"write_paths,omitempty"`
-	Combined     bool          `json:"combined,omitempty"`
+	Risk            string        `json:"risk,omitempty"`
+	Reason          string        `json:"reason,omitempty"`
+	Structures      []string      `json:"structures,omitempty"`
+	Capabilities    []string      `json:"capabilities,omitempty"`
+	Scope           ApprovalScope `json:"scope,omitempty"`
+	Workspace       string        `json:"workspace,omitempty"`
+	Sandbox         string        `json:"sandbox,omitempty"`
+	OutboundDomains []string      `json:"outbound_domains"`
+	WritePaths      []string      `json:"write_paths,omitempty"`
+	Combined        bool          `json:"combined,omitempty"`
 }
 
 func (c *ApprovalContext) CanRemember() bool {
@@ -237,6 +238,9 @@ func (c *ApprovalContext) Clone() *ApprovalContext {
 	clone.Structures = append([]string(nil), c.Structures...)
 	clone.Capabilities = append([]string(nil), c.Capabilities...)
 	clone.WritePaths = append([]string(nil), c.WritePaths...)
+	if c.OutboundDomains != nil {
+		clone.OutboundDomains = append([]string{}, c.OutboundDomains...)
+	}
 	return &clone
 }
 
@@ -254,8 +258,11 @@ type ConfirmRequest struct {
 }
 
 type ConfirmReply struct {
-	Allowed  bool
-	Remember bool
+	// Cancelled marks an interrupted/unavailable approval, not an explicit user
+	// rejection. It is internal lifecycle metadata, never a client decision.
+	Cancelled bool `json:"-"`
+	Allowed   bool
+	Remember  bool
 	// Deprecated: an allowed unified request already covers displayed
 	// capabilities. This field is accepted for source compatibility and ignored.
 	AllowWithPermission bool

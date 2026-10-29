@@ -8,6 +8,8 @@ NekoCode 提供 `nekocode-headless/2` 双向 NDJSON 协议，适合由宿主启�
 这是 NekoCode 自有协议，基于 runtime 的真实能力定义控制方法、事件和终态。
 NDJSON 是传输格式；协议版本和 capability 列表才是接入契约。
 
+不需要双向协议的脚本可使用 `-p "任务"` 或 `exec "任务"`，输出最终文本或单个 JSON 结果；见 [一次性脚本入口](../../headless/README.md#一次性脚本入口)。下文仅描述显式 stream-json 模式。
+
 ## 启动
 
 使用现有 NekoCode 模型与权限配置，以项目目录为工作目录启动：
@@ -59,8 +61,10 @@ stdout 只输出协议 JSON；CLI 诊断错误写 stderr，内部诊断日志沿
 {"type":"user","uuid":"u-1","message":{"role":"user","content":"解释这个项目"}}
 ```
 
-content 可为字符串或仅含 `{"type":"text","text":"..."}` 的数组。
-空输入、图像/文档/外部 tool_result、非 null 的 `parent_tool_use_id`（包括空字符串）、`shouldQuery:false`，
+content 可为字符串，或包含 `{"type":"text","text":"..."}` 和
+`{"type":"image","path":"uploads/shot.jpg"}` 的数组。图片通过本地路径引用，
+路径与模型能力要求见 [图片支持](../users/IMAGES.md#headlessndjson-over-stdio)。
+空输入、文档/外部 tool_result、非 null 的 `parent_tool_use_id`（包括空字符串）、`shouldQuery:false`，
 以及除 `next` 外的 priority 均明确拒绝。省略 priority 等同 FIFO。
 
 省略 uuid 时由服务端分配。相同 uuid 在同一连接内只接受一次；重复输入输出
@@ -115,6 +119,8 @@ thinking signature 或供应商 usage。完整 assistant 内容是权威值，�
 `error_step_limit`，含 `is_error`、`result`、`duration_ms` 和可选 `errors` 数组。
 `stop_reason` 分别为 `completed`、`execution_error`、`cancelled`、`step_limit`。
 runtime 的失败/取消终态优先于代理摘要，保存会话等收尾失败不会被标为成功。
+
+一次性 `--output-schema` 模式还使用 `error_output_validation`：最终答案 JSON 解析失败、包含额外 JSON 值或尾随内容、以及 Schema Validate 失败均归入此类，退出码为 `1`。运行取消优先报告 `error_cancelled` 和退出码 `130`；启动前的 Schema 文件或编译错误仍退出 `2`，不会启动运行。输出校验失败不自动重试。
 
 代理提供摘要时附带真实 `step_count`（主代理执行步数）；命令或提前终止未提供摘要时省略，
 不填假零值。`permission_denials` 汇总本轮审批 broker 的拒绝/过期记录，字段为

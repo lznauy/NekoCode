@@ -32,7 +32,7 @@ func TestSubagentLiveModelAcceptance(t *testing.T) {
 	t.Chdir(root)
 	t.Setenv("HOME", filepath.Join(root, "home"))
 	model.Name = "live-acceptance"
-	if err := config.Save(config.Config{Active: model.Name, Models: []config.ModelConfig{model}}); err != nil {
+	if err := config.Save(config.Config{Active: "live/" + model.Name, Providers: []config.ProviderConfig{{Name: "live", APIKey: model.APIKey, BaseURL: model.BaseURL, Protocol: model.Protocol, Models: []config.ModelDefinition{{Name: model.Name, Model: model.Model, ContextWindow: model.ContextWindow, ReasoningEffort: model.ReasoningEffort}}}}}); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "probe.txt")

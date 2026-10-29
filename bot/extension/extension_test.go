@@ -128,7 +128,7 @@ func TestManagerOwnsPluginSkillLifecycle(t *testing.T) {
 	})
 	manager.RegisterCommands(commands, nil)
 	menu, ok := commands.Menu(context.Background(), "/plugin")
-	if !ok || menu.Title != "Plugin action" || len(menu.Items) != 6 {
+	if !ok || menu.Title != "Plugin action" || len(menu.Items) != 7 {
 		t.Fatalf("plugin action menu = %+v, %v", menu, ok)
 	}
 	menu, ok = commands.Menu(context.Background(), "/plugin disable")
@@ -337,5 +337,144 @@ func TestMCPStatusCommand(t *testing.T) {
 	}
 	if got := mcpOwnerLabel("session:acp:docs"); got != "会话 acp" {
 		t.Fatalf("session owner label = %q", got)
+	}
+}
+
+func TestMCPAuthorizationCommandsJoinServerName(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	manager := New(Config{Context: ctxmgr.New(ctxmgr.Config{}), Tools: tools.New(), Policy: policy.New()})
+	defer manager.Close()
+	if err := manager.AddMCPServerBackground("docs server", mcp.ServerConfig{URL: server.URL}); err != nil {
+		server.Close()
+		t.Fatal(err)
+	}
+	server.Close()
+
+	commands := command.New(command.Deps{})
+	manager.RegisterCommands(commands, nil)
+	for _, tc := range []struct {
+		action string
+		want   string
+	}{
+		{action: "login", want: "docs server 授权已启动"},
+		{action: "logout", want: "MCP logout done."},
+		{action: "cancel", want: "MCP cancel done."},
+	} {
+		t.Run(tc.action, func(t *testing.T) {
+			out, handled := commands.Execute(context.Background(), "/mcp-"+tc.action+" docs server", nil)
+			if !handled || !strings.Contains(out, tc.want) || strings.Contains(out, "Usage:") {
+				t.Fatalf("/mcp-%s output = %q, handled=%v; want %q", tc.action, out, handled, tc.want)
+			}
+		})
+	}
+}
+
+func TestMCPErrorActionsDependOnTransport(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	remoteURL := server.URL
+	server.Close()
+
+	manager := New(Config{Context: ctxmgr.New(ctxmgr.Config{}), Tools: tools.New(), Policy: policy.New()})
+	defer manager.Close()
+	if err := manager.AddMCPServerBackground("local command", mcp.ServerConfig{Command: "/nonexistent"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.AddMCPServerBackground("remote service", mcp.ServerConfig{URL: remoteURL}); err != nil {
+		t.Fatal(err)
+	}
+	waitWorkspaceMCPStatus(t, manager, "local command", mcp.StatusError)
+	waitWorkspaceMCPStatus(t, manager, "remote service", mcp.StatusError)
+
+	menu, ok := manager.mcpMenu(context.Background(), &command.Command{})
+	if !ok || len(menu.Items) != 2 {
+		t.Fatalf("error menu = %+v, ok=%v; want one row per server", menu, ok)
+	}
+	local := menu.Items[0]
+	if !strings.HasPrefix(local.Label, "local command ·") || local.Value != "/mcp" || !local.Current || local.Submit {
+		t.Fatalf("stdio error item = %+v; want read-only /mcp row", local)
+	}
+	remote := menu.Items[1]
+	if !strings.HasPrefix(remote.Label, "remote service ·") || remote.Value != "/mcp-login remote service" || !remote.Submit || remote.Current {
+		t.Fatalf("remote error item = %+v; want login action", remote)
+	}
+
+	status := manager.mcpStatus()
+	if strings.Contains(status, "/mcp-login local command") || !strings.Contains(status, "/mcp-login remote service") {
+		t.Fatalf("error status has incorrect OAuth hints: %q", status)
+	}
+}
+
+func TestMCPStatusActionHints(t *testing.T) {
+	const name = "docs server"
+	for _, tc := range []struct {
+		name       string
+		status     string
+		hError     string
+		definition ConfiguredMCP
+		credential bool
+		want       []string
+		notWant    []string
+	}{
+		{
+			name: "ready with credential", status: mcp.StatusReady, credential: true,
+			definition: ConfiguredMCP{URL: "https://example.com/mcp"},
+			want:       []string{"2 tools", "/mcp-logout " + name},
+			notWant:    []string{"/mcp-login", "/mcp-cancel"},
+		},
+		{
+			name: "authorization required", status: mcp.StatusAuthRequired,
+			definition: ConfiguredMCP{URL: "https://example.com/mcp"},
+			want:       []string{"/mcp-login " + name},
+			notWant:    []string{"/mcp-logout", "/mcp-cancel"},
+		},
+		{
+			name: "authorizing with credential", status: mcp.StatusAuthorizing, credential: true,
+			definition: ConfiguredMCP{URL: "https://example.com/mcp"},
+			want:       []string{"/mcp-cancel " + name, "/mcp-logout " + name},
+			notWant:    []string{"/mcp-login"},
+		},
+		{
+			name: "remote error", status: mcp.StatusError, hError: "connection failed",
+			definition: ConfiguredMCP{URL: "https://example.com/mcp"},
+			want:       []string{"connection failed", "/mcp-login " + name},
+			notWant:    []string{"/mcp-logout", "/mcp-cancel"},
+		},
+		{
+			name: "stdio error", status: mcp.StatusError, hError: "process exited", credential: true,
+			definition: ConfiguredMCP{Command: "server", Args: []string{"--stdio"}},
+			want:       []string{"process exited", "server --stdio"},
+			notWant:    []string{"/mcp-login", "/mcp-logout", "/mcp-cancel"},
+		},
+		{
+			name: "stdio authorizing health does not invent OAuth", status: mcp.StatusAuthorizing, hError: "process exited", credential: true,
+			definition: ConfiguredMCP{Command: "server"},
+			want:       []string{"process exited"},
+			notWant:    []string{"/mcp-login", "/mcp-logout", "/mcp-cancel"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			definition := tc.definition
+			definition.Name = name
+			definition.Source = "配置"
+			definition.Enabled = true
+			h := mcp.Health{Status: tc.status, Error: tc.hError, Owner: "config:" + name, ToolCount: 2}
+			got := strings.Join(mcpStatusParts(name, h, definition, true, tc.credential), " · ")
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("status %q missing %q", got, want)
+				}
+			}
+			for _, notWant := range tc.notWant {
+				if strings.Contains(got, notWant) {
+					t.Errorf("status %q unexpectedly contains %q", got, notWant)
+				}
+			}
+		})
 	}
 }

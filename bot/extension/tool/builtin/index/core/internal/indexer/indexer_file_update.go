@@ -31,7 +31,10 @@ func (i *Indexer) UpsertFile(g *graphpkg.Graph, cwd, path string, content []byte
 func (i *Indexer) ApplyChanges(g *graphpkg.Graph, cwd string, changes []FileChange) (err error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	return i.applyChangesLocked(g, cwd, changes)
+	if err := i.applyChangesLocked(g, cwd, changes); err != nil {
+		return err
+	}
+	return i.db.RecordSync()
 }
 
 func (i *Indexer) applyChangesLocked(g *graphpkg.Graph, cwd string, changes []FileChange) (err error) {

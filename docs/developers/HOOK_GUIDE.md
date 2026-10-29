@@ -146,7 +146,7 @@ JS 每次调用都创建新的虚拟机，不能靠全局变量保存上一次�
 
 ## 三、选对事件和失败策略
 
-当前有 14 个内部触发点，对应 15 个配置事件名。`PostToolUseFailure` 只是工具执行后事件的失败过滤视图。
+当前有 16 个内部触发点，对应 17 个配置事件名。`PostToolUseFailure` 只是工具执行后事件的失败过滤视图。
 
 | 配置事件 | 适合做什么 | 使用时注意 |
 | --- | --- | --- |
@@ -158,6 +158,8 @@ JS 每次调用都创建新的虚拟机，不能靠全局变量保存上一次�
 | `PostToolUse` | 根据工具结果补充提示 | 包含成功、失败；已阻断工具不触发，不能撤销已发生的执行 |
 | `PostToolUseFailure` | 只处理工具失败 | 与 `PostToolUse` 共享内部触发点 |
 | `PostToolBatch` | 查看一批工具的汇总结果 | `batch` 包含成功、失败和被阻断的调用 |
+| `PermissionRequest` | 记录即将交给用户的审批 | 仅观察；允许工具名 matcher，不能批准或拒绝 |
+| `PermissionDenied` | 记录用户或权限规则的明确拒绝 | `args.source` 区分 `user` 与 `rule`；仅观察 |
 | `Stop` | 检查最终回答 | 正常循环拒绝后有限重试；终止恢复路径不再重试 |
 | `SubagentStart` / `SubagentStop` | 观察子 Agent 生命周期 | 不会让父插件自动接管子 Agent 的工具检查 |
 | `PreCompact` / `PostCompact` | 观察上下文摘要尝试 | Post 也报告失败，不能直接当作摘要成功 |
@@ -174,6 +176,44 @@ JS 每次调用都创建新的虚拟机，不能靠全局变量保存上一次�
 未填写 `mode` 时，只有 `PreToolUse`、`Stop` 默认是 guard，其他事件默认按 observer 处理失败。为兼容已有插件，省略模式和显式 observer 的控制结果检查并不完全相同；新配置不要依赖这个差异。底层协议允许工具后事件返回结束决定，但不能拒绝已经执行完的工具动作。
 
 结束通知使用独立的一秒清理预算，应保持简短。不要把必须成功的持久化事务仅放在结束 Hook 中。
+
+### 观察审批与拒绝
+
+`PermissionRequest` 在执行器实际调用审批回调之前触发，覆盖命令审批、命令与能力合并审批、运行后发现的额外能力审批，以及工作区访问扩展。规则放行、记住授权或 full 模式导致免询问时不触发；没有审批回调也不伪造一次请求。
+
+`PermissionDenied` 在用户拒绝审批（包含关闭审批框）或权限规则明确拒绝工具/能力时触发。规则直接拒绝只产生 Denied，不会先产生 Request。Plan Mode、子 Agent Profile 的工具过滤、普通工具错误、缺少审批回调与取消执行本身不归类为此事件。取消、超时、关闭 Runtime 及无人工交互的适配器清理，通过内部取消标记与显式拒绝区分；该标记不在客户端 JSON 决策中开放。用户明确拒绝或关闭审批框仍产生 Denied，即使任务同时被取消。
+
+两个事件的 `tool` 是 canonical 工具名；工作区扩展审批使用 `workspace`。`args` 包含：
+
+| 字段 | 含义 |
+| --- | --- |
+| `call_id` | 原始工具调用 ID；同一调用发生多次独立审批时保持一致 |
+| `source` | Request 为 `approval`；Denied 为 `user` 或 `rule` |
+| `tool_args` | 该次审批或拒绝对应的工具参数快照，不含运行时回调 |
+| `kind` | 实际审批请求的类型，规则直接拒绝时可能没有此字段 |
+| `approval` | 审批范围，例如 capabilities、write_paths、outbound_domains；规则拒绝时只有预知的范围才会附带 |
+
+Denied 的 `error` 为 true，`error_message` 为拒绝原因。`actor_id` 为 `main` 或子任务 ID；父级插件可以观察子 Agent 的审批事实，但不能通过这些事件接管其权限判断或借用父级工具检查的 ledger。每个真实审批产生一个 Request；只有被拒绝时再产生一个 Denied。
+
+仅允许 observer 模式，返回 `reject`、`stop` 属于非法结果；返回内容不会变成授权决定或模型提示。插件可以记录诊断或更新条目私有状态。事件数据是独立快照，修改它不会修改执行参数、域名授权或用户看到的审批。拒绝通知在原 run 被取消后仍有至多一秒的观察预算。
+
+例如，只为 Shell 的拒绝记录计数：
+
+```json
+{
+  "version": 1,
+  "PermissionDenied": [{
+    "matcher": "shell",
+    "mode": "observer",
+    "hooks": [{
+      "type": "js",
+      "code": "({state_patch:{ints:{denied:(event.state.ints.denied || 0) + 1},strings:{last_source:event.args.source,last_actor:event.actor_id}}})"
+    }]
+  }]
+}
+```
+
+协议继续使用 v1：本次只增加可选事件名，旧事件和载荷不变。旧版本不认识这两个配置名，会在加载时明确报错；没有配置新事件的旧插件保持原行为。
 
 ## 四、理解事件与返回值
 

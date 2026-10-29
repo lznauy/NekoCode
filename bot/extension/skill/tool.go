@@ -28,7 +28,7 @@ func (t *skillTool) Parameters() []core.Parameter {
 			Type:        "string",
 			Required:    true,
 			Description: "The skill name to load, from the available skills list",
-			Enum:        t.registry.Names(),
+			Enum:        t.registry.ModelNames(),
 		},
 	}
 }
@@ -43,9 +43,9 @@ func (t *skillTool) Execute(ctx context.Context, args map[string]any) (core.Tool
 		return core.ToolOutput{}, fmt.Errorf("skill name is required")
 	}
 
-	sk, ok := t.registry.Get(name)
-	if !ok {
-		return core.ToolOutput{}, fmt.Errorf("skill not found: %s (available: %s)", name, t.registry.namesString())
+	sk, err := t.registry.ForModel(name)
+	if err != nil {
+		return core.ToolOutput{}, err
 	}
 
 	content := FormatForContext(sk)

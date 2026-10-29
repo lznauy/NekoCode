@@ -20,6 +20,9 @@ import (
 // available; callers should treat it as a signal to request host-execution
 // permission.
 func Run(ctx context.Context, command string, profile Profile, timeout time.Duration) (string, error) {
+	if profile.OutboundDomains != nil {
+		return "", NetworkIsolationError{Reason: "domain isolation requires Linux native namespaces"}
+	}
 	if profile.Workspace == "" {
 		return "", fmt.Errorf("sandbox workspace is required")
 	}
@@ -67,6 +70,9 @@ func Run(ctx context.Context, command string, profile Profile, timeout time.Dura
 }
 
 func Start(ctx context.Context, command string, profile Profile) (*Process, error) {
+	if profile.OutboundDomains != nil {
+		return nil, NetworkIsolationError{Reason: "domain isolation requires Linux native namespaces"}
+	}
 	return nil, UnavailableError{Reason: "async sandbox start is unavailable on this platform"}
 }
 

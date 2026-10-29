@@ -52,15 +52,17 @@ type OutputEvent struct {
 // or consult mutable extension registries during a run.
 type RunConfig struct {
 	// ResumeContext restores a task; persistence remains owned by the assembly layer.
-	ResumeContext *ctxmgr.ManagerSnapshot
-	SubagentID    string
-	SaveContext   func(ctxmgr.ManagerSnapshot, string, string, AttemptUsage) error
+	ResumeContext     *ctxmgr.ManagerSnapshot
+	IsolatedWorkspace bool
+	SubagentID        string
+	SaveContext       func(ctxmgr.ManagerSnapshot, string, string, AttemptUsage) error
 
 	Prompt              string
 	Profile             Profile
 	SkillContents       []string
 	ProjectInstructions string
 	ContextWindow       int
+	CompactionWindow    int
 	AutoCompactPercent  int
 	OnStarted           func()
 	OnText              func(string)

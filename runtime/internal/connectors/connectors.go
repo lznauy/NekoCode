@@ -23,6 +23,10 @@ type ConnectorStatusViewer interface {
 	ConnectorStatusView() core.ConnectorView
 }
 
+type ConnectorCommandMenu interface {
+	CommandMenu(ctx context.Context, args []string) (protocol.CommandMenu, bool)
+}
+
 type ConnectorFactory func(rt core.ConnectorRuntime) Connector
 
 type Manager struct {
@@ -48,6 +52,18 @@ func (m *Manager) Register(name string, factory ConnectorFactory) {
 	m.mu.Lock()
 	m.factories[name] = factory
 	m.mu.Unlock()
+}
+
+func (m *Manager) CommandMenu(ctx context.Context, name string, args []string) (protocol.CommandMenu, bool) {
+	conn, err := m.connector(ctx, strings.ToLower(strings.TrimSpace(name)))
+	if err != nil {
+		return protocol.CommandMenu{}, false
+	}
+	provider, ok := conn.(ConnectorCommandMenu)
+	if !ok {
+		return protocol.CommandMenu{}, false
+	}
+	return provider.CommandMenu(ctx, args)
 }
 
 func (m *Manager) Handle(ctx context.Context, args []string) (string, error) {

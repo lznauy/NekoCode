@@ -16,6 +16,7 @@ import (
 
 // SubagentInfo is a bounded read model. It never carries active model context.
 type SubagentInfo struct {
+	Isolation        string           `json:"isolation,omitempty"`
 	ID               string           `json:"id"`
 	ParentSessionID  string           `json:"parent_session_id"`
 	Title            string           `json:"title,omitempty"`
@@ -57,7 +58,7 @@ func infoFromSnapshot(s *Snapshot) SubagentInfo {
 		copy.Result = protocol.SubagentTextPreview(copy.Result, 4096)
 		latest = &copy
 	}
-	return SubagentInfo{ID: s.ID, ParentSessionID: m.ParentSessionID, Title: m.Title, Profile: m.Profile, Skills: append([]string(nil), m.Skills...), Prompt: protocol.SubagentTextPreview(m.Prompt, 1024), Status: m.Status, RunCount: m.RunCount, Result: protocol.SubagentTextPreview(m.Result, 4096), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, TranscriptSeq: s.TranscriptSeq, CurrentAttemptID: m.CurrentAttemptID, LatestAttempt: latest}
+	return SubagentInfo{Isolation: m.Isolation, ID: s.ID, ParentSessionID: m.ParentSessionID, Title: m.Title, Profile: m.Profile, Skills: append([]string(nil), m.Skills...), Prompt: protocol.SubagentTextPreview(m.Prompt, 1024), Status: m.Status, RunCount: m.RunCount, Result: protocol.SubagentTextPreview(m.Result, 4096), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, TranscriptSeq: s.TranscriptSeq, CurrentAttemptID: m.CurrentAttemptID, LatestAttempt: latest}
 }
 
 // Projection failure does not invalidate a committed context. Readers detect

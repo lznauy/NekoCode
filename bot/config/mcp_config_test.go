@@ -15,7 +15,7 @@ func TestValidateRemoteMCP(t *testing.T) {
 		{"bad callback", MCPServerConfig{URL: "https://example.com/mcp", OAuthCallbackPort: -1, Enabled: true}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := &Config{Active: "main", Models: []ModelConfig{{Name: "main", Provider: "openai", Model: "gpt-4o"}}, MCPServers: map[string]MCPServerConfig{"docs": tc.server}}
+			cfg := &Config{Active: "openai/main", Providers: []ProviderConfig{{Name: "openai", Models: []ModelDefinition{{Name: "main", Model: "gpt-4o"}}}}, MCPServers: map[string]MCPServerConfig{"docs": tc.server}}
 			if err := Validate(cfg); (err == nil) != tc.valid {
 				t.Fatalf("valid=%v err=%v", tc.valid, err)
 			}

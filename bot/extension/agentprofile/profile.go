@@ -14,6 +14,8 @@ const (
 type Profile struct {
 	Name         string
 	Description  string
+	Model        string
+	Isolation    string
 	SystemPrompt string
 	Tools        []string
 	Skills       []string

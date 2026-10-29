@@ -96,7 +96,11 @@ change-review/
 
 新技能先使用 `name`、`description` 和 Markdown 正文即可。
 
-当前解析器也接收 `allowed-tools`、`context`、`agent`、`max_steps`、`context_window`、`disable-model-invocation`。但这些兼容元数据目前不能作为运行时工具白名单、自动 fork、模型调用禁令或资源配额的可靠开关，不要仅凭字段被成功解析就认定限制已经生效。
+`context` 可省略或设置为 `inline`。`disable-model-invocation: true` 表示仅限用户手动选择：仍可通过 `$技能名` 或技能选择入口加载，但不会出现在模型技能目录和 `skill` 工具枚举中；模型直接调用、`task.skills` 和 Profile 的 `skills` 预加载都会被拒绝。省略或设为 `false` 保持普通技能行为。它约束加载入口，不是文件保密或工具权限边界。
+
+`context: fork`、其他 context 值，以及 `allowed-tools`、`agent`、`max_steps`、`context_window` 暂不支持。只要出现这些执行字段（即使值为空或零），该文件就会加载失败，避免配置看似有效却未执行。其他描述性元数据仍可保留。
+
+输入 `/skills` 查看已加载的技能、手动专用标记，以及无效技能的完整文件路径和错误原因。修正后重新加载扩展或重启会话以更新结果。
 
 需要独立子 Agent 时，通过 `task` 选择 Profile；需要工具范围和执行步数上限时，在 Agent 文件中配置 `tools`、`max_steps`。需要确定性的事件检查时使用 [Hook](HOOK_GUIDE.md)。
 

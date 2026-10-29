@@ -2,6 +2,7 @@ package permission
 
 import (
 	"fmt"
+	"nekocode/bot/extension/tool/runtime/netpolicy"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -31,9 +32,10 @@ type PermissionsDecl struct {
 }
 
 type SandboxProfile struct {
-	SandboxMode   string   `json:"sandbox_mode,omitempty"`
-	Network       bool     `json:"network,omitempty"`
-	WritableRoots []string `json:"writable_roots,omitempty"`
+	SandboxMode     string   `json:"sandbox_mode,omitempty"`
+	Network         bool     `json:"network,omitempty"`
+	OutboundDomains []string `json:"outbound_domains"`
+	WritableRoots   []string `json:"writable_roots,omitempty"`
 }
 
 type SandboxRule struct {
@@ -121,6 +123,14 @@ func LoadSandboxRules(decl PermissionsDecl) ([]SandboxRule, error) {
 	for _, spec := range keys {
 		profile := decl.Sandbox[spec]
 		profile.SandboxMode = strings.TrimSpace(profile.SandboxMode)
+		var domainErr error
+		profile.OutboundDomains, domainErr = netpolicy.Normalize(profile.OutboundDomains)
+		if domainErr != nil {
+			return nil, fmt.Errorf("permissions.sandbox %q: %w", spec, domainErr)
+		}
+		if profile.OutboundDomains != nil && profile.SandboxMode == "host" {
+			return nil, fmt.Errorf("permissions.sandbox %q: %s", spec, `outbound_domains cannot be used with host execution: host mode cannot enforce domain restrictions; use sandbox_mode="workspace-write" or "read-only". If unrestricted host execution is intended, remove outbound_domains from both the tool arguments and matching permissions.sandbox rules (an empty array still requires isolation)`)
+		}
 		r, err := ParseRule(spec, EffectAllow, "declared")
 		if err != nil {
 			return nil, fmt.Errorf("permissions.sandbox %q: %w", spec, err)

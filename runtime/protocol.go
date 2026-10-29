@@ -133,11 +133,13 @@ type MemoryView struct {
 
 // SessionMeta is a lightweight descriptor for a persisted session.
 type SessionMeta struct {
-	ID        string `json:"id"`
-	CWD       string `json:"cwd"`
-	CreatedAt int64  `json:"createdAt"`
-	UpdatedAt int64  `json:"updatedAt"`
-	MsgCount  int    `json:"msgCount"`
+	ID                string `json:"id"`
+	CWD               string `json:"cwd"`
+	CreatedAt         int64  `json:"createdAt"`
+	UpdatedAt         int64  `json:"updatedAt"`
+	MsgCount          int    `json:"msgCount"`
+	ForkedFrom        string `json:"forkedFrom,omitempty"`
+	ForkSourceDeleted bool   `json:"forkSourceDeleted,omitempty"`
 }
 
 // DisplayMessage is a persistent conversation projection for interaction
@@ -166,18 +168,20 @@ type ImageRef struct {
 
 // ConfigView is the configuration contract exposed to interaction surfaces.
 type ConfigView struct {
-	Path                  string                     `json:"path"`
-	Exists                bool                       `json:"exists"`
-	Active                string                     `json:"active"`
-	AutoCompactPercent    int                        `json:"auto_compact_percent"`
-	FlashModel            string                     `json:"flash_model,omitempty"`
-	Models                []ModelConfig              `json:"models"`
-	ImageGenModels        []ImageGenConfig           `json:"image_gen_models,omitempty"`
-	ImageUnderstandModels []ImageUnderstandConfig    `json:"image_understand_models,omitempty"`
-	MCPServers            map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
-	Permissions           *PermissionsConfig         `json:"permissions,omitempty"`
-	Workspaces            []WorkspaceConfig          `json:"workspaces,omitempty"`
-	Jev                   *JevConfig                 `json:"jev,omitempty"`
+	Path                   string                     `json:"path"`
+	Exists                 bool                       `json:"exists"`
+	Active                 string                     `json:"active"`
+	AutoCompactPercent     int                        `json:"auto_compact_percent"`
+	MaxConcurrentSubagents int                        `json:"max_concurrent_subagents,omitempty"`
+	CompactionModel        string                     `json:"compaction_model,omitempty"`
+	Providers              []ProviderConfig           `json:"providers"`
+	Models                 []ModelConfig              `json:"models"`
+	ImageGenModels         []ImageGenConfig           `json:"image_gen_models,omitempty"`
+	ImageUnderstandModels  []ImageUnderstandConfig    `json:"image_understand_models,omitempty"`
+	MCPServers             map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
+	Permissions            *PermissionsConfig         `json:"permissions,omitempty"`
+	Workspaces             []WorkspaceConfig          `json:"workspaces,omitempty"`
+	Jev                    *JevConfig                 `json:"jev,omitempty"`
 }
 
 type JevConfig struct {
@@ -186,6 +190,16 @@ type JevConfig struct {
 	BaseURL       string   `json:"base_url,omitempty"`
 	KeepThreshold *float64 `json:"keep_threshold,omitempty"`
 	Enabled       *bool    `json:"enabled,omitempty"`
+}
+
+// ProviderConfig preserves the editable provider groups. ConfigView.Models is
+// derived catalog metadata and is never used as the persistence source.
+type ProviderConfig struct {
+	Name     string                     `json:"name"`
+	BaseURL  string                     `json:"base_url,omitempty"`
+	APIKey   string                     `json:"api_key,omitempty"`
+	Protocol string                     `json:"protocol,omitempty"`
+	Models   []protocol.ModelDefinition `json:"models"`
 }
 
 type ModelConfig struct {
@@ -197,6 +211,7 @@ type ModelConfig struct {
 	Protocol        string       `json:"protocol,omitempty"`
 	ReasoningEffort string       `json:"reasoning_effort,omitempty"`
 	ContextWindow   int          `json:"context_window,omitempty"`
+	Vision          *bool        `json:"vision,omitempty"`
 	Profile         ModelProfile `json:"profile"`
 }
 

@@ -16,16 +16,19 @@ const (
 )
 
 type ApprovalDecision struct {
-	Allowed  bool `json:"allowed"`
-	Remember bool `json:"remember,omitempty"`
+	// Cancelled is set only by in-process adapters when no human decision exists.
+	Cancelled bool `json:"-"`
+	Allowed   bool `json:"allowed"`
+	Remember  bool `json:"remember,omitempty"`
 	// Deprecated: unified approvals no longer require a separate action.
 	AllowWithPermission bool `json:"allow_with_permission,omitempty"`
 }
 
 func (d ApprovalDecision) ConfirmReply() protocol.ConfirmReply {
 	return protocol.ConfirmReply{
-		Allowed:  d.Allowed,
-		Remember: d.Remember,
+		Allowed:   d.Allowed,
+		Cancelled: d.Cancelled,
+		Remember:  d.Remember,
 	}
 }
 

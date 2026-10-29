@@ -4,7 +4,7 @@
 
 本文介绍如何给 NekoCode 增加一个可委托的子 Agent。示例创建只读审查员 `review-agents/reviewer`，通过插件安装，再由主 Agent 调用。
 
-这里的自定义 Agent 是子任务执行配置（Profile），不是新的模型服务。它定义指令、工具范围、默认技能和步数；模型配置继承主 Agent，thinking 关闭。应用底座开发见 [Runtime 应用开发指南](RUNTIME_APP_GUIDE.md)。
+这里的自定义 Agent 是子任务执行配置（Profile），不是新的模型服务。它定义指令、工具范围、默认技能、步数和可选工作模型；不指定模型时跟随主 Agent。应用底座开发见 [Runtime 应用开发指南](RUNTIME_APP_GUIDE.md)。
 
 ## 一、先选 Agent 还是 Skill
 
@@ -107,6 +107,8 @@ TUI 中用 `/tasks` 或 `Ctrl+G` 查看当前父会话的子任务。达到步�
 | `base` | 可选 `explore` 或 `coder`；声明后工具只能是基线的子集 |
 | `tools` | 工具白名单；支持 YAML 数组或逗号分隔字符串 |
 | `skills` | 默认技能名称数组，与 task 指定技能合并、去重，运行前解析 |
+| `model` | 可选，引用 `config.json` 中 完整模型引用（`服务名/模型名或别名`）；省略或空字符串跟随主对话模型，未知名称在运行前报错 |
+| `isolation` | 可选 `shared`（默认）或 `worktree`；后者要求独立 Git 工作副本，不能由 task 降回 shared |
 | `max_steps` | 1–200；省略或 0 使用默认 150，按工具执行轮次限制 |
 | 正文 | 必填；作为自定义指令，运行时仍保留通用约束和完成协议 |
 
@@ -118,7 +120,39 @@ TUI 中用 `/tasks` 或 `Ctrl+G` 查看当前父会话的子任务。达到步�
 - 写了 `tools: []`：禁用全部外部工具，即使声明了 `base`。
 - 两者都没写：没有外部工具，只能根据给定内容完成文本任务。
 
-`coder` 包含读写文件和 Shell 等工具，`explore` 不包含写入或 Shell。完整基线见 [Profile 定义](../../bot/extension/agentprofile/profile.go)。未知工具、超出基线的工具和未知 YAML 字段都会报错；`model`、`permissionMode` 不是当前支持字段。
+`coder` 包含读写文件和 Shell 等工具，`explore` 不包含写入或 Shell。完整基线见 [Profile 定义](../../bot/extension/agentprofile/profile.go)。未知工具、超出基线的工具和未知 YAML 字段都会报错；`permissionMode` 尚不支持。
+
+### 为 Agent 指定模型
+
+在 frontmatter 中加入 `model: relay/fast-review`，其中 `relay/fast-review` 必须是已经配置的 完整模型引用（`服务名/模型名或别名`），不是供应商模型 ID，也不是自动识别的 `fast`/`small` 别名。省略或空字符串表示使用当前主对话模型。`agent_profiles` 会展示显式模型配置。
+
+每次任务创建独立客户端，协议、端点、推理设置及上下文窗口跟随所选模型，输出限制沿用对应协议客户端的默认限制。Profile 工具白名单保持生效；选模型不会增加工具权限。子 Agent 仍使用文本任务输入，原生图片处理不随此字段开启。
+
+`compaction_model` 继续独立用于压缩，不再决定子 Agent 的工作模型；压缩仍关闭推理。旧版依赖 `compaction_model` 执行子任务的配置，可在相应 Profile 中显式设置同名 `model`。
+
+恢复任务时，重新读取当前 Profile 的模型配置；修改 Profile 或模型配置后，恢复执行可使用新模型。已保存的历史内容会保留，上下文窗口和推理设置使用当前模型的值。模型配置通过现有配置刷新或重启生效，运行中不切换；缺失模型不会静默回退。
+
+### 独立工作副本
+
+给 Profile 加 `isolation: worktree`，或委托时使用 `task(profile="coder", isolation="worktree", prompt="…")`。未设置时沿用共享工作区。`agent_profiles` 展示 Profile 的配置；`task_list` 的已保存任务展示实际 isolation。
+
+新副本从当前 Git HEAD 创建，不带主目录未提交、暂存或未跟踪的内容。项目必须已有 Git 提交；父级工作目录在 HEAD 中也必须存在。副本位于 `~/.nekocode/worktrees/<父会话>/<任务 ID>/tree`，保留父级相对仓库根的工作目录位置。每次执行独立创建 Shell、进程管理、LSP 和索引实例，文件缓存及内容快照独立，不能把子任务写入父会话的 rewind 记录。审批模式仍实时继承父级，`$WORKSPACE` 权限锚点指向子目录。
+
+首版支持内置工具。会捕获父级运行状态的扩展工具（包括 capability/MCP）不能直接复用，Profile 含这类工具时明确报错；可通过预加载的 `skills` 使用工作流说明。Git 管理操作禁用 hooks、文件过滤器、外部 diff、自动取回对象和远程协议；Git LFS 等过滤器生成的文件不会自动物化，子模块也不自动初始化。
+
+恢复任务默认沿用保存的 isolation，复用原目录和改动，不能切换模式。失败、取消和异常退出保留副本；副本被清理后该任务不能再恢复，需要新建任务。创建中断留下的记录也能用显式 discard 清理。
+
+结果通过以下命令管理（等当前任务结束后执行）：
+
+- `/worktree list`：列出当前父会话保留的副本，包括创建失败的记录。
+- `/worktree diff <任务 ID>`：相对创建时的提交查看全部改动，包括新增的非忽略文件、已跟踪的忽略文件及子任务内的提交；暂存或提交后的强制添加文件也会保留，不改变子任务暂存区。
+- `/worktree apply <任务 ID>`：预检查后应用到主工作副本；冲突报错并保留结果，不创建提交，也不自动解决冲突。多个任务和会话的应用由仓库共享锁串行执行。非空且预检通过的应用会捕获所有受影响路径并创建 `/rewind` 检查点；空差异和冲突不创建锚点。
+- `/worktree remove <任务 ID>`：只清理没有改动或额外文件的副本。
+- `/worktree remove <任务 ID> --discard`：明确丢弃副本中的全部内容，也适用于创建中断的半成品。任务历史与锁文件保留。
+
+工作中的任务持有操作系统锁，管理命令不能操作其副本；进程退出会自动释放锁。应用后需在主目录审查和验证，再显式清理。Apply 与 patch 使用同一临时 index 的 raw `-z --no-renames` 计划捕获常规文件内容和权限；rename 捕获新旧两路径，symlink、gitlink 等检查点不支持的类型会拒绝应用。`/rewind` 不保证进程崩溃、外部并发写入或目录元数据恢复。单次差异输出限制为 64 MiB，超限报错并保留现场。不要删除正在使用的锁文件，也不要同时用外部编辑器或 Git 命令改写正在应用的主目录文件。
+
+worktree 提供文件副本隔离；文件访问和命令执行仍由现有沙箱与权限规则约束，显式授予的宿主权限继续有效。
 
 ## 四、组合 Skill 与 MCP
 

@@ -7,13 +7,20 @@ import (
 	"time"
 
 	"nekocode/interaction/connect"
+	"nekocode/protocol"
 )
 
 const usageAdd = "Usage: /connect feishu add <app-id> <app-secret>"
 
+func (c *Connector) CommandMenu(_ context.Context, args []string) (protocol.CommandMenu, bool) {
+	return connect.ConnectorCommandMenu("feishu", args, nil)
+}
+
 func (c *Connector) HandleCommand(ctx context.Context, args []string) (string, error) {
 	if len(args) > 0 {
 		switch strings.ToLower(args[0]) {
+		case "connect":
+			return c.connect(ctx)
 		case "add":
 			return c.addApp(args[1:])
 		case "pair":
@@ -29,6 +36,8 @@ func (c *Connector) HandleCommand(ctx context.Context, args []string) (string, e
 				return "", err
 			}
 			return "Feishu connector stopped.", nil
+		default:
+			return fmt.Sprintf("Unknown Feishu command %q.\nUsage: /connect feishu <connect|add|pair|unpair|reset|status|disconnect>", args[0]), nil
 		}
 	}
 	return c.connect(ctx)

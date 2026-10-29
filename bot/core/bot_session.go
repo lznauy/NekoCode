@@ -47,6 +47,16 @@ func (b *Bot) initSession() {
 }
 
 func (b *Bot) registerSessionCommands(p *command.Parser) {
+	p.RegisterInfo("fork", "Fork the current conversation into a new session", func(ctx context.Context, cmd *command.Command) (string, bool) {
+		if len(cmd.Args) != 0 {
+			return "Usage: /fork", true
+		}
+		snapshot, err := b.ForkSession(ctx)
+		if err != nil {
+			return "Failed to fork session: " + err.Error(), true
+		}
+		return fmt.Sprintf("Forked session %s from %s (%d history messages). Workspace files are shared. /sessions %s to return.", snapshot.ID, snapshot.ForkedFrom, snapshot.ForkedAtSeq, snapshot.ForkedFrom), true
+	})
 	p.RegisterInfo("sessions", "Resume a saved session", func(ctx context.Context, cmd *command.Command) (string, bool) {
 		if err := ctx.Err(); err != nil {
 			return "Session command cancelled: " + err.Error(), true
@@ -80,8 +90,8 @@ func (b *Bot) registerSessionCommands(p *command.Parser) {
 		sessions := b.sess.List()
 		items := make([]protocol.CommandMenuItem, 0, len(sessions))
 		for _, item := range sessions {
-			description := fmt.Sprintf("%s · %d messages · %s",
-				time.Unix(item.CreatedAt, 0).Local().Format("01-02 15:04"), item.MsgCount, filepath.Base(item.CWD))
+			description := fmt.Sprintf("%s · %d messages · %s%s",
+				time.Unix(item.CreatedAt, 0).Local().Format("01-02 15:04"), item.MsgCount, filepath.Base(item.CWD), formatSessionSource(item))
 			items = append(items, protocol.CommandMenuItem{
 				Key:   item.ID,
 				Value: "/sessions " + item.ID, Label: item.ID,
@@ -151,6 +161,10 @@ func (b *Bot) ResumeSession(id string) error {
 func (b *Bot) resumeSession(id string) (*session.Snapshot, error) {
 	b.historyMu.Lock()
 	defer b.historyMu.Unlock()
+	return b.resumeSessionLocked(id)
+}
+
+func (b *Bot) resumeSessionLocked(id string) (*session.Snapshot, error) {
 	oldID := b.sess.CurrentID()
 	snapshot, err := b.sess.LoadLazy(id)
 	if err != nil {
@@ -468,6 +482,17 @@ func checkpointChangeCounts(turn checkpoint.TurnInfo) (created, modified, delete
 	return created, modified, deleted
 }
 
+func formatSessionSource(item session.Meta) string {
+	if item.ForkedFrom == "" {
+		return ""
+	}
+	source := " · from " + item.ForkedFrom
+	if item.ForkSourceDeleted {
+		source += " · source deleted"
+	}
+	return source
+}
+
 func formatSessionList(sessions []session.Meta) string {
 	if len(sessions) == 0 {
 		return "No saved sessions."
@@ -475,7 +500,7 @@ func formatSessionList(sessions []session.Meta) string {
 	var out strings.Builder
 	out.WriteString("Saved sessions:\n")
 	for _, item := range sessions {
-		fmt.Fprintf(&out, "  %s  %s  %d msgs  %s\n", item.ID, item.Age(), item.MsgCount, item.CWD)
+		fmt.Fprintf(&out, "  %s  %s  %d msgs  %s%s\n", item.ID, item.Age(), item.MsgCount, item.CWD, formatSessionSource(item))
 	}
 	out.WriteString("\n/sessions <id> to resume")
 	return out.String()

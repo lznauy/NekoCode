@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { cn } from '../lib/classnames'
 import { isWailsEnvironment, safeGetConfig, safeResolveModelProfile, safeSaveConfig, safeSkillManagementView, safeMCPAuthorizationAction } from '../lib/wails'
-import type { ConfigView, ImageGenConfig, ImageUnderstandConfig, MCPServerConfig, ModelConfig } from '../types/config'
+import type { ConfigView, ImageGenConfig, ImageUnderstandConfig, MCPServerConfig, ModelConfig, ModelDefinition, ProviderConfig } from '../types/config'
 import type { SkillManagementView } from '../types/skills'
 import { Select } from './Select'
 
@@ -13,24 +13,49 @@ interface ConfigPanelProps {
   initialTab?: ConfigTab
 }
 
-const emptyModel = (name: string): ModelConfig => ({
-  name,
-  provider: 'openai',
-  api_key: '',
-  model: '',
-  base_url: '',
-  protocol: 'openai',
-  reasoning_effort: '',
-  context_window: 0,
-})
-
-type EditableModelConfig = ModelConfig & { uiKey: string }
+type EditableModelConfig = ModelDefinition & { uiKey: string; shorthand: boolean; profile?: ModelConfig['profile'] }
+type EditableProviderConfig = Omit<ProviderConfig, 'models'> & { uiKey: string; models: EditableModelConfig[] }
 type EditableImageGenConfig = ImageGenConfig & { uiKey: string }
 type EditableImageUnderstandConfig = ImageUnderstandConfig & { uiKey: string }
-type EditableConfigView = Omit<ConfigView, 'models' | 'image_gen_models' | 'image_understand_models'> & {
-  models: EditableModelConfig[]
+type EditableConfigView = Omit<ConfigView, 'models' | 'providers' | 'image_gen_models' | 'image_understand_models'> & {
+  providers: EditableProviderConfig[]
+  activeModelKey?: string
+  compactionModelKey?: string
   image_gen_models?: EditableImageGenConfig[]
   image_understand_models?: EditableImageUnderstandConfig[]
+}
+
+function modelRef(provider: Pick<ProviderConfig, 'name'>, model: ModelDefinition) {
+  return `${provider.name}/${model.name || model.model}`
+}
+
+function resolvedModel(provider: EditableProviderConfig, model: EditableModelConfig): ModelConfig {
+  return { ...model, name: modelRef(provider, model), provider: provider.name,
+    api_key: provider.api_key ?? '', base_url: provider.base_url,
+    protocol: model.protocol || provider.protocol || 'openai' }
+}
+
+function allModels(cfg: EditableConfigView): ModelConfig[] {
+  return cfg.providers.flatMap((provider) => provider.models.map((model) => resolvedModel(provider, model)))
+}
+
+function modelKey(providers: EditableProviderConfig[], reference: string | undefined) {
+  return providers.flatMap((p) => p.models.filter((m) => modelRef(p, m) === reference)).map((m) => m.uiKey)[0]
+}
+
+function profileChanged(before: ModelConfig, after: ModelConfig) {
+  return before.provider !== after.provider || before.model !== after.model || before.protocol !== after.protocol ||
+    (before.context_window ?? 0) !== (after.context_window ?? 0)
+}
+
+function replaceProviders(prev: EditableConfigView, providers: EditableProviderConfig[]): EditableConfigView {
+  const next = { ...prev, providers }
+  const refs = new Map(providers.flatMap((p) => p.models.map((m) => [m.uiKey, modelRef(p, m)] as const)))
+  next.activeModelKey = prev.activeModelKey && refs.has(prev.activeModelKey) ? prev.activeModelKey : refs.keys().next().value
+  next.compactionModelKey = prev.compactionModelKey && refs.has(prev.compactionModelKey) ? prev.compactionModelKey : undefined
+  next.active = refs.get(next.activeModelKey ?? '') ?? ''
+  next.compaction_model = refs.get(next.compactionModelKey ?? '') ?? ''
+  return next
 }
 
 const emptyImageModel = (name: string): ImageGenConfig => ({
@@ -73,12 +98,14 @@ function nextConfigRowKey(prefix: string) {
   return `${prefix}-${configRowId}`
 }
 
-function withModelKey(model: ModelConfig): EditableModelConfig {
-  return { ...model, uiKey: nextConfigRowKey('model') }
-}
-
-function withModelKeys(models: ModelConfig[]): EditableModelConfig[] {
-  return models.map(withModelKey)
+function withProviderKeys(providers: ProviderConfig[], catalog: ModelConfig[] = []): EditableProviderConfig[] {
+  return providers.map((provider) => ({ ...provider, uiKey: nextConfigRowKey('provider'),
+    models: provider.models.map((entry) => {
+      const model = typeof entry === 'string' ? { model: entry } : entry
+      return { ...model, uiKey: nextConfigRowKey('model'), shorthand: typeof entry === 'string',
+        profile: catalog.find((m) => m.name === modelRef(provider, model))?.profile }
+    }),
+  }))
 }
 
 function withImageModelKey(model: ImageGenConfig): EditableImageGenConfig {
@@ -95,6 +122,17 @@ function withImageUnderstandModelKey(model: ImageUnderstandConfig): EditableImag
 
 function withImageUnderstandModelKeys(models: ImageUnderstandConfig[]): EditableImageUnderstandConfig[] {
   return models.map(withImageUnderstandModelKey)
+}
+
+function editableConfig(view: ConfigView): EditableConfigView {
+  const providers = withProviderKeys(view.providers ?? [], view.models ?? [])
+  return { ...view, providers,
+    activeModelKey: modelKey(providers, view.active),
+    compactionModelKey: modelKey(providers, view.compaction_model),
+    image_gen_models: withImageModelKeys(view.image_gen_models ?? []),
+    image_understand_models: withImageUnderstandModelKeys(view.image_understand_models ?? []),
+    mcp_servers: view.mcp_servers ?? {},
+  }
 }
 
 export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }: ConfigPanelProps) {
@@ -125,13 +163,7 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
           setError('无法读取配置：Wails 配置接口没有返回数据')
           return
         }
-        setCfg({
-          ...next,
-          models: withModelKeys(next.models ?? []),
-          image_gen_models: withImageModelKeys(next.image_gen_models ?? []),
-          image_understand_models: withImageUnderstandModelKeys(next.image_understand_models ?? []),
-          mcp_servers: next.mcp_servers ?? {},
-        })
+        setCfg(editableConfig(next))
         setSelectedMcp(Object.keys(next.mcp_servers ?? {})[0] ?? '')
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
@@ -142,28 +174,50 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
   const mcpEntries = Object.entries(cfg?.mcp_servers ?? {})
   const enabledMcpCount = mcpEntries.filter(([, srv]) => srv.enabled).length
   const selectedMcpEntry = mcpEntries.find(([name]) => name === selectedMcp) ?? mcpEntries[0]
-  const activeModel = cfg?.models.find((model) => model.name === cfg.active)
+  const models = cfg ? allModels(cfg) : []
+  const activeModel = models.find((model) => model.name === cfg?.active)
 
   if (!open) return null
 
   const update = (patch: Partial<EditableConfigView>) => {
     setSaved(false)
-    setCfg((prev) => (prev ? { ...prev, ...patch } : prev))
+    setCfg((prev) => {
+      if (!prev) return prev
+      const next = { ...prev, ...patch }
+      if ('active' in patch) next.activeModelKey = modelKey(next.providers, patch.active)
+      if ('compaction_model' in patch) next.compactionModelKey = modelKey(next.providers, patch.compaction_model)
+      return next
+    })
   }
 
-  const updateModel = (idx: number, patch: Partial<ModelConfig>) => {
+  const updateProvider = (idx: number, patch: Partial<ProviderConfig>) => {
     setSaved(false)
     setCfg((prev) => {
       if (!prev) return prev
-      const profileChanged = 'provider' in patch || 'model' in patch || 'protocol' in patch || 'context_window' in patch
-      const models = prev.models.map((m, i) => i === idx ? { ...m, ...patch, ...(profileChanged ? { profile: undefined } : {}) } : m)
-      const next: EditableConfigView = { ...prev, models }
-      const previousName = prev.models[idx]?.name
-      if (previousName && next.active === previousName) next.active = models[idx].name
-      if (previousName && next.flash_model === previousName) next.flash_model = models[idx].name
-      if (!models.some((m) => m.name === next.active)) next.active = models[0]?.name ?? ''
-      if (next.flash_model && !models.some((m) => m.name === next.flash_model)) next.flash_model = ''
-      return next
+      const providers = prev.providers.map((p, i) => {
+        if (i !== idx) return p
+        const updated = { ...p, ...patch, models: p.models }
+        updated.models = p.models.map((m) => profileChanged(resolvedModel(p, m), resolvedModel(updated, m)) ? { ...m, profile: undefined } : m)
+        return updated
+      })
+      return replaceProviders(prev, providers)
+    })
+  }
+
+  const updateModel = (providerKey: string, key: string, patch: Partial<ModelConfig>) => {
+    setSaved(false)
+    setCfg((prev) => {
+      if (!prev) return prev
+      const providers = prev.providers.map((p) => p.uiKey === providerKey ? { ...p,
+        models: p.models.map((m) => {
+          if (m.uiKey !== key) return m
+          const updated = { ...m, ...patch }
+          if (profileChanged(resolvedModel(p, m), resolvedModel(p, updated))) updated.profile = undefined
+          if (patch.profile && updated.reasoning_effort && !(patch.profile.reasoning_efforts ?? []).includes(updated.reasoning_effort)) updated.reasoning_effort = ''
+          return updated
+        }),
+      } : p)
+      return replaceProviders(prev, providers)
     })
   }
 
@@ -185,27 +239,36 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
     })
   }
 
-  const addModel = () => {
+  const addProvider = () => {
     setCfg((prev) => {
       if (!prev) return prev
-      const name = nextName(prev.models.map((m) => m.name), 'model')
-      return { ...prev, models: [...prev.models, withModelKey(emptyModel(name))], active: prev.active || name }
+      const name = nextName(prev.providers.map((p) => p.name), 'provider')
+      const provider = withProviderKeys([{ name, protocol: 'openai', api_key: '', base_url: '', models: [''] }])[0]
+      return replaceProviders(prev, [...prev.providers, provider])
     })
     setSaved(false)
   }
 
-  const removeModel = (idx: number) => {
+  const removeProvider = (idx: number) => {
+    setCfg((prev) => prev ? replaceProviders(prev, prev.providers.filter((_, i) => i !== idx)) : prev)
+    setSaved(false)
+  }
+
+  const addModel = (providerIdx: number) => {
     setCfg((prev) => {
-      if (!prev || prev.models.length <= 1) return prev
-      const removed = prev.models[idx]
-      const models = prev.models.filter((_, i) => i !== idx)
-      return {
-        ...prev,
-        models,
-        active: prev.active === removed.name ? models[0].name : prev.active,
-        flash_model: prev.flash_model === removed.name ? '' : prev.flash_model,
-      }
+      if (!prev) return prev
+      const providers = prev.providers.map((p, i) => i === providerIdx ? { ...p,
+        models: [...p.models, { model: '', uiKey: nextConfigRowKey('model'), shorthand: true }],
+      } : p)
+      return replaceProviders(prev, providers)
     })
+    setSaved(false)
+  }
+
+  const removeModel = (providerIdx: number, idx: number) => {
+    setCfg((prev) => prev ? replaceProviders(prev, prev.providers.map((p, pi) => pi === providerIdx ? {
+      ...p, models: p.models.filter((_, i) => i !== idx),
+    } : p)) : prev)
     setSaved(false)
   }
 
@@ -308,9 +371,11 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
     setError('')
     setSaved(false)
     try {
+      const { activeModelKey: _activeKey, compactionModelKey: _compactionKey, ...configuration } = cfg
       const savedCfg = await safeSaveConfig({
-        ...cfg,
-        models: cfg.models.map((model) => trimModel(model)),
+        ...configuration,
+        providers: cfg.providers.map(trimProvider),
+        models: [],
         image_gen_models: (cfg.image_gen_models ?? []).map((model) => trimImageModel(model)),
         image_understand_models: (cfg.image_understand_models ?? []).map((model) => trimImageUnderstandModel(model)),
         mcp_servers: trimMcpServers(cfg.mcp_servers ?? {}),
@@ -319,13 +384,7 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
         setError('保存失败：Wails 配置接口没有返回数据')
         return
       }
-      setCfg({
-        ...savedCfg,
-        models: withModelKeys(savedCfg.models ?? []),
-        image_gen_models: withImageModelKeys(savedCfg.image_gen_models ?? []),
-        image_understand_models: withImageUnderstandModelKeys(savedCfg.image_understand_models ?? []),
-        mcp_servers: savedCfg.mcp_servers ?? {},
-      })
+      setCfg(editableConfig(savedCfg))
       setSaved(true)
       onSaved()
       return savedCfg
@@ -380,7 +439,7 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
               <section className="rounded-md border border-border/50 bg-surface px-4 py-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <StatusPill ok={cfg.exists} text={cfg.exists ? '已识别配置文件' : '未找到配置文件，保存后创建'} />
-                  <span className="text-[11px] text-text-3">{cfg.models.length} 个文本模型</span>
+                  <span className="text-[11px] text-text-3">{models.length} 个文本模型</span>
                   <span className="text-[11px] text-text-3">{cfg.image_gen_models?.length ?? 0} 个图片生成模型</span>
                   <span className="text-[11px] text-text-3">{cfg.image_understand_models?.length ?? 0} 个图片理解模型</span>
                   <span className="text-[11px] text-text-3">{mcpEntries.length} 个 MCP 服务</span>
@@ -391,15 +450,15 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
                 <Field label="当前模型">
                   <Select
                     value={cfg.active}
-                    options={cfg.models.map((m) => ({ value: m.name, label: m.name }))}
+                    options={models.map((m) => ({ value: m.name, label: m.name }))}
                     onChange={(v) => update({ active: v })}
                   />
                 </Field>
-                <Field label="Flash 模型">
+                <Field label="上下文压缩模型">
                   <Select
-                    value={cfg.flash_model ?? ''}
-                    options={[{ value: '', label: '跟随当前模型' }, ...cfg.models.map((m) => ({ value: m.name, label: m.name }))]}
-                    onChange={(v) => update({ flash_model: v })}
+                    value={cfg.compaction_model ?? ''}
+                    options={[{ value: '', label: '跟随当前模型' }, ...models.map((m) => ({ value: m.name, label: m.name }))]}
+                    onChange={(v) => update({ compaction_model: v })}
                   />
                 </Field>
                 <Field label="当前有效窗口">
@@ -420,7 +479,7 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
                 </Field>
               </section>
               <section className="grid gap-2 md:grid-cols-3">
-                <ConfigShortcut title="文本模型" detail={`${cfg.models.length} 个，当前 ${cfg.active || '未设置'}`} onClick={() => setTab('models')} />
+                <ConfigShortcut title="文本模型" detail={`${models.length} 个，当前 ${cfg.active || '未设置'}`} onClick={() => setTab('models')} />
                 <ConfigShortcut title="图片模型" detail={`${cfg.image_gen_models?.length ?? 0} 个生成，${cfg.image_understand_models?.length ?? 0} 个理解`} onClick={() => setTab('models')} />
                 <ConfigShortcut title="MCP 服务" detail={`${enabledMcpCount}/${mcpEntries.length} 已启用`} onClick={() => setTab('mcp')} />
               </section>
@@ -430,17 +489,29 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
               {tab === 'models' && (
                 <>
               <section>
-                <SectionTitle title="文本模型" action="添加模型" onAction={addModel} />
-                <div className="mt-2 space-y-2">
-                  {cfg.models.map((model, idx) => (
-                    <ModelCard
-                      key={model.uiKey}
-                      model={model}
-                      active={cfg.active === model.name}
-                      canRemove={cfg.models.length > 1}
-                      onChange={(patch) => updateModel(idx, patch)}
-                      onRemove={() => removeModel(idx)}
-                    />
+                <SectionTitle title="模型服务" action="添加服务" onAction={addProvider} />
+                <div className="mt-2 space-y-3">
+                  {cfg.providers.map((provider, pi) => (
+                    <div key={provider.uiKey} className="rounded-md border border-border/50 bg-surface px-4 py-3">
+                      <div className="mb-3 flex items-center justify-between">
+                        <span className="text-xs font-semibold">{provider.name || '未命名服务'}</span>
+                        <button type="button" className="danger-button" disabled={cfg.providers.length <= 1} onClick={() => removeProvider(pi)}>删除服务</button>
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <Field label="服务名称"><input className="field" value={provider.name} onChange={(e) => updateProvider(pi, { name: e.target.value })} /></Field>
+                        <Field label="默认协议"><Select value={provider.protocol || 'openai'} options={[{value: 'openai', label: 'openai'}, {value: 'anthropic', label: 'anthropic'}]} onChange={(v) => updateProvider(pi, {protocol: v as ProviderConfig['protocol']})} /></Field>
+                        <Field label="API Key"><input className="field font-mono" type="password" value={provider.api_key ?? ''} onChange={(e) => updateProvider(pi, {api_key: e.target.value})} /></Field>
+                        <Field label="Base URL"><input className="field font-mono" value={provider.base_url ?? ''} onChange={(e) => updateProvider(pi, {base_url: e.target.value})} /></Field>
+                      </div>
+                      <div className="mt-4 space-y-2">
+                        {provider.models.map((model, mi) => (
+                          <ModelCard key={model.uiKey} model={resolvedModel(provider, model)} alias={model.name ?? ''} protocolOverride={model.protocol ?? ''}
+                            active={cfg.active === modelRef(provider, model)} canRemove={provider.models.length > 1}
+                            onChange={(patch) => updateModel(provider.uiKey, model.uiKey, patch)} onRemove={() => removeModel(pi, mi)} />
+                        ))}
+                      </div>
+                      <button type="button" className="secondary-button mt-3" onClick={() => addModel(pi)}>添加模型</button>
+                    </div>
                   ))}
                 </div>
               </section>
@@ -557,12 +628,16 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
 
 function ModelCard({
   model,
+  alias,
+  protocolOverride,
   active,
   canRemove,
   onChange,
   onRemove,
 }: {
   model: ModelConfig
+  alias: string
+  protocolOverride: string
   active: boolean
   canRemove: boolean
   onChange: (patch: Partial<ModelConfig>) => void
@@ -573,9 +648,7 @@ function ModelCard({
     const timer = window.setTimeout(() => {
       safeResolveModelProfile(model).then((profile) => {
         if (cancelled || !profile) return
-        const effort = model.reasoning_effort || ''
-        const supported = effort === '' || (profile.reasoning_efforts ?? []).includes(effort)
-        onChange({ profile, reasoning_effort: supported ? model.reasoning_effort : '' })
+        onChange({ profile })
       })
     }, 250)
     return () => {
@@ -592,13 +665,12 @@ function ModelCard({
         <button className="danger-button" type="button" disabled={!canRemove} onClick={onRemove}>删除</button>
       </div>
       <div className="grid gap-3 md:grid-cols-2">
-        <Field label="名称"><input className="field" value={model.name} onChange={(e) => onChange({ name: e.target.value })} /></Field>
-        <Field label="Provider"><input className="field" value={model.provider} onChange={(e) => onChange({ provider: e.target.value })} /></Field>
+        <Field label="模型别名（可选）"><input className="field" placeholder="默认使用模型 ID" value={alias} onChange={(e) => onChange({ name: e.target.value })} /></Field>
         <Field label="模型 ID"><input className="field" value={model.model} onChange={(e) => onChange({ model: e.target.value })} /></Field>
         <Field label="协议">
           <Select
-            value={model.protocol || 'openai'}
-            options={[{ value: 'openai', label: 'openai' }, { value: 'anthropic', label: 'anthropic' }]}
+            value={protocolOverride}
+            options={[{ value: '', label: '跟随服务' }, { value: 'openai', label: 'openai' }, { value: 'anthropic', label: 'anthropic' }]}
             onChange={(v) => onChange({ protocol: v as ModelConfig['protocol'] })}
           />
         </Field>
@@ -627,8 +699,7 @@ function ModelCard({
             </span>
           </div>
         </Field>
-        <Field label="API Key"><input className="field font-mono" type="password" value={model.api_key} onChange={(e) => onChange({ api_key: e.target.value })} /></Field>
-        <Field label="Base URL"><input className="field font-mono" value={model.base_url ?? ''} onChange={(e) => onChange({ base_url: e.target.value })} /></Field>
+        <Field label="视觉能力"><Select value={model.vision === undefined ? '' : String(model.vision)} options={[{value: '', label: '自动'}, {value: 'true', label: '支持'}, {value: 'false', label: '不支持'}]} onChange={(v) => onChange({vision: v === '' ? undefined : v === 'true'})} /></Field>
       </div>
     </div>
   )
@@ -882,22 +953,29 @@ function StatusPill({ ok, text }: { ok: boolean; text: string }) {
   )
 }
 
-function validateConfig(cfg: ConfigView | null): string {
+function validateConfig(cfg: EditableConfigView | null): string {
   if (!cfg) return ''
-  if (!cfg.models.length) return '至少需要一个文本模型'
+  if (!cfg.providers.length) return '至少需要一个模型服务'
   const names = new Set<string>()
-  for (const [idx, model] of cfg.models.entries()) {
-    const name = model.name.trim()
-    if (!name) return `第 ${idx + 1} 个模型缺少名称`
-    if (names.has(name)) return `模型名称重复：${name}`
-    names.add(name)
-    if (!model.provider.trim()) return `${name} 缺少 provider`
-    if (!model.model.trim()) return `${name} 缺少模型 ID`
-    if ((model.context_window ?? 0) < 0) return `${name} 的上下文窗口不能为负数`
-    if (!model.profile) return `${name} 的模型能力正在解析`
+  const providerNames = new Set<string>()
+  for (const provider of cfg.providers) {
+    const providerName = provider.name.trim()
+    if (!providerName || /[\s/]/u.test(providerName)) return '服务名称不能为空，也不能包含空白或斜杠'
+    if (providerNames.has(providerName)) return `服务名称重复：${providerName}`
+    providerNames.add(providerName)
+    if (!provider.models.length) return `${providerName} 至少需要一个模型`
+    for (const model of provider.models) {
+      const name = modelRef({name: providerName}, { ...model, name: model.name?.trim(), model: model.model.trim() })
+      if (!model.model.trim() || /\s/u.test(model.model.trim())) return `${providerName} 缺少有效模型 ID`
+      if (model.name && /\s/u.test(model.name.trim())) return `${name} 的模型别名不能包含空白`
+      if (names.has(name)) return `模型名称重复：${name}`
+      names.add(name)
+      if ((model.context_window ?? 0) < 0) return `${name} 的上下文窗口不能为负数`
+      if (!model.profile) return `${name} 的模型能力正在解析`
+    }
   }
   if (!names.has(cfg.active)) return '当前模型不在模型列表中'
-  if (cfg.flash_model && !names.has(cfg.flash_model)) return 'Flash 模型不在模型列表中'
+  if (cfg.compaction_model && !names.has(cfg.compaction_model)) return '上下文压缩模型不在模型列表中'
   if (cfg.auto_compact_percent < 1 || cfg.auto_compact_percent > 99) return '自动压缩门限必须在 1% 到 99% 之间'
   const imageUnderstandNames = new Set<string>()
   for (const [idx, model] of (cfg.image_understand_models ?? []).entries()) {
@@ -935,17 +1013,14 @@ function nextName(names: string[], base: string): string {
   return `${base}-${Date.now()}`
 }
 
-function trimModel(model: ModelConfig): ModelConfig {
-  return {
-    name: model.name.trim(),
-    provider: model.provider.trim(),
-    api_key: model.api_key.trim(),
-    model: model.model.trim(),
-    base_url: model.base_url?.trim(),
-    protocol: model.protocol || 'openai',
-    reasoning_effort: model.reasoning_effort || '',
-    context_window: model.context_window && model.context_window > 0 ? model.context_window : undefined,
-  }
+function trimProvider(provider: EditableProviderConfig): ProviderConfig {
+  return { name: provider.name.trim(), api_key: provider.api_key?.trim(), base_url: provider.base_url?.trim(),
+    protocol: provider.protocol || 'openai', models: provider.models.map((model) => {
+      const entry: ModelDefinition = { model: model.model.trim(), name: model.name?.trim() || undefined,
+        protocol: model.protocol || undefined, reasoning_effort: model.reasoning_effort || undefined,
+        context_window: model.context_window && model.context_window > 0 ? model.context_window : undefined, vision: model.vision }
+      return model.shorthand && !entry.name && !entry.protocol && !entry.reasoning_effort && !entry.context_window && entry.vision === undefined ? entry.model : entry
+    }) }
 }
 
 function formatNumber(value: number): string {

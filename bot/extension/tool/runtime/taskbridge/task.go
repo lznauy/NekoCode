@@ -29,11 +29,12 @@ type TaskResult struct {
 // concrete sub-agent implementation. Profile defines the capability ceiling;
 // Skills supply task-scoped workflows and cannot grant additional tools.
 type TaskSpec struct {
-	ResumeID string
-	Title    string
-	Prompt   string
-	Profile  string
-	Skills   []string
+	Isolation string
+	ResumeID  string
+	Title     string
+	Prompt    string
+	Profile   string
+	Skills    []string
 }
 
 // TaskRunner executes a delegated task without exposing the concrete sub-agent
@@ -64,6 +65,7 @@ type TaskAttemptSummary struct {
 }
 
 type TaskSummary struct {
+	Isolation     string              `json:"isolation,omitempty"`
 	Recorded      bool                `json:"recorded"`
 	Title         string              `json:"title,omitempty"`
 	ID            string              `json:"id"`

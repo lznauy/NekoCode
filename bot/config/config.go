@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
+	"nekocode/bot/extension/tool/runtime/netpolicy"
 	"nekocode/util/fs"
 	utilhttp "nekocode/util/http"
 )
@@ -83,9 +85,10 @@ type PermissionsConfig struct {
 }
 
 type SandboxConfig struct {
-	SandboxMode   string   `json:"sandbox_mode,omitempty"`
-	Network       bool     `json:"network,omitempty"`
-	WritableRoots []string `json:"writable_roots,omitempty"`
+	SandboxMode     string   `json:"sandbox_mode,omitempty"`
+	Network         bool     `json:"network,omitempty"`
+	OutboundDomains []string `json:"outbound_domains"`
+	WritableRoots   []string `json:"writable_roots,omitempty"`
 }
 
 type WorkspaceConfig struct {
@@ -94,11 +97,11 @@ type WorkspaceConfig struct {
 }
 
 type Config struct {
-	Active                 string                     `json:"active"`                // name of the active model
-	FlashModel             string                     `json:"flash_model,omitempty"` // optional lightweight model; empty uses the active model
+	Active                 string                     `json:"active"`                     // name of the active model
+	CompactionModel        string                     `json:"compaction_model,omitempty"` // optional context-compaction model reference; empty uses the active model
 	AutoCompactPercent     int                        `json:"auto_compact_percent,omitempty"`
 	MaxConcurrentSubagents int                        `json:"max_concurrent_subagents,omitempty"`
-	Models                 []ModelConfig              `json:"models"`
+	Providers              []ProviderConfig           `json:"providers"`
 	ImageGenModels         []ImageGenConfig           `json:"image_gen_models,omitempty"`        // text-to-image models
 	ImageUnderstandModels  []ImageUnderstandConfig    `json:"image_understand_models,omitempty"` // image-to-text models
 	MCPServers             map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
@@ -131,17 +134,13 @@ const DefaultAutoCompactPercent = 80
 const DefaultMaxConcurrentSubagents = 8
 
 var Default = Config{
-	Active:                 "default",
+	Active:                 "deepseek/default",
 	AutoCompactPercent:     DefaultAutoCompactPercent,
 	MaxConcurrentSubagents: DefaultMaxConcurrentSubagents,
-	Models: []ModelConfig{
-		{
-			Name:     "default",
-			Provider: "deepseek",
-			Model:    "deepseek-v4-flash",
-			BaseURL:  "https://api.deepseek.com/v1",
-		},
-	},
+	Providers: []ProviderConfig{{
+		Name: "deepseek", BaseURL: "https://api.deepseek.com/v1", Protocol: "openai",
+		Models: []ModelDefinition{{Name: "default", Model: "deepseek-v4-flash"}},
+	}},
 	ImageGenModels: []ImageGenConfig{
 		{
 			Name:     "jimeng",
@@ -157,37 +156,19 @@ func Load() (*Config, error) {
 
 	configPath := Path()
 	data, err := os.ReadFile(configPath)
-	if err != nil {
+	if os.IsNotExist(err) {
 		return &cfg, nil
+	}
+	if err != nil {
+		return nil, err
 	}
 	_ = os.Chmod(configPath, 0o600)
 
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "config: %s is malformed JSON (%v) — using defaults. Fix or delete the file to silence this warning.\n", configPath, err)
-		return &cfg, nil
+		return nil, fmt.Errorf("config %s: %w", configPath, err)
 	}
-
-	// Validate Active points to an existing model.
-	if cfg.Active != "" && len(cfg.Models) > 0 {
-		found := false
-		for _, m := range cfg.Models {
-			if m.Name == cfg.Active {
-				found = true
-				break
-			}
-		}
-		if !found {
-			fmt.Fprintf(os.Stderr, "config: active model %q not found, falling back to %q\n", cfg.Active, cfg.Models[0].Name)
-			cfg.Active = cfg.Models[0].Name
-		}
-	}
-	for i := range cfg.Models {
-		model := &cfg.Models[i]
-		model.ReasoningEffort = strings.ToLower(strings.TrimSpace(model.ReasoningEffort))
-		if !ReasoningCapabilityFor(*model).Supports(model.ReasoningEffort) {
-			fmt.Fprintf(os.Stderr, "config: model %q does not support reasoning_effort %q; using auto\n", model.Name, model.ReasoningEffort)
-			model.ReasoningEffort = ReasoningAuto
-		}
+	if err := Validate(&cfg); err != nil {
+		return nil, fmt.Errorf("config %s: %w", configPath, err)
 	}
 
 	return &cfg, nil
@@ -225,11 +206,14 @@ func (c *Config) EffectiveMaxConcurrentSubagents() int {
 // Clone returns an independently mutable configuration value.
 func (c Config) Clone() Config {
 	out := c
-	out.Models = append([]ModelConfig(nil), c.Models...)
-	for i := range out.Models {
-		if c.Models[i].Vision != nil {
-			vision := *c.Models[i].Vision
-			out.Models[i].Vision = &vision
+	out.Providers = slices.Clone(c.Providers)
+	for i := range out.Providers {
+		out.Providers[i].Models = slices.Clone(c.Providers[i].Models)
+		for j := range out.Providers[i].Models {
+			if value := c.Providers[i].Models[j].Vision; value != nil {
+				vision := *value
+				out.Providers[i].Models[j].Vision = &vision
+			}
 		}
 	}
 	out.ImageGenModels = append([]ImageGenConfig(nil), c.ImageGenModels...)
@@ -253,6 +237,7 @@ func (c Config) Clone() Config {
 			permissions.Sandbox = make(map[string]SandboxConfig, len(c.Permissions.Sandbox))
 			for name, sandbox := range c.Permissions.Sandbox {
 				sandbox.WritableRoots = append([]string(nil), sandbox.WritableRoots...)
+				sandbox.OutboundDomains = slices.Clone(sandbox.OutboundDomains)
 				permissions.Sandbox[name] = sandbox
 			}
 		}
@@ -354,8 +339,21 @@ func Validate(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
 	}
-	if len(cfg.Models) == 0 {
-		return fmt.Errorf("at least one model is required")
+	if cfg.Permissions != nil {
+		for rule, profile := range cfg.Permissions.Sandbox {
+			domains, err := netpolicy.Normalize(profile.OutboundDomains)
+			if err != nil {
+				return fmt.Errorf("permissions.sandbox %q: %w", rule, err)
+			}
+			if domains != nil && strings.TrimSpace(profile.SandboxMode) == "host" {
+				return fmt.Errorf("permissions.sandbox %q: %s", rule, `outbound_domains cannot be used with host execution: host mode cannot enforce domain restrictions; use sandbox_mode="workspace-write" or "read-only". If unrestricted host execution is intended, remove outbound_domains from both the tool arguments and matching permissions.sandbox rules (an empty array still requires isolation)`)
+			}
+			profile.OutboundDomains = domains
+			cfg.Permissions.Sandbox[rule] = profile
+		}
+	}
+	if err := cfg.validateProviders(); err != nil {
+		return err
 	}
 	if cfg.AutoCompactPercent == 0 {
 		cfg.AutoCompactPercent = DefaultAutoCompactPercent
@@ -370,52 +368,21 @@ func Validate(cfg *Config) error {
 		cfg.MaxConcurrentSubagents = DefaultMaxConcurrentSubagents
 	}
 
-	seen := make(map[string]bool, len(cfg.Models))
-	for i := range cfg.Models {
-		m := &cfg.Models[i]
-		m.Name = strings.TrimSpace(m.Name)
-		m.Provider = strings.TrimSpace(m.Provider)
-		m.APIKey = strings.TrimSpace(m.APIKey)
-		m.Model = strings.TrimSpace(m.Model)
-		m.BaseURL = strings.TrimSpace(m.BaseURL)
-		m.Protocol = strings.TrimSpace(m.Protocol)
-		m.ReasoningEffort = strings.ToLower(strings.TrimSpace(m.ReasoningEffort))
-
-		if m.Name == "" {
-			return fmt.Errorf("model #%d name is required", i+1)
-		}
-		if seen[m.Name] {
-			return fmt.Errorf("duplicate model name %q", m.Name)
-		}
-		seen[m.Name] = true
-		if m.Provider == "" {
-			return fmt.Errorf("model %q provider is required", m.Name)
-		}
-		if m.Model == "" {
-			return fmt.Errorf("model %q model id is required", m.Name)
-		}
-		if m.Protocol != "" && m.Protocol != "openai" && m.Protocol != "anthropic" {
-			return fmt.Errorf("model %q protocol must be openai or anthropic", m.Name)
-		}
-		if m.ContextWindow < 0 {
-			return fmt.Errorf("model %q context_window must not be negative", m.Name)
-		}
-		capability := ReasoningCapabilityFor(*m)
-		if !capability.Supports(m.ReasoningEffort) {
-			return fmt.Errorf("model %q reasoning_effort must be one of %s", m.Name, strings.Join(capability.Values(), ", "))
-		}
+	models := cfg.AllModels()
+	seen := make(map[string]bool, len(models))
+	for _, model := range models {
+		seen[model.Name] = true
 	}
-
 	cfg.Active = strings.TrimSpace(cfg.Active)
 	if cfg.Active == "" {
-		cfg.Active = cfg.Models[0].Name
+		cfg.Active = models[0].Name
 	}
 	if !seen[cfg.Active] {
-		return fmt.Errorf("active model %q does not exist", cfg.Active)
+		return fmt.Errorf("active model %q does not exist; use provider/model", cfg.Active)
 	}
-	cfg.FlashModel = strings.TrimSpace(cfg.FlashModel)
-	if cfg.FlashModel != "" && !seen[cfg.FlashModel] {
-		return fmt.Errorf("flash model %q does not exist", cfg.FlashModel)
+	cfg.CompactionModel = strings.TrimSpace(cfg.CompactionModel)
+	if cfg.CompactionModel != "" && !seen[cfg.CompactionModel] {
+		return fmt.Errorf("compaction model %q does not exist; use provider/model", cfg.CompactionModel)
 	}
 
 	imageSeen := make(map[string]bool, len(cfg.ImageGenModels))
@@ -603,21 +570,21 @@ func (c *Config) ResolveModel(name string) ModelConfig {
 
 // ActiveModelConfig returns the ModelConfig for the currently active model.
 func (c *Config) ActiveModelConfig() ModelConfig {
-	for _, m := range c.Models {
+	for _, m := range c.AllModels() {
 		if m.Name == c.Active {
 			return m
 		}
 	}
 	// Fallback to first model if active not found
-	if len(c.Models) > 0 {
-		return c.Models[0]
+	if len(c.AllModels()) > 0 {
+		return c.AllModels()[0]
 	}
 	return ModelConfig{}
 }
 
 // LookupModelConfig returns the ModelConfig for a named model.
 func (c *Config) LookupModelConfig(name string) (ModelConfig, bool) {
-	for _, m := range c.Models {
+	for _, m := range c.AllModels() {
 		if m.Name == name {
 			return m, true
 		}
@@ -627,8 +594,8 @@ func (c *Config) LookupModelConfig(name string) (ModelConfig, bool) {
 
 // AllModelNames returns all available model names.
 func (c *Config) AllModelNames() []string {
-	names := make([]string, 0, len(c.Models))
-	for _, m := range c.Models {
+	names := make([]string, 0, len(c.AllModels()))
+	for _, m := range c.AllModels() {
 		names = append(names, m.Name)
 	}
 	return names
@@ -636,7 +603,7 @@ func (c *Config) AllModelNames() []string {
 
 // SwitchModel switches to the named model. Returns false if not found.
 func (c *Config) SwitchModel(name string) bool {
-	for _, m := range c.Models {
+	for _, m := range c.AllModels() {
 		if m.Name == name {
 			c.Active = name
 			return true

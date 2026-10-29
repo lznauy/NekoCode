@@ -354,3 +354,7 @@ CREATE INDEX idx_edges_kind ON edges(kind);
 ```bash
 go test ./bot/index/ -v
 ```
+
+## 用户维护入口
+
+NekoCode 中执行 `/index status`（或 `/index`）可查看数据库文件统计、语言分布、最近成功同步时间和 watcher 状态。`/index rebuild` 复用工作区工具实例，关闭旧 watcher 与数据库后，将旧库及 SQLite 辅助文件移入 `.nekocode/index-backup-*`，再创建并初始化新 Manager。备份保留供诊断，不自动删除。维护命令与查询、关闭互斥，任务执行期间不可运行。

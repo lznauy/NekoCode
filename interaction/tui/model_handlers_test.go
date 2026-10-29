@@ -733,3 +733,54 @@ func TestJevPreviewRoutesByCallIDAndSurvivesCompletion(t *testing.T) {
 		t.Fatalf("settled verdict missing: %s", view.String())
 	}
 }
+
+func TestProcessingSubmitLeafWithOwnMenuSubmitsInsteadOfReopening(t *testing.T) {
+	for _, value := range []string{"/workspace", "/plugin check"} {
+		t.Run(value, func(t *testing.T) {
+			bot := &imageCommandFakeBot{commandFakeBot: commandFakeBot{menus: map[string]controlruntime.CommandMenu{
+				value: {Items: []controlruntime.CommandMenuItem{{Value: value, Label: "submit", Submit: true}}},
+			}}}
+			m, err := NewModel(bot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.transitionTo(stateProcessing)
+			m.Input.SetValue(value)
+			m.handleProcessingKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+			if !m.Suggestions.IsMenu() {
+				t.Fatal("initial command menu did not open")
+			}
+
+			m.handleProcessingKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+			if len(bot.steered) != 1 || bot.steered[0].Text != value {
+				t.Fatalf("steered inputs = %#v, want %q", bot.steered, value)
+			}
+			if m.Suggestions.Visible() {
+				t.Fatal("submit leaf reopened its own command menu")
+			}
+		})
+	}
+}
+
+func TestCheckAllPluginsMenuSubmitsRootCommand(t *testing.T) {
+	bot := &commandFakeBot{commands: []string{"/plugin"}, menus: map[string]controlruntime.CommandMenu{
+		"/plugin check": {Title: "Choose plugin", Items: []controlruntime.CommandMenuItem{{Value: "/plugin check", Label: "All plugins", Submit: true}}},
+	}}
+	m, err := NewModel(bot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Input.SetValue("/plugin check")
+	if cmd := m.handleIdleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})); cmd != nil {
+		t.Fatal("opening check menu submitted command")
+	}
+	if !m.Suggestions.IsMenu() {
+		t.Fatal("missing check menu")
+	}
+	if cmd := m.handleIdleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})); cmd == nil {
+		t.Fatal("all plugins leaf reopened menu instead of submitting")
+	}
+	if inputs := bot.submittedInputs(); len(inputs) != 1 || inputs[0] != "/plugin check" {
+		t.Fatalf("inputs: %v", inputs)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 	"nekocode/protocol"
@@ -14,6 +15,12 @@ import (
 // Reverse control requests bridge runtime approvals/questions to the host.
 // Their lifetime is tracked by the server's pending map.
 func (s *server) request(ctx context.Context, pending pendingRequest, request map[string]any) error {
+	if s.options.once {
+		// Cancel before waking the blocked runner so it cannot start another step.
+		s.active.cancel()
+		s.deny(ctx, pending)
+		return fmt.Errorf("non-interactive run requires human %s; use interactive mode or configure permission rules", pending.kind)
+	}
 	if s.eof || s.cancelInteractions {
 		s.deny(ctx, pending)
 		return nil
@@ -26,7 +33,7 @@ func (s *server) request(ctx context.Context, pending pendingRequest, request ma
 func (s *server) deny(ctx context.Context, p pendingRequest) {
 	// A concurrent runtime cancellation can have resolved the broker already.
 	if p.kind == "approval" {
-		_ = s.backend.DecideApproval(ctx, p.id, rt.ApprovalDecision{})
+		_ = s.backend.DecideApproval(ctx, p.id, rt.ApprovalDecision{Cancelled: true})
 	} else {
 		_ = s.backend.AnswerQuestion(ctx, p.id, rt.QuestionReply{Rejected: true})
 	}

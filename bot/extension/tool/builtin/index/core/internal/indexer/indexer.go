@@ -34,3 +34,11 @@ func (i *Indexer) Close() error {
 	i.parser.Close()
 	return i.db.Close()
 }
+
+func (i *Indexer) RecordSync() error { return i.db.RecordSync() }
+
+func (i *Indexer) Status() (dbpkg.Status, error) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.db.Status()
+}

@@ -473,7 +473,7 @@ func (r *Runtime) CommandMenu(ctx context.Context, input string) (CommandMenu, b
 		if service != nil {
 			menu, _ = service(ctx, "/")
 		}
-		runtimeMenu, _ := r.runtimeCommandMenu("/")
+		runtimeMenu, _ := r.runtimeCommandMenu(ctx, "/")
 		return mergeCommandMenus(menu, runtimeMenu), true
 	}
 	if service != nil {
@@ -481,15 +481,21 @@ func (r *Runtime) CommandMenu(ctx context.Context, input string) (CommandMenu, b
 			return menu, true
 		}
 	}
-	return r.runtimeCommandMenu(trimmed)
+	return r.runtimeCommandMenu(ctx, trimmed)
 }
 
-func (r *Runtime) runtimeCommandMenu(input string) (CommandMenu, bool) {
+func (r *Runtime) runtimeCommandMenu(ctx context.Context, input string) (CommandMenu, bool) {
 	parts := strings.Fields(strings.TrimSpace(input))
-	if len(parts) != 1 {
+	if len(parts) == 0 {
 		return CommandMenu{}, false
 	}
 	command := strings.ToLower(parts[0])
+	if command == "/connect" && len(parts) >= 2 && len(parts) <= 3 {
+		return r.connectors.CommandMenu(ctx, parts[1], parts[2:])
+	}
+	if len(parts) != 1 {
+		return CommandMenu{}, false
+	}
 	if command == "/" {
 		r.mu.Lock()
 		items := make([]CommandMenuItem, 0, len(r.runtimeCommands))

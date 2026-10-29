@@ -33,6 +33,11 @@ func (e *Engine) newContextManager(cfg RunConfig) *ctxmgr.Manager {
 			return prompt.FormatEnvironment(cfg.Environment(), "", "bash", "", "")
 		},
 	})
+	mgr.ConfigureModel(ctxmgr.ModelContext{
+		Window: cfg.ContextWindow, AutoCompactPercent: cfg.AutoCompactPercent,
+		CompactionModel: e.compactionModel, CompactionWindow: cfg.CompactionWindow,
+		Reasoning: provider.ReasoningSettingsFor(e.llmClient),
+	})
 	return mgr
 }
 
@@ -67,12 +72,7 @@ func phaseReporter(cfg RunConfig) func(string) {
 
 func (e *Engine) newExecutor(cfg RunConfig) (*runner.Executor, func()) {
 	executor := runner.NewExecutor(e.toolRegistry)
-	executor.SetConfirmFn(func(req protocol.ConfirmRequest) protocol.ConfirmReply {
-		return protocol.Deny()
-	})
-	if cfg.ConfirmFn != nil {
-		executor.SetConfirmFn(cfg.ConfirmFn)
-	}
+	executor.SetConfirmFn(cfg.ConfirmFn)
 	if cfg.FullAccess != nil && cfg.FullAccess() {
 		executor.SetFullAccess(true)
 	}
@@ -80,6 +80,7 @@ func (e *Engine) newExecutor(cfg RunConfig) (*runner.Executor, func()) {
 	if cfg.ConfigurePermissions != nil {
 		cfg.ConfigurePermissions(executor)
 	}
+	toolpolicy.ObservePermissions(executor, cfg.Policy, cfg.SubagentID)
 	if cfg.OnToolCall != nil {
 		executor.SetPreviewDecisionFn(func(callID, name string, args map[string]any, preview string, decision protocol.ToolDecision) {
 			cfg.OnToolCall(ToolCallEvent{Action: protocol.StepActionToolPreview, CallID: callID, ToolName: name, Output: preview, Decision: decision})
@@ -95,11 +96,13 @@ func (e *Engine) newExecutor(cfg RunConfig) (*runner.Executor, func()) {
 				toolState.OutputStore = cfg.ToolState.OutputStore.Child("agent-" + uuid.NewString())
 			}
 		}
-		toolState.FileCache.Seed(cfg.ToolState.FileCache)
-		if cfg.ToolState.SnapshotStore != nil {
-			toolState.SnapshotStore = cfg.ToolState.SnapshotStore
+		if !cfg.IsolatedWorkspace {
+			toolState.FileCache.Seed(cfg.ToolState.FileCache)
+			if cfg.ToolState.SnapshotStore != nil {
+				toolState.SnapshotStore = cfg.ToolState.SnapshotStore
+			}
+			toolState.Checkpoints = cfg.ToolState.Checkpoints
 		}
-		toolState.Checkpoints = cfg.ToolState.Checkpoints
 	}
 	if cfg.ResumeContext != nil && cfg.SubagentID != "" && cfg.ToolState != nil && cfg.ToolState.OutputStore != nil {
 		// Restore only exact, regular artifacts in this task's namespace. Other
@@ -117,7 +120,7 @@ func (e *Engine) newExecutor(cfg RunConfig) (*runner.Executor, func()) {
 		}
 	}
 	return executor, func() {
-		if cfg.ToolState != nil && cfg.ToolState.FileCache != nil {
+		if !cfg.IsolatedWorkspace && cfg.ToolState != nil && cfg.ToolState.FileCache != nil {
 			cfg.ToolState.FileCache.Merge(toolState.FileCache)
 		}
 	}

@@ -344,11 +344,120 @@ func TestPluginFileAndJSONLimits(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "large"), []byte(strings.Repeat("x", maxPluginReadFileBytes+1)), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readPluginFile(root, "large"); err == nil {
+	openedRoot, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer openedRoot.Close()
+	if _, err := readPluginFile(openedRoot, "large"); err == nil {
 		t.Fatal("oversized readFile accepted")
 	}
-	if _, err := readLimitedFile(root, maxPluginSourceBytes); err == nil {
+	if _, err := readLimitedFile(openedRoot, ".", maxPluginSourceBytes); err == nil {
 		t.Fatal("directory accepted as plugin file")
+	}
+}
+
+func TestPluginFilesRejectEscapingSymlinks(t *testing.T) {
+	outside := t.TempDir()
+	outsideFiles := map[string]string{
+		"hooks.json": `{"PreModel":[]}`,
+		"hook.js":    `null`,
+		"data.txt":   "outside",
+	}
+	for name, body := range outsideFiles {
+		if err := os.WriteFile(filepath.Join(outside, name), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, test := range []struct {
+		name  string
+		write func(*testing.T, string)
+		load  func(*testing.T, string) error
+	}{
+		{
+			name: "hook config",
+			write: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.Symlink(filepath.Join(outside, "hooks.json"), filepath.Join(root, "hooks.json")); err != nil {
+					t.Skip(err)
+				}
+			},
+			load: func(_ *testing.T, root string) error {
+				_, err := Load(root, "hooks.json")
+				return err
+			},
+		},
+		{
+			name: "external JS",
+			write: func(t *testing.T, root string) {
+				t.Helper()
+				config := `{"PreModel":[{"hooks":[{"type":"js","path":"hook.js"}]}]}`
+				if err := os.WriteFile(filepath.Join(root, "hooks.json"), []byte(config), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Join(outside, "hook.js"), filepath.Join(root, "hook.js")); err != nil {
+					t.Skip(err)
+				}
+			},
+			load: func(_ *testing.T, root string) error {
+				_, err := Load(root, "hooks.json")
+				return err
+			},
+		},
+		{
+			name: "JS readFile",
+			write: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.Symlink(filepath.Join(outside, "data.txt"), filepath.Join(root, "data.txt")); err != nil {
+					t.Skip(err)
+				}
+			},
+			load: func(_ *testing.T, root string) error {
+				_, err := runPluginJS(root, Event{}, hookAction{Type: "js", Code: `readFile("data.txt")`})
+				return err
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			test.write(t, root)
+			if err := test.load(t, root); err == nil {
+				t.Fatal("escaping symlink was accepted")
+			}
+		})
+	}
+}
+
+func TestReadLimitedFileStaysInOpenedRoot(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "plugin")
+	if err := os.Mkdir(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "data.txt"), []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	openedRoot, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer openedRoot.Close()
+	data, err := readLimitedFile(openedRoot, "data.txt", maxPluginReadFileBytes)
+	if err != nil || string(data) != "original" {
+		t.Fatalf("ordinary read = %q, %v", data, err)
+	}
+	if err := os.Rename(root, filepath.Join(parent, "old")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "data.txt"), []byte("replacement"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	data, err = readLimitedFile(openedRoot, "data.txt", maxPluginReadFileBytes)
+	if err != nil || string(data) != "original" {
+		t.Fatalf("read after root replacement = %q, %v", data, err)
 	}
 }
 
@@ -384,11 +493,11 @@ func TestEventCapabilitiesPreservePluginBehavior(t *testing.T) {
 		if _, err := load(event.Name, "guard", ""); (err == nil) != guards[event.Point] {
 			t.Errorf("guard mode at %s: %v", event.Name, err)
 		}
-		if _, err := load(event.Name, "observer", "write"); (err == nil) != (event.Point == PreToolUse || event.Point == PostToolUse) {
+		if _, err := load(event.Name, "observer", "write"); (err == nil) != event.ToolMatcher {
 			t.Errorf("tool matcher at %s: %v", event.Name, err)
 		}
 	}
-	if len(seen) != 15 || !seen["PostToolUseFailure"] {
+	if len(seen) != 17 || !seen["PostToolUseFailure"] {
 		t.Fatalf("configuration events changed: %v", seen)
 	}
 }

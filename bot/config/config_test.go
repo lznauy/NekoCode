@@ -40,13 +40,13 @@ func TestMaxConcurrentSubagentsConfig(t *testing.T) {
 }
 
 func TestDefaultConfig(t *testing.T) {
-	if Default.Active != "default" {
+	if Default.Active != "deepseek/default" {
 		t.Errorf("expected Active 'default', got '%s'", Default.Active)
 	}
-	if len(Default.Models) != 1 {
-		t.Fatalf("expected 1 model, got %d", len(Default.Models))
+	if len(Default.AllModels()) != 1 {
+		t.Fatalf("expected 1 model, got %d", len(Default.AllModels()))
 	}
-	m := Default.Models[0]
+	m := Default.AllModels()[0]
 	if m.Provider != "deepseek" {
 		t.Errorf("expected Provider 'deepseek', got '%s'", m.Provider)
 	}
@@ -62,8 +62,8 @@ func TestDefaultConfig(t *testing.T) {
 	if Default.AutoCompactPercent != 80 {
 		t.Errorf("expected AutoCompactPercent 80, got %d", Default.AutoCompactPercent)
 	}
-	if Default.FlashModel != "" {
-		t.Errorf("expected FlashModel empty, got %s", Default.FlashModel)
+	if Default.CompactionModel != "" {
+		t.Errorf("expected CompactionModel empty, got %s", Default.CompactionModel)
 	}
 }
 
@@ -93,12 +93,9 @@ func TestLoad_ValidConfigFile(t *testing.T) {
 	}
 
 	customCfg := Config{
-		Active:     "claude",
-		FlashModel: "deepseek-flash",
-		Models: []ModelConfig{
-			{Name: "default", Provider: "deepseek", APIKey: "sk-ds", Model: "deepseek-chat", BaseURL: "https://api.deepseek.com/v1"},
-			{Name: "claude", Provider: "anthropic", APIKey: "sk-ant", Model: "claude-3-opus", BaseURL: "https://api.anthropic.com", Protocol: "anthropic"},
-		},
+		Active:          "anthropic/claude",
+		CompactionModel: "deepseek/default",
+		Providers:       []ProviderConfig{{Name: "deepseek", APIKey: "sk-ds", BaseURL: "https://api.deepseek.com/v1", Models: []ModelDefinition{{Name: "default", Model: "deepseek-chat"}}}, {Name: "anthropic", APIKey: "sk-ant", BaseURL: "https://api.anthropic.com", Protocol: "anthropic", Models: []ModelDefinition{{Name: "claude", Model: "claude-3-opus"}}}},
 	}
 
 	data, err := json.Marshal(customCfg)
@@ -125,43 +122,29 @@ func TestLoad_ValidConfigFile(t *testing.T) {
 	if cfg.Active != customCfg.Active {
 		t.Errorf("expected Active '%s', got '%s'", customCfg.Active, cfg.Active)
 	}
-	if cfg.FlashModel != customCfg.FlashModel {
-		t.Errorf("expected FlashModel %s, got %s", customCfg.FlashModel, cfg.FlashModel)
+	if cfg.CompactionModel != customCfg.CompactionModel {
+		t.Errorf("expected CompactionModel %s, got %s", customCfg.CompactionModel, cfg.CompactionModel)
 	}
-	if len(cfg.Models) != 2 {
-		t.Fatalf("expected 2 models, got %d", len(cfg.Models))
+	if len(cfg.AllModels()) != 2 {
+		t.Fatalf("expected 2 models, got %d", len(cfg.AllModels()))
 	}
 
 	am := cfg.ActiveModelConfig()
-	if am.Name != "claude" || am.Provider != "anthropic" || am.Model != "claude-3-opus" {
+	if am.Name != "anthropic/claude" || am.Provider != "anthropic" || am.Model != "claude-3-opus" {
 		t.Errorf("unexpected active config: %+v", am)
 	}
 }
 
 func TestLoad_InvalidJSON(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
-
-	configDir := filepath.Join(tmpDir, ".nekocode")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		t.Fatalf("failed to create config dir: %v", err)
+	t.Setenv("HOME", t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(Path()), 0700); err != nil {
+		t.Fatal(err)
 	}
-
-	configPath := filepath.Join(configDir, "config.json")
-	if err := os.WriteFile(configPath, []byte("not valid json {{{"), 0644); err != nil {
-		t.Fatalf("failed to write config file: %v", err)
+	if err := os.WriteFile(Path(), []byte("not valid json {{{"), 0600); err != nil {
+		t.Fatal(err)
 	}
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
-	if cfg == nil {
-		t.Fatal("Load() returned nil config")
-	}
-
-	if cfg.Active != Default.Active {
-		t.Errorf("expected Active '%s', got '%s'", Default.Active, cfg.Active)
+	if cfg, err := Load(); err == nil || cfg != nil {
+		t.Fatalf("invalid config silently accepted: cfg=%v err=%v", cfg, err)
 	}
 }
 
@@ -174,7 +157,7 @@ func TestLoad_PartialConfig(t *testing.T) {
 		t.Fatalf("failed to create config dir: %v", err)
 	}
 
-	partialJSON := `{"active": "gpt4", "models": [{"name": "gpt4", "provider": "openai", "api_key": "sk-xxx", "model": "gpt-4-turbo"}]}`
+	partialJSON := `{"active": "openai/gpt4", "providers": [{"name": "openai", "api_key": "sk-xxx", "base_url": "", "protocol": "", "models": [{"name": "gpt4", "model": "gpt-4-turbo"}]}]}`
 	configPath := filepath.Join(configDir, "config.json")
 	if err := os.WriteFile(configPath, []byte(partialJSON), 0644); err != nil {
 		t.Fatalf("failed to write config file: %v", err)
@@ -185,7 +168,7 @@ func TestLoad_PartialConfig(t *testing.T) {
 		t.Fatalf("Load() returned error: %v", err)
 	}
 
-	if cfg.Active != "gpt4" {
+	if cfg.Active != "openai/gpt4" {
 		t.Errorf("expected Active 'gpt4', got '%s'", cfg.Active)
 	}
 	// The effective window resolves from the built-in table
@@ -197,12 +180,10 @@ func TestLoad_PartialConfig(t *testing.T) {
 
 func TestConfig_JSONRoundTrip(t *testing.T) {
 	original := Config{
-		Active:             "default",
-		FlashModel:         "flash",
+		Active:             "openai/default",
+		CompactionModel:    "flash",
 		AutoCompactPercent: 75,
-		Models: []ModelConfig{
-			{Name: "default", Provider: "openai", APIKey: "sk-abc", Model: "gpt-4-turbo", BaseURL: "https://custom.api.com/v1"},
-		},
+		Providers:          []ProviderConfig{{Name: "openai", APIKey: "sk-abc", BaseURL: "https://custom.api.com/v1", Models: []ModelDefinition{{Name: "default", Model: "gpt-4-turbo"}}}},
 	}
 
 	data, err := json.Marshal(original)
@@ -215,17 +196,17 @@ func TestConfig_JSONRoundTrip(t *testing.T) {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
 
-	if restored.Active != original.Active || restored.FlashModel != original.FlashModel || restored.AutoCompactPercent != original.AutoCompactPercent {
+	if restored.Active != original.Active || restored.CompactionModel != original.CompactionModel || restored.AutoCompactPercent != original.AutoCompactPercent {
 		t.Errorf("round-trip failed: got %+v, want %+v", restored, original)
 	}
-	if len(restored.Models) != 1 || restored.Models[0].Name != "default" {
+	if len(restored.AllModels()) != 1 || restored.Providers[0].Models[0].Name != "default" {
 		t.Errorf("models round-trip failed")
 	}
 }
 
 func TestConfigCloneDoesNotShareMutableState(t *testing.T) {
 	original := Config{
-		Models:                []ModelConfig{{Name: "model"}},
+		Providers:             []ProviderConfig{{Name: "test", Models: []ModelDefinition{{Name: "model"}}}},
 		ImageUnderstandModels: []ImageUnderstandConfig{{Name: "vision"}},
 		MCPServers: map[string]MCPServerConfig{
 			"server": {Args: []string{"first"}, Env: map[string]string{"KEY": "value"}},
@@ -239,7 +220,7 @@ func TestConfigCloneDoesNotShareMutableState(t *testing.T) {
 	}
 
 	clone := original.Clone()
-	clone.Models[0].Name = "changed"
+	clone.Providers[0].Models[0].Name = "changed"
 	clone.ImageUnderstandModels[0].Name = "changed"
 	server := clone.MCPServers["server"]
 	server.Args[0] = "changed"
@@ -250,7 +231,7 @@ func TestConfigCloneDoesNotShareMutableState(t *testing.T) {
 	sandbox.WritableRoots[0] = "/changed"
 	clone.Permissions.Sandbox["shell"] = sandbox
 
-	if original.Models[0].Name != "model" ||
+	if original.Providers[0].Models[0].Name != "model" ||
 		original.ImageUnderstandModels[0].Name != "vision" ||
 		original.MCPServers["server"].Args[0] != "first" ||
 		original.MCPServers["server"].Env["KEY"] != "value" ||
@@ -262,7 +243,7 @@ func TestConfigCloneDoesNotShareMutableState(t *testing.T) {
 
 func TestValidateImageUnderstandModels(t *testing.T) {
 	cfg := Config{
-		Models: []ModelConfig{{Name: "default", Provider: "openai", Model: "gpt-5"}},
+		Providers: []ProviderConfig{{Name: "openai", Models: []ModelDefinition{{Name: "default", Model: "gpt-5"}}}},
 		ImageUnderstandModels: []ImageUnderstandConfig{{
 			Name: " vision ", Provider: " openai ", Model: " gpt-5 ", Protocol: " OPENAI ",
 		}},
@@ -284,7 +265,7 @@ func TestValidateImageUnderstandModels(t *testing.T) {
 	}
 
 	duplicate := Config{
-		Models: []ModelConfig{{Name: "default", Provider: "openai", Model: "gpt-5"}},
+		Providers: []ProviderConfig{{Name: "openai", Models: []ModelDefinition{{Name: "default", Model: "gpt-5"}}}},
 		ImageUnderstandModels: []ImageUnderstandConfig{
 			{Name: "fast", Provider: "openai", Model: "vision-fast"},
 			{Name: "FAST", Provider: "openai", Model: "vision-other"},
@@ -300,10 +281,8 @@ func TestSave_CreatesConfigFile(t *testing.T) {
 	t.Setenv("HOME", tmpDir)
 
 	cfg := Config{
-		Active: "default",
-		Models: []ModelConfig{
-			{Name: "default", Provider: "openai", Model: "gpt-4o-mini", Protocol: "openai"},
-		},
+		Active:    "openai/default",
+		Providers: []ProviderConfig{{Name: "openai", Protocol: "openai", Models: []ModelDefinition{{Name: "default", Model: "gpt-4o-mini"}}}},
 	}
 
 	if err := Save(cfg); err != nil {
@@ -317,18 +296,15 @@ func TestSave_CreatesConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() returned error: %v", err)
 	}
-	if loaded.Active != "default" {
+	if loaded.Active != "openai/default" {
 		t.Fatalf("unexpected saved config: %+v", loaded)
 	}
 }
 
 func TestValidate_DuplicateModelName(t *testing.T) {
 	cfg := Config{
-		Active: "default",
-		Models: []ModelConfig{
-			{Name: "default", Provider: "openai", Model: "gpt-4o-mini"},
-			{Name: "default", Provider: "anthropic", Model: "claude-sonnet-4-5"},
-		},
+		Active:    "openai/default",
+		Providers: []ProviderConfig{{Name: "openai", Models: []ModelDefinition{{Name: "default", Model: "gpt-4o-mini"}, {Name: "default", Model: "gpt-5"}}}},
 	}
 
 	if err := Validate(&cfg); err == nil {
@@ -337,23 +313,21 @@ func TestValidate_DuplicateModelName(t *testing.T) {
 }
 
 func TestValidateReasoningEffort(t *testing.T) {
-	cfg := Config{Models: []ModelConfig{{
-		Name: "default", Provider: "deepseek", Model: "deepseek-v4-flash", ReasoningEffort: " HIGH ",
-	}}}
+	cfg := Config{Providers: []ProviderConfig{{Name: "deepseek", Models: []ModelDefinition{{Name: "default", Model: "deepseek-v4-flash", ReasoningEffort: " HIGH "}}}}}
 	if err := Validate(&cfg); err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.Models[0].ReasoningEffort; got != "high" {
+	if got := cfg.Providers[0].Models[0].ReasoningEffort; got != "high" {
 		t.Fatalf("normalized reasoning_effort = %q, want high", got)
 	}
-	cfg.Models[0].ReasoningEffort = "extreme"
+	cfg.Providers[0].Models[0].ReasoningEffort = "extreme"
 	if err := Validate(&cfg); err == nil {
 		t.Fatal("unsupported reasoning_effort should fail validation")
 	}
 }
 
 func TestValidateAutoCompactPercent(t *testing.T) {
-	cfg := Config{Models: []ModelConfig{{Name: "default", Provider: "openai", Model: "gpt-4o"}}}
+	cfg := Config{Providers: []ProviderConfig{{Name: "openai", Models: []ModelDefinition{{Name: "default", Model: "gpt-4o"}}}}}
 	if err := Validate(&cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -369,40 +343,36 @@ func TestValidateAutoCompactPercent(t *testing.T) {
 
 func TestConfig_ModelsList(t *testing.T) {
 	cfg := Config{
-		Active: "default",
-		Models: []ModelConfig{
-			{Name: "default", Provider: "deepseek", APIKey: "sk-ds", Model: "deepseek-chat", BaseURL: "https://api.deepseek.com/v1"},
-			{Name: "claude", Provider: "anthropic", APIKey: "sk-ant", Model: "claude-sonnet-4-6", BaseURL: "https://api.anthropic.com", Protocol: "anthropic"},
-			{Name: "gpt4", Provider: "openai", APIKey: "sk-openai", Model: "gpt-4-turbo"},
-		},
+		Active:    "openai/default",
+		Providers: []ProviderConfig{{Name: "deepseek", APIKey: "sk-ds", BaseURL: "https://api.deepseek.com/v1", Models: []ModelDefinition{{Name: "default", Model: "deepseek-chat"}}}, {Name: "anthropic", APIKey: "sk-ant", BaseURL: "https://api.anthropic.com", Protocol: "anthropic", Models: []ModelDefinition{{Name: "claude", Model: "claude-sonnet-4-6"}}}, {Name: "openai", APIKey: "sk-openai", Models: []ModelDefinition{{Name: "gpt4", Model: "gpt-4-turbo"}}}},
 	}
 
 	names := cfg.AllModelNames()
 	if len(names) != 3 {
 		t.Fatalf("expected 3 model names, got %d: %v", len(names), names)
 	}
-	if names[0] != "default" || names[1] != "claude" || names[2] != "gpt4" {
+	if names[0] != "deepseek/default" || names[1] != "anthropic/claude" || names[2] != "openai/gpt4" {
 		t.Errorf("unexpected names: %v", names)
 	}
 
 	am := cfg.ActiveModelConfig()
-	if am.Name != "default" || am.Provider != "deepseek" || am.Model != "deepseek-chat" {
+	if am.Name != "deepseek/default" || am.Provider != "deepseek" || am.Model != "deepseek-chat" {
 		t.Errorf("unexpected active config: %+v", am)
 	}
 
-	if !cfg.SwitchModel("claude") {
+	if !cfg.SwitchModel("anthropic/claude") {
 		t.Fatal("SwitchModel(claude) failed")
 	}
-	if cfg.Active != "claude" {
+	if cfg.Active != "anthropic/claude" {
 		t.Errorf("expected Active 'claude', got '%s'", cfg.Active)
 	}
 
 	am = cfg.ActiveModelConfig()
-	if am.Name != "claude" || am.Provider != "anthropic" || am.APIKey != "sk-ant" || am.Model != "claude-sonnet-4-6" {
+	if am.Name != "anthropic/claude" || am.Provider != "anthropic" || am.APIKey != "sk-ant" || am.Model != "claude-sonnet-4-6" {
 		t.Errorf("SwitchModel(claude) active config wrong: %+v", am)
 	}
 
-	if !cfg.SwitchModel("gpt4") {
+	if !cfg.SwitchModel("openai/gpt4") {
 		t.Fatal("SwitchModel(gpt4) failed")
 	}
 	am = cfg.ActiveModelConfig()
@@ -417,11 +387,8 @@ func TestConfig_ModelsList(t *testing.T) {
 
 func TestConfig_ModelsJSONRoundTrip(t *testing.T) {
 	original := Config{
-		Active: "claude",
-		Models: []ModelConfig{
-			{Name: "default", Provider: "deepseek", APIKey: "sk-ds", Model: "deepseek-chat", BaseURL: "https://api.deepseek.com/v1"},
-			{Name: "claude", Provider: "anthropic", APIKey: "sk-ant", Model: "claude-sonnet-4-6", Protocol: "anthropic", ReasoningEffort: "medium"},
-		},
+		Active:    "anthropic/claude",
+		Providers: []ProviderConfig{{Name: "deepseek", APIKey: "sk-ds", BaseURL: "https://api.deepseek.com/v1", Models: []ModelDefinition{{Name: "default", Model: "deepseek-chat"}}}, {Name: "anthropic", APIKey: "sk-ant", Protocol: "anthropic", Models: []ModelDefinition{{Name: "claude", Model: "claude-sonnet-4-6", ReasoningEffort: "medium"}}}},
 	}
 
 	data, err := json.Marshal(original)
@@ -433,14 +400,35 @@ func TestConfig_ModelsJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &restored); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
-	if got := restored.Models[1].ReasoningEffort; got != "medium" {
+	if got := restored.AllModels()[1].ReasoningEffort; got != "medium" {
 		t.Fatalf("reasoning_effort round trip = %q", got)
 	}
 
-	if len(restored.Models) != 2 {
-		t.Fatalf("expected 2 models, got %d", len(restored.Models))
+	if len(restored.AllModels()) != 2 {
+		t.Fatalf("expected 2 models, got %d", len(restored.AllModels()))
 	}
-	if restored.Active != "claude" {
+	if restored.Active != "anthropic/claude" {
 		t.Errorf("expected active 'claude', got %s", restored.Active)
+	}
+}
+
+func TestOutboundDomainsValidateAndClone(t *testing.T) {
+	cfg := Config{Active: "openai/test", Providers: []ProviderConfig{{Name: "openai", APIKey: "fixture", Models: []ModelDefinition{{Name: "test", Model: "test"}}}}, Permissions: &PermissionsConfig{Sandbox: map[string]SandboxConfig{"shell": {OutboundDomains: []string{"EXAMPLE.COM."}}, "shell(false)": {OutboundDomains: []string{}}}}}
+	if err := Validate(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	cloned := cfg.Clone()
+	entry := cloned.Permissions.Sandbox["shell"]
+	entry.OutboundDomains[0] = "changed.example"
+	if cfg.Permissions.Sandbox["shell"].OutboundDomains[0] != "example.com" || cloned.Permissions.Sandbox["shell(false)"].OutboundDomains == nil {
+		t.Fatal("domain policy clone lost isolation")
+	}
+	cfg.Permissions.Sandbox["shell"] = SandboxConfig{OutboundDomains: []string{"*.example.com"}}
+	if err := Validate(&cfg); err == nil {
+		t.Fatal("wildcard allowed")
+	}
+	cfg.Permissions.Sandbox["shell"] = SandboxConfig{SandboxMode: "host", OutboundDomains: []string{}}
+	if err := Validate(&cfg); err == nil {
+		t.Fatal("host restriction allowed")
 	}
 }

@@ -305,6 +305,7 @@ func commandPrefix(input string) string {
 
 // RegisterDefaults registers the built-in slash commands using Deps directly.
 func RegisterDefaults(p *Parser, deps Deps) {
+	registerIndex(p, deps)
 	getConfig := func() string {
 		selection := deps.GetConfigFn()
 		return selection.Provider + "/" + selection.Model

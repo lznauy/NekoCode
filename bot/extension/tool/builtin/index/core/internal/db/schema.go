@@ -1,6 +1,8 @@
 package db
 
 const schemaSQL = `
+CREATE TABLE IF NOT EXISTS index_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
 CREATE TABLE IF NOT EXISTS nodes (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,

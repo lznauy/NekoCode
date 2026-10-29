@@ -112,3 +112,30 @@ func TestBuiltinsAreIndependentAndReadOnly(t *testing.T) {
 		t.Fatal("shared builtin slice")
 	}
 }
+
+func TestAgentModelField(t *testing.T) {
+	for _, name := range []string{"", "fast-review", "模型 A"} {
+		p, err := parse("---\nname: reviewer\nmodel: ' "+name+" '\nbase: explore\n---\nReview.", knownTool)
+		if err != nil || p.Model != name {
+			t.Fatalf("model=%q err=%v", p.Model, err)
+		}
+		if !reflect.DeepEqual(p.Tools, Builtins()[1].Tools) {
+			t.Fatal("model changed tool ceiling")
+		}
+	}
+}
+
+func TestProfileIsolation(t *testing.T) {
+	for _, mode := range []string{"shared", "worktree", "invalid"} {
+		p, err := parse("---\nname: isolated\nbase: coder\nisolation: "+mode+"\n---\nImplement task.", func(string) bool { return true })
+		if mode == "invalid" {
+			if err == nil {
+				t.Fatal("accepted invalid isolation")
+			}
+			continue
+		}
+		if err != nil || p.Isolation != mode {
+			t.Fatalf("%s: %+v %v", mode, p, err)
+		}
+	}
+}

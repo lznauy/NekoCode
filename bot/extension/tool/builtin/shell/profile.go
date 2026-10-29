@@ -3,6 +3,7 @@ package shell
 import (
 	"context"
 	"fmt"
+	"nekocode/bot/extension/tool/runtime/netpolicy"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,16 +15,21 @@ import (
 )
 
 type sandboxRequest struct {
-	Mode          string
-	Network       bool
-	WritableRoots []string
+	Mode            string
+	OutboundDomains []string
+	domainErr       error
+	Network         bool
+	WritableRoots   []string
 }
 
 // PermissionPlan describes the capability escalation implied by the shell's
 // explicit sandbox arguments before execution. The executor uses this to fold
 // command and capability approval into one atomic decision.
 func (t *ShellTool) PermissionPlan(args map[string]any, workspace string) *core.PermissionRequest {
-	request := sandboxRequestFromArgs(args)
+	request := t.effectiveSandboxRequest(args)
+	if request.domainErr != nil {
+		return nil
+	}
 	capabilities := request.permissionCapabilities()
 	if len(capabilities) == 0 {
 		return nil
@@ -39,6 +45,9 @@ func (t *ShellTool) PermissionPlan(args map[string]any, workspace string) *core.
 			"workspace": workspace,
 			"sandbox":   "native",
 		},
+	}
+	if request.OutboundDomains != nil {
+		permission.Details["outbound_domains"] = request.OutboundDomains
 	}
 	if len(request.WritableRoots) > 0 {
 		permission.Details["writePaths"] = append([]string(nil), request.WritableRoots...)
@@ -66,7 +75,7 @@ func buildProfileFromRequest(workspace string, req sandboxRequest, authorizedCap
 	if mode == "" {
 		mode = "workspace-write"
 	}
-	profile := sandbox.Profile{Workspace: workspace}
+	profile := sandbox.Profile{Workspace: workspace, OutboundDomains: req.OutboundDomains}
 	switch mode {
 	case "workspace-write":
 		// Default mode.
@@ -168,4 +177,18 @@ func uniqueStrings(values []string) []string {
 		out = append(out, v)
 	}
 	return out
+}
+
+func (t *ShellTool) effectiveSandboxRequest(args map[string]any) sandboxRequest {
+	r := sandboxRequestFromArgs(args)
+	if profile, ok := t.sandboxProfileFor(args); ok && profile.OutboundDomains != nil {
+		r.OutboundDomains = netpolicy.Intersect(r.OutboundDomains, profile.OutboundDomains)
+	}
+	if r.OutboundDomains != nil {
+		if r.Mode == "host" {
+			r.domainErr = fmt.Errorf(`outbound_domains cannot be used with host execution: host mode cannot enforce domain restrictions; use sandbox_mode="workspace-write" or "read-only". If unrestricted host execution is intended, remove outbound_domains from both the tool arguments and matching permissions.sandbox rules (an empty array still requires isolation)`)
+		}
+		r.Network = len(r.OutboundDomains) > 0
+	}
+	return r
 }

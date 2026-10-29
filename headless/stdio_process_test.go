@@ -84,3 +84,66 @@ func TestStdioProcessExitsWithOpenInput(t *testing.T) {
 		})
 	}
 }
+
+func TestOnceStdioProcessHelper(t *testing.T) {
+	mode := os.Getenv("NEKOCODE_ONCE_STDIO_HELPER")
+	if mode == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	backend := onceBackend(t, func(context.Context, string, rt.RunHost) (string, error) {
+		if mode == "blocked-output" {
+			return strings.Repeat("x", 256*1024), nil
+		}
+		return "final answer", nil
+	})
+	options := Options{OutputFormat: "text", Prompt: "run"}
+	if mode == "input" {
+		options.Prompt = ""
+	}
+	err := serveStdio(ctx, backend, "/workspace", options)
+	os.Exit(ExitCode(err))
+}
+
+func TestOnceStdioProcessDoesNotHang(t *testing.T) {
+	for _, mode := range []string{"prompt", "input", "blocked-output"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestOnceStdioProcessHelper$")
+			command.Env = append(os.Environ(), "NEKOCODE_ONCE_STDIO_HELPER="+mode)
+			input, err := command.StdinPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer input.Close()
+			if mode == "blocked-output" {
+				output, err := command.StdoutPipe()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer output.Close()
+			}
+			err = command.Run()
+			want := 0
+			if mode != "prompt" {
+				want = 130
+			}
+			code := 0
+			if err != nil {
+				if exit, ok := err.(*exec.ExitError); ok {
+					code = exit.ExitCode()
+				} else {
+					t.Fatal(err)
+				}
+			}
+			if code != want {
+				t.Fatalf("exit=%d want=%d error=%v", code, want, err)
+			}
+			if ctx.Err() != nil {
+				t.Fatal("process hung")
+			}
+		})
+	}
+}

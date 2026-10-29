@@ -8,20 +8,22 @@ import (
 type Point = contract.Point
 
 const (
-	SessionStart  = contract.SessionStart
-	SessionEnd    = contract.SessionEnd
-	RunStart      = contract.RunStart
-	RunEnd        = contract.RunEnd
-	PreCompact    = contract.PreCompact
-	PostCompact   = contract.PostCompact
-	SubagentStart = contract.SubagentStart
-	SubagentStop  = contract.SubagentStop
-	UserSubmit    = contract.UserSubmit
-	PreModel      = contract.PreModel
-	PreToolUse    = contract.PreToolUse
-	PostToolUse   = contract.PostToolUse
-	PostToolBatch = contract.PostToolBatch
-	Stop          = contract.Stop
+	SessionStart      = contract.SessionStart
+	SessionEnd        = contract.SessionEnd
+	RunStart          = contract.RunStart
+	RunEnd            = contract.RunEnd
+	PreCompact        = contract.PreCompact
+	PostCompact       = contract.PostCompact
+	SubagentStart     = contract.SubagentStart
+	SubagentStop      = contract.SubagentStop
+	UserSubmit        = contract.UserSubmit
+	PreModel          = contract.PreModel
+	PreToolUse        = contract.PreToolUse
+	PostToolUse       = contract.PostToolUse
+	PostToolBatch     = contract.PostToolBatch
+	PermissionRequest = contract.PermissionRequest
+	PermissionDenied  = contract.PermissionDenied
+	Stop              = contract.Stop
 )
 
 type Event = contract.Event

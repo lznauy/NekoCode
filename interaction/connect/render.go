@@ -48,6 +48,13 @@ func ApprovalDetails(p controlruntime.ApprovalView) []ApprovalDetail {
 	if p.Approval.Workspace != "" {
 		add("工作区", p.Approval.Workspace)
 	}
+	if p.Approval.OutboundDomains != nil {
+		domains := strings.Join(p.Approval.OutboundDomains, "、")
+		if domains == "" {
+			domains = "禁止联网"
+		}
+		add("网络域名", domains)
+	}
 	add("可写目录", strings.Join(p.Approval.WritePaths, "、"))
 	return details
 }

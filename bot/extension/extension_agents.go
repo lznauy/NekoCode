@@ -22,6 +22,8 @@ type AgentInfo struct {
 	Tools       []string `json:"tools"`
 	Skills      []string `json:"skills,omitempty"`
 	MaxSteps    int      `json:"max_steps"`
+	Model       string   `json:"model,omitempty"`
+	Isolation   string   `json:"isolation,omitempty"`
 }
 
 // AgentProfile resolves exact IDs first, then unique short names. Builtin short
@@ -71,7 +73,7 @@ func (m *Manager) agentProfilesLocked() []agentprofile.Profile {
 func (m *Manager) agentInfosLocked() []AgentInfo {
 	var out []AgentInfo
 	for _, p := range m.agentProfilesLocked() {
-		info := AgentInfo{ID: p.Name, Name: p.Name, Description: p.Description, Tools: p.Tools, Skills: p.Skills, MaxSteps: p.MaxSteps}
+		info := AgentInfo{ID: p.Name, Name: p.Name, Description: p.Description, Tools: p.Tools, Skills: p.Skills, MaxSteps: p.MaxSteps, Model: p.Model, Isolation: p.Isolation}
 		if owner, short, ok := strings.Cut(p.Name, "/"); ok {
 			info.Plugin, info.Name = owner, short
 		}
@@ -104,7 +106,7 @@ type agentCatalogTool struct {
 
 func (*agentCatalogTool) Name() string { return "agent_profiles" }
 func (*agentCatalogTool) Description() string {
-	return "List available sub-agent profile IDs, descriptions, exact tool ceilings, default skills, step limits and plugin load errors. Consult this catalog before choosing a custom profile for task."
+	return "List available sub-agent profile IDs, descriptions, exact tool ceilings, default skills, model overrides, step limits and plugin load errors. Consult this catalog before choosing a custom profile for task."
 }
 func (*agentCatalogTool) Parameters() []core.Parameter { return nil }
 func (t *agentCatalogTool) Execute(ctx context.Context, _ map[string]any) (core.ToolOutput, error) {

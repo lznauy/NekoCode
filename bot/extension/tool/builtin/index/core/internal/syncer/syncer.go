@@ -18,44 +18,82 @@ import (
 
 // Syncer watches for file changes and updates the graph incrementally.
 type Syncer struct {
-	indexer *indexerpkg.Indexer
-	graph   *graphpkg.Graph
-	graphMu *sync.RWMutex
-	watcher *fsnotify.Watcher
-	cwd     string
-	mu      sync.Mutex
-	stopCh  chan struct{}
-	doneCh  chan struct{}
-	start   sync.Once
-	stop    sync.Once
-	stopErr error
+	indexer  *indexerpkg.Indexer
+	graph    *graphpkg.Graph
+	graphMu  *sync.RWMutex
+	watcher  *fsnotify.Watcher
+	cwd      string
+	mu       sync.Mutex
+	stopCh   chan struct{}
+	doneCh   chan struct{}
+	start    sync.Once
+	stop     sync.Once
+	stopErr  error
+	healthMu sync.RWMutex
+	state    string
+	lastErr  error
 }
+
+const (
+	StateRunning  = "running"
+	StateDegraded = "degraded"
+	StateStopped  = "stopped"
+)
+
+var newWatcher = fsnotify.NewWatcher
 
 // NewSyncer creates a new file syncer.
 func NewSyncer(indexer *indexerpkg.Indexer, cwd string, graphMu *sync.RWMutex) (*Syncer, error) {
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		return nil, fmt.Errorf("create watcher: %w", err)
-	}
-
 	s := &Syncer{
 		indexer: indexer,
 		graphMu: graphMu,
-		watcher: watcher,
 		cwd:     cwd,
 		stopCh:  make(chan struct{}),
 		doneCh:  make(chan struct{}),
+		state:   StateStopped,
 	}
+	watcher, err := newWatcher()
+	if err != nil {
+		err = fmt.Errorf("create watcher: %w", err)
+		s.degrade(err)
+		return s, err
+	}
+	s.watcher = watcher
 
 	// Add directories to watch
 	if err := s.addWatchDirs(cwd); err != nil {
 		if closeErr := watcher.Close(); closeErr != nil {
-			return nil, fmt.Errorf("%w (close watcher: %v)", err, closeErr)
+			err = fmt.Errorf("%w (close watcher: %v)", err, closeErr)
 		}
-		return nil, err
+		s.watcher = nil
+		s.degrade(err)
+		return s, err
 	}
 
 	return s, nil
+}
+
+// Status returns the current watcher state and its most recent error.
+func (s *Syncer) Status() (string, error) {
+	s.healthMu.RLock()
+	defer s.healthMu.RUnlock()
+	return s.state, s.lastErr
+}
+
+func (s *Syncer) degrade(err error) {
+	s.healthMu.Lock()
+	s.state = StateDegraded
+	s.lastErr = err
+	s.healthMu.Unlock()
+}
+
+func (s *Syncer) setState(state string, err error) {
+	s.healthMu.Lock()
+	s.state = state
+	if err != nil {
+		s.lastErr = err
+	}
+	s.healthMu.Unlock()
 }
 
 // addWatchDirs recursively adds directories to the watcher.
@@ -83,7 +121,13 @@ func (s *Syncer) addWatchDirs(dir string) error {
 
 // Start begins watching for file changes.
 func (s *Syncer) Start() {
-	s.start.Do(func() { go s.run() })
+	s.start.Do(func() {
+		if s.watcher == nil {
+			return
+		}
+		s.setState(StateRunning, nil)
+		go s.run()
+	})
 }
 
 func (s *Syncer) run() {
@@ -103,6 +147,12 @@ func (s *Syncer) run() {
 			return
 		case event, ok := <-s.watcher.Events:
 			if !ok {
+				select {
+				case <-s.stopCh:
+					return
+				default:
+				}
+				s.degrade(fmt.Errorf("watcher events channel closed"))
 				return
 			}
 			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove) == 0 {
@@ -112,7 +162,9 @@ func (s *Syncer) run() {
 			if event.Op&fsnotify.Create != 0 {
 				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
 					if !indexerpkg.ShouldSkipDir(info.Name()) {
-						_ = s.watcher.Add(event.Name)
+						if err := s.watcher.Add(event.Name); err != nil {
+							s.degrade(fmt.Errorf("watch new directory: %w", err))
+						}
 					}
 					continue
 				}
@@ -141,10 +193,17 @@ func (s *Syncer) run() {
 			debounce = nil
 			s.handleFileChanges(changes)
 
-		case _, ok := <-s.watcher.Errors:
+		case err, ok := <-s.watcher.Errors:
 			if !ok {
+				select {
+				case <-s.stopCh:
+					return
+				default:
+				}
+				s.degrade(fmt.Errorf("watcher errors channel closed"))
 				return
 			}
+			s.degrade(err)
 		}
 	}
 }
@@ -165,6 +224,7 @@ func (s *Syncer) handleFileChanges(events map[string]fsnotify.Op) {
 			continue
 		}
 		if err != nil {
+			s.degrade(fmt.Errorf("read changed file %s: %w", path, err))
 			continue
 		}
 		changes = append(changes, indexerpkg.FileChange{Path: path, Content: content})
@@ -179,6 +239,7 @@ func (s *Syncer) handleFileChanges(events map[string]fsnotify.Op) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.indexer.ApplyChanges(s.graph, s.cwd, changes); err != nil {
+		s.degrade(fmt.Errorf("update files: %w", err))
 		logger.Log("index: update files: %v", err)
 	}
 }
@@ -187,9 +248,12 @@ func (s *Syncer) handleFileChanges(events map[string]fsnotify.Op) {
 func (s *Syncer) Stop() error {
 	s.Start()
 	s.stop.Do(func() {
-		close(s.stopCh)
-		s.stopErr = s.watcher.Close()
-		<-s.doneCh
+		if s.watcher != nil {
+			close(s.stopCh)
+			s.stopErr = s.watcher.Close()
+			<-s.doneCh
+		}
+		s.setState(StateStopped, s.stopErr)
 	})
 	return s.stopErr
 }

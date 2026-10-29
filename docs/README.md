@@ -26,6 +26,7 @@
 | [自定义 Plugin](developers/PLUGIN_GUIDE.md) | 组合、安装、更新和分发扩展 |
 | [Hook 使用与开发](developers/HOOK_GUIDE.md) | 插件事件、JS 和命令动作、状态、诊断及 Go 接入 |
 | [自定义工具开发](developers/TOOL_GUIDE.md) | 实现 Go 工具、编译接入宿主并验证 |
+| [Shell 网络域名限制](developers/NETWORK_EGRESS.md) | 出站域名配置、授权匹配、沙箱代理、支持边界与验证 |
 | [Runtime 应用开发](developers/RUNTIME_APP_GUIDE.md) | 组装自己的应用、UI 或消息渠道 |
 | [ACP 协议](developers/ACP.md) | 编辑器协议、能力协商与实现状态 |
 | [Headless 协议](developers/STREAM_JSON.md) | 双向 NDJSON 消息与控制契约（当前实现） |
@@ -54,7 +55,8 @@
 | --- | --- |
 | [对比补齐方向](plan/COMPARISON_GAPS.md) | 相对主流产品的短板与补齐顺序 |
 | [Headless 协议剩余差距](plan/STREAM_JSON_GAPS.md) | `nekocode-headless/2` 尚未暴露的能力与暂缓项 |
-| [子任务后续](plan/SUBAGENT_NEXT.md) | 全局列表、删除、输出搜索导出、多端接入、worktree 隔离 |
+| [子任务后续](plan/SUBAGENT_NEXT.md) | 全局列表、删除、输出搜索导出、多端接入 |
+| [通用运行预算](plan/RUN_BUDGET.md) | 主 Agent 与子任务的步数、累计 token 预算和耗尽后的收尾行为 |
 
 当前行为以对应现状文档为准：Headless 见 [STREAM_JSON.md](developers/STREAM_JSON.md)，子任务见 [用户指南](users/USER_GUIDE.md#查看子任务) 和 [数据目录](users/DATA_DIRECTORY.md#subagents--子任务会话)。
 

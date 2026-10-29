@@ -93,15 +93,13 @@ func (b *Bot) setReasoningEffort(effort string, persist bool) error {
 
 	next := b.cfg.Clone()
 	active := next.Active
-	for i := range next.Models {
-		if next.Models[i].Name != active {
-			continue
-		}
-		capability := config.ReasoningCapabilityFor(next.Models[i])
+	model, exists := next.LookupModelConfig(active)
+	if exists {
+		capability := config.ReasoningCapabilityFor(model)
 		if !capability.Supports(effort) {
-			return fmt.Errorf("model %q supports reasoning effort: %v", next.Models[i].Model, capability.Values())
+			return fmt.Errorf("model %q supports reasoning effort: %v", model.Model, capability.Values())
 		}
-		next.Models[i].ReasoningEffort = effort
+		next.SetModelReasoning(active, effort)
 		if persist {
 			if err := config.Save(next); err != nil {
 				return fmt.Errorf("persist reasoning effort %q: %w", effort, err)
@@ -111,6 +109,7 @@ func (b *Bot) setReasoningEffort(effort string, persist bool) error {
 		b.rebuildAgentLocked()
 		return nil
 	}
+
 	return fmt.Errorf("active model %q not found", active)
 }
 

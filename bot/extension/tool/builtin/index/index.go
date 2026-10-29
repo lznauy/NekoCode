@@ -17,6 +17,7 @@ import (
 // It lazily initializes its own Manager on first use, so registration
 // requires no external setup.
 type IndexTool struct {
+	opMu   sync.RWMutex
 	mu     sync.Mutex
 	root   string
 	closed bool
@@ -45,6 +46,8 @@ func (t *IndexTool) ensureInit(ctx context.Context) (*indexcore.Manager, error) 
 	}
 	if t.root == "" {
 		t.root = cwd
+	}
+	if t.mgr == nil {
 		t.mgr, t.mgrErr = indexcore.NewManager(cwd)
 		if t.mgrErr == nil {
 			t.mgrErr = t.mgr.Init()
@@ -55,6 +58,8 @@ func (t *IndexTool) ensureInit(ctx context.Context) (*indexcore.Manager, error) 
 
 // Close releases the index watcher and database owned by this tool instance.
 func (t *IndexTool) Close() error {
+	t.opMu.Lock()
+	defer t.opMu.Unlock()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
@@ -88,6 +93,8 @@ func (t *IndexTool) Parameters() []core.Parameter {
 }
 
 func (t *IndexTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
+	t.opMu.RLock()
+	defer t.opMu.RUnlock()
 	mgr, err := t.ensureInit(ctx)
 	if err != nil {
 		return core.ToolOutput{Text: fmt.Sprintf("Index initialization failed: %v", err)}, nil

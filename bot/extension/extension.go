@@ -54,6 +54,7 @@ type Snapshot struct {
 	MCPHealth     map[string]mcp.Health
 	AgentErrors   map[string]string
 	HookErrors    map[string]string
+	SkillErrors   map[string]string
 	Agents        []AgentInfo
 	ConfiguredMCP []ConfiguredMCP
 }
@@ -222,6 +223,7 @@ func (m *Manager) Snapshot() Snapshot {
 		MCPHealth:     m.mcp.Health(),
 		AgentErrors:   m.agentErrorsLocked(),
 		HookErrors:    maps.Clone(m.hookErrors),
+		SkillErrors:   m.skills.LoadErrors(),
 		Agents:        m.agentInfosLocked(),
 		ConfiguredMCP: cloneConfiguredMCP(m.configuredMCP),
 	}
@@ -568,4 +570,15 @@ func (m *Manager) MCPAuthorizationAction(name, action string) error {
 	m.ops.Lock()
 	defer m.ops.Unlock()
 	return m.mcp.AuthorizationAction(name, action)
+}
+
+// ModelSkill enforces automatic invocation restrictions, including delegation.
+func (m *Manager) ModelSkill(name string) (skill.Command, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sk, err := m.skills.ForModel(name)
+	if err != nil {
+		return skill.Command{}, err
+	}
+	return skill.Command{Name: sk.Name, Context: skill.FormatForContext(sk)}, nil
 }

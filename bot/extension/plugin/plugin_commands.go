@@ -7,10 +7,10 @@ import (
 
 // Usage returns the /plugin command usage text.
 func Usage() string {
-	return "Usage: /plugin <subcommand> [args]\n\nSubcommands:\n  install <source>   Install from GitHub URL, user/repo, or local path\n  uninstall <name>   Remove a plugin\n  list               List installed plugins\n  enable <name>      Enable a disabled plugin\n  disable <name>     Disable a plugin (keeps files)\n  info <name>        Show plugin details"
+	return "Usage: /plugin <subcommand> [args]\n\nSubcommands:\n  install <source> [--yes]   Install from GitHub URL, user/repo, or local path\n  uninstall <name>           Remove a plugin\n  list                       List installed plugins\n  enable <name>              Enable a disabled plugin\n  disable <name>             Disable a plugin (keeps files)\n  info <name>                Show plugin details\n  check [name]               Check static compatibility without executing plugins\n\n--yes skips the install preview and confirmation."
 }
 
-const InstallUsage = "Usage: /plugin install <source>\n  source: GitHub URL | user/repo | ./local-path"
+const InstallUsage = "Usage: /plugin install <source> [--yes]\n  source: GitHub URL | user/repo | ./local-path\n  --yes: Skip the install preview and confirmation"
 
 // ListText renders the installed plugin list for command-line callers.
 func (m *Manager) ListText() string {

@@ -31,6 +31,7 @@ func (t *TaskTool) Description() string {
 
 func (t *TaskTool) Parameters() []core.Parameter {
 	return []core.Parameter{
+		{Name: "isolation", Type: "string", Description: "Optional shared or worktree. worktree creates a private Git HEAD checkout (excludes uncommitted parent changes). Results stay there until the user applies them with /worktree. Omit on resume to reuse saved mode. Cannot weaken a worktree profile to shared."},
 		{Name: "title", Type: "string", Description: "Short task display name, at most 80 characters. Do not copy the full prompt."},
 		{Name: "resume_id", Type: "string", Description: "Continue a saved subagent in the current parent session using the full task_list items[].id or the returned [Subagent ID]. Never use latest_attempt.id: it identifies an execution attempt, not a subagent. Omit profile and skills to reuse the saved capability profile and skills. Never resume a task that is still running."},
 		{Name: "profile", Type: "string",
@@ -107,6 +108,13 @@ func (t *TaskTool) Execute(ctx context.Context, args map[string]any) (output cor
 		}
 	}
 
+	isolation := toolutil.OptStringArg(args, "isolation", "")
+	if raw, ok := args["isolation"]; ok {
+		v, valid := raw.(string)
+		if !valid || (v != "shared" && v != "worktree") {
+			return core.ToolOutput{}, fmt.Errorf("isolation must be shared or worktree")
+		}
+	}
 	// Read sub-callback from args (injected by agent for TUI forwarding).
 	subCtx := ctx
 	switch cb := args["_sub_callback"].(type) {
@@ -119,7 +127,7 @@ func (t *TaskTool) Execute(ctx context.Context, args map[string]any) (output cor
 	}
 
 	result, err := t.run(subCtx, taskbridge.TaskSpec{
-		Title: title, Prompt: prompt, Profile: profile, Skills: skills, ResumeID: resumeID,
+		Isolation: isolation, Title: title, Prompt: prompt, Profile: profile, Skills: skills, ResumeID: resumeID,
 	})
 	if err != nil && result == nil {
 		return core.ToolOutput{}, err

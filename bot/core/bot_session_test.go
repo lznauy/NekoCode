@@ -282,6 +282,54 @@ func TestSessionCommandResumesDirectManager(t *testing.T) {
 	}
 }
 
+func TestSessionCommandsShowForkSourceStatus(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	manager := session.New(t.TempDir())
+	source := manager.Current()
+	source.Messages = []types.Message{{Role: "user", Content: "source"}}
+	if err := manager.Save(source); err != nil {
+		t.Fatal(err)
+	}
+	branch := manager.StartNew()
+	branch.ForkedFrom = source.ID
+	branch.Messages = []types.Message{{Role: "user", Content: "branch"}}
+	if err := manager.Save(branch); err != nil {
+		t.Fatal(err)
+	}
+
+	b := &Bot{sess: manager}
+	parser := command.NewParser()
+	b.registerSessionCommands(parser)
+	findDescription := func() string {
+		t.Helper()
+		menu, ok := parser.Menu(context.Background(), "/sessions")
+		if !ok {
+			t.Fatal("sessions menu was not returned")
+		}
+		for _, item := range menu.Items {
+			if item.Key == branch.ID {
+				return item.Description
+			}
+		}
+		t.Fatalf("branch %s missing from menu: %+v", branch.ID, menu.Items)
+		return ""
+	}
+	if description := findDescription(); !strings.Contains(description, "from "+source.ID) || strings.Contains(description, "source deleted") {
+		t.Fatalf("existing-source description = %q", description)
+	}
+
+	if err := manager.Delete(source.ID); err != nil {
+		t.Fatal(err)
+	}
+	if description := findDescription(); !strings.Contains(description, "from "+source.ID) || !strings.Contains(description, "source deleted") {
+		t.Fatalf("deleted-source description = %q", description)
+	}
+	text, handled := parser.Execute(context.Background(), parser.Parse("/sessions"))
+	if !handled || !strings.Contains(text, "from "+source.ID) || !strings.Contains(text, "source deleted") {
+		t.Fatalf("deleted-session text = %q, handled=%v", text, handled)
+	}
+}
+
 func TestEnsureSessionIdentitySyncsManagedProcesses(t *testing.T) {
 	manager := session.New(t.TempDir())
 	manager.ClearCurrent()

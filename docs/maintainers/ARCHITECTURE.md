@@ -563,9 +563,9 @@ TUI 与 GUI 的图片粘贴统一使用 runtime `Input.Images` 附件字段。�
 
 ## Hook 系统（事件驱动）
 
-### 十四种触发点
+### 十六种触发点
 
-触发点及能力统一定义在 [`contract/point.go`](../../bot/policy/contract/point.go)。插件支持 15 个配置事件名，`PostToolUseFailure` 是 `PostToolUse` 的失败过滤视图，不增加内部触发点。
+触发点及能力统一定义在 [`contract/point.go`](../../bot/policy/contract/point.go)。插件支持 17 个配置事件名，`PostToolUseFailure` 是 `PostToolUse` 的失败过滤视图，不增加内部触发点。
 
 | Point | 时机 | 典型作用 |
 |-------|------|---------|
@@ -577,6 +577,8 @@ TUI 与 GUI 的图片粘贴统一使用 runtime `Input.Images` 附件字段。�
 | PreModel | 每次模型请求前，包含最终兜底合成 | 注入本次请求提示或拒绝模型请求 |
 | PreToolUse | 单个工具执行前 | 允许或阻止该工具调用 |
 | PostToolUse | 单个工具执行后 | 根据单次结果追加提示或停止 |
+| PermissionRequest | 真实审批回调前 | 观察待审批范围，不授予权限 |
+| PermissionDenied | 用户或权限规则明确拒绝 | 记录拒绝来源和调用身份 |
 | PostToolBatch | 一批工具全部执行后 | 根据整批活动和进度作出决策 |
 | Stop | 模型准备返回最终文本时，包含兜底恢复路径 | 校验候选回答；终止恢复路径不再重试 |
 | PreCompact | 实际上下文摘要尝试前 | 观察压缩开始 |
@@ -622,7 +624,7 @@ Hook 的计数器和去重标记按 hook 名隔离；候选状态通过校验，
 `bot/policy/contract/` 定义 Go、JS 和命令共用的 v1 事件、结果和控制决定。
 引擎负责串行评估、超时与取消、回调故障隔离、状态提交和决策汇总；agent 消费统一 Outcome。
 
-- 内部 14 个触发点；配置支持 15 个事件名（PostToolUseFailure 是失败过滤视图）。
+- 内部 16 个触发点；配置支持 17 个事件名（PostToolUseFailure 是失败过滤视图）。
 - Session、run、工具、子 Agent、压缩各生命周期有真实接入；SessionStart 在当前 session 首个 run 开始时执行一次。
 - 控制决定为 continue / reject / stop；stop 优先，拒绝最终回答的重试耗尽后返回错误。
 - 提示按注册顺序全部保留；拒绝事实独立于结束决定，无法被 completed 覆盖。状态通过 256 项 / 64 KiB 配额检查后提交，热替换与会话切换后旧回调结果和状态均丢弃。
@@ -664,7 +666,7 @@ Hook 的计数器和去重标记按 hook 名隔离；候选状态通过校验，
 | `check` | diff/PR/issue 审查、非平凡实现后的交付检查 | 范围核对 → 风险审查 → 独立复核 → 验证 |
 | `skill-creator` | 创建、审查或更新技能 | 收集需求 → 编写 SKILL.md → 校验 |
 
-Skill frontmatter 中的 `context`、`agent`、`allowed-tools`、`max_steps` 和 `context_window` 会被解析并保存在 `Skill`；主 Agent 仍可按需 inline 加载正文。委托任务通过 `task(profile, skills, prompt, title?, resume_id?)` 显式选择 profile 和 task-scoped skills，可用独立标题显示任务，并通过 `resume_id` 续跑当前父会话的已保存任务；只读 `task_list` 用于查找任务。skill 只提供工作流，不能扩展 profile 的工具权限。
+Skill 默认 inline 加载，`context` 只能省略或设为 `inline`；`agent`、`allowed-tools`、`max_steps`、`context_window` 和 `context: fork` 会明确报加载错误，可通过 `/skills` 查看文件与原因。`disable-model-invocation: true` 保留用户手动入口，但禁止模型工具调用和委托预加载。委托任务通过 `task(profile, skills, prompt, title?, resume_id?)` 显式选择 profile 和 task-scoped skills，可用独立标题显示任务，并通过 `resume_id` 续跑当前父会话的已保存任务；只读 `task_list` 用于查找任务。skill 只提供工作流，不能扩展 profile 的工具权限。
 
 ## 子 Agent 系统
 
@@ -681,7 +683,7 @@ Skill frontmatter 中的 `context`、`agent`、`allowed-tools`、`max_steps` 和
 
 - 独立 ctxmgr（`New(Config)`），配置 merge model 时自动接入 Compactor
 - FileCache 从主 Agent 种子预热（Seed/Merge）
-- 模型和上下文窗口从主 Agent 配置继承；子 Agent 显式关闭 thinking
+- 工作模型默认跟随主 Agent，可由 Profile 的 `model` 引用已配置模型；上下文窗口和推理设置跟随所选模型，压缩模型独立
 - profile 工具白名单同时用于模型工具过滤与执行前复核；代理工具需要同时列出代理名与允许的 effective target，不能借代理扩大权限
 - 选定 skill 内容在每次模型请求时以 user 级 task-scoped workflow 重投影，不进入可压缩历史，也不授予额外工具
 - 每次运行独立的确定性 Policy guard；不以关键词匹配代替权限检查
@@ -795,3 +797,43 @@ TUI 和 GUI 直接渲染菜单；Telegram 渲染 inline keyboard 并同步平台
 | Session 持久化 | `bot/session/` | Manager、Snapshot 与 JSON 存取 |
 | TUI | `interaction/tui/` | Bubble Tea v2 组件化 |
 | Connector | `interaction/connect/` | Telegram 等外部 IM 接入 |
+
+### 索引维护命令
+
+`bot/command/index.go` 注册 `/index [status|rebuild]`，从工具注册表取得工作区已有的 `IndexTool`，复用其生命周期。命令不允许在任务执行中运行。IndexTool 的操作锁使维护、查询和关闭互斥；重建先停止 watcher 并关闭数据库，备份旧库及 WAL/SHM 后创建新的 Manager。每个 Manager 持有操作系统共享锁，重建必须获得跨进程独占锁；独占锁覆盖备份与新库初始化，成功后转为共享锁。额外的重建门锁保护 Windows 上不能原子完成的锁降级；锁文件不删除。其他实例仍使用旧库时重建明确报忙，禁止移动活跃数据库。初始化或锁降级失败时，在独占锁保护下隔离失败的新库并恢复旧库；资源关闭失败则不移动数据库，也不提前释放租约。状态统计来自 SQLite，最近成功同步时间通过 `index_metadata` 持久化，在初始化同步和成功增量同步后更新。无项目根目录、初始化失败与 watcher 不可用分别报告，不将不可用伪装成空索引。Watcher 状态区分 running、degraded 和 stopped，并保留最近错误。
+
+### 子 Agent 模型装配
+
+Profile 的可选 `model` 引用 完整模型引用（`服务名/模型名或别名`）；`agent_profiles` 展示显式覆盖值。`bot/core/bot_subagent.go` 使用主 Agent 装配时的配置快照，在创建执行记录前严格解析模型名称，为每次任务创建独立客户端，并设置对应的上下文窗口和推理契约。省略时使用主对话模型；`compaction_model` 仅用于独立的压缩客户端，其窗口通过 `RunConfig.CompactionWindow` 传入上下文管理器。任务恢复重新解析当前 Profile；历史快照不覆盖当前模型限制。Profile 工具边界不受模型选择影响。
+
+### Shell 域名受限出口
+
+Shell 的可选 `outbound_domains` 从 config、权限声明、工具参数、预审批到持久化 grant 全链路保留 nil/空集合区别。命中多个域声明时取交集。原生后端以独立网络命名空间、逐调用 Unix 出口代理及 seccomp 约束强制执行；空集合也要求原生隔离。`NetworkIsolationError` 不触发 Landlock/host 降级。协议审批上下文和各端审批卡展示域集合；受限 grant 使用独立 capability 标记，避免旧版误读成广域网络授权。实现边界、资源清理和验收命令见 [Shell 网络域名限制](../developers/NETWORK_EGRESS.md)。
+
+### 审批事实观察
+
+runner 的 `SetPermissionObserver` 只输出独立 JSON 快照，不返回权限决定。实际审批回调统一在 executeOne 中包装，覆盖工作区、命令和能力升级；规则拒绝在决定发生处单独记录。`agent/internal/toolpolicy.ObservePermissions` 将通知投影到 PermissionRequest/PermissionDenied，主 Agent 和子 Agent 各自装配 Actor ID；子 Agent 使用父级 Policy 观察，保持本地 guard 与执行器授权边界。协议点能力不允许 reject/stop，Observe 丢弃控制输出，观察者异常不改变审批结果。
+
+### 一次性命令执行
+
+`cmd/tui` 和 `cmd/headless` 共用 `headless.ParseArgs` 与 `RunStdio`。`-p`/`--print`/`exec` 的 text/json 输出由 `headless/once.go` 适配，内部复用同一个 `Serve` 生命周期和可靠事件归并，只保留最终 result。显式 stream-json 仍走原双向协议；一次性运行遇到人工交互时拒绝并终止。可选输出 Schema 在建立 Runtime 前编译，提示模型后本地验证最终 JSON；使用 `santhosh-tekuri/jsonschema/v6`，禁止外部引用，开启 format 断言，不使用供应商原生响应约束。CLI 把执行、配置和取消错误映射到稳定退出码，所有诊断走 stderr。
+
+### 子 Agent 文件隔离
+
+`bot/worktree` 管理显式开启的 worktree 生命周期，`bot/core/bot_subagent.go` 负责与 durable task、独立 toolbox 和权限配置接线。session 只持久化 isolation；工作副本身份由独立 manifest 保存，恢复及管理操作校验当前仓库归属和固定路径。创建前写 manifest，失败现场可通过显式 discard 回收。每个任务持有跨进程锁，清理保留锁文件和 removed 标记；同一 Git common directory 的结果应用另有跨进程互斥锁。
+
+工作副本从 HEAD 创建，管理 Git 禁用 hooks/filters/外部协议，先 no-checkout 再在目标配置上下文内 checkout，避免条件 include 激活宿主命令。isolated RunConfig 不继承或回并父级文件缓存、快照及 rewind，只共享按 actor 命名的输出存储。Shell、LSP、索引和进程实例独立，实时审批模式继承父级，权限路径锚点重绑子目录。结果需显式 diff/apply/remove，冲突不自动解决。
+
+### 会话分支
+
+`/fork` 经既有 idle 命令生命周期执行。`bot/core/bot_session_fork.go` 先保存活动上下文，再调用 `session.Manager.Fork` 建立独立快照，最后复用恢复流程切换；运行时沿用 session-changed 事件刷新历史。分支用 `forked_from` 和 `forked_at_seq` 记录来源，不依赖源会话生存。
+
+`bot/session/fork.go` 为新 ID 预留目录，复制完整 transcript 和压缩后的活动上下文，清除源 history handle、检查点、ledger 和累计调用用量。图片及工具输出只从对应会话拥有的目录通过 `os.Root` 读取普通文件，独立复制后同步替换结构化路径与摘要、记忆、消息中的引用；外部文件引用沿用其原生命周期。复制或落盘失败时不激活分支并清理半成品；切换失败时保留已保存分支并明确报告 ID。
+
+不复制子任务、worktree、后台进程或临时 workspace roots；切换成功后清空工具文件缓存和内容快照。项目配置及审批规则仍按当前配置恢复，工作区文件共享，文件 rewind 从新分支的新检查点开始。
+
+### 插件静态诊断
+
+`extension.Manager.CheckPlugins` 和 `/plugin check [name]` 基于当前已安装插件快照读取磁盘定义，使用 ops 锁与安装/卸载串行，不重新发布扩展状态。组件通过 `os.Root` 的有界、可取消遍历统一发现，文件访问不能越过插件根；遇到权限错误、扫描上限或报告上限时显式报告检查不完整。Skill 发现保留运行时的 SKILL.md 后停止遍历语义。
+
+诊断复用 `skill.ParseContent`、`agentprofile.Load`、`policy.LoadPluginHooks` 的静态解析，Hook JS 仅编译，不执行；MCP 只解析及校验配置，不创建客户端。清单未知字段、被忽略的旧 commands 与宿主依赖产生 warning，解析/路径错误产生 error。状态不变与 Skill-only、Agent/Hook、MCP 三类插件形态均有回归覆盖；静态通过与运行可用分开表达。

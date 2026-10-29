@@ -19,6 +19,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"nekocode/bot/extension/tool/runtime/netpolicy"
 	"nekocode/util/fs"
 )
 
@@ -91,6 +92,11 @@ func prepareNativeLaunch(command string, profile Profile) (*nativeLaunch, error)
 		return nil, fmt.Errorf("resolve workspace: %w", err)
 	}
 	profile.Workspace = ws
+	profile.OutboundDomains, err = netpolicy.Normalize(profile.OutboundDomains)
+	if err != nil {
+		return nil, err
+	}
+	profile.EgressSocket = ""
 
 	writePaths, err := resolveWritePaths(profile.WritePaths)
 	if err != nil {
@@ -130,6 +136,16 @@ func prepareNativeLaunch(command string, profile Profile) (*nativeLaunch, error)
 		cleanup = func() { cleanupStagingRoot(staging) }
 	}
 
+	if len(profile.OutboundDomains) > 0 {
+		proxy, err := createEgressProxy(profile.OutboundDomains)
+		if err != nil {
+			cleanup()
+			return nil, err
+		}
+		previousCleanup := cleanup
+		cleanup = func() { proxy.Close(); previousCleanup() }
+		profile.EgressSocket = proxy.socket()
+	}
 	profileJSON, err := json.Marshal(profile)
 	if err != nil {
 		cleanup()
@@ -150,7 +166,7 @@ func prepareNativeLaunch(command string, profile Profile) (*nativeLaunch, error)
 		syscall.CLONE_NEWUTS |
 		syscall.CLONE_NEWPID |
 		syscall.CLONE_NEWNET
-	if profile.Network {
+	if profile.Network && profile.OutboundDomains == nil {
 		// Network was granted: share the host network namespace instead of
 		// creating an isolated (loopback-only) one.
 		cloneFlags &^= syscall.CLONE_NEWNET
@@ -203,6 +219,9 @@ func runNativeBash(ctx context.Context, command string, profile Profile, timeout
 			strings.Contains(runErr.Error(), "operation not permitted")
 	}
 
+	if profile.OutboundDomains != nil {
+		return runChild(ctx, launch.self, launch.args, nil, launch.workdir, timeout, launch.sysproc, nil, "")
+	}
 	return runChild(ctx, launch.self, launch.args, nil, launch.workdir, timeout, launch.sysproc, unavail, "namespace creation failed")
 }
 
@@ -310,6 +329,17 @@ func handleSandboxChild() {
 	command := os.Args[3]
 
 	if err := sandboxChildSetupAndExec(profile, command); err != nil {
+		var exit *exec.ExitError
+		if profile.OutboundDomains != nil && errors.As(err, &exit) {
+			code := exit.ExitCode()
+			if status, ok := exit.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+				code = 128 + int(status.Signal())
+			}
+			if code < 1 {
+				code = 1
+			}
+			os.Exit(code)
+		}
 		fmt.Fprintf(os.Stderr, "sandbox child: %v\n", err)
 		os.Exit(1)
 	}
@@ -317,6 +347,7 @@ func handleSandboxChild() {
 }
 
 func init() {
+	handleRestrictedCommand()
 	handleSandboxChild()
 }
 
@@ -466,6 +497,39 @@ func sandboxChildSetupAndExec(profile Profile, command string) error {
 		}
 	}
 
+	if profile.EgressSocket != "" {
+		socket := filepath.Join(root, "tmp", ".nekocode-egress.sock")
+		f, err := os.OpenFile(socket, os.O_CREATE|os.O_RDWR, 0600)
+		if err != nil {
+			return err
+		}
+		_ = f.Close()
+		if err := unix.Mount(profile.EgressSocket, socket, "", unix.MS_BIND, ""); err != nil {
+			return fmt.Errorf("mount egress socket: %w", err)
+		}
+		if err := unix.Mount("", socket, "", unix.MS_REMOUNT|unix.MS_BIND|unix.MS_RDONLY, ""); err != nil {
+			return fmt.Errorf("protect egress socket: %w", err)
+		}
+		profile.EgressSocket = "/tmp/.nekocode-egress.sock"
+	}
+	if profile.OutboundDomains != nil {
+		self, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(root, "tmp", ".nekocode-exec")
+		f, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, 0500)
+		if err != nil {
+			return err
+		}
+		_ = f.Close()
+		if err := unix.Mount(self, target, "", unix.MS_BIND, ""); err != nil {
+			return fmt.Errorf("mount restricted helper: %w", err)
+		}
+		if err := unix.Mount("", target, "", unix.MS_REMOUNT|unix.MS_BIND|unix.MS_RDONLY, ""); err != nil {
+			return fmt.Errorf("protect restricted helper: %w", err)
+		}
+	}
 	// 4. Swap the staging tree in as the root.
 	if err := unix.PivotRoot(root, filepath.Join(root, ".old")); err != nil {
 		return fmt.Errorf("pivot_root: %w", err)
@@ -481,6 +545,9 @@ func sandboxChildSetupAndExec(profile Profile, command string) error {
 
 	// 5. Environment + exec the command.
 	env := buildSandboxEnv()
+	if profile.OutboundDomains != nil {
+		return superviseRestrictedCommand(profile, command, env)
+	}
 
 	shells := []string{"/bin/bash", "/bin/sh", "/usr/bin/bash", "/usr/bin/sh"}
 	var lastErr error

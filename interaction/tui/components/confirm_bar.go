@@ -411,6 +411,13 @@ func (c *ConfirmBar) formatPermissionDesc() string {
 	if approval.Workspace != "" {
 		lines = append(lines, "工作区: "+approval.Workspace)
 	}
+	if approval.OutboundDomains != nil {
+		domains := strings.Join(approval.OutboundDomains, "、")
+		if domains == "" {
+			domains = "禁止联网"
+		}
+		lines = append(lines, "网络域名: "+domains)
+	}
 	if len(approval.WritePaths) > 0 {
 		lines = append(lines, "可写目录: "+strings.Join(approval.WritePaths, "、"))
 	}

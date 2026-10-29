@@ -7,6 +7,17 @@ import (
 	"testing"
 )
 
+func TestInstallUsageDocumentsYes(t *testing.T) {
+	for _, usage := range []string{Usage(), InstallUsage} {
+		if !strings.Contains(usage, "install <source> [--yes]") {
+			t.Fatalf("usage missing install options: %s", usage)
+		}
+		if !strings.Contains(usage, "--yes") || !strings.Contains(usage, "preview and confirmation") {
+			t.Fatalf("usage missing --yes behavior: %s", usage)
+		}
+	}
+}
+
 func TestFetchRemotePreview(t *testing.T) {
 	p, err := fetchRemotePreview(context.Background(), "https://github.com/owner/repo", func(_ context.Context, url string) ([]byte, error) {
 		if !strings.Contains(url, "owner/repo") {

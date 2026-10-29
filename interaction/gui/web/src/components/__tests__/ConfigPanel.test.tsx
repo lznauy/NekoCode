@@ -3,16 +3,17 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ConfigPanel } from '../ConfigPanel'
 import type { ConfigView, ModelConfig } from '../../types/config'
-import { ResolveModelProfile, SaveConfig, MCPAuthorizationAction } from '../../../wailsjs/go/main/App'
+import { GetConfig, ResolveModelProfile, SaveConfig, MCPAuthorizationAction } from '../../../wailsjs/go/main/App'
 
 const config: ConfigView = {
   path: '/tmp/config.json',
   exists: true,
-  active: 'main',
+  active: 'openai/main',
   auto_compact_percent: 80,
+  providers: [{ name: 'openai', api_key: '', protocol: 'openai', models: [{ name: 'main', model: 'gpt-5', reasoning_effort: 'medium' }] }],
   models: [
     {
-      name: 'main',
+      name: 'openai/main',
       provider: 'openai',
       api_key: '',
       model: 'gpt-5',
@@ -94,7 +95,7 @@ describe('ConfigPanel', () => {
     await user.click(screen.getByRole('button', { name: '保存配置' }))
     await waitFor(() => expect(SaveConfig).toHaveBeenCalled())
     const saved = vi.mocked(SaveConfig).mock.calls[0][0] as unknown as ConfigView
-    expect(saved.active).toBe('main-dev')
+    expect(saved.active).toBe('openai/main-dev')
     expect(saved.jev).toEqual(config.jev)
   })
 
@@ -124,8 +125,8 @@ describe('ConfigPanel', () => {
 
     await waitFor(() => expect(SaveConfig).toHaveBeenCalled())
     const saved = vi.mocked(SaveConfig).mock.calls[0][0] as unknown as ConfigView
-    expect(saved.models[0].context_window).toBe(96000)
-    expect(saved.models[0].profile).toBeUndefined()
+    expect(saved.providers[0].models[0]).toMatchObject({ context_window: 96000 })
+    expect(saved.providers[0].models[0]).not.toHaveProperty('profile')
   })
 
   it('adds and saves an image understanding model', async () => {
@@ -142,5 +143,157 @@ describe('ConfigPanel', () => {
     expect(saved.image_understand_models).toEqual([
       expect.objectContaining({ name: 'vision-1', protocol: 'openai', model: 'gpt-5-mini' }),
     ])
+  })
+
+  it('shares connection settings, preserves shorthand and updates both selections when a provider is renamed', async () => {
+    vi.mocked(GetConfig).mockResolvedValueOnce({ ...config,
+      active: 'relay/model-a', compaction_model: 'relay/model-b',
+      providers: [{ name: 'relay', base_url: 'https://example.com/v1', api_key: 'shared-key', protocol: 'openai', models: ['model-a', 'model-b'] }],
+      models: ['model-a', 'model-b'].map((model) => ({ ...config.models[0], name: `relay/${model}`, model })),
+    } as never)
+    const user = userEvent.setup()
+    render(<ConfigPanel open initialTab="models" onClose={vi.fn()} onSaved={vi.fn()} />)
+    const providerName = await screen.findByLabelText('服务名称')
+    expect(screen.getAllByLabelText('API Key')).toHaveLength(1)
+    await user.clear(providerName)
+    await user.type(providerName, 'gateway')
+    await user.clear(screen.getByLabelText('API Key'))
+    await user.type(screen.getByLabelText('API Key'), 'replacement-key')
+    const save = screen.getByRole('button', { name: '保存配置' })
+    await waitFor(() => expect(save).toBeEnabled())
+    await user.click(save)
+    await waitFor(() => expect(SaveConfig).toHaveBeenCalled())
+    const saved = vi.mocked(SaveConfig).mock.calls[0][0] as unknown as ConfigView
+    expect(saved.providers).toEqual([{ name: 'gateway', base_url: 'https://example.com/v1', api_key: 'replacement-key', protocol: 'openai', models: ['model-a', 'model-b'] }])
+    expect(saved.active).toBe('gateway/model-a')
+    expect(saved.compaction_model).toBe('gateway/model-b')
+  })
+
+  it('keeps explicit protocol and vision overrides when the provider protocol changes', async () => {
+    vi.mocked(GetConfig).mockResolvedValueOnce({ ...config,
+      providers: [{ ...config.providers[0], models: [{ name: 'main', model: 'gpt-5', protocol: 'openai', vision: false }] }],
+    } as never)
+    const user = userEvent.setup()
+    render(<ConfigPanel open initialTab="models" onClose={vi.fn()} onSaved={vi.fn()} />)
+    await user.click(await screen.findByLabelText('默认协议'))
+    await user.click(screen.getByRole('button', { name: 'anthropic' }))
+    const save = screen.getByRole('button', { name: '保存配置' })
+    await waitFor(() => expect(save).toBeEnabled())
+    await user.click(save)
+    await waitFor(() => expect(SaveConfig).toHaveBeenCalled())
+    const saved = vi.mocked(SaveConfig).mock.calls[0][0] as unknown as ConfigView
+    expect(saved.providers[0].protocol).toBe('anthropic')
+    expect(saved.providers[0].models[0]).toMatchObject({ protocol: 'openai', vision: false })
+  })
+
+  it('rejects duplicate aliases inside a provider', async () => {
+    const user = userEvent.setup()
+    render(<ConfigPanel open initialTab="models" onClose={vi.fn()} onSaved={vi.fn()} />)
+    await user.click(await screen.findByRole('button', { name: '添加模型' }))
+    await user.type(screen.getAllByLabelText('模型 ID')[1], 'model-b')
+    await user.type(screen.getAllByLabelText('模型别名（可选）')[1], 'main')
+    expect(screen.getByText('模型名称重复：openai/main')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '保存配置' })).toBeDisabled()
+  })
+  it('changing from inherited protocol to the identical explicit protocol remains saveable', async () => {
+    const user = userEvent.setup()
+    render(<ConfigPanel open initialTab="models" onClose={vi.fn()} onSaved={vi.fn()} />)
+    const save = await screen.findByRole('button', { name: '保存配置' })
+    await waitFor(() => expect(save).toBeEnabled())
+    // Let the initial metadata request finish before changing the override.
+    await waitFor(() => expect(ResolveModelProfile).toHaveBeenCalled())
+    await user.click(screen.getByLabelText('协议'))
+    await user.click(screen.getAllByRole('button', { name: 'openai' }).slice(-1)[0])
+    await waitFor(() => expect(save).toBeEnabled())
+  })
+
+  it('a temporary duplicate provider name does not switch the active connection', async () => {
+    vi.mocked(GetConfig).mockResolvedValueOnce({ ...config,
+      active: 'first/main', compaction_model: 'first/main',
+      providers: ['first', 'second'].map((name) => ({ name, api_key: `${name}-secret`, protocol: 'openai', models: [{name: 'main', model: 'gpt-5'}] })),
+      models: ['first', 'second'].map((name) => ({ ...config.models[0], name: `${name}/main`, provider: name })),
+    } as never)
+    const user = userEvent.setup()
+    render(<ConfigPanel open initialTab="models" onClose={vi.fn()} onSaved={vi.fn()} />)
+    await screen.findAllByLabelText('服务名称')
+    const input = screen.getAllByLabelText('服务名称')[0]
+    await user.clear(input)
+    await user.type(input, 'second')
+    await user.clear(input)
+    await user.type(input, 'first')
+    const save = screen.getByRole('button', { name: '保存配置' })
+    await waitFor(() => expect(save).toBeEnabled())
+    await user.click(save)
+    await waitFor(() => expect(SaveConfig).toHaveBeenCalled())
+    const saved = vi.mocked(SaveConfig).mock.calls[0][0] as unknown as ConfigView
+    expect(saved.active).toBe('first/main')
+    expect(saved.compaction_model).toBe('first/main')
+  })
+
+  it('changing an explicit protocol back to the identical inherited protocol remains saveable', async () => {
+    vi.mocked(GetConfig).mockResolvedValueOnce({ ...config,
+      providers: [{ ...config.providers[0], models: [{name: 'main', model: 'gpt-5', protocol: 'openai'}] }],
+    } as never)
+    const user = userEvent.setup()
+    render(<ConfigPanel open initialTab="models" onClose={vi.fn()} onSaved={vi.fn()} />)
+    await waitFor(() => expect(ResolveModelProfile).toHaveBeenCalled())
+    await user.click(screen.getByLabelText('协议'))
+    await user.click(screen.getByRole('button', {name: '跟随服务'}))
+    const save = screen.getByRole('button', {name: '保存配置'})
+    await waitFor(() => expect(save).toBeEnabled())
+    await user.click(save)
+    await waitFor(() => expect(SaveConfig).toHaveBeenCalled())
+    const saved = vi.mocked(SaveConfig).mock.calls[0][0] as unknown as ConfigView
+    expect(saved.providers[0].models[0]).not.toHaveProperty('protocol', 'openai')
+  })
+
+  it('a temporary duplicate model alias keeps the selected row', async () => {
+    vi.mocked(GetConfig).mockResolvedValueOnce({ ...config,
+      active: 'openai/first', compaction_model: 'openai/first',
+      providers: [{ ...config.providers[0], models: ['first', 'second'].map((name) => ({name, model: 'gpt-5'})) }],
+      models: ['first', 'second'].map((name) => ({ ...config.models[0], name: `openai/${name}` })),
+    } as never)
+    const user = userEvent.setup()
+    render(<ConfigPanel open initialTab="models" onClose={vi.fn()} onSaved={vi.fn()} />)
+    const input = (await screen.findAllByLabelText('模型别名（可选）'))[0]
+    await user.clear(input)
+    await user.type(input, 'second')
+    await user.clear(input)
+    await user.type(input, 'first')
+    const save = screen.getByRole('button', {name: '保存配置'})
+    await waitFor(() => expect(save).toBeEnabled())
+    await user.click(save)
+    await waitFor(() => expect(SaveConfig).toHaveBeenCalled())
+    const saved = vi.mocked(SaveConfig).mock.calls[0][0] as unknown as ConfigView
+    expect(saved.active).toBe('openai/first')
+    expect(saved.compaction_model).toBe('openai/first')
+  })
+
+  it('retains manual selections after deleting an earlier provider and excludes internal row keys from saves', async () => {
+    vi.mocked(GetConfig).mockResolvedValueOnce({ ...config,
+      active: 'first/main', compaction_model: '',
+      providers: ['first', 'second'].map((name) => ({ name, protocol: 'openai', models: [{name: 'main', model: 'gpt-5'}] })),
+      models: ['first', 'second'].map((name) => ({ ...config.models[0], name: `${name}/main`, provider: name })),
+    } as never)
+    const user = userEvent.setup()
+    render(<ConfigPanel open onClose={vi.fn()} onSaved={vi.fn()} />)
+    await user.click(await screen.findByLabelText('当前模型'))
+    await user.click(screen.getByRole('button', {name: 'second/main'}))
+    await user.click(screen.getByLabelText('上下文压缩模型'))
+    await user.click(screen.getAllByRole('button', {name: 'second/main'}).slice(-1)[0])
+    await user.click(screen.getByRole('button', {name: '模型'}))
+    await user.click(screen.getAllByRole('button', {name: '删除服务'})[0])
+    const save = screen.getByRole('button', {name: '保存配置'})
+    await waitFor(() => expect(save).toBeEnabled())
+    await user.click(save)
+    await waitFor(() => expect(SaveConfig).toHaveBeenCalled())
+    const saved = vi.mocked(SaveConfig).mock.calls[0][0] as unknown as ConfigView
+    expect(saved.active).toBe('second/main')
+    expect(saved.compaction_model).toBe('second/main')
+    expect(saved.providers).toHaveLength(1)
+    expect(saved.providers[0].name).toBe('second')
+    expect(saved).not.toHaveProperty('activeModelKey')
+    expect(saved).not.toHaveProperty('compactionModelKey')
+    expect(saved.providers[0]).not.toHaveProperty('uiKey')
   })
 })

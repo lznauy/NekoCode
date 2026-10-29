@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"nekocode/bot/extension/tool/runtime/netpolicy"
 	"strings"
 	"sync"
 	"time"
@@ -76,7 +77,7 @@ func (t *ShellTool) Description() string {
 		"Use the process tool only when you need to wait for, watch, list, or stop such a task. " +
 		"A non-zero exit is reported as status: failed with exit_code; judge verification by that status, not by trailing success text. Pipelines use normal shell semantics, so preserve upstream failures with pipefail or separate commands when they matter. " +
 		"Network, extra writable roots, and host execution require the corresponding minimal permission request. " +
-		"By default commands run in an isolated workspace-write sandbox: the host filesystem is visible read-only (host binaries like npm globals and nix profiles are executable), but writes outside the workspace and authorized writable roots fail. Use sandbox_mode=host when host access is needed."
+		"By default commands run in an isolated workspace-write sandbox: the host filesystem is visible read-only (host binaries like npm globals and nix profiles are executable), but writes outside the workspace and authorized writable roots fail. For HTTP/HTTPS access to known domains, prefer outbound_domains with workspace-write or read-only mode. Use sandbox_mode=host only when unsandboxed host execution is needed; it cannot be combined with outbound_domains, including restrictions inherited from permissions.sandbox rules."
 }
 
 func (t *ShellTool) Parameters() []core.Parameter {
@@ -84,8 +85,9 @@ func (t *ShellTool) Parameters() []core.Parameter {
 		{Name: "command", Type: "string", Required: true, Description: "Shell command to execute."},
 		{Name: "name", Type: "string", Required: false, Description: "Optional stable name for a command that may keep running; otherwise the runtime assigns one."},
 		{Name: "timeout_ms", Type: "number", Required: false, Description: "Optional hard lifetime. When reached, the runtime terminates the process group. Omit when the duration is unknown."},
-		{Name: "sandbox_mode", Type: "string", Required: false, Enum: []string{"read-only", "workspace-write", "host"}, Description: "Sandbox mode; defaults to workspace-write."},
-		{Name: "network", Type: "boolean", Required: false, Description: "Default false. Set true when the command needs outbound network access or must listen on the host network."},
+		{Name: "sandbox_mode", Type: "string", Required: false, Enum: []string{"read-only", "workspace-write", "host"}, Description: "Defaults to workspace-write; read-only also prevents workspace writes. host requests unsandboxed execution and cannot be combined with outbound_domains, including an empty array or domains inherited from configuration."},
+		{Name: "network", Type: "boolean", Required: false, Description: "Default false. Set true for broad outbound network access or host-network listening. For isolated HTTP/HTTPS to known domains, use outbound_domains instead; a domain list enables its allowed egress without network=true, and network=true cannot widen that list."},
+		{Name: "outbound_domains", Type: "array", Items: &core.Schema{Type: "string"}, Description: "Optional exact DNS names, e.g. [\"example.com\"], for HTTP port 80 / HTTPS port 443 through the Linux native sandbox proxy. No URLs, IPs, ports or wildcards; list subdomains separately. Omit to use the network boolean; [] requires isolated networking with no egress. Use workspace-write or read-only, never host. Requested domains are intersected with matching permissions.sandbox rules; omitting this argument does not remove configured restrictions."},
 		{Name: "writable_roots", Type: "array", Required: false, Items: &core.Schema{Type: "string"}, Description: "Existing directories outside the workspace. Verify each path exists and request the smallest directory needed; all descendants become writable. Omit workspace paths."},
 	}
 }
@@ -114,7 +116,10 @@ func (t *ShellTool) run(ctx context.Context, args map[string]any, grant core.Per
 	if err != nil {
 		return "", err
 	}
-	reqProfile := sandboxRequestFromArgs(args)
+	reqProfile := t.effectiveSandboxRequest(args)
+	if reqProfile.domainErr != nil {
+		return "", reqProfile.domainErr
+	}
 	requestedCaps := reqProfile.permissionCapabilities()
 	if hasCapability(requestedCaps, core.CapProcessHost) && !hasCapability(grant.Capabilities, core.CapProcessHost) {
 		return "", permissionRequired(
@@ -126,13 +131,19 @@ func (t *ShellTool) run(ctx context.Context, args map[string]any, grant core.Per
 		)
 	}
 	if len(requestedCaps) > 0 && !containsAllCapabilities(grant.Capabilities, requestedCaps) {
-		return "", permissionRequired(
-			fmt.Sprintf("shell command requests sandbox profile: %s", strings.Join(requestedCaps, ", ")),
-			requestedCaps, "project", workspace, reqProfile.WritableRoots,
-		)
+		return "", core.RequiredPermissionError{Request: *t.PermissionPlan(args, workspace)}
 	}
 
 	host := hasCapability(grant.Capabilities, core.CapProcessHost)
+	if reqProfile.OutboundDomains != nil && host {
+		return "", fmt.Errorf(`outbound_domains cannot be used with host execution: host mode cannot enforce domain restrictions; use sandbox_mode="workspace-write" or "read-only". If unrestricted host execution is intended, remove outbound_domains from both the tool arguments and matching permissions.sandbox rules (an empty array still requires isolation)`)
+	}
+	if len(reqProfile.OutboundDomains) > 0 {
+		have, domainErr := netpolicy.FromDetails(grant.Details)
+		if domainErr != nil || !netpolicy.Covers(have, reqProfile.OutboundDomains) {
+			return "", fmt.Errorf("network grant does not cover requested outbound domains")
+		}
+	}
 	var profile sandbox.Profile
 	if !host {
 		profile, err = buildProfileFromRequest(workspace, reqProfile, grant.Capabilities)
@@ -140,7 +151,7 @@ func (t *ShellTool) run(ctx context.Context, args map[string]any, grant core.Per
 			return "", err
 		}
 		if ruleProfile, ok := t.sandboxProfileFor(args); ok {
-			if ruleProfile.Network && !reqProfile.Network && hasCapability(grant.Capabilities, core.CapNetOutbound) {
+			if reqProfile.OutboundDomains == nil && ruleProfile.Network && !reqProfile.Network && hasCapability(grant.Capabilities, core.CapNetOutbound) {
 				profile.Network = true
 			}
 		}

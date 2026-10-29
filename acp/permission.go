@@ -32,7 +32,12 @@ func (s *server) handlePermission(ctx context.Context, sessionID string, view co
 }
 
 func permissionDecision(response permissionResponse, valid, allowAlways bool) controlruntime.ApprovalDecision {
-	if !valid || response.Outcome.Outcome != "selected" {
+	if !valid {
+		// An RPC failure carries no user decision, even if a response was partially
+		// decoded before the error. Keep it separate from explicit rejection.
+		return controlruntime.ApprovalDecision{Cancelled: true}
+	}
+	if response.Outcome.Outcome != "selected" {
 		return controlruntime.ApprovalDecision{}
 	}
 	if response.Outcome.OptionID == "allow_once" {
@@ -48,7 +53,7 @@ func approvalSummary(view controlruntime.ApprovalView) string {
 	if view.Approval == nil {
 		return ""
 	}
-	details := make([]string, 0, 9)
+	details := make([]string, 0, 10)
 	appendValue := func(label, value string) {
 		if value != "" {
 			details = append(details, label+": "+value)
@@ -61,6 +66,13 @@ func approvalSummary(view controlruntime.ApprovalView) string {
 	appendValue("Write paths", strings.Join(view.Approval.WritePaths, ", "))
 	appendValue("Workspace", view.Approval.Workspace)
 	appendValue("Sandbox", view.Approval.Sandbox)
+	if view.Approval.OutboundDomains != nil {
+		domains := strings.Join(view.Approval.OutboundDomains, ", ")
+		if domains == "" {
+			domains = "none (all outbound network access denied)"
+		}
+		appendValue("Outbound domains", domains)
+	}
 	appendValue("Persistence scope", string(view.Approval.Scope))
 	if view.Approval.Combined {
 		details = append(details, "This approval combines the operation and its required capabilities.")

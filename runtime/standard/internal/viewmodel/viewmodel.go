@@ -17,33 +17,36 @@ func Model(model config.ModelConfig) controlruntime.ModelSelection {
 
 func Config(cfg config.Config) controlruntime.ConfigView {
 	return controlruntime.ConfigView{
-		Path:                  config.Path(),
-		Exists:                config.Exists(),
-		Active:                cfg.Active,
-		AutoCompactPercent:    cfg.EffectiveAutoCompactPercent(),
-		FlashModel:            cfg.FlashModel,
-		Models:                modelConfigsToView(cfg.Models),
-		ImageGenModels:        imageGenConfigsToView(cfg.ImageGenModels),
-		ImageUnderstandModels: imageUnderstandConfigsToView(cfg.ImageUnderstandModels),
-		MCPServers:            mcpServerConfigsToView(cfg.MCPServers),
-		Permissions:           permissionsConfigToView(cfg.Permissions),
-		Workspaces:            workspaceConfigsToView(cfg.Workspaces),
-		Jev:                   jevConfigToView(cfg.Jev),
+		Path:                   config.Path(),
+		Exists:                 config.Exists(),
+		Active:                 cfg.Active,
+		AutoCompactPercent:     cfg.EffectiveAutoCompactPercent(),
+		MaxConcurrentSubagents: cfg.MaxConcurrentSubagents,
+		CompactionModel:        cfg.CompactionModel,
+		Providers:              providerConfigsToView(cfg.Providers),
+		Models:                 modelConfigsToView(cfg.AllModels()),
+		ImageGenModels:         imageGenConfigsToView(cfg.ImageGenModels),
+		ImageUnderstandModels:  imageUnderstandConfigsToView(cfg.ImageUnderstandModels),
+		MCPServers:             mcpServerConfigsToView(cfg.MCPServers),
+		Permissions:            permissionsConfigToView(cfg.Permissions),
+		Workspaces:             workspaceConfigsToView(cfg.Workspaces),
+		Jev:                    jevConfigToView(cfg.Jev),
 	}
 }
 
 func ToConfig(view controlruntime.ConfigView) config.Config {
 	return config.Config{
-		Active:                view.Active,
-		FlashModel:            view.FlashModel,
-		AutoCompactPercent:    view.AutoCompactPercent,
-		Models:                modelConfigsFromView(view.Models),
-		ImageGenModels:        imageGenConfigsFromView(view.ImageGenModels),
-		ImageUnderstandModels: imageUnderstandConfigsFromView(view.ImageUnderstandModels),
-		MCPServers:            mcpServerConfigsFromView(view.MCPServers),
-		Permissions:           permissionsConfigFromView(view.Permissions),
-		Workspaces:            workspaceConfigsFromView(view.Workspaces),
-		Jev:                   jevConfigFromView(view.Jev),
+		Active:                 view.Active,
+		CompactionModel:        view.CompactionModel,
+		AutoCompactPercent:     view.AutoCompactPercent,
+		MaxConcurrentSubagents: view.MaxConcurrentSubagents,
+		Providers:              providerConfigsFromView(view.Providers),
+		ImageGenModels:         imageGenConfigsFromView(view.ImageGenModels),
+		ImageUnderstandModels:  imageUnderstandConfigsFromView(view.ImageUnderstandModels),
+		MCPServers:             mcpServerConfigsFromView(view.MCPServers),
+		Permissions:            permissionsConfigFromView(view.Permissions),
+		Workspaces:             workspaceConfigsFromView(view.Workspaces),
+		Jev:                    jevConfigFromView(view.Jev),
 	}
 }
 
@@ -59,6 +62,7 @@ func SessionMeta(meta session.Meta) controlruntime.SessionMeta {
 	return controlruntime.SessionMeta{
 		ID: meta.ID, CWD: meta.CWD, CreatedAt: meta.CreatedAt,
 		UpdatedAt: meta.UpdatedAt, MsgCount: meta.MsgCount,
+		ForkedFrom: meta.ForkedFrom, ForkSourceDeleted: meta.ForkSourceDeleted,
 	}
 }
 
@@ -69,7 +73,7 @@ func SessionSnapshot(snapshot *session.Snapshot) controlruntime.SessionMeta {
 	return controlruntime.SessionMeta{
 		ID: snapshot.ID, CWD: snapshot.CWD,
 		CreatedAt: snapshot.CreatedAt, UpdatedAt: snapshot.UpdatedAt,
-		MsgCount: len(snapshot.Messages),
+		MsgCount: len(snapshot.Messages), ForkedFrom: snapshot.ForkedFrom,
 	}
 }
 

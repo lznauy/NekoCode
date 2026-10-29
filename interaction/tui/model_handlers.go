@@ -272,6 +272,7 @@ func (m *Model) handleProcessingKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "enter":
 		value := m.Input.Value()
 		preserveImageDraft := false
+		acceptedSubmit := false
 		// Accept a highlighted suggestion first, mirroring the idle path:
 		// without this the popup would be visible but not selectable.
 		if m.Suggestions.Visible() {
@@ -299,6 +300,7 @@ func (m *Model) handleProcessingKey(msg tea.KeyPressMsg) tea.Cmd {
 				return nil
 			}
 			value = selected.Value
+			acceptedSubmit = true
 			preserveImageDraft = len(m.Input.ImageAttachments()) > 0
 		}
 		if value != "" {
@@ -306,7 +308,7 @@ func (m *Model) handleProcessingKey(msg tea.KeyPressMsg) tea.Cmd {
 			// instead of executing, mirroring the idle path. Record the typed
 			// command as the menu's parent so esc walks back to it, exactly
 			// like the suggestion-accept path above.
-			if m.openCommandMenu(value) {
+			if !acceptedSubmit && m.openCommandMenu(value) {
 				if m.Suggestions.IsMenu() {
 					m.commandMenuBack = append(m.commandMenuBack, value)
 				} else {

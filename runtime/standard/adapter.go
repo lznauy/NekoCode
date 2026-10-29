@@ -114,8 +114,8 @@ func (a *adapter) SwitchSessionModel(name string) (controlruntime.ModelSelection
 // config surfaces. API keys and other secrets stay in the config layer.
 func (a *adapter) ModelOptions() ([]controlruntime.ModelOption, string) {
 	configuration := a.bot.Configuration()
-	options := make([]controlruntime.ModelOption, 0, len(configuration.Models))
-	for _, model := range configuration.Models {
+	options := make([]controlruntime.ModelOption, 0, len(configuration.AllModels()))
+	for _, model := range configuration.AllModels() {
 		options = append(options, controlruntime.ModelOption{
 			Name:             model.Name,
 			Model:            model.Model,

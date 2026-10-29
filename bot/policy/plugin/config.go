@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/dop251/goja"
@@ -55,11 +56,16 @@ func pluginEventSpecs() []eventSpec {
 }
 
 func Load(pluginRoot, hooksPath string) ([]Hook, error) {
-	path, err := resolvePluginPath(pluginRoot, hooksPath)
+	root, err := os.OpenRoot(pluginRoot)
+	if err != nil {
+		return nil, fmt.Errorf("open plugin root: %w", err)
+	}
+	defer root.Close()
+	path, err := resolvePluginPath(hooksPath)
 	if err != nil {
 		return nil, err
 	}
-	data, err := readLimitedFile(path, maxPluginSourceBytes)
+	data, err := readLimitedFile(root, path, maxPluginSourceBytes)
 	if err != nil {
 		return nil, fmt.Errorf("read hooks file: %w", err)
 	}
@@ -106,7 +112,7 @@ func Load(pluginRoot, hooksPath string) ([]Hook, error) {
 			if total > 256 {
 				return nil, fmt.Errorf("plugin config exceeds 256 hook entries")
 			}
-			if err := validateEntry(pluginRoot, spec, eh); err != nil {
+			if err := validateEntry(root, spec, eh); err != nil {
 				return nil, fmt.Errorf("%s[%d]: %w", spec.Name, i, err)
 			}
 			id := eh.ID
@@ -161,7 +167,7 @@ func Load(pluginRoot, hooksPath string) ([]Hook, error) {
 	return hooks, nil
 }
 
-func validateEntry(pluginRoot string, spec eventSpec, eh eventHook) error {
+func validateEntry(root *os.Root, spec eventSpec, eh eventHook) error {
 	if eh.Mode != "" && eh.Mode != "guard" && eh.Mode != "observer" {
 		return fmt.Errorf("unknown mode %q", eh.Mode)
 	}
@@ -195,7 +201,7 @@ func validateEntry(pluginRoot string, spec eventSpec, eh eventHook) error {
 			return fmt.Errorf("action %d has unknown type %q", i, a.Type)
 		}
 		if a.Type == "js" {
-			source, name, err := jsSource(pluginRoot, *a)
+			source, name, err := jsSource(root, *a)
 			if err != nil {
 				return fmt.Errorf("action %d: %w", i, err)
 			}

@@ -34,7 +34,7 @@
 
 ## 事件
 
-内部共有 14 个触发点，配置支持 15 个事件名，其中 PostToolUseFailure 是 PostToolUse 的失败过滤视图：
+内部共有 16 个触发点，配置支持 17 个事件名，其中 PostToolUseFailure 是 PostToolUse 的失败过滤视图：
 
 | 配置事件 | 触发时机 |
 |---|---|
@@ -47,11 +47,15 @@
 | PostToolUse | 单个未被阻断的工具执行后，包含成功和失败 |
 | PostToolUseFailure | 上述事件中失败的工具调用 |
 | PostToolBatch | 工具批次处理后，batch 包含成功、失败和阻断结果 |
+| PermissionRequest | 执行器实际调用审批回调前；仅观察，不能授权或阻断 |
+| PermissionDenied | 用户或权限规则明确拒绝时；仅观察，source 区分 user/rule |
 | Stop | 模型准备以文本结束本轮运行时，包括最终兜底合成及固定回退文本 |
 | SubagentStart / SubagentStop | 真正开始执行的子 Agent 开始 / 结束，仅观察其生命周期 |
 | PreCompact / PostCompact | 实际摘要尝试前 / 结束后，status 区分 completed 与 failed |
 
 命令通过 stdin 读取一个 JSON 事件，stdout 返回 JSON 结果，stderr 用于诊断。JS 使用相同字段的 `event`，也可以定义 `hook(event)` 函数。
+
+审批事件的 args 包含 call_id、source、tool_args，实际审批附带 kind、approval；范围与诊断说明见 [Hook 指南](../../../docs/developers/HOOK_GUIDE.md#观察审批与拒绝)。父级观察 Policy 接收子 Agent 的审批事件并保留 actor_id；Plan Mode、Profile 工具过滤、普通工具失败和没有审批回调不生成审批拒绝事件。新增事件继续使用协议 v1，旧运行时会拒绝不认识的新配置名。
 
 事件字段包括 `version`、`event`、`hook_id`、`evaluation_id`、`action_index`、`session_id`、`run_id`、`actor_id`、`pluginRoot`、`input`、`tool`、`args`、`error`、`output`、`error_message`、`batch`、`intent`、`text`、`state`。没有对应事实的字段为空或省略。
 

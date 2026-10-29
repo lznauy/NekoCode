@@ -292,9 +292,9 @@ func (b *Bot) initAgent() {
 		Reasoning: resolvedReasoning(am), Vision: am.EffectiveVision(),
 	})
 
-	fm := b.cfg.ResolveModel(b.cfg.FlashModel)
+	fm := b.cfg.ResolveModel(b.cfg.CompactionModel)
 	// The compaction client never receives native image input: summaries are
-	// text-only and the flash model may not be multimodal, so Vision stays
+	// text-only and the compaction model may not be multimodal, so Vision stays
 	// false and image-bearing history is stripped at its wire boundary.
 	compactionReasoning := resolvedReasoning(fm)
 	compactionReasoning.Disabled = true
@@ -323,8 +323,13 @@ func (b *Bot) initAgent() {
 			ResetText: b.resetStream,
 		},
 		Interaction: agent.Interaction{
-			Confirm: b.confirm,
-			Ask:     b.ask,
+			ConfirmSource: func() protocol.ConfirmFunc {
+				if host := b.currentHost(); host != nil {
+					return host.Confirm
+				}
+				return nil
+			},
+			Ask: b.ask,
 			Todos: func(items []protocol.TodoItem) {
 				b.ctxMgr.SetTodos(items)
 				b.todos(items)
@@ -355,7 +360,7 @@ func (b *Bot) initAgent() {
 	// rules (e.g. pnpm dev → network) are applied.
 	b.toolbox.SetSandboxEngine(b.ag.SandboxEngine())
 
-	b.wireTaskTool(fm, compactionModel, b.ag)
+	b.wireTaskTool(am, compactionModel, b.ag)
 }
 
 // bashRiskJudgeFn adapts the stored RiskJudge into the executor's judge
@@ -443,5 +448,6 @@ func (b *Bot) initCommands() {
 	b.ext.RegisterCommands(b.cmd, b.confirmInstall)
 	b.registerSessionCommands(b.cmd.Parser())
 	b.registerWorkspaceCommands(b.cmd.Parser())
+	b.registerWorktreeCommands(b.cmd.Parser())
 	b.registerCommandMenus(b.cmd.Parser())
 }

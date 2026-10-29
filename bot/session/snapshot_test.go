@@ -60,6 +60,65 @@ func TestList(t *testing.T) {
 	}
 }
 
+func TestListDerivesForkSourceDeletionFromDirectories(t *testing.T) {
+	td := t.TempDir()
+	t.Setenv("HOME", td)
+
+	source := newSnapshot(td)
+	if err := source.save(); err != nil {
+		t.Fatal(err)
+	}
+	deletedSource := newSnapshot(td)
+	if err := deletedSource.save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := deleteSnapshot(deletedSource.ID); err != nil {
+		t.Fatal(err)
+	}
+	corruptSource := newSnapshot(td)
+	if err := corruptSource.save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir(), corruptSource.ID, "session.json"), []byte("corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	present := newSnapshot(td)
+	present.ForkedFrom = source.ID
+	deleted := newSnapshot(td)
+	deleted.ForkedFrom = deletedSource.ID
+	corrupt := newSnapshot(td)
+	corrupt.ForkedFrom = corruptSource.ID
+	for _, snapshot := range []*Snapshot{present, deleted, corrupt} {
+		if err := snapshot.save(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	metas := make(map[string]Meta)
+	for _, meta := range list() {
+		metas[meta.ID] = meta
+	}
+	if len(metas) != 4 {
+		t.Fatalf("listed sessions = %+v, want four readable sessions", metas)
+	}
+	for _, test := range []struct {
+		id      string
+		source  string
+		deleted bool
+	}{
+		{id: source.ID},
+		{id: present.ID, source: source.ID},
+		{id: deleted.ID, source: deletedSource.ID, deleted: true},
+		{id: corrupt.ID, source: corruptSource.ID},
+	} {
+		meta := metas[test.id]
+		if meta.ForkedFrom != test.source || meta.ForkSourceDeleted != test.deleted {
+			t.Errorf("session %s fork metadata = (%q, %v), want (%q, %v)", test.id, meta.ForkedFrom, meta.ForkSourceDeleted, test.source, test.deleted)
+		}
+	}
+}
+
 func TestMetaAge(t *testing.T) {
 	now := time.Now().Unix()
 	tests := []struct {

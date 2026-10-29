@@ -1,15 +1,20 @@
 package shell
 
 import (
+	"nekocode/bot/extension/tool/runtime/netpolicy"
 	"strings"
 )
 
 func sandboxRequestFromArgs(args map[string]any) sandboxRequest {
-	return sandboxRequest{
+	r := sandboxRequest{
 		Mode:          optStringArg(args, "sandbox_mode"),
 		Network:       optBoolArg(args, "network"),
 		WritableRoots: optStringSliceArg(args, "writable_roots"),
 	}
+	if raw, ok := args["outbound_domains"]; ok {
+		r.OutboundDomains, r.domainErr = netpolicy.Parse(raw)
+	}
+	return r
 }
 
 // optStringSliceArg extracts an optional []string from args[key]. Accepts

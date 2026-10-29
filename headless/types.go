@@ -34,6 +34,10 @@ type Backend interface {
 var _ Backend = (*rt.Runtime)(nil)
 
 type Options struct {
+	OutputFormat           string
+	OutputSchema           string
+	once                   bool
+	schema                 *onceSchema
 	InputFormat            string
 	Prompt                 string
 	Resume                 string

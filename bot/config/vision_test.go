@@ -68,16 +68,16 @@ func TestGLMThinkingModeDeclared(t *testing.T) {
 }
 
 func TestCloneDeepCopiesVisionPointer(t *testing.T) {
-	original := Config{Models: []ModelConfig{{Name: "m", Model: "glm-5", Vision: visionPtr(true)}}}
+	original := Config{Providers: []ProviderConfig{{Name: "test", Models: []ModelDefinition{{Name: "m", Model: "glm-5", Vision: visionPtr(true)}}}}}
 	cloned := original.Clone()
-	*cloned.Models[0].Vision = false
-	if *original.Models[0].Vision != true {
+	*cloned.Providers[0].Models[0].Vision = false
+	if *original.Providers[0].Models[0].Vision != true {
 		t.Fatal("Clone shared the Vision pointer with the original config")
 	}
 }
 
 func TestVisionRoundTripsThroughJSON(t *testing.T) {
-	cfg := Config{Models: []ModelConfig{{Name: "m", Model: "glm-5", Vision: visionPtr(true)}}}
+	cfg := Config{Providers: []ProviderConfig{{Name: "test", Models: []ModelDefinition{{Name: "m", Model: "glm-5", Vision: visionPtr(true)}}}}}
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +89,7 @@ func TestVisionRoundTripsThroughJSON(t *testing.T) {
 	if err := json.Unmarshal(data, &loaded); err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Models[0].Vision == nil || *loaded.Models[0].Vision != true {
+	if loaded.Providers[0].Models[0].Vision == nil || *loaded.Providers[0].Models[0].Vision != true {
 		t.Fatalf("vision did not round-trip: %s", data)
 	}
 }

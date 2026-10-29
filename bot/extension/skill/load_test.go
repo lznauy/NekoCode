@@ -1,6 +1,7 @@
 package skill
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,13 +16,8 @@ func TestDiscoverAndLoad(t *testing.T) {
 name: test-skill
 description: A test skill
 when_to_use: legacy trigger field should be ignored
-allowed-tools:
-  - bash
-  - read
-context: fork
-agent: coder
-max_steps: 4
-context_window: 8000
+context: inline
+disable-model-invocation: true
 ---
 
 # Test Skill
@@ -46,11 +42,8 @@ This is the test skill body.
 	if sk.Description != "A test skill" {
 		t.Errorf("description = %q", sk.Description)
 	}
-	if sk.Context != "fork" || sk.AgentProfile != "coder" {
-		t.Errorf("context/agent mismatch")
-	}
-	if len(sk.AllowedTools) != 2 || sk.MaxSteps != 4 || sk.ContextWindow != 8000 {
-		t.Errorf("execution fields wrong")
+	if sk.Context != "inline" || !sk.DisableModelInvocation {
+		t.Fatal("supported execution metadata not parsed")
 	}
 	if sk.Content != "# Test Skill\n\nThis is the test skill body." {
 		t.Errorf("content = %q", sk.Content)
@@ -72,6 +65,28 @@ func TestLoadErrors(t *testing.T) {
 	_, err = parseSkillContent("---\nname: x\n---\nbody")
 	if err == nil || !strings.Contains(err.Error(), "description") {
 		t.Error("expected missing description error")
+	}
+}
+
+func TestSkillNameRejectsUnicodeWhitespace(t *testing.T) {
+	for _, name := range []string{"has space", "has\ttab", "has\nnewline", "has\u00a0nbsp", "has\u2003em-space", "has\u3000ideographic-space", " \t\u00a0"} {
+		t.Run(name, func(t *testing.T) {
+			_, err := parseSkillContent("---\nname: " + fmt.Sprintf("%q", name) + "\ndescription: test\n---\nbody")
+			if err == nil || !strings.Contains(err.Error(), "$ command identifier") || !strings.Contains(err.Error(), "whitespace") {
+				t.Fatalf("expected command identifier whitespace error for %q, got %v", name, err)
+			}
+		})
+	}
+}
+
+func TestSkillNameAllowsNonWhitespaceCharacters(t *testing.T) {
+	const name = "deploy.prod+工具"
+	sk, err := parseSkillContent("---\nname: " + name + "\ndescription: test\n---\nbody")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sk.Name != name {
+		t.Fatalf("name = %q, want %q", sk.Name, name)
 	}
 }
 
@@ -111,5 +126,35 @@ func TestBundledSkills(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Errorf("missing bundled skills: %v", want)
+	}
+}
+
+func TestUnsupportedExecutionFields(t *testing.T) {
+	for _, field := range []string{"context: fork", "context: unknown", "allowed-tools: []", "agent: ''", "max_steps: 0", "context_window: 0", "context: inline\n<<: {agent: coder}"} {
+		t.Run(field, func(t *testing.T) {
+			_, err := parseSkillContent("---\nname: x\ndescription: test\n" + field + "\n---\nbody")
+			if err == nil || !strings.Contains(err.Error(), "unsupported") {
+				t.Fatalf("expected explicit unsupported error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestBundledCreatorDraftIsLoadable(t *testing.T) {
+	const fence = "```yaml\n"
+	_, draft, ok := strings.Cut(bundledMetaContent, fence)
+	if !ok {
+		t.Fatal("missing draft template")
+	}
+	draft, _, ok = strings.Cut(draft, "```")
+	if !ok {
+		t.Fatal("unterminated draft template")
+	}
+	sk, err := parseSkillContent(draft)
+	if err != nil {
+		t.Fatalf("creator draft cannot load: %v", err)
+	}
+	if !strings.Contains(sk.Content, "## Steps") || !strings.Contains(sk.Content, "## Output") {
+		t.Fatalf("missing workflow scaffold: %s", sk.Content)
 	}
 }

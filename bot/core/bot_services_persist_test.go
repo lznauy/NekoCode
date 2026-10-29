@@ -16,11 +16,8 @@ import (
 func seedPersistConfig(t *testing.T) {
 	t.Helper()
 	cfg := config.Config{
-		Active: "default",
-		Models: []config.ModelConfig{
-			{Name: "default", Provider: "deepseek", APIKey: "sk-test", Model: "deepseek-v4-flash"},
-			{Name: "alt", Provider: "deepseek", APIKey: "sk-test", Model: "deepseek-v4-flash"},
-		},
+		Active:    "deepseek/default",
+		Providers: []config.ProviderConfig{{Name: "deepseek", APIKey: "sk-test", Models: []config.ModelDefinition{{Name: "default", Model: "deepseek-v4-flash"}, {Name: "alt", Model: "deepseek-v4-flash"}}}},
 	}
 	if err := config.Save(cfg); err != nil {
 		t.Fatalf("seed config: %v", err)
@@ -46,15 +43,15 @@ func newPersistTestBot(t *testing.T) *Bot {
 func TestSwitchModelPersistsConfig(t *testing.T) {
 	b := newPersistTestBot(t)
 
-	if err := b.SwitchModel("alt"); err != nil {
+	if err := b.SwitchModel("deepseek/alt"); err != nil {
 		t.Fatalf("SwitchModel: %v", err)
 	}
 	loaded, err := config.Load()
 	if err != nil {
 		t.Fatalf("reload config: %v", err)
 	}
-	if loaded.Active != "alt" {
-		t.Fatalf("persisted active = %q, want %q", loaded.Active, "alt")
+	if loaded.Active != "deepseek/alt" {
+		t.Fatalf("persisted active = %q, want %q", loaded.Active, "deepseek/alt")
 	}
 }
 
@@ -75,7 +72,7 @@ func TestSetReasoningEffortPersistsConfig(t *testing.T) {
 
 func TestRuntimeModelChangesDoNotPersistConfig(t *testing.T) {
 	b := newPersistTestBot(t)
-	if err := b.SwitchModelRuntime("alt"); err != nil {
+	if err := b.SwitchModelRuntime("deepseek/alt"); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.SetReasoningEffortRuntime("high"); err != nil {
@@ -85,7 +82,7 @@ func TestRuntimeModelChangesDoNotPersistConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Active != "default" || loaded.ActiveModelConfig().ReasoningEffort != "" {
+	if loaded.Active != "deepseek/default" || loaded.ActiveModelConfig().ReasoningEffort != "" {
 		t.Fatalf("runtime-only change leaked to disk: active=%q effort=%q", loaded.Active, loaded.ActiveModelConfig().ReasoningEffort)
 	}
 }
@@ -107,7 +104,7 @@ func TestPersistedModelChangesLeaveRuntimeUnchangedOnSaveFailure(t *testing.T) {
 		name  string
 		apply func(*Bot) error
 	}{
-		{"model", func(b *Bot) error { return b.SwitchModel("alt") }},
+		{"model", func(b *Bot) error { return b.SwitchModel("deepseek/alt") }},
 		{"reasoning", func(b *Bot) error { return b.SetReasoningEffort("high") }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

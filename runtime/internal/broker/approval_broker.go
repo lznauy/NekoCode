@@ -49,7 +49,7 @@ func NewApprovalBroker(eventBus *eventbus.EventBus, source core.SourceRef, runID
 func (b *ApprovalBroker) Request(req protocol.ConfirmRequest) protocol.ConfirmReply {
 	wait := b.Register(req)
 	if wait == nil {
-		return protocol.ConfirmReply{Allowed: false}
+		return protocol.ConfirmReply{Cancelled: true}
 	}
 	return wait()
 }
@@ -176,7 +176,7 @@ func (b *ApprovalBroker) rejectAll(closeBroker bool) {
 	b.mu.Unlock()
 
 	for _, rec := range records {
-		rec.reply <- protocol.ConfirmReply{Allowed: false}
+		rec.reply <- protocol.ConfirmReply{Cancelled: true}
 		b.publish(rec.runID, core.EventApprovalResolved, cloneApprovalView(rec.view))
 	}
 }

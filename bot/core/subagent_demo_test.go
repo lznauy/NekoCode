@@ -156,7 +156,7 @@ func runSubagentDemo(t *testing.T, profile string, skills []string) {
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	defer server.Close()
-	if err := config.Save(config.Config{Active: "demo", Models: []config.ModelConfig{{Name: "demo", Provider: "openai", Protocol: "openai", Model: "demo", APIKey: "local-test-only", BaseURL: server.URL + "/v1"}}}); err != nil {
+	if err := config.Save(config.Config{Active: "openai/demo", Providers: []config.ProviderConfig{{Name: "openai", APIKey: "local-test-only", BaseURL: server.URL + "/v1", Protocol: "openai", Models: []config.ModelDefinition{{Name: "demo", Model: "demo"}}}}}); err != nil {
 		t.Fatal(err)
 	}
 	b, err := New()

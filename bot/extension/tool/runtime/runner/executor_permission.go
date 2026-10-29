@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"nekocode/bot/extension/tool/runtime/netpolicy"
 	"strings"
 
 	tools "nekocode/bot/extension/tool"
@@ -46,6 +47,7 @@ func (e *Executor) tryPermissionEscalation(ctx context.Context, privileged tools
 
 	req := permErr.PermissionRequest()
 	if e.permissionDenied(tc.Name, req) {
+		e.observePermissionDenial(ctx, tc, "denied by capability rule", &req)
 		return core.ToolOutput{}, false, failDeniedByRule, execErr
 	}
 	// Full-takeover mode: escalate without any dialog, including capabilities
@@ -259,11 +261,13 @@ func permissionToolAliases(toolName string) []string {
 }
 
 func approvalContextFromPermission(req core.PermissionRequest) *protocol.ApprovalContext {
+	domains, _ := netpolicy.FromDetails(req.Details)
 	context := &protocol.ApprovalContext{
-		Reason:       req.Reason,
-		Capabilities: append([]string(nil), req.Capabilities...),
-		Scope:        protocol.ApprovalScope(req.Scope),
-		WritePaths:   permission.WritePathsFromRequest(req),
+		OutboundDomains: domains,
+		Reason:          req.Reason,
+		Capabilities:    append([]string(nil), req.Capabilities...),
+		Scope:           protocol.ApprovalScope(req.Scope),
+		WritePaths:      permission.WritePathsFromRequest(req),
 	}
 	if workspace, ok := req.Details["workspace"].(string); ok {
 		context.Workspace = workspace

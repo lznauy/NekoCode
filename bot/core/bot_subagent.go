@@ -11,24 +11,30 @@ import (
 	"nekocode/bot/agent/subagent"
 	"nekocode/bot/config"
 	ctxmgr "nekocode/bot/contextmgr"
+	"nekocode/bot/extension/tool/builtin/catalog"
+	"nekocode/bot/extension/tool/runtime/runner"
 	"nekocode/bot/extension/tool/runtime/taskbridge"
+	"nekocode/bot/extension/tool/runtime/workspace"
 	"nekocode/bot/policy"
 	"nekocode/bot/prompt"
 	"nekocode/bot/provider"
 	"nekocode/bot/session"
+	"nekocode/bot/worktree"
 	"nekocode/protocol"
 	"time"
 )
 
-func (b *Bot) wireTaskTool(fm config.ModelConfig, compactionModel provider.LLM, ag *agentcore.Agent) {
+func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provider.LLM, ag *agentcore.Agent) {
 	registry := b.toolbox.Registry
 	ctxMgr := b.ctxMgr
-	contextWindow := b.cfg.EffectiveContextWindow()
+	modelConfig := b.cfg.Clone()
+	compactionWindow := effectiveModelWindow(b.cfg.ResolveModel(b.cfg.CompactionModel))
 	autoCompactPercent := b.cfg.EffectiveAutoCompactPercent()
 
-	b.toolbox.WireTaskRunner(func(ctx context.Context, spec taskbridge.TaskSpec) (*taskbridge.TaskResult, error) {
+	b.toolbox.WireTaskRunner(func(ctx context.Context, spec taskbridge.TaskSpec) (taskResult *taskbridge.TaskResult, runErr error) {
 		id := taskbridge.TaskIDFromCtx(ctx)
 		savedProfile := ""
+		savedIsolation := "shared"
 		if spec.ResumeID != "" {
 			id = spec.ResumeID
 			// Resolve inherited capabilities before opening can repair history.
@@ -40,6 +46,9 @@ func (b *Bot) wireTaskTool(fm config.ModelConfig, compactionModel provider.LLM, 
 				return nil, err
 			}
 			savedProfile = metadata.Profile
+			if metadata.Isolation != "" {
+				savedIsolation = metadata.Isolation
+			}
 			if spec.Profile == "" {
 				spec.Profile = savedProfile
 			}
@@ -50,6 +59,30 @@ func (b *Bot) wireTaskTool(fm config.ModelConfig, compactionModel provider.LLM, 
 		}
 		if spec.ResumeID != "" && savedProfile != profile.Name {
 			return nil, fmt.Errorf("cannot change subagent profile on resume")
+		}
+		mode := spec.Isolation
+		if spec.ResumeID != "" {
+			if mode == "" {
+				mode = savedIsolation
+			}
+			if mode != savedIsolation {
+				return nil, fmt.Errorf("cannot change task isolation on resume")
+			}
+		} else if mode == "" {
+			mode = profile.Isolation
+		}
+		if mode == "" {
+			mode = "shared"
+		}
+		if mode != "shared" && mode != "worktree" {
+			return nil, fmt.Errorf("invalid isolation mode")
+		}
+		if profile.Isolation == "worktree" && mode != "worktree" {
+			return nil, fmt.Errorf("profile requires worktree isolation")
+		}
+		selectedModel, err := resolveSubagentModel(&modelConfig, parentModel, profile.Model)
+		if err != nil {
+			return nil, err
 		}
 		if id == "" {
 			id = uuid.NewString()
@@ -70,14 +103,46 @@ func (b *Bot) wireTaskTool(fm config.ModelConfig, compactionModel provider.LLM, 
 			contextSnapshot := snapshot.ContextSnapshot()
 			restored = &contextSnapshot
 		}
-		reasoning := resolvedReasoning(fm)
-		reasoning.Disabled = true
+		runRegistry := registry
+		var isolated *catalog.Toolbox
+		var workInfo worktree.Info
+		if mode == "worktree" {
+			lease, err := worktree.Acquire(b.sess.CurrentID(), id)
+			if err != nil {
+				return nil, err
+			}
+			defer lease.Close()
+			workInfo, err = lease.Open(ctx, b.cwd, id, spec.ResumeID != "")
+			if err != nil {
+				return nil, fmt.Errorf("open isolated worktree: %w", err)
+			}
+			isolated = catalog.NewToolboxWithConfig(catalog.ToolboxConfig{
+				Workspace: workspace.New(workInfo.Cwd, nil), ImageGenModels: modelConfig.ImageGenModels, ImageUnderstandModels: modelConfig.ImageUnderstandModels,
+			})
+			defer func() {
+				if err := isolated.Close(); err != nil {
+					runErr = errors.Join(runErr, fmt.Errorf("close isolated tools: %w", err))
+				}
+			}()
+			isolated.WireInteraction(ag.ToolInteraction())
+			isolated.SetSessionID(id)
+			// Extensions may capture parent state; do not silently reuse them in another cwd.
+			for _, name := range profile.Tools {
+				if _, err := isolated.Registry.Get(name); err != nil {
+					return nil, fmt.Errorf("tool %q does not support isolated worktrees", name)
+				}
+			}
+			runRegistry = isolated.Registry
+		}
+		if err := child.SetIsolation(mode); err != nil {
+			return nil, err
+		}
 		subLLM := provider.New(provider.Config{
-			APIKey: fm.APIKey, BaseURL: fm.BaseURL, Model: fm.Model, Protocol: fm.Protocol,
-			Reasoning: reasoning,
+			APIKey: selectedModel.APIKey, BaseURL: selectedModel.BaseURL, Model: selectedModel.Model, Protocol: selectedModel.Protocol,
+			Reasoning: resolvedReasoning(selectedModel),
 		})
 		engine := subagent.New(subagent.Config{
-			LLM: subLLM, Tools: registry, CompactionModel: compactionModel,
+			LLM: subLLM, Tools: runRegistry, CompactionModel: compactionModel,
 		})
 		skillNames, skillContents, err := b.delegatedSkills(append(profile.Skills, spec.Skills...))
 		if err != nil {
@@ -90,7 +155,20 @@ func (b *Bot) wireTaskTool(fm config.ModelConfig, compactionModel provider.LLM, 
 		if attempt == nil {
 			return nil, fmt.Errorf("subagent attempt was not initialized")
 		}
-		cfg := buildSubagentRunConfig(ctx, spec, profile, skillContents, contextWindow, autoCompactPercent, ag, b.sess.CurrentID(), b.environment, attempt.ID, attempt.Seq)
+		cfg := buildSubagentRunConfig(ctx, spec, profile, skillContents, effectiveModelWindow(selectedModel), autoCompactPercent, ag, b.sess.CurrentID(), b.environment, attempt.ID, attempt.Seq)
+		if isolated != nil {
+			cfg.IsolatedWorkspace = true
+			home, _ := os.UserHomeDir()
+			cfg.ConfigurePermissions = func(executor *runner.Executor) {
+				ag.Executor().ConfigureChildPermissions(executor)
+				executor.SetWorkspace(workInfo.Cwd, home)
+				isolated.SetSandboxEngine(executor.SandboxEngine())
+			}
+			cfg.Environment = func() prompt.Environment {
+				return prompt.Environment{Cwd: workInfo.Cwd, Roots: []prompt.Root{{Path: workInfo.Cwd, Access: "read-write"}}, ManagedProcesses: isolated.ManagedProcessSummary()}
+			}
+			cfg.Prompt += "\n[Worktree isolation] Work only in " + workInfo.Cwd + ". This checkout starts at " + workInfo.Base + "; parent uncommitted files are excluded. Leave results here for review. Do not apply or remove this worktree yourself."
+		}
 		b.mu.Lock()
 		if b.promptBuilder != nil {
 			cfg.ProjectInstructions = b.promptBuilder.BuildProjectInstructions()
@@ -106,6 +184,7 @@ func (b *Bot) wireTaskTool(fm config.ModelConfig, compactionModel provider.LLM, 
 				})
 			}
 		}
+		cfg.CompactionWindow = compactionWindow
 		cfg.SubagentID = id
 		cfg.ResumeContext = restored
 		cfg.SaveContext = func(snapshot ctxmgr.ManagerSnapshot, status, output string, usage subagent.AttemptUsage) error {
@@ -142,6 +221,9 @@ func (b *Bot) wireTaskTool(fm config.ModelConfig, compactionModel provider.LLM, 
 		converted := subagentTaskResult(result)
 		if converted != nil {
 			converted.ID = id
+			if isolated != nil {
+				converted.Content += fmt.Sprintf("\n[Worktree retained: %s]\nReview with /worktree diff %s; apply with /worktree apply %s", workInfo.Path, id, id)
+			}
 		}
 		return converted, err
 	})
@@ -220,9 +302,9 @@ func (b *Bot) delegatedSkills(names []string) ([]string, []string, error) {
 		if _, duplicate := seen[name]; duplicate {
 			continue
 		}
-		command, ok := b.ext.Skill(name)
-		if !ok {
-			return nil, nil, fmt.Errorf("unknown delegated skill: %s", name)
+		command, err := b.ext.ModelSkill(name)
+		if err != nil {
+			return nil, nil, fmt.Errorf("delegated skill %q: %w", name, err)
 		}
 		seen[name] = struct{}{}
 		resolved = append(resolved, name)
@@ -246,4 +328,17 @@ func subagentTaskResult(result *subagent.Result) *taskbridge.TaskResult {
 		Status:  status,
 		Content: subagent.FormatResult(result),
 	}
+}
+
+// resolveSubagentModel requires an explicit configured reference. Unknown
+// profile references must never become raw provider model IDs.
+func resolveSubagentModel(cfg *config.Config, parent config.ModelConfig, name string) (config.ModelConfig, error) {
+	if name == "" {
+		return parent, nil
+	}
+	model, ok := cfg.LookupModelConfig(name)
+	if !ok {
+		return config.ModelConfig{}, fmt.Errorf("unknown subagent model %q: use a configured providers[].models (provider/model)", name)
+	}
+	return model, nil
 }

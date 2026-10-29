@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"nekocode/util/fs"
 	"nekocode/util/yaml"
@@ -111,6 +112,9 @@ func parseSkillContent(content string) (*Skill, error) {
 	if fm.Name == "" || fm.Description == "" {
 		return nil, fmt.Errorf("missing required field: name or description")
 	}
+	if strings.IndexFunc(fm.Name, unicode.IsSpace) >= 0 {
+		return nil, fmt.Errorf("invalid skill name %q: must be usable as a $ command identifier and cannot contain whitespace", fm.Name)
+	}
 	return &Skill{
 		Name:                   fm.Name,
 		Description:            fm.Description,
@@ -129,9 +133,21 @@ func parseFrontmatter(content string) (*frontmatter, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	var fields map[string]goyaml.Node
+	if err := goyaml.Unmarshal(yamlBytes, &fields); err != nil {
+		return nil, "", fmt.Errorf("invalid YAML: %w", err)
+	}
+	for _, key := range []string{"allowed-tools", "agent", "max_steps", "context_window"} {
+		if _, exists := fields[key]; exists {
+			return nil, "", fmt.Errorf("unsupported execution field %q; configure execution limits in an Agent Profile", key)
+		}
+	}
 	var fm frontmatter
 	if err := goyaml.Unmarshal(yamlBytes, &fm); err != nil {
 		return nil, "", fmt.Errorf("invalid YAML: %w", err)
+	}
+	if fm.Context != "" && fm.Context != "inline" {
+		return nil, "", fmt.Errorf("unsupported context %q; only inline is supported", fm.Context)
 	}
 	return &fm, body, nil
 }
@@ -166,3 +182,7 @@ func bundledSkills() []*Skill {
 	}
 	return sk
 }
+
+// ParseContent validates skill text without registering it or reading auxiliary
+// files. Diagnostic consumers share exactly the runtime frontmatter contract.
+func ParseContent(content string) (*Skill, error) { return parseSkillContent(content) }

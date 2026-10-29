@@ -12,3 +12,10 @@ func (e UnavailableError) Error() string {
 	}
 	return "sandbox unavailable: " + e.Reason
 }
+
+// NetworkIsolationError must never trigger host execution or a weaker backend.
+type NetworkIsolationError struct{ Reason string }
+
+func (e NetworkIsolationError) Error() string {
+	return "required network isolation unavailable: " + e.Reason
+}

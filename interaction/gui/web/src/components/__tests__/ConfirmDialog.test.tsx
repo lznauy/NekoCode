@@ -98,6 +98,7 @@ describe('ConfirmDialog', () => {
             workspace: '/repo',
             sandbox: 'bubblewrap',
             write_paths: ['/tmp/cache'],
+            outbound_domains: ['registry.npmjs.org'],
           },
         }}
         onDone={vi.fn()}
@@ -107,6 +108,7 @@ describe('ConfirmDialog', () => {
     expect(screen.getByText('审批详情')).toBeInTheDocument()
     expect(screen.getByText('command requires public network access')).toBeInTheDocument()
     expect(screen.getByText('/tmp/cache')).toBeInTheDocument()
+    expect(screen.getByText('registry.npmjs.org')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '仅本次允许' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '始终允许' }))
     expect(replyConfirm).toHaveBeenCalledWith('confirm-permission', true, true)

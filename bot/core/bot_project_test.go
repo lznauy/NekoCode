@@ -42,7 +42,7 @@ func TestProjectMCPDoesNotContaminateGlobalConfiguration(t *testing.T) {
 	if len(servers) != 2 || servers["override"].Command != "project" || len(servers["override"].Args) != 0 || len(servers["override"].Env) != 0 || servers["inherited"].Command != "global" {
 		t.Fatalf("bad effective config: %+v", servers)
 	}
-	if err := b.SwitchModel("alt"); err != nil {
+	if err := b.SwitchModel("deepseek/alt"); err != nil {
 		t.Fatal(err)
 	}
 	saved, err := config.Load()

@@ -92,3 +92,29 @@ func TestPluginLifecyclePreservesActorIdentity(t *testing.T) {
 		t.Fatalf("outcome=%+v", out)
 	}
 }
+
+func TestPermissionPluginObserversUseV1AndCannotDecide(t *testing.T) {
+	root := t.TempDir()
+	config := `{"version":1,"PermissionRequest":[{"matcher":"shell","mode":"observer","hooks":[{"type":"js","code":"({state_patch:{strings:{seen:event.args.call_id + ':' + event.actor_id}}})"}]}],"PermissionDenied":[{"matcher":"shell","mode":"observer","hooks":[{"type":"js","code":"({decision:{action:'continue'},state_patch:{strings:{source:event.args.source}}})"}]}]}`
+	if err := os.WriteFile(filepath.Join(root, "hooks.json"), []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	hooks, err := LoadPluginHooks(root, "hooks.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gov := New()
+	for _, hook := range hooks {
+		if err := gov.Register(hook); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gov.Observe(t.Context(), PermissionRequest, Facts{ActorID: "child", Tool: ToolFacts{Name: "shell", Args: map[string]any{"call_id": "call"}}})
+	gov.Observe(t.Context(), PermissionDenied, Facts{ActorID: "child", Tool: ToolFacts{Name: "shell", Error: true, Args: map[string]any{"source": "rule"}}})
+	// Inspect committed observer state, rather than unused hint output.
+	requestMemory := gov.hooks.state[hooks[0].Name]
+	deniedMemory := gov.hooks.state[hooks[1].Name]
+	if requestMemory.strings["seen"] != "call:child" || deniedMemory.strings["source"] != "rule" {
+		t.Fatalf("request=%+v denied=%+v", requestMemory, deniedMemory)
+	}
+}

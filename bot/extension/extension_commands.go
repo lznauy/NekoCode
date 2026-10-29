@@ -21,6 +21,9 @@ func (m *Manager) RegisterCommands(handler *command.Handler, confirm InstallConf
 	m.syncSkillCommandsLocked()
 	m.mu.Unlock()
 	p := handler.Parser()
+	p.RegisterLocalInfo("skills", "Show skills and load errors", func(_ context.Context, _ *command.Command) (string, bool) {
+		return m.skillReport(), true
+	})
 	p.RegisterInfo("plugin", "Manage plugins", func(ctx context.Context, cmd *command.Command) (string, bool) {
 		if len(cmd.Args) == 0 {
 			return plugin.Usage(), true
@@ -36,6 +39,8 @@ func (m *Manager) RegisterCommands(handler *command.Handler, confirm InstallConf
 			return m.enablePlugin(ctx, cmd.Args[1:], true), true
 		case "disable":
 			return m.enablePlugin(ctx, cmd.Args[1:], false), true
+		case "check":
+			return m.pluginCheckReport(ctx, cmd.Args[1:]), true
 		case "info":
 			return m.pluginInfo(cmd.Args[1:]), true
 		default:
@@ -48,10 +53,10 @@ func (m *Manager) RegisterCommands(handler *command.Handler, confirm InstallConf
 		// its only entry point in interactive UIs), but they stay executable
 		// for text transports without a picker.
 		p.RegisterHiddenInfo("mcp-"+action, "MCP OAuth "+action, func(_ context.Context, cmd *command.Command) (string, bool) {
-			if len(cmd.Args) != 1 {
+			if len(cmd.Args) == 0 {
 				return "Usage: /mcp-" + action + " <server>", true
 			}
-			name := cmd.Args[0]
+			name := strings.Join(cmd.Args, " ")
 			if err := m.MCPAuthorizationAction(name, action); err != nil {
 				return err.Error(), true
 			}
@@ -77,6 +82,7 @@ func (m *Manager) pluginMenu(_ context.Context, cmd *command.Command) (protocol.
 			{Value: "/plugin enable", Label: "Enable", Description: "Activate an installed plugin"},
 			{Value: "/plugin disable", Label: "Disable", Description: "Deactivate an installed plugin"},
 			{Value: "/plugin info", Label: "Info", Description: "Inspect an installed plugin"},
+			{Value: "/plugin check", Label: "Check", Description: "Check plugin compatibility without executing it"},
 			{Value: "/plugin uninstall", Label: "Uninstall", Description: "Remove an installed plugin"},
 			{Value: "/plugin list", Label: "List", Description: "Show installed plugins", Submit: true},
 		}}, true
@@ -88,14 +94,17 @@ func (m *Manager) pluginMenu(_ context.Context, cmd *command.Command) (protocol.
 	if action == "install" || action == "list" {
 		return protocol.CommandMenu{}, false
 	}
-	if action != "enable" && action != "disable" && action != "info" && action != "uninstall" {
+	if action != "enable" && action != "disable" && action != "check" && action != "info" && action != "uninstall" {
 		return protocol.CommandMenu{}, false
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	plugins := m.plugins.ListPlugins()
-	items := make([]protocol.CommandMenuItem, 0, len(plugins))
+	items := make([]protocol.CommandMenuItem, 0, len(plugins)+1)
+	if action == "check" {
+		items = append(items, protocol.CommandMenuItem{Value: "/plugin check", Label: "All plugins", Description: "Check every installed plugin, including disabled ones", Submit: true})
+	}
 	for _, item := range plugins {
 		failed := m.agentErrors[item.Name] != "" || m.hookErrors[item.Name] != ""
 		if action == "enable" && item.Enabled && !failed || action == "disable" && !item.Enabled {
@@ -366,10 +375,16 @@ func (m *Manager) mcpMenu(_ context.Context, cmd *command.Command) (protocol.Com
 				Value: "/mcp-cancel " + name, Submit: true,
 			})
 		case mcp.StatusError:
-			items = append(items, protocol.CommandMenuItem{
+			item := protocol.CommandMenuItem{
 				Label: name + " · 连接失败 · " + source, Description: strings.TrimSpace(h.Error + " · " + description),
-				Value: "/mcp-login " + name, Submit: true,
-			})
+				Value: "/mcp", Current: true,
+			}
+			if mcpIsRemote(definition, configured, h) {
+				item.Value = "/mcp-login " + name
+				item.Current = false
+				item.Submit = true
+			}
+			items = append(items, item)
 			if logout {
 				items = append(items, logoutItem(name))
 			}
@@ -406,7 +421,7 @@ func (m *Manager) mcpStatus() string {
 			ready++
 		}
 		definition, configured := definitions[name]
-		fmt.Fprintf(&b, "  %-20s %s\n", name, strings.Join(mcpStatusParts(name, h, definition, configured), " · "))
+		fmt.Fprintf(&b, "  %-20s %s\n", name, strings.Join(mcpStatusParts(name, h, definition, configured, m.mcp.HasStoredCredential(name)), " · "))
 		if h.AuthURL != "" {
 			fmt.Fprintf(&b, "    授权链接：%s\n", h.AuthURL)
 		}
@@ -442,7 +457,7 @@ func (m *Manager) mcpInventory() (map[string]mcp.Health, map[string]ConfiguredMC
 	return health, definitions, names
 }
 
-func mcpStatusParts(name string, h mcp.Health, definition ConfiguredMCP, configured bool) []string {
+func mcpStatusParts(name string, h mcp.Health, definition ConfiguredMCP, configured, storedCredential bool) []string {
 	status := h.Status
 	if status == "" {
 		status = "未加载"
@@ -451,15 +466,31 @@ func mcpStatusParts(name string, h mcp.Health, definition ConfiguredMCP, configu
 		}
 	}
 	parts := []string{status}
+	remote := mcpIsRemote(definition, configured, h)
 	switch {
 	case h.Status == mcp.StatusReady:
 		parts = append(parts, fmt.Sprintf("%d tools", h.ToolCount))
 	case h.Status == mcp.StatusAuthRequired:
 		// The SDK error behind this state is noise; the actionable hint is
 		// the command. Once a login flow starts, the URL line appears above.
-		parts = append(parts, fmt.Sprintf("运行 /mcp-login %s 完成授权", name))
+		if remote {
+			parts = append(parts, fmt.Sprintf("运行 /mcp-login %s 完成授权", name))
+		}
+	case h.Status == mcp.StatusAuthorizing:
+		if remote {
+			parts = append(parts, fmt.Sprintf("运行 /mcp-cancel %s 取消授权", name))
+		}
+		if h.Error != "" {
+			parts = append(parts, h.Error)
+		}
 	case h.Error != "":
 		parts = append(parts, h.Error)
+	}
+	if h.Status == mcp.StatusError && remote {
+		parts = append(parts, fmt.Sprintf("运行 /mcp-login %s 重新连接", name))
+	}
+	if remote && storedCredential {
+		parts = append(parts, fmt.Sprintf("运行 /mcp-logout %s 删除已保存凭据", name))
 	}
 	source, detail := mcpDisplaySource(definition, configured, h)
 	parts = append(parts, source)
@@ -470,6 +501,15 @@ func mcpStatusParts(name string, h mcp.Health, definition ConfiguredMCP, configu
 		parts = append(parts, strings.TrimSpace(definition.Command+" "+strings.Join(definition.Args, " ")))
 	}
 	return parts
+}
+
+// Configured definitions are authoritative for transport type. OAuth health
+// identifies remote plugin/session servers that have no host definition.
+func mcpIsRemote(definition ConfiguredMCP, configured bool, h mcp.Health) bool {
+	if configured {
+		return definition.URL != ""
+	}
+	return h.AuthURL != "" || h.Status == mcp.StatusAuthRequired || h.Status == mcp.StatusAuthorizing
 }
 
 func mcpDisplaySource(definition ConfiguredMCP, configured bool, h mcp.Health) (string, string) {
@@ -505,4 +545,31 @@ func mcpOwnerLabel(owner string) string {
 	default:
 		return owner
 	}
+}
+
+func (m *Manager) skillReport() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out strings.Builder
+	out.WriteString("Skills:\n")
+	for _, sk := range m.skills.List() {
+		fmt.Fprintf(&out, "- $%s", sk.Name)
+		if sk.DisableModelInvocation {
+			out.WriteString(" (manual-only)")
+		}
+		out.WriteString("\n")
+	}
+	errors := m.skills.LoadErrors()
+	paths := make([]string, 0, len(errors))
+	for path := range errors {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	if len(paths) > 0 {
+		out.WriteString("\nSkill load errors:\n")
+	}
+	for _, path := range paths {
+		fmt.Fprintf(&out, "- %s: %s\n", path, errors[path])
+	}
+	return out.String()
 }

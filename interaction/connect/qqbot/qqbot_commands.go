@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"nekocode/interaction/connect"
+	"nekocode/protocol"
 )
 
 const (
@@ -20,6 +23,10 @@ Commands:
   status                   查看状态
 
 在 q.qq.com 创建机器人可获取 AppID 和 AppSecret。`
+
+func (c *Connector) CommandMenu(_ context.Context, args []string) (protocol.CommandMenu, bool) {
+	return connect.ConnectorCommandMenu("qqbot", args, nil)
+}
 
 func (c *Connector) HandleCommand(ctx context.Context, args []string) (string, error) {
 	if len(args) > 0 {

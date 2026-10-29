@@ -35,26 +35,43 @@ NekoCode 需要一个模型服务商的 API Key 才能工作。首次使用前�
 
 ```json
 {
-  "active": "deepseek",
-  "auto_compact_percent": 80,
-  "max_concurrent_subagents": 8,
-  "models": [
+  "active": "deepseek/deepseek",
+  "providers": [
     {
       "name": "deepseek",
-      "provider": "deepseek",
-      "api_key": "你的 API Key",
-      "model": "deepseek-v4-flash",
       "base_url": "https://api.deepseek.com/v1",
+      "api_key": "你的 API Key",
       "protocol": "openai",
-      "reasoning_effort": "medium"
+      "models": [
+        {
+          "model": "deepseek-v4-flash",
+          "reasoning_effort": "medium",
+          "name": "deepseek"
+        }
+      ]
     }
-  ]
+  ],
+  "auto_compact_percent": 80,
+  "max_concurrent_subagents": 8
 }
 ```
 
-- `active`：默认使用的模型名（必须能在 `models` 列表里找到）
+- `active`：默认使用的完整模型引用，格式为 `服务名/模型别名`；未设置别名时使用模型 ID
 - `protocol`：填 `openai` 或 `anthropic`，绝大多数 OpenAI 兼容服务（DeepSeek、通义、Kimi 等）都填 `openai`
 - 可以配置多个模型，用 `/model` 命令随时切换
+
+同一服务下的模型共享 `base_url`、`api_key` 和默认 `protocol`。每条模型可以直接写模型 ID，也可以写成对象，按需设置别名、推理强度、上下文窗口、视觉能力或协议覆盖：
+
+```json
+"models": [
+  "deepseek-v4-flash",
+  {"name": "coder", "model": "deepseek-v4-flash", "reasoning_effort": "high"}
+]
+```
+
+上例放在名为 `deepseek` 的服务内时，两个模型分别引用为 `deepseek/deepseek-v4-flash` 和 `deepseek/coder`。更换 `coder` 对应的实际模型 ID 不影响引用；不同服务可以有同名模型。保存配置会保留字符串简写和 provider 分组。旧的顶层 `models` 与 `flash_model` 已移除，请将连接信息移入 `providers`，并将 `flash_model` 改为可选的 `compaction_model`。
+
+顶层配置字段名必须按示例使用小写形式，例如 `providers`，不能写成 `Providers`；同一个顶层字段也不能重复出现。存在这类歧义时，加载会直接报错，避免服务地址和凭据混用。
 
 配置好后运行 `nekocode-tui`，在输入框打字、回车，就开始对话了。
 
@@ -63,8 +80,14 @@ NekoCode 需要一个模型服务商的 API Key 才能工作。首次使用前�
 配置完成后，可以在项目目录中使用无界面入口：
 
 ```bash
-# 单次任务，输出 NDJSON，完成后退出
-nekocode-tui -p "解释这个项目" --output-format stream-json
+# 单次任务，只输出最终答案，完成后退出
+nekocode-tui -p "解释这个项目"
+
+# 从管道读取任务，输出一个 JSON 结果对象
+printf '解释这个项目' | nekocode-tui exec - --output-format json
+
+# 要求最终答案符合本地 JSON Schema
+nekocode-tui exec "汇总代码问题" --output-schema result.schema.json --output-format json
 
 # 宿主通过 stdin/stdout 进行多轮交互
 nekocode-tui --headless
@@ -72,6 +95,12 @@ nekocode-tui --headless
 # 支持 ACP 的编辑器
 nekocode-tui --acp
 ```
+
+一次性入口 `-p` / `--print` / `exec` 默认输出文本；`--output-format json` 输出单个结果对象，其中 `result` 是最终答案，`session_id` 可用于 `--resume SESSION_ID` 续跑。`nekocode-headless` 独立二进制支持相同参数，无参数时仍启动双向协议。
+
+`--output-schema` 先提示模型按格式回答，再在本地校验最终 JSON；通过后，JSON 结果对象增加 `structured_output`。最终答案不是合法 JSON、包含额外 JSON 值或尾随内容、以及不符合 Schema 时，JSON `result.subtype` 为 `error_output_validation`，退出码为 `1`，不自动重试；运行取消优先报告 `error_cancelled` 和退出码 `130`。启动前的 Schema 文件或编译错误退出码为 `2`，不会启动运行。校验失败不会撤销已经完成的文件修改。Schema 最大 1 MiB，只允许同一文档内引用，输入任务最大 8 MiB。需要人工审批或回答问题时，一次性入口拒绝该请求并终止，沿用已有权限配置；可改用交互模式或配置所需的权限规则。
+
+退出码：成功 `0`，执行失败、步数上限、需要交互或最终格式校验失败 `1`，参数、输入或 Schema 配置错误 `2`，取消 `130`。文本模式失败不输出部分答案，诊断写 stderr；JSON 模式在任务终止后尽可能输出带 `is_error` 和 `errors` 的结果对象，启动前的错误及输出管道不可用时仅以 stderr 和退出码报告。
 
 Headless 使用自有 `nekocode-headless/2` 协议，支持工具审批、提问、会话管理和运行控制。
 需要审批或回答问题时，宿主必须保持 stdin 打开并回复控制请求；stdin 关闭后交互自动拒绝。
@@ -101,6 +130,7 @@ Headless 使用自有 `nekocode-headless/2` 协议，支持工具审批、提问
 
 - `/model`：选择已配置模型
 - `/effort`：选择当前模型的推理强度
+- `/index`：打开索引操作菜单；`/index status`：查看代码索引状态；`/index rebuild`：重建索引
 - `/permission`：选择审批模式（manual / auto / full，auto 需配置 Jev，见「权限与安全」）
 - `/rewind`：按用户消息选择最近 100 个恢复点，并显示相对位置、时间和文件变更数量；没有文件修改的消息也会保留为恢复锚点
 - `/sessions`：选择历史会话；TUI 中可按 `d` 删除当前选中的会话（需二次确认）
@@ -124,12 +154,22 @@ GUI 使用同一份命令数据：输入 `/` 后在输入框上方弹出面板�
 | `/plan <任务>` | 让 AI 先出方案，你确认后再动手 |
 | `/sessions [id]` | 打开历史会话菜单；也可手动指定 id 恢复会话 |
 | `/tasks` | 打开子任务中心，查看当前父会话的执行状态、轮次、结果和分页输出（同 `Ctrl+G`） |
+| `/fork` | 将当前对话复制成独立的新会话并切换，保留原会话 |
+| `/worktree` | 管理当前会话的子任务副本：`list`、`diff <任务 ID>`、`apply <任务 ID>`、`remove <任务 ID> [--discard]` |
 | `/workspace` | 查看项目根目录、`NEKOCODE.md` 来源和读取错误；`/workspace reload` 刷新项目配置 |
 | `/export` | 导出当前对话到文件 |
 | `/plugin` | 管理插件（见「插件」一节） |
 | `/connect` | 连接 IM 平台（见下一节） |
 | `/disconnect <平台>` | 断开某个 IM 平台 |
 | `$<技能名>` | 使用技能（见「技能」一节） |
+
+### 从当前对话另开一条思路
+
+输入 `/fork`，把当前对话复制成新会话并立即切换。原会话保留，命令会显示原会话 ID，用 `/sessions <原 ID>` 可以回去。两边后续消息各自保存，适合在同一个上下文上尝试不同实现方案。空对话不能创建分支；命令需等当前任务结束后执行。首版复制当前完整历史，不支持从某条历史消息截断分支。
+
+分支保留压缩摘要、活动上下文、已加载技能，以及会话拥有的图片和工具输出的独立副本；删除原会话后，这些副本仍可读取。工作区或其他外部目录中的文件引用仍使用原路径。分支会记录来源会话和复制时的历史位置，新分支的用量重新计数。
+
+会话分支仍使用同一个工作区，切换会话不会撤销或隔离代码改动。子 Agent 的任务历史、worktree、运行中的进程、临时目录授权和 `/rewind` 文件检查点不会复制；分支中的文件操作重新读取、重新授权，并建立新的检查点。需要独立代码副本时，使用子 Agent 的 `isolation: worktree`。
 
 ### 上下文压缩
 
@@ -337,6 +377,10 @@ description: 按团队规范生成提交信息。当用户要求提交代码、�
 
 远程安装前会显示插件内容预览，确认后才安装（加 `--yes` 跳过确认）。插件安装到 `~/.nekocode/plugins/`，其中的技能会自动可用。
 
+### 插件兼容性检查
+
+输入 `/plugin check` 检查全部已安装插件，或 `/plugin check <名称>` 检查一个插件，包括禁用的插件。报告会指出不支持的字段、缺失文件和配置错误，以及旧命令需要迁移为 Skill 等问题。检查不会启用插件、运行脚本或连接 MCP；静态通过后仍需验证模型、外部依赖和服务连接。详见 [插件兼容性检查](../developers/PLUGIN_GUIDE.md#十先检查兼容性)。
+
 ### 自定义子 Agent
 
 完整的创建、能力配置和委托步骤见 [自定义 Agent 指南](../developers/AGENT_GUIDE.md)。
@@ -375,6 +419,10 @@ max_steps: 20
 
 运行 `/plugin install ./my-reviewer` 后，模型可以通过 `agent_profiles` 查询目录，再以 `task(profile="my-reviewer/reviewer", prompt="…")` 委托任务。同名 Agent 可来自不同插件；短名称只在唯一时解析，`coder`、`explore` 始终指向内置 Profile。`/plugin info my-reviewer` 及 GUI 插件详情显示可调用 ID 和加载错误。修改已安装文件后刷新扩展，或禁用后重新启用插件。
 
+需要子 Agent 各改各的文件时，可要求 `task` 使用 `isolation="worktree"`，或给对应 Agent 配置 `isolation: worktree`。每个任务从当前 Git 提交建立独立副本；主目录没提交的改动不会带进去。完成后先用 `/worktree list` 找到任务，再用 `/worktree diff <任务 ID>` 查看，确认后 `/worktree apply <任务 ID>` 应用到主目录。非空且预检通过的应用会创建 `/rewind` 检查点，可恢复应用前的文件状态；有冲突会报错、保留副本且不创建锚点。
+
+副本不会自动删除，失败或取消也保留。处理完后用 `/worktree remove <任务 ID> --discard` 明确清理；清理后的任务不能继续恢复。运行中的任务不能被清理。默认仍共享工作区，完整边界和限制见 [独立工作副本](../developers/AGENT_GUIDE.md#独立工作副本)。
+
 支持字段与规则：
 
 | 字段 | 含义 |
@@ -384,12 +432,13 @@ max_steps: 20
 | `base` | 可选 `coder` 或 `explore`；声明后工具只能收窄到该基线的子集 |
 | `tools` | 工具白名单，支持 YAML 数组或逗号分隔字符串；`Read/Write/Edit/Bash/Grep/Glob/LS/WebSearch/WebFetch` 会映射为内部工具名 |
 | `skills` | 默认工作流；与本次 task 的 skills 合并、去重，在运行前解析，不授予额外权限 |
+| `isolation` | `shared`（默认）或 `worktree`，决定是否使用独立 Git 工作副本 |
 | `max_steps` | 1–200 个工具执行轮次；省略或 0 使用默认 150，达到上限返回 partial 结果 |
 | Markdown 正文 | 必填的自定义指令；执行器始终保留通用子 Agent 约束和结构化完成协议 |
 
 不写 `tools` 时，声明了 `base` 就继承基线工具，否则为无外部工具的文本任务；`tools: []` 明确禁用外部工具。无 `base` 的 Profile 可声明宿主已有工具，但不能声明 `task`、`agent_profiles` 或内部完成工具。MCP 需同时列出 `capability` 和精确目标，例如 `mcp__demo__lookup`；不支持通配授权，目标可用性在调用时检查。
 
-Agent 文件只允许从插件目录内部读取（包含符号链接检查），最大 1 MiB。同一插件内重名、未知工具、非法字段或任何 Agent 文件加载失败都会阻止该插件本次运行时激活；不会发布其中的 Skills、Agents、Hooks 和 MCP。修复后可重新启用或刷新。模型仍继承主 Agent 配置，thinking 关闭；`model`、`permissionMode` 等未支持字段会明确报错，不会静默忽略。Skill 的 `context/agent/max_steps/context_window` 元数据本身不启动子 Agent，委托仍通过 `task`。
+Agent 文件只允许从插件目录内部读取（包含符号链接检查），最大 1 MiB。同一插件内重名、未知工具、非法字段或任何 Agent 文件加载失败都会阻止该插件本次运行时激活；不会发布其中的 Skills、Agents、Hooks 和 MCP。修复后可重新启用或刷新。Agent 可通过 `model` 引用已配置的 完整模型引用（`服务名/模型名或别名`）；省略时跟随主对话模型，推理设置和上下文窗口跟随所选模型。未知模型在执行前报错；`permissionMode` 等未支持字段会明确报错，不会静默忽略。Skill 默认 inline 加载；`context: fork`、`agent`、`allowed-tools`、`max_steps`、`context_window` 会明确报加载错误，委托仍通过 `task`。
 
 为兼容已有插件，manifest 省略 `agents` 或设置空数组时仍会自动发现插件中的 `agents/*.md`。需要控制加载范围时，请显式列出文件。
 
@@ -514,30 +563,38 @@ MCP 子进程默认以项目根目录为工作目录；可用 `cwd` 指定绝对
 
 ```json
 {
-  "active": "deepseek",
-  "flash_model": "deepseek",
-  "auto_compact_percent": 80,
-  "max_concurrent_subagents": 8,
-  "models": [
+  "active": "deepseek/deepseek",
+  "compaction_model": "deepseek/deepseek",
+  "providers": [
     {
       "name": "deepseek",
-      "provider": "deepseek",
-      "api_key": "sk-xxx",
-      "model": "deepseek-v4-flash",
       "base_url": "https://api.deepseek.com/v1",
+      "api_key": "sk-xxx",
       "protocol": "openai",
-      "reasoning_effort": "medium"
+      "models": [
+        {
+          "model": "deepseek-v4-flash",
+          "reasoning_effort": "medium",
+          "name": "deepseek"
+        }
+      ]
     },
     {
-      "name": "claude",
-      "provider": "anthropic",
-      "api_key": "sk-ant-xxx",
-      "model": "claude-sonnet-4-5",
+      "name": "anthropic",
       "base_url": "https://api.anthropic.com",
+      "api_key": "sk-ant-xxx",
       "protocol": "anthropic",
-      "reasoning_effort": "high"
+      "models": [
+        {
+          "model": "claude-sonnet-4-5",
+          "reasoning_effort": "high",
+          "name": "claude"
+        }
+      ]
     }
   ],
+  "auto_compact_percent": 80,
+  "max_concurrent_subagents": 8,
   "image_gen_models": [
     {
       "name": "jimeng",
@@ -550,19 +607,19 @@ MCP 子进程默认以项目根目录为工作目录；可用 `cwd` 指定绝对
   ],
   "image_understand_models": [
     {
-	  "name": "fast",
-	  "provider": "tencent",
-	  "api_key": "your-tokenhub-key",
-	  "model": "hy-vision-2.0-instruct",
-	  "base_url": "https://tokenhub.tencentmaas.com/v1",
-	  "protocol": "openai"
-	},
-	{
-	  "name": "accurate",
-	  "provider": "tencent",
-	  "api_key": "your-tokenhub-key",
-	  "model": "hunyuan-t1-vision-20250916",
-	  "base_url": "https://tokenhub.tencentmaas.com/v1",
+      "name": "fast",
+      "provider": "tencent",
+      "api_key": "your-tokenhub-key",
+      "model": "hy-vision-2.0-instruct",
+      "base_url": "https://tokenhub.tencentmaas.com/v1",
+      "protocol": "openai"
+    },
+    {
+      "name": "accurate",
+      "provider": "tencent",
+      "api_key": "your-tokenhub-key",
+      "model": "hunyuan-t1-vision-20250916",
+      "base_url": "https://tokenhub.tencentmaas.com/v1",
       "protocol": "openai"
     }
   ],
@@ -586,7 +643,10 @@ MCP 子进程默认以项目根目录为工作目录；可用 `cwd` 指定绝对
     }
   },
   "workspaces": [
-    {"path": "/home/me/other-project", "access": "read-only"}
+    {
+      "path": "/home/me/other-project",
+      "access": "read-only"
+    }
   ],
   "jev": {
     "api_key": "apikey-xxx"
@@ -596,16 +656,16 @@ MCP 子进程默认以项目根目录为工作目录；可用 `cwd` 指定绝对
 
 主要字段说明：
 
-- `active` / `models`：模型配置（见「首次配置」）
-- `flash_model`：可选的轻量模型配置名，用于压缩和子 Agent 等辅助请求；省略时跟随 `active`
+- `active` / `providers`：分组模型配置（见「首次配置」）
+- `compaction_model`：可选的上下文压缩模型引用（`服务名/模型名或别名`）；省略时跟随 `active`。子 Agent 的工作模型由 Profile 的 `model` 决定，省略时跟随主对话模型，不再使用此字段
 - `image_gen_models`：可选的图片生成模型列表；只有配置后才会注册 `image_gen` 工具
 - `image_understand_models`：可选的图片理解模型列表；支持 `openai` 和 `anthropic` 协议，只有配置后才会注册 `image_understand` 工具。建议将低延迟模型命名为 `fast`，将高精度模型命名为 `accurate`。工具默认使用 `fast` 模式：优先选择同名模型，把长边超过 1280px 的 PNG/JPEG 图片等比缩小；GIF/WebP 保持原文件。`accurate` 模式选择同名模型并保留原图。两种模式均默认最多输出 1024 Token；完整 OCR 可通过工具参数 `max_tokens` 提高上限，取值范围为 1–4096。工具按已知模型能力关闭推理，GLM 使用 `thinking.type=disabled`；OpenAI 兼容端点使用流式请求，同时兼容普通 JSON 响应。显式传入 `model` 时以指定的配置名为准。旧配置没有 `fast` 名称时，默认模式仍使用列表中的第一个模型；使用 `accurate` 模式前必须配置同名模型或显式指定 `model`。
 - 图片理解工具支持 `path`（单图）或 `paths`（按输入顺序排列的 1–4 张图片），二者只能提供一个；整批原图合计不得超过 20 MiB。相关截图可一次发送并按图号返回结果；每张图片均校验工作区访问和授权后内容是否变化。调试日志记录准备、首个结果文本和总耗时，以及缩图前后的字节数。
 - `image_understand` 接收本地图片路径与可选问题，将 PNG、JPEG、WebP 或 GIF 图片发送给所选多模态模型并返回文本结果。由于图片会离开本机，默认每次发送前都会显示文件路径和目标服务并请求确认；可通过权限配置显式允许该工具
 - TUI/GUI 粘贴的图片临时保存在 `~/.nekocode/tmp/images/<session-id>/`，单条消息最多 8 张、单张最大 20 MiB。草稿占位符删除时立即清理；已发送图片随会话保留，并在删除会话时一起清理。粘贴时图片会先压缩到长边 ≤1568（不透明重编码为 JPEG，透明保留 PNG，GIF 原样），落盘字节即最终发送字节，保证多轮对话中前缀缓存稳定
-- `vision`：模型的原生多模态开关（`models[]` 里的可选布尔字段）。开启后粘贴的图片会作为图像内容直接随请求发给模型（如 GLM-5、Claude、GPT-4o/5、Gemini、Qwen-VL 等视觉模型），无需调用工具即可"看图"；未设置时按内置模型能力表自动判断，显式 `true`/`false` 恒覆盖内置表。关闭或模型不支持时，图片仅通过 `image_understand` 工具路径处理（需配置 `image_understand_models`）。两种模式可以随时通过 `/model` 切换：历史消息中的图片与路径信息完整保留，切换不丢上下文；图片 Token 按 `(宽×高)/750` 估算计入上下文，自动压缩的触发时机与文本一致。注意：图片会发送至主模型 API 端点（与代码、文本同通道）；用于压缩的 `flash_model` 永远不接收图片
+- `vision`：模型的原生多模态开关（`providers[].models[]` 里的可选布尔字段）。开启后粘贴的图片会作为图像内容直接随请求发给模型（如 GLM-5、Claude、GPT-4o/5、Gemini、Qwen-VL 等视觉模型），无需调用工具即可"看图"；未设置时按内置模型能力表自动判断，显式 `true`/`false` 恒覆盖内置表。关闭或模型不支持时，图片仅通过 `image_understand` 工具路径处理（需配置 `image_understand_models`）。两种模式可以随时通过 `/model` 切换：历史消息中的图片与路径信息完整保留，切换不丢上下文；图片 Token 按 `(宽×高)/750` 估算计入上下文，自动压缩的触发时机与文本一致。注意：图片会发送至主模型 API 端点（与代码、文本同通道）；用于压缩的 `compaction_model` 永远不接收图片
 - `reasoning_effort`：可选的模型推理强度，留空或设为 `auto` 时使用模型默认值。可选级别由模型能力表决定，`/effort` 和配置界面只展示当前模型支持的值；未知模型严格退化为 `auto`，`none`（界面显示为 Off）也只在模型明确支持关闭推理时出现。OpenAI 与 Anthropic 协议适配器只翻译已解析的生效值，不根据协议猜测模型能力
-- `context_window`：上下文窗口大小。**这是模型的属性，通常不用填**——NekoCode 内置了常见模型的对照表，会根据模型名自动确定（如 deepseek 1M、Claude 200K~1M、Gemini 1M)。需要精确控制时（比如自部署模型），在 `models[]` 里给对应模型填 `context_window`：单模型覆盖 > 内置表 > 默认 128K。GUI 概览只读显示当前模型的有效窗口；模型卡片中的“上下文窗口覆盖”留空即保持自动解析，不会把默认值固化进配置
+- `context_window`：上下文窗口大小。**这是模型的属性，通常不用填**——NekoCode 内置了常见模型的对照表，会根据模型名自动确定（如 deepseek 1M、Claude 200K~1M、Gemini 1M)。需要精确控制时（比如自部署模型），在 `providers[].models[]` 里给对应模型填 `context_window`：单模型覆盖 > 内置表 > 默认 128K。GUI 概览只读显示当前模型的有效窗口；模型卡片中的“上下文窗口覆盖”留空即保持自动解析，不会把默认值固化进配置
 - `auto_compact_percent`：自动摘要压缩的上下文占用门限，范围 1～99，默认 80。达到门限后执行一次全量摘要替换；压缩后若仍达到模型窗口上限，才返回上下文已满错误
 - `max_concurrent_subagents`：子任务同时执行的上限，使用正整数，默认 8；省略或设为 0 使用默认值，超出的任务自动排队。修改后重启生效
 - `permissions`：权限规则（见下一节）；`allow`、`ask`、`deny` 分别表示允许、询问和拒绝，`sandbox` 可为匹配的 Shell 命令指定 `read-only`、`workspace-write` 或 `host` 执行环境
@@ -635,12 +695,20 @@ NekoCode 对有风险的操作默认会征求你的同意，规则按 **拒绝 >
 - **auto 模式（可选，需配置 Jev）**：`/permission auto` 开启后，未匹配用户 deny、ask、allow 的 shell 命令会交给 Jev 判断危险性——判定安全（置信度足够高）的命令直接执行，危险**或不确定**的照常弹出授权框。安全设计：硬拒绝规则和用户声明的规则优先于 Jev；内置询问规则是 Jev 判定危险或不可用时的回退；Jev 超时、评分缺失或越界，以及命令超过 960 个字符时，都回退为询问；Jev 放行后仍会经过间接执行、管道注入等结构化检测。日志仅记录判定分数、缓存统计和输入摘要，不记录可能含密钥的命令或 URL 原文。auto 与 full 互斥：切到 full 会关闭 auto，反之亦然
 - **动态 Shell**：命令替换、进程替换、动态命令名、`eval`、`source`、`shell -c` 和 shell heredoc 会明确标注在审批卡上。宽泛的 `Bash(*)` 不会绕过这次审批；选择「始终允许」只会记住完整命令字面量，不会自动放宽成 glob
 
+### Shell 出站域名白名单
+
+Linux 原生沙箱可在 `permissions.sandbox` 的 Shell 规则中设置 `outbound_domains`，例如 `["registry.npmjs.org"]`，仅允许这些精确域名的 HTTP/HTTPS 连接（80/443）。Shell 工具也可按次请求域集合，不能突破配置上限；审批卡会展示目标域名。
+
+空数组 `[]` 表示隔离断网；未填写时保持现有 `network` 布尔行为。域限制不能与 host 模式组合，网络隔离不可用时明确拒绝，不会降级为 Landlock 或宿主联网。私网、本地服务、SSH/UDP 和上游代理链不在首版支持范围。
+
+完整示例、兼容边界及故障说明见 [Shell 网络域名限制](../developers/NETWORK_EGRESS.md)。
+
 ## 十、常见问题
 
 需要按日志和调用链定位问题时，见 [故障排查指南](TROUBLESHOOTING.md)。
 
 **启动后聊天报错？**
-检查 `~/.nekocode/config.json` 里的 `api_key` 是否填写、`base_url` 是否正确、`active` 是否和 `models` 里的 `name` 对上。
+检查 `~/.nekocode/config.json` 里的 `api_key` 是否填写、`base_url` 是否正确、`active` 是否为有效的 `服务名/模型名或别名` 引用。
 
 **改完配置没生效？**
 重启 `nekocode-tui`。
@@ -656,3 +724,15 @@ NekoCode 对有风险的操作默认会征求你的同意，规则按 **拒绝 >
 
 **Jev 判定不准或想临时关闭？**
 在 `config.json` 的 `jev` 段加 `"enabled": false` 即可一键关闭（保留 api_key，随开随用），改完通过配置接口保存会立即生效，否则重启生效；也可以直接删除 `jev` 段并取消 `TYPESAFE_API_KEY` 环境变量。关闭后当前 auto 模式会自动切回 manual，且菜单不再显示 auto。判定明细在应用日志中以 `jev:` 前缀检索，便于确认是判定质量问题还是阈值设置问题（可在 `keep_threshold` 调整保留倾向）。
+
+### 代码索引维护
+
+在 NekoCode 输入框执行 `/index status`，查看索引根目录、已收录文件数、语言分布、最近成功同步时间（UTC）和文件监听状态。首次执行会初始化索引；未找到支持的项目标记时会提示不可用。统计只包含索引支持并实际收录的文件。
+
+当索引初始化失败、结果缺失或监听不可用时，执行 `/index rebuild`。命令会停止旧监听，关闭旧库，将旧数据库及 SQLite 辅助文件保留在 `.nekocode/index-backup-*` 中，再重新扫描项目并启动监听。结果会显示备份路径；失败时备份仍保留，可修正文件权限等问题后重试。备份不自动清理。
+
+索引维护命令需等当前任务结束后执行。重建与本实例的索引查询互斥，查询会等待重建完成。同一项目的多个实例可以同时查询，但其他实例仍打开索引时会拒绝重建，不移动数据库或生成备份；关闭其他实例后重试。重建失败后仍可重新查询或再次重试。锁由操作系统在实例退出时释放，`.nekocode/index.lock` 和 `index-rebuild.lock` 保留在磁盘上，不要删除正在使用的锁文件。升级后首次重建前需关闭尚不支持索引锁的旧版本实例。
+
+### Skill 加载状态
+
+输入 `/skills` 查看可用技能与加载错误。标记 `manual-only` 的技能需要用户通过 `$技能名` 或技能选择入口手动加载；模型不能自行调用，也不能给子 Agent 预加载。配置不支持的执行字段时，该技能不会生效，列表会显示文件路径和原因。

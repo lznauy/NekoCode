@@ -16,6 +16,7 @@ package permission
 import (
 	"context"
 	"fmt"
+	"nekocode/bot/extension/tool/runtime/netpolicy"
 	"strings"
 	"time"
 )
@@ -147,12 +148,26 @@ func (e *Engine) SetSandboxRules(rules []SandboxRule) {
 	e.sandboxRules = rules
 }
 
-// SandboxFor returns the most specific sandbox profile matching a tool call.
+// SandboxFor returns the most specific sandbox profile matching a tool call,
+// intersected with the domain ceilings of every matching subcommand.
 func (e *Engine) SandboxFor(toolName string, callInfo map[string]any) (SandboxProfile, bool) {
 	var best SandboxRule
 	bestScore := -1
+	var domains []string
 	for _, sr := range e.sandboxRules {
-		if !e.ruleApplies(sr.Rule, toolName, callInfo) {
+		matches := e.ruleApplies(sr.Rule, toolName, callInfo)
+		if sr.Profile.OutboundDomains != nil {
+			// A ceiling must survive unrelated commands in a chain. Reuse
+			// deny's any-subcommand semantics only for this restriction;
+			// other profile fields retain their original matching semantics.
+			domainRule := sr.Rule
+			domainRule.Effect = EffectDeny
+			// Keep whole-call matches too, including exact compound rules.
+			if matches || e.ruleApplies(domainRule, toolName, callInfo) {
+				domains = netpolicy.Intersect(domains, sr.Profile.OutboundDomains)
+			}
+		}
+		if !matches {
 			continue
 		}
 		score := sandboxRuleSpecificity(sr.Rule)
@@ -162,7 +177,11 @@ func (e *Engine) SandboxFor(toolName string, callInfo map[string]any) (SandboxPr
 		}
 	}
 	if bestScore >= 0 {
+		best.Profile.OutboundDomains = domains
 		return best.Profile, true
+	}
+	if domains != nil {
+		return SandboxProfile{OutboundDomains: domains}, true
 	}
 	return SandboxProfile{}, false
 }

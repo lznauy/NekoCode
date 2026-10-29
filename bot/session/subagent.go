@@ -38,6 +38,7 @@ type SubagentAttempt struct {
 
 // SubagentMetadata belongs to a durable task, rather than an execution slot.
 type SubagentMetadata struct {
+	Isolation        string            `json:"isolation,omitempty"`
 	ParentSessionID  string            `json:"parent_session_id"`
 	Title            string            `json:"title,omitempty"`
 	Profile          string            `json:"profile"`
@@ -160,6 +161,22 @@ func OpenSubagent(parentID, id, cwd string, resume bool) (*SubagentSession, erro
 		snapshot.Subagent = &SubagentMetadata{ParentSessionID: parentID, Status: "created"}
 	}
 	return &SubagentSession{root: root, lock: f, snapshot: snapshot}, nil
+}
+
+// SetIsolation is immutable once the first attempt is recorded.
+func (s *SubagentSession) SetIsolation(mode string) error {
+	if mode != "shared" && mode != "worktree" {
+		return fmt.Errorf("invalid isolation mode")
+	}
+	saved := s.snapshot.Subagent.Isolation
+	if saved == "" {
+		saved = "shared"
+	}
+	if s.snapshot.Subagent.RunCount > 0 && saved != mode {
+		return fmt.Errorf("cannot change task isolation on resume")
+	}
+	s.snapshot.Subagent.Isolation = mode
+	return nil
 }
 
 func (s *SubagentSession) Snapshot() *Snapshot { return s.snapshot.Clone() }

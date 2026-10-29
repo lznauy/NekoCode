@@ -76,6 +76,78 @@ func TestCommandMenusRejectCrossConversationToken(t *testing.T) {
 	}
 }
 
+func TestConnectorCommandMenusExposeOnlyRealFiniteActions(t *testing.T) {
+	tests := []struct {
+		platform string
+		actions  []struct {
+			name   string
+			submit bool
+		}
+	}{
+		{platform: "telegram", actions: []struct {
+			name   string
+			submit bool
+		}{{"connect", true}, {"add", false}, {"token", false}, {"profiles", true}, {"list", true}, {"use", false}, {"pair", false}, {"unpair", false}, {"remove", false}, {"delete", false}, {"reset", true}, {"status", true}, {"disconnect", true}, {"stop", true}}},
+		{platform: "feishu", actions: []struct {
+			name   string
+			submit bool
+		}{{"connect", true}, {"add", false}, {"pair", true}, {"unpair", true}, {"reset", true}, {"status", true}, {"disconnect", true}, {"stop", true}}},
+		{platform: "wecom", actions: []struct {
+			name   string
+			submit bool
+		}{{"connect", true}, {"add", false}, {"pair", true}, {"unpair", true}, {"reset", true}, {"start", true}, {"status", true}, {"disconnect", true}, {"stop", true}}},
+		{platform: "qqbot", actions: []struct {
+			name   string
+			submit bool
+		}{{"add", false}, {"sandbox", false}, {"start", true}, {"stop", true}, {"disconnect", true}, {"status", true}}},
+	}
+	for _, test := range tests {
+		t.Run(test.platform, func(t *testing.T) {
+			menu, ok := ConnectorCommandMenu(test.platform, nil, []string{"personal"})
+			if !ok || len(menu.Items) != len(test.actions) {
+				t.Fatalf("menu = %+v, ok=%v", menu, ok)
+			}
+			for i, want := range test.actions {
+				item := menu.Items[i]
+				if item.Label != want.name || item.Value != "/connect "+test.platform+" "+want.name || item.Submit != want.submit {
+					t.Errorf("item %d = %+v, want %s submit=%v", i, item, want.name, want.submit)
+				}
+			}
+		})
+	}
+}
+
+func TestConnectorCommandMenusResolveProfilesAndSandbox(t *testing.T) {
+	for _, action := range []string{"use", "pair", "unpair", "remove", "delete"} {
+		menu, ok := ConnectorCommandMenu("telegram", []string{action}, []string{"work", "personal"})
+		if !ok || len(menu.Items) != 2 {
+			t.Fatalf("%s menu = %+v, ok=%v", action, menu, ok)
+		}
+		for i, name := range []string{"personal", "work"} {
+			item := menu.Items[i]
+			if item.Value != "/connect telegram "+action+" "+name || item.Label != name || !item.Submit {
+				t.Errorf("%s item %d = %+v", action, i, item)
+			}
+		}
+	}
+	menu, ok := ConnectorCommandMenu("telegram", []string{"use"}, nil)
+	if !ok || len(menu.Items) != 0 || menu.Empty == "" {
+		t.Fatalf("empty profile menu = %+v, ok=%v", menu, ok)
+	}
+	menu, ok = ConnectorCommandMenu("qqbot", []string{"sandbox"}, nil)
+	if !ok || len(menu.Items) != 2 || menu.Items[0].Value != "/connect qqbot sandbox on" || menu.Items[1].Value != "/connect qqbot sandbox off" || !menu.Items[0].Submit || !menu.Items[1].Submit {
+		t.Fatalf("sandbox menu = %+v, ok=%v", menu, ok)
+	}
+}
+
+func TestConnectorCommandMenusDoNotCaptureDirectArguments(t *testing.T) {
+	for _, args := range [][]string{{"add"}, {"status"}, {"add", "123:secret"}, {"token", "personal", "123:secret"}, {"use", "personal"}} {
+		if menu, ok := ConnectorCommandMenu("telegram", args, []string{"personal"}); ok {
+			t.Fatalf("direct args %q returned menu %+v", args, menu)
+		}
+	}
+}
+
 func TestFormatMenuIncludesDescriptionsAndFallbackHint(t *testing.T) {
 	text := FormatMenu(&MenuPrompt{Title: "Models", Choices: []MenuChoice{{Label: "fast", Description: "low latency"}}})
 	if text != "Models\n\n1. fast — low latency\n\n回复序号进行选择。" {

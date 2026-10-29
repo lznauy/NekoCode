@@ -1,6 +1,46 @@
 package wecom
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+)
+
+func TestHandleCommandTypoDoesNotRunDefaultConnect(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := Config{BotID: "bot", Secret: "secret"}
+	cfg.finishPairing("owner", "chat")
+	if err := saveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	conn := New(nil)
+	got, err := conn.HandleCommand(context.Background(), []string{"conect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "Unknown WeCom command") || !strings.Contains(got, "Usage:") {
+		t.Fatalf("typo response = %q, want unknown command and usage", got)
+	}
+	if conn.base.IsRunning() {
+		t.Fatal("typo started the default connection")
+	}
+}
+
+func TestHandleCommandExplicitConnectMatchesEmptyArgs(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	conn := New(nil)
+	empty, err := conn.HandleCommand(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	explicit, err := conn.HandleCommand(context.Background(), []string{"connect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explicit != empty {
+		t.Fatalf("explicit connect = %q, empty args = %q", explicit, empty)
+	}
+}
 
 func TestConfigPairingLifecycle(t *testing.T) {
 	cfg := Config{BotID: "bot", Secret: "secret"}

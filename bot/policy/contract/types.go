@@ -8,20 +8,22 @@ const Version = 1
 type Point string
 
 const (
-	SessionStart  Point = "session_start"
-	SessionEnd    Point = "session_end"
-	RunStart      Point = "run_start"
-	RunEnd        Point = "run_end"
-	UserSubmit    Point = "user_submit"
-	PreModel      Point = "pre_model"
-	PreToolUse    Point = "pre_tool_use"
-	PostToolUse   Point = "post_tool_use"
-	PostToolBatch Point = "post_tool_batch"
-	Stop          Point = "stop"
-	PreCompact    Point = "pre_compact"
-	PostCompact   Point = "post_compact"
-	SubagentStart Point = "subagent_start"
-	SubagentStop  Point = "subagent_stop"
+	SessionStart      Point = "session_start"
+	SessionEnd        Point = "session_end"
+	RunStart          Point = "run_start"
+	RunEnd            Point = "run_end"
+	UserSubmit        Point = "user_submit"
+	PreModel          Point = "pre_model"
+	PreToolUse        Point = "pre_tool_use"
+	PostToolUse       Point = "post_tool_use"
+	PostToolBatch     Point = "post_tool_batch"
+	PermissionRequest Point = "permission_request"
+	PermissionDenied  Point = "permission_denied"
+	Stop              Point = "stop"
+	PreCompact        Point = "pre_compact"
+	PostCompact       Point = "post_compact"
+	SubagentStart     Point = "subagent_start"
+	SubagentStop      Point = "subagent_stop"
 )
 
 type Action string

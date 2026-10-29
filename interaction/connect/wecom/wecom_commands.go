@@ -7,13 +7,20 @@ import (
 	"time"
 
 	"nekocode/interaction/connect"
+	"nekocode/protocol"
 )
 
 const usageAdd = "Usage: /connect wecom add <bot-id> <secret>"
 
+func (c *Connector) CommandMenu(_ context.Context, args []string) (protocol.CommandMenu, bool) {
+	return connect.ConnectorCommandMenu("wecom", args, nil)
+}
+
 func (c *Connector) HandleCommand(ctx context.Context, args []string) (string, error) {
 	if len(args) > 0 {
 		switch strings.ToLower(args[0]) {
+		case "connect":
+			return c.connect(ctx)
 		case "add":
 			return c.add(ctx, args[1:])
 		case "pair":
@@ -34,6 +41,8 @@ func (c *Connector) HandleCommand(ctx context.Context, args []string) (string, e
 			return "WeCom connector stopped.", nil
 		case "status":
 			return c.status()
+		default:
+			return fmt.Sprintf("Unknown WeCom command %q.\nUsage: /connect wecom <connect|add|pair|unpair|reset|start|stop|status>", args[0]), nil
 		}
 	}
 	return c.connect(ctx)

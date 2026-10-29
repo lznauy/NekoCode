@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"nekocode/bot/extension/tool/runtime/netpolicy"
 	"nekocode/protocol"
 	"os"
 	"path/filepath"
@@ -17,12 +18,14 @@ import (
 )
 
 type Executor struct {
-	registry  *tools.Registry
-	workspace *workspace.Manager
-	state     *execution.ExecutionState
-	confirmFn protocol.ConfirmFunc
-	phaseFn   protocol.PhaseFunc
-	planMode  bool
+	registry           *tools.Registry
+	workspace          *workspace.Manager
+	state              *execution.ExecutionState
+	confirmFn          protocol.ConfirmFunc
+	confirmSource      func() protocol.ConfirmFunc
+	permissionObserver func(context.Context, PermissionEvent)
+	phaseFn            protocol.PhaseFunc
+	planMode           bool
 	// fullAccess is the "全接管" (full-takeover) permission mode: every tool
 	// call runs without approval prompts. Explicit deny rules still block —
 	// a deny is a hard user-configured rule, not an approval.
@@ -160,13 +163,26 @@ func (e *Executor) ExecutionState() *execution.ExecutionState { return e.state }
 func (e *Executor) SetConfirmFn(fn protocol.ConfirmFunc) {
 	e.fnMu.Lock()
 	e.confirmFn = fn
+	e.confirmSource = nil
+	e.fnMu.Unlock()
+}
+
+// SetConfirmSource resolves an optional live handler without fabricating a
+// denial callback when the application has no approval surface.
+func (e *Executor) SetConfirmSource(source func() protocol.ConfirmFunc) {
+	e.fnMu.Lock()
+	e.confirmSource = source
 	e.fnMu.Unlock()
 }
 
 func (e *Executor) ConfirmFn() protocol.ConfirmFunc {
 	e.fnMu.RLock()
-	defer e.fnMu.RUnlock()
-	return e.confirmFn
+	source, fn := e.confirmSource, e.confirmFn
+	e.fnMu.RUnlock()
+	if source != nil {
+		return source()
+	}
+	return fn
 }
 
 func (e *Executor) SetPhaseFn(fn protocol.PhaseFunc) {
@@ -373,6 +389,16 @@ func (a escalationApproval) requestCoveredBy(req core.PermissionRequest) bool {
 	}
 	for _, cap := range req.Capabilities {
 		if !slices.Contains(a.predicted.Capabilities, cap) {
+			return false
+		}
+	}
+	if slices.Contains(req.Capabilities, core.CapNetOutbound) {
+		have, err := netpolicy.FromDetails(a.predicted.Details)
+		if err != nil {
+			return false
+		}
+		need, err := netpolicy.FromDetails(req.Details)
+		if err != nil || !netpolicy.Covers(have, need) {
 			return false
 		}
 	}

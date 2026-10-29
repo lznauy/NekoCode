@@ -41,12 +41,18 @@ type CallRelation struct {
 
 // Manager owns one workspace code index.
 type Manager struct {
-	mu      sync.RWMutex
-	indexer *indexerpkg.Indexer
-	syncer  *syncerpkg.Syncer
-	graph   *graphpkg.Graph
-	cwd     string
-	root    string
+	mu               sync.RWMutex
+	indexer          *indexerpkg.Indexer
+	syncer           *syncerpkg.Syncer
+	graph            *graphpkg.Graph
+	cwd              string
+	root             string
+	lease            *indexLease
+	closeOnce        sync.Once
+	closeErr         error
+	databaseCloseErr error
+	leaseOnce        sync.Once
+	leaseErr         error
 }
 
 func NewManager(cwd string) (*Manager, error) {
@@ -54,15 +60,24 @@ func NewManager(cwd string) (*Manager, error) {
 	if root == "" {
 		return &Manager{cwd: cwd}, nil
 	}
-	nekocodeDir := filepath.Join(root, ".nekocode")
-	if err := os.MkdirAll(nekocodeDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create .nekocode dir: %w", err)
+
+	lease, err := acquireIndexLease(root, false)
+	if err != nil {
+		return nil, err
 	}
-	idx, err := indexerpkg.NewIndexer(filepath.Join(nekocodeDir, "index.db"))
+	manager, err := newManagerWithLease(cwd, root, lease)
+	if err != nil {
+		_ = lease.close()
+	}
+	return manager, err
+}
+
+func newManagerWithLease(cwd, root string, lease *indexLease) (*Manager, error) {
+	idx, err := indexerpkg.NewIndexer(filepath.Join(root, ".nekocode", "index.db"))
 	if err != nil {
 		return nil, fmt.Errorf("open indexer: %w", err)
 	}
-	return &Manager{indexer: idx, cwd: cwd, root: root}, nil
+	return &Manager{indexer: idx, cwd: cwd, root: root, lease: lease}, nil
 }
 
 func (m *Manager) Init() error {
@@ -76,27 +91,49 @@ func (m *Manager) Init() error {
 	m.mu.Lock()
 	m.graph = graph
 	m.mu.Unlock()
+	if err := m.indexer.RecordSync(); err != nil {
+		return err
+	}
 
 	fileSyncer, err := syncerpkg.NewSyncer(m.indexer, m.root, &m.mu)
+	m.syncer = fileSyncer
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not start file syncer: %v\n", err)
 		return nil
 	}
-	m.syncer = fileSyncer
 	fileSyncer.SetGraph(graph)
 	fileSyncer.Start()
 	return nil
 }
 
 func (m *Manager) Close() error {
-	var syncErr error
-	if m.syncer != nil {
-		syncErr = m.syncer.Stop()
+	return m.close(true)
+}
+
+func (m *Manager) close(releaseLease bool) error {
+	m.closeOnce.Do(func() {
+		var syncErr error
+		if m.syncer != nil {
+			syncErr = m.syncer.Stop()
+		}
+		if m.indexer != nil {
+			m.databaseCloseErr = m.indexer.Close()
+		}
+		m.closeErr = errors.Join(syncErr, m.databaseCloseErr)
+	})
+	var leaseErr error
+	// Do not release database ownership if SQLite could not be closed.
+	if releaseLease && m.databaseCloseErr == nil {
+		leaseErr = m.releaseLease()
 	}
-	if m.indexer != nil {
-		return errors.Join(syncErr, m.indexer.Close())
-	}
-	return syncErr
+	return errors.Join(m.closeErr, leaseErr)
+}
+
+func (m *Manager) releaseLease() error {
+	m.leaseOnce.Do(func() {
+		m.leaseErr = m.lease.close()
+	})
+	return m.leaseErr
 }
 
 func (m *Manager) Rebuild() error {

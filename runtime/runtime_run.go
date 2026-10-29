@@ -207,7 +207,7 @@ func (h runHost) Confirm(request ConfirmRequest) ConfirmReply {
 		}
 	})
 	if !ok || wait == nil {
-		return ConfirmReply{Allowed: false}
+		return ConfirmReply{Cancelled: true}
 	}
 	reply := wait()
 	if waiting {

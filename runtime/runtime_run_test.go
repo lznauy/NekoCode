@@ -502,6 +502,45 @@ func TestManagerExposesStructuredCommandMenu(t *testing.T) {
 	}
 }
 
+type connectorMenuStub struct {
+	statusPublishingConnector
+	calls int
+}
+
+func (c *connectorMenuStub) CommandMenu(_ context.Context, args []string) (CommandMenu, bool) {
+	c.calls++
+	if len(args) == 0 {
+		return CommandMenu{Title: "Demo actions", Items: []CommandMenuItem{{Value: "/connect demo use", Label: "use"}}}, true
+	}
+	if len(args) == 1 && args[0] == "use" {
+		return CommandMenu{Title: "Demo profiles", Items: []CommandMenuItem{{Value: "/connect demo use personal", Label: "personal", Submit: true}}}, true
+	}
+	return CommandMenu{}, false
+}
+
+func TestManagerDelegatesNestedConnectorMenusButNotDirectArguments(t *testing.T) {
+	rt := newTestRuntime(&testBot{})
+	conn := &connectorMenuStub{}
+	rt.RegisterConnector("demo", func(runtime ConnectorRuntime) Connector {
+		conn.statusPublishingConnector = statusPublishingConnector{rt: runtime}
+		return conn
+	})
+	menu, ok := rt.CommandMenu(context.Background(), "/connect demo")
+	if !ok || len(menu.Items) != 1 || menu.Items[0].Value != "/connect demo use" || menu.Items[0].Submit {
+		t.Fatalf("actions menu = %+v, ok=%v", menu, ok)
+	}
+	menu, ok = rt.CommandMenu(context.Background(), "/connect demo use")
+	if !ok || len(menu.Items) != 1 || menu.Items[0].Value != "/connect demo use personal" || !menu.Items[0].Submit {
+		t.Fatalf("profiles menu = %+v, ok=%v", menu, ok)
+	}
+	if menu, ok := rt.CommandMenu(context.Background(), "/connect demo token super-secret"); ok {
+		t.Fatalf("direct credentials returned a menu: %+v", menu)
+	}
+	if conn.calls != 2 {
+		t.Fatalf("menu provider calls = %d, want 2", conn.calls)
+	}
+}
+
 func TestManagerBuildsConnectorMenusFromRuntimeState(t *testing.T) {
 	rt := newTestRuntime(&testBot{})
 	rt.RegisterConnector("demo", func(runtime ConnectorRuntime) Connector {

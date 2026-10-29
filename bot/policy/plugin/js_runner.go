@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"nekocode/bot/policy/contract"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -16,9 +17,14 @@ const maxPluginReadFileBytes = 64 * 1024
 
 func runPluginJS(pluginRoot string, event Event, action hookAction) (*Result, error) {
 	event = contract.NormalizeEvent(event)
+	root, err := os.OpenRoot(pluginRoot)
+	if err != nil {
+		return nil, fmt.Errorf("open plugin root: %w", err)
+	}
+	defer root.Close()
 	program := action.program
 	if program == nil {
-		source, name, err := jsSource(pluginRoot, action)
+		source, name, err := jsSource(root, action)
 		if err != nil {
 			return nil, err
 		}
@@ -62,7 +68,7 @@ func runPluginJS(pluginRoot string, event Event, action hookAction) (*Result, er
 		return nil, fmt.Errorf("set console: %w", err)
 	}
 	if err := vm.Set("readFile", func(path string) (string, error) {
-		return readPluginFile(pluginRoot, path)
+		return readPluginFile(root, path)
 	}); err != nil {
 		return nil, fmt.Errorf("set readFile: %w", err)
 	}
@@ -109,7 +115,7 @@ func eventObject(event Event) (map[string]any, error) {
 	return out, err
 }
 
-func jsSource(pluginRoot string, action hookAction) (source, name string, err error) {
+func jsSource(root *os.Root, action hookAction) (source, name string, err error) {
 	if len(action.Code) > maxPluginSourceBytes {
 		return "", "", fmt.Errorf("JS source exceeds 1 MiB")
 	}
@@ -119,11 +125,11 @@ func jsSource(pluginRoot string, action hookAction) (source, name string, err er
 	if action.Path == "" {
 		return "", "", fmt.Errorf("js hook requires code or path")
 	}
-	path, err := resolvePluginPath(pluginRoot, action.Path)
+	path, err := resolvePluginPath(action.Path)
 	if err != nil {
 		return "", "", err
 	}
-	data, err := readLimitedFile(path, maxPluginSourceBytes)
+	data, err := readLimitedFile(root, path, maxPluginSourceBytes)
 	if err != nil {
 		return "", "", err
 	}
@@ -212,38 +218,22 @@ func appendConsoleLog(logs *[]string, level string, args ...goja.Value) {
 	*logs = append(*logs, line)
 }
 
-func readPluginFile(pluginRoot, relPath string) (string, error) {
-	path, err := resolvePluginPath(pluginRoot, relPath)
+func readPluginFile(root *os.Root, relPath string) (string, error) {
+	path, err := resolvePluginPath(relPath)
 	if err != nil {
 		return "", err
 	}
-	data, err := readLimitedFile(path, maxPluginReadFileBytes)
+	data, err := readLimitedFile(root, path, maxPluginReadFileBytes)
 	if err != nil {
 		return "", fmt.Errorf("read file: %w", err)
 	}
 	return string(data), nil
 }
 
-func resolvePluginPath(pluginRoot, relPath string) (string, error) {
+func resolvePluginPath(relPath string) (string, error) {
 	clean := filepath.Clean(relPath)
 	if filepath.IsAbs(clean) || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || clean == ".." {
 		return "", fmt.Errorf("plugin file path must stay inside plugin root")
 	}
-	root, err := filepath.EvalSymlinks(pluginRoot)
-	if err != nil {
-		return "", fmt.Errorf("resolve plugin root: %w", err)
-	}
-	target := filepath.Join(root, clean)
-	resolved, err := filepath.EvalSymlinks(target)
-	if err != nil {
-		return "", fmt.Errorf("resolve plugin file: %w", err)
-	}
-	relative, err := filepath.Rel(root, resolved)
-	if err != nil {
-		return "", fmt.Errorf("check plugin file path: %w", err)
-	}
-	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
-		return "", fmt.Errorf("plugin file path must stay inside plugin root")
-	}
-	return resolved, nil
+	return clean, nil
 }

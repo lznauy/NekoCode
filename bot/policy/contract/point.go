@@ -26,6 +26,8 @@ var pointSpecs = []PointSpec{
 	{Point: PreToolUse, Name: "PreToolUse", CanReject: true, CanStop: true, DefaultGuard: true, ToolMatcher: true},
 	{Point: PostToolUse, Name: "PostToolUse", CanStop: true, ToolMatcher: true},
 	{Point: PostToolBatch, Name: "PostToolBatch", CanStop: true},
+	{Point: PermissionRequest, Name: "PermissionRequest", ToolMatcher: true},
+	{Point: PermissionDenied, Name: "PermissionDenied", ToolMatcher: true},
 	{Point: Stop, Name: "Stop", CanReject: true, CanStop: true, DefaultGuard: true},
 	{Point: PreCompact, Name: "PreCompact"},
 	{Point: PostCompact, Name: "PostCompact"},

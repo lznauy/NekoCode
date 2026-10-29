@@ -25,6 +25,13 @@ const skillListHeader = "## Available Skills (authoritative)\n\n" +
 // because the list is the first thing in the provider's cached prefix and any
 // byte change re-reads the entire history.
 func buildSkillListText(skills []*Skill, contextWindow int) string {
+	eligible := make([]*Skill, 0, len(skills))
+	for _, sk := range skills {
+		if !sk.DisableModelInvocation {
+			eligible = append(eligible, sk)
+		}
+	}
+	skills = eligible
 	total := len(skills)
 	if total == 0 {
 		return ""

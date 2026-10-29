@@ -3,6 +3,7 @@ package permission
 import (
 	"encoding/json"
 	"errors"
+	"nekocode/bot/extension/tool/runtime/netpolicy"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,6 +13,9 @@ import (
 )
 
 const permissionStoreVersion = 1
+
+// Older binaries must not interpret a scoped grant as broad net.outbound.
+const scopedNetworkCapability = "net.outbound.domains"
 
 // storeMu serializes read-modify-write cycles on the shared permissions file.
 // Every Executor owns a separate Store instance bound to the same project
@@ -49,12 +53,13 @@ type permissionProject struct {
 // intentionally minimal: effect + tool + capabilities + the workspace it was
 // granted for (for traceability) + the human-readable reason.
 type Grant struct {
-	Effect       string   `json:"effect"`
-	Tool         string   `json:"tool"`
-	Capabilities []string `json:"capabilities"`
-	WritePaths   []string `json:"writePaths,omitempty"`
-	Workspace    string   `json:"workspace,omitempty"`
-	Reason       string   `json:"reason,omitempty"`
+	Effect          string   `json:"effect"`
+	Tool            string   `json:"tool"`
+	Capabilities    []string `json:"capabilities"`
+	WritePaths      []string `json:"writePaths,omitempty"`
+	OutboundDomains []string `json:"outbound_domains"`
+	Workspace       string   `json:"workspace,omitempty"`
+	Reason          string   `json:"reason,omitempty"`
 }
 
 type WorkspaceRoot struct {
@@ -99,22 +104,35 @@ func (s *Store) find(tool string, req core.PermissionRequest, effect string, mat
 }
 
 func (s *Store) Allow(tool string, req core.PermissionRequest) error {
+	domains, err := netpolicy.FromDetails(req.Details)
+	if err != nil {
+		return err
+	}
 	tool = normalizeToolName(tool)
 	return s.mutate(func(f *permissionFile) bool {
 		p := f.Projects[s.root]
 		g := Grant{
-			Effect:       "allow",
-			Tool:         tool,
-			Capabilities: append([]string(nil), req.Capabilities...),
-			WritePaths:   WritePathsFromRequest(req),
-			Workspace:    s.root,
-			Reason:       req.Reason,
+			Effect:          "allow",
+			Tool:            tool,
+			Capabilities:    append([]string(nil), req.Capabilities...),
+			WritePaths:      WritePathsFromRequest(req),
+			OutboundDomains: domains,
+			Workspace:       s.root,
+			Reason:          req.Reason,
+		}
+		if domains != nil {
+			for i, capability := range g.Capabilities {
+				if capability == core.CapNetOutbound {
+					g.Capabilities[i] = scopedNetworkCapability
+				}
+			}
 		}
 		for _, existing := range p.Grants {
 			if existing.Effect == g.Effect && existing.Tool == g.Tool &&
 				existing.Workspace == g.Workspace &&
 				slices.Equal(existing.Capabilities, g.Capabilities) &&
-				slices.Equal(normalizeWritePaths(existing.WritePaths), g.WritePaths) {
+				slices.Equal(normalizeWritePaths(existing.WritePaths), g.WritePaths) &&
+				(existing.OutboundDomains == nil) == (g.OutboundDomains == nil) && slices.Equal(existing.OutboundDomains, g.OutboundDomains) {
 				return false
 			}
 		}

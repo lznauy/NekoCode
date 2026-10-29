@@ -11,6 +11,7 @@ import (
 
 // SubagentSummary is a bounded task projection shared by all UI adapters.
 type SubagentSummary struct {
+	Isolation     string                  `json:"isolation,omitempty"`
 	Recorded      bool                    `json:"recorded"`
 	Title         string                  `json:"title,omitempty"`
 	ID            string                  `json:"id"`

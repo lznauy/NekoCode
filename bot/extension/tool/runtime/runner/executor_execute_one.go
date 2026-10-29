@@ -51,6 +51,7 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 	tc = e.applySandboxProfile(tc)
 
 	phaseFn, confirmFn, planMode := e.callbacks()
+	confirmFn = e.observeConfirm(ctx, confirmFn)
 	if phaseFn != nil {
 		phaseFn(protocol.PhaseRunning + " " + resultName)
 	}
@@ -80,6 +81,7 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 	var preApproval *escalationApproval
 	dec := e.evaluatePermission(ctx, tc, predictedReq)
 	if dec.block {
+		e.observePermissionDenial(ctx, tc, dec.reason, predictedReq)
 		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: dec.reason}
 	} else if dec.prompt {
 		reply, ok := e.promptConfirm(tc, confirmFn, predictedReq, dec)
@@ -466,6 +468,7 @@ func (e *Executor) promptConfirm(tc core.ToolCallItem, confirmFn protocol.Confir
 			approval.Workspace = predicted.Workspace
 			approval.Sandbox = predicted.Sandbox
 			approval.WritePaths = predicted.WritePaths
+			approval.OutboundDomains = predicted.OutboundDomains
 		}
 		approval.Combined = true
 	}
@@ -545,8 +548,9 @@ func urlHostForRemember(raw string) string {
 
 func (e *Executor) callbacks() (protocol.PhaseFunc, protocol.ConfirmFunc, bool) {
 	e.fnMu.RLock()
-	defer e.fnMu.RUnlock()
-	return e.phaseFn, e.confirmFn, e.planMode
+	phase, plan := e.phaseFn, e.planMode
+	e.fnMu.RUnlock()
+	return phase, e.ConfirmFn(), plan
 }
 
 func (e *Executor) callTool(ctx context.Context, tool core.Tool, tc core.ToolCallItem) (output core.ToolOutput, execErr error) {

@@ -33,6 +33,11 @@ type Profile struct {
 	//   true            = native backend shares the host network namespace
 	Network bool
 
+	// Non-nil requires fail-closed domain isolation; empty denies all egress.
+	OutboundDomains []string
+	// Internal socket used only by the native supervisor.
+	EgressSocket string
+
 	// WritePaths are extra host directories bind-mounted as read-write
 	// inside the sandbox, in addition to Workspace. Use cases: package
 	// manager caches, authorized external project directories.

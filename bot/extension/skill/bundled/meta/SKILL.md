@@ -25,7 +25,7 @@ Ask one round, not more:
 
 - What does the skill do? (one sentence)
 - What tools does it need? (bash, read, write, edit, grep, glob, etc.)
-- Fork or inline? (fork for 5+ steps, heavy processing, or token-intensive work)
+- Should only explicit user selection load this skill? If so, set `disable-model-invocation: true`.
 - Output location? Default: `.nekocode/skills/<name>/SKILL.md` in current project.
 
 ### Step 2: Draft
@@ -36,22 +36,19 @@ Write the SKILL.md with this structure:
 ---
 name: <kebab-case>
 description: <one-line summary plus trigger guidance; this is what the model uses to decide when to invoke the skill>
-allowed-tools: [bash, read, write]  # if fork mode
-context: inline|fork
-agent: coder                         # if fork mode
-max_steps: N                         # if fork mode, default 4
-context_window: N                      # if fork mode, default 16000
+context: inline
+disable-model-invocation: false
 ---
 
-# <Title>
+# Title
 
 ## Steps
-1. First concrete action
-2. Second concrete action
-...
+
+1. Describe the concrete action and verification.
 
 ## Output
-<what the model produces, with format example>
+
+Describe the expected result and its location.
 ```
 
 ### Step 3: Validate
@@ -82,7 +79,7 @@ Check each item:
 - [ ] File references use relative paths (skill dir is the base)
 - [ ] Under 5K characters (reference material goes in auxiliary files)
 - [ ] One task per skill (no mixed concerns)
-- [ ] If fork mode: `allowed-tools`, `max_steps`, `context_window` are set
+- [ ] Only supported execution metadata is used: `context: inline` and optional `disable-model-invocation`
 
 ### Step 3: Report
 
@@ -99,7 +96,7 @@ N issues: N critical, N warning, N info
 ```
 
 Severity levels:
-- **[!]** — missing required fields, broken references, unsafe allowed-tools
+- **[!]** — missing required fields, broken references, unsupported execution fields
 - **[~]** — vague steps, description too generic
 - **[-]** — style issues, could be more concise, missing examples
 
@@ -147,13 +144,9 @@ description: Helps with deployment
 description: Deploy the project to production. Use when the user says deploy, release, ship, go live, or publish.
 ```
 
-### Fork for Heavy Work
+### Delegate Heavy Work
 
-Use `context: fork` when the skill:
-- Has 5+ sequential steps
-- Processes or generates many files
-- Needs to read extensive reference material
-- Would fill the main context window
+Skills load inline. Automatic `context: fork` is not supported. Use `task` with an Agent Profile for delegated work; configure tools and execution limits in that Profile. Manual-only skills cannot be preloaded through `task.skills` or Profile `skills`.
 
 ---
 
@@ -176,7 +169,7 @@ Use `context: fork` when the skill:
 |---------------|------|
 | Skill created but model never invokes it | `description` has no trigger keywords the user actually types |
 | Model follows steps literally but output is wrong | Steps are too abstract; add exact commands and output examples |
-| Fork mode skill hangs or times out | `max_steps` too low or `context_window` too small for the workload |
+| Skill fails to load | Check `/skills` for its file path and error; remove unsupported execution fields |
 | Auxiliary files not found | Model doesn't know skill dir; add explicit `read path/to/file` step |
 | Skill contradicts system prompt | System prompt rules always win; don't try to override core behavior |
 | Template written to skill dir instead of cwd | Say "write to `<name>` in the current directory", not "write to `<name>`" |

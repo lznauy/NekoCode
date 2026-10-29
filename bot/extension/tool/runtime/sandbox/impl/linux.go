@@ -19,6 +19,18 @@ func Run(ctx context.Context, command string, profile Profile, timeout time.Dura
 	// Validate the workspace up front so callers always get a clear
 	// "workspace is required" error rather than a confusing backend-specific
 	// failure (or an UnavailableError from a doomed landlock attempt).
+	if profile.OutboundDomains != nil {
+		if !isNativeAvailable() {
+			return "", NetworkIsolationError{Reason: "Linux native namespaces required"}
+		}
+		out, err := runNativeBash(ctx, command, profile, timeout)
+		if err != nil {
+			if _, ok := err.(UnavailableError); ok {
+				return "", NetworkIsolationError{Reason: err.Error()}
+			}
+		}
+		return out, err
+	}
 	if profile.Workspace == "" {
 		return "", fmt.Errorf("sandbox workspace is required")
 	}
@@ -55,6 +67,18 @@ func Run(ctx context.Context, command string, profile Profile, timeout time.Dura
 
 // Start launches a long-running command in the best available sandbox.
 func Start(ctx context.Context, command string, profile Profile) (*Process, error) {
+	if profile.OutboundDomains != nil {
+		if !isNativeAvailable() {
+			return nil, NetworkIsolationError{Reason: "Linux native namespaces required"}
+		}
+		p, err := startNativeBash(ctx, command, profile)
+		if err != nil {
+			if _, ok := err.(UnavailableError); ok {
+				return nil, NetworkIsolationError{Reason: err.Error()}
+			}
+		}
+		return p, err
+	}
 	if profile.Workspace == "" {
 		return nil, fmt.Errorf("sandbox workspace is required")
 	}

@@ -141,3 +141,29 @@ func TestApprovalHashesIgnoreDisplayPreview(t *testing.T) {
 		t.Fatal("real argument change did not affect identity")
 	}
 }
+
+func TestApprovalBrokerCancellationProvenance(t *testing.T) {
+	for _, mode := range []string{"deny", "cancel", "close"} {
+		t.Run(mode, func(t *testing.T) {
+			b := NewApprovalBroker(nil, core.SourceRef{}, nil)
+			wait := b.Register(protocol.ConfirmRequest{ToolName: "shell"})
+			switch mode {
+			case "deny":
+				if err := b.Decide(b.Pending()[0].ID, core.ApprovalDecision{}); err != nil {
+					t.Fatal(err)
+				}
+			case "cancel":
+				b.RejectAll()
+			case "close":
+				b.Close()
+			}
+			reply := wait()
+			if reply.Allowed || reply.Cancelled != (mode != "deny") {
+				t.Fatalf("%s reply=%+v", mode, reply)
+			}
+			if mode == "close" && !b.Request(protocol.ConfirmRequest{}).Cancelled {
+				t.Fatal("closed broker fabricated a decision")
+			}
+		})
+	}
+}

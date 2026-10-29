@@ -1,6 +1,7 @@
 package syncer
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -92,6 +93,45 @@ func TestSyncerIgnoresUnsupportedFiles(t *testing.T) {
 	defer graphMu.RUnlock()
 	if got := len(g.FindNodesByFile("notes.txt")); got != 0 {
 		t.Fatalf("unsupported file indexed %d nodes", got)
+	}
+}
+
+func TestNewSyncerFailureRetainsDegradedStatus(t *testing.T) {
+	originalNewWatcher := newWatcher
+	t.Cleanup(func() { newWatcher = originalNewWatcher })
+	injected := errors.New("injected watcher creation failure")
+	newWatcher = func() (*fsnotify.Watcher, error) { return nil, injected }
+
+	s, err := NewSyncer(nil, t.TempDir(), nil)
+	if !errors.Is(err, injected) {
+		t.Fatalf("NewSyncer() error = %v", err)
+	}
+	if s == nil {
+		t.Fatal("NewSyncer() discarded failed watcher status")
+	}
+	state, lastErr := s.Status()
+	if state != StateDegraded || !errors.Is(lastErr, injected) {
+		t.Fatalf("Status() = %q, %v", state, lastErr)
+	}
+	if err := s.Stop(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSyncerStatusRunningAndStopped(t *testing.T) {
+	s, err := NewSyncer(nil, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Start()
+	if state, lastErr := s.Status(); state != StateRunning || lastErr != nil {
+		t.Fatalf("running Status() = %q, %v", state, lastErr)
+	}
+	if err := s.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if state, lastErr := s.Status(); state != StateStopped || lastErr != nil {
+		t.Fatalf("stopped Status() = %q, %v", state, lastErr)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/extension/tool"
 	"nekocode/bot/extension/tool/runtime/core"
+	"nekocode/bot/extension/tool/runtime/execution"
 	"nekocode/bot/extension/tool/runtime/permission"
 	"nekocode/bot/extension/tool/runtime/runner"
 	"nekocode/bot/policy"
@@ -578,5 +579,92 @@ func TestSubagentPartialResultRetainsBudgetError(t *testing.T) {
 	}
 	if result == nil || result.Status != StatusPartial || result.Content != state.lastText {
 		t.Fatalf("partial findings were lost: %+v", result)
+	}
+}
+
+type limitedSummaryLLM struct{ scriptedLLM }
+
+func (*limitedSummaryLLM) GetMaxTokens() int { return 3000 }
+
+func TestSubagentKeepsCompactionModelWindow(t *testing.T) {
+	summary := &limitedSummaryLLM{}
+	engine := New(Config{LLM: &scriptedLLM{}, CompactionModel: summary, Tools: tools.New()})
+	mgr := engine.newContextManager(RunConfig{ContextWindow: 128000, CompactionWindow: 2000})
+	for range 5 {
+		mgr.Add("user", strings.Repeat("earlier evidence ", 1000))
+		mgr.Add("assistant", "Earlier analysis.")
+	}
+	mgr.Add("user", "Continue the task.")
+	_, err := mgr.Summarize(t.Context())
+	var budget *ctxmgr.RequestBudgetError
+	if !errors.As(err, &budget) || budget.Output != 3000 || summary.calls != 0 {
+		t.Fatalf("compaction used work-model window: calls=%d err=%v", summary.calls, err)
+	}
+}
+
+func TestSubagentPermissionHooksUseParentObserverAndChildActor(t *testing.T) {
+	gov := policy.New()
+	observed := 0
+	if err := gov.Register(policy.Hook{Name: "denied", Point: policy.PermissionDenied, On: func(state policy.State) *policy.Result {
+		observed++
+		if state.Facts().ActorID != "task-child" {
+			t.Errorf("actor=%q", state.Facts().ActorID)
+		}
+		return nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	engine := New(Config{LLM: &scriptedLLM{}, Tools: tools.New(testProxyTool{name: "shell"})})
+	executor, cleanup := engine.newExecutor(RunConfig{SubagentID: "task-child", Policy: gov, ConfirmFn: func(protocol.ConfirmRequest) protocol.ConfirmReply { return protocol.Deny() }})
+	defer cleanup()
+	executor.SetPermissionPolicy(permission.PermissionsDecl{Ask: []string{"shell"}}, t.TempDir(), t.TempDir())
+	result := executor.ExecuteBatch(t.Context(), []core.ToolCallItem{{ID: "call", Name: "shell", Args: map[string]any{"command": "fixture"}}})[0]
+	if result.Error == "" || observed != 1 {
+		t.Fatalf("events=%d result=%+v", observed, result)
+	}
+}
+
+func TestSubagentWithoutApprovalHandlerDoesNotReportUserDenial(t *testing.T) {
+	gov := policy.New()
+	events := 0
+	for _, point := range []policy.HookPoint{policy.PermissionRequest, policy.PermissionDenied} {
+		if err := gov.Register(policy.Hook{Name: string(point), Point: point, On: func(policy.State) *policy.Result { events++; return nil }}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	engine := New(Config{LLM: &scriptedLLM{}, Tools: tools.New(testProxyTool{name: "shell"})})
+	executor, cleanup := engine.newExecutor(RunConfig{SubagentID: "headless-child", Policy: gov})
+	defer cleanup()
+	executor.SetPermissionPolicy(permission.PermissionsDecl{Ask: []string{"shell"}}, t.TempDir(), t.TempDir())
+	executor.ExecuteBatch(t.Context(), []core.ToolCallItem{{ID: "call", Name: "shell", Args: map[string]any{"command": "fixture"}}})
+	if events != 0 {
+		t.Fatalf("missing callback fabricated %d approval events", events)
+	}
+}
+
+func TestIsolatedWorkspaceDoesNotShareFileState(t *testing.T) {
+	parent := execution.NewExecutionState()
+	root := t.TempDir()
+	parentPath := filepath.Join(root, "parent.txt")
+	childPath := filepath.Join(root, "child.txt")
+	for _, path := range []string{parentPath, childPath} {
+		if err := os.WriteFile(path, []byte("base"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parent.FileCache.Put(parentPath, []string{"base"}, 1, 1)
+	engine := &Engine{toolRegistry: tools.New()}
+	child, cleanup := engine.newExecutor(RunConfig{IsolatedWorkspace: true, SubagentID: "isolated", ToolState: parent})
+	state := child.ExecutionState()
+	if _, ok := state.FileCache.Lines(parentPath); ok {
+		t.Fatal("inherited parent read state")
+	}
+	if state.SnapshotStore == parent.SnapshotStore || state.Checkpoints != nil {
+		t.Fatal("shared parent snapshots or rewind")
+	}
+	state.FileCache.Put(childPath, []string{"base"}, 1, 1)
+	cleanup()
+	if _, ok := parent.FileCache.Lines(childPath); ok {
+		t.Fatal("merged isolated read state into parent")
 	}
 }

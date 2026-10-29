@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 
 	agentcore "nekocode/bot/agent"
@@ -175,7 +176,8 @@ func toSandboxDecl(input map[string]config.SandboxConfig) map[string]permission.
 	for rule, profile := range input {
 		output[rule] = permission.SandboxProfile{
 			SandboxMode: profile.SandboxMode, Network: profile.Network,
-			WritableRoots: append([]string(nil), profile.WritableRoots...),
+			WritableRoots:   append([]string(nil), profile.WritableRoots...),
+			OutboundDomains: slices.Clone(profile.OutboundDomains),
 		}
 	}
 	return output

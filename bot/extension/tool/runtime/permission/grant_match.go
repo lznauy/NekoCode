@@ -1,6 +1,7 @@
 package permission
 
 import (
+	"nekocode/bot/extension/tool/runtime/netpolicy"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,8 +11,18 @@ import (
 )
 
 func grantAllowsRequest(g Grant, req core.PermissionRequest) bool {
-	if !containsAllCapabilities(g.Capabilities, req.Capabilities) {
+	if !containsAllCapabilities(effectiveGrantCapabilities(g), req.Capabilities) {
 		return false
+	}
+	if hasCapability(req.Capabilities, core.CapNetOutbound) {
+		domains, err := netpolicy.FromDetails(req.Details)
+		if err != nil {
+			return false
+		}
+		have, err := netpolicy.Normalize(g.OutboundDomains)
+		if err != nil || !netpolicy.Covers(have, domains) {
+			return false
+		}
 	}
 	if !hasCapability(req.Capabilities, core.CapFsWritePath) {
 		return true
@@ -20,7 +31,7 @@ func grantAllowsRequest(g Grant, req core.PermissionRequest) bool {
 }
 
 func grantDeniesRequest(g Grant, req core.PermissionRequest) bool {
-	if !intersectsCapability(g.Capabilities, req.Capabilities) {
+	if !intersectsCapability(effectiveGrantCapabilities(g), req.Capabilities) {
 		return false
 	}
 	if !hasCapability(g.Capabilities, core.CapFsWritePath) || !hasCapability(req.Capabilities, core.CapFsWritePath) {
@@ -146,4 +157,14 @@ func normalizeWritePaths(paths []string) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+func effectiveGrantCapabilities(g Grant) []string {
+	caps := slices.Clone(g.Capabilities)
+	for i, capability := range caps {
+		if capability == scopedNetworkCapability && g.OutboundDomains != nil {
+			caps[i] = core.CapNetOutbound
+		}
+	}
+	return caps
 }

@@ -61,7 +61,7 @@ wecom/qqbot 的出站降级是平台限制而非未实现：降级策略是结�
 
 ### headless（NDJSON over stdio）
 
-用户消息的 `content` 数组支持三种 block，按出现顺序拼接：
+用户消息的 `content` 数组支持 text 和 image 两种 block，按出现顺序拼接：
 
 ```json
 {"type": "user", "uuid": "...", "message": {"role": "user", "content": [

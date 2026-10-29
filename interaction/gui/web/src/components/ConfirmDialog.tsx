@@ -183,6 +183,7 @@ function PermissionDetails({ entry, canRemember }: { entry: ConfirmEntry; canRem
     ['能力', approval?.capabilities?.join('、') ?? ''],
     ['范围', approval?.scope ?? ''],
     ['工作区', approval?.workspace ?? ''],
+    ['网络域名', approval?.outbound_domains != null ? (approval.outbound_domains.join('、') || '禁止联网') : ''],
     ['可写目录', approval?.write_paths?.join('、') ?? ''],
     ['命令类别', permissionText(entry, 'commandClass')],
     ['沙箱', approval?.sandbox ?? ''],

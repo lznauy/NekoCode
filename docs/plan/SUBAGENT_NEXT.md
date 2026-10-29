@@ -2,7 +2,7 @@
 
 > **主要读者：** NekoCode 项目开发者与维护者。本文只写**还没做**的子任务能力：要做什么、为什么、怎么算做完。已完成的能力写在现状文档里，不在本文重复。
 >
-> 更新日期：2026-10-25。完成后先把结果写进 [用户指南](../users/USER_GUIDE.md#查看子任务)、[数据目录](../users/DATA_DIRECTORY.md#subagents--子任务会话)、[Runtime 应用指南](../developers/RUNTIME_APP_GUIDE.md) 或 [Headless 契约](../developers/STREAM_JSON.md)，再把对应小节从本文删除。
+> 更新日期：2026-10-29。完成后先把结果写进 [用户指南](../users/USER_GUIDE.md#查看子任务)、[数据目录](../users/DATA_DIRECTORY.md#subagents--子任务会话)、[Runtime 应用指南](../developers/RUNTIME_APP_GUIDE.md) 或 [Headless 契约](../developers/STREAM_JSON.md)，再把对应小节从本文删除。
 
 ## 现状边界（只列决定后续取舍的事实）
 
@@ -10,7 +10,6 @@
 - 实时正文已经流式：`subagent_engine` 发出 `text_delta`/`reasoning_delta`/`message`，经 Runtime 事件推给 TUI（`interaction/tui/tasks_stream.go`）。这一条不必再做。
 - **没有删除入口**：`/sessions` 的 `d` 只在会话菜单里生效（`interaction/tui/model_handlers.go:382` 的 `requestSessionDelete` 要求输入框为 `/sessions` 且处于菜单态），任务浮层没有删除键，Runtime 也没有删除方法，任务目录只能随父会话一起清。
 - 工具输出只能看不能找：预览和分页读取有，搜索和导出没有。
-- 工作区不隔离：子 Agent 文件写入落在同一工作目录。
 - 各端能力不等价：Runtime/TUI 已有任务查询与详情；GUI、HTTP 没有对应接口；headless 只发事件，没有查询方法。
 
 ## 1. 全局任务列表（跨父会话只读）
@@ -51,19 +50,9 @@
 
 **算做完**：各端对同一任务显示一致状态或明确声明不支持；未知事件、迟到事件不污染已提交结果。
 
-## 5. 同仓库并发写隔离（worktree）
-
-**要做什么**：评估并实现可选的“子 Agent 在独立 worktree 中执行”，只有需要并行改同一仓库时才启用。
-
-**为什么**：现在两个 coder 任务同时改同一文件会互相覆盖，上下文隔离不等于文件隔离。
-
-**关键约束**：属于调度与权限设计，不能靠观测界面顺带承诺；要处理异常退出后的 worktree 回收，以及用户工作区里未提交改动的处理方式。与 [对比补齐方向](COMPARISON_GAPS.md) 的对应条目一起设计。
-
-**算做完**：两个 coder 任务改同一文件不互相覆盖；崩溃后残留 worktree 可识别并清理；未启用时的行为与现在一致。
-
 ## 顺序建议
 
-1 → 2 → 3 可以各自独立提交；4 依赖 1 的查询形态先稳定；5 单独评审，不与其他项混在同一个提交里。
+1 → 2 → 3 可以各自独立提交；4 依赖 1 的查询形态先稳定。
 
 ## 验收与测试的共同要求
 

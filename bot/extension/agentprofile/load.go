@@ -75,6 +75,8 @@ func parse(content string, hasTool func(string) bool) (Profile, error) {
 		Name        string    `yaml:"name"`
 		Description string    `yaml:"description"`
 		Base        string    `yaml:"base"`
+		Model       string    `yaml:"model"`
+		Isolation   string    `yaml:"isolation"`
 		Tools       toolNames `yaml:"tools"`
 		Skills      []string  `yaml:"skills"`
 		MaxSteps    int       `yaml:"max_steps"`
@@ -90,7 +92,10 @@ func parse(content string, hasTool func(string) bool) (Profile, error) {
 	if def.MaxSteps < 0 || def.MaxSteps > MaxSteps {
 		return Profile{}, fmt.Errorf("max_steps must be between 0 and %d", MaxSteps)
 	}
-	p := Profile{Name: def.Name, Description: strings.TrimSpace(def.Description), SystemPrompt: strings.TrimSpace(body), Tools: []string(def.Tools), Skills: def.Skills, MaxSteps: def.MaxSteps}
+	if def.Isolation != "" && def.Isolation != "shared" && def.Isolation != "worktree" {
+		return Profile{}, fmt.Errorf("isolation must be shared or worktree")
+	}
+	p := Profile{Isolation: def.Isolation, Model: strings.TrimSpace(def.Model), Name: def.Name, Description: strings.TrimSpace(def.Description), SystemPrompt: strings.TrimSpace(body), Tools: []string(def.Tools), Skills: def.Skills, MaxSteps: def.MaxSteps}
 	if p.SystemPrompt == "" {
 		return Profile{}, fmt.Errorf("agent instructions cannot be empty")
 	}

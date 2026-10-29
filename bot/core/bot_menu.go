@@ -5,17 +5,63 @@ import (
 
 	"nekocode/bot/command"
 	"nekocode/bot/config"
+	"nekocode/bot/worktree"
 	"nekocode/protocol"
 )
 
 func (b *Bot) registerCommandMenus(p *command.Parser) {
+	p.RegisterMenu("worktree", func(_ context.Context, cmd *command.Command) (protocol.CommandMenu, bool) {
+		if len(cmd.Args) == 0 {
+			return protocol.CommandMenu{Title: "Manage worktrees", Items: []protocol.CommandMenuItem{
+				{Value: "/worktree list", Label: "list", Description: "List retained worktrees", Submit: true},
+				{Value: "/worktree diff", Label: "diff", Description: "Show task changes"},
+				{Value: "/worktree apply", Label: "apply", Description: "Apply task changes"},
+				{Value: "/worktree remove", Label: "remove", Description: "Remove a retained worktree"},
+			}}, true
+		}
+		if len(cmd.Args) != 1 || cmd.Args[0] != "diff" && cmd.Args[0] != "apply" && cmd.Args[0] != "remove" {
+			return protocol.CommandMenu{}, false
+		}
+		action := cmd.Args[0]
+		infos, err := worktree.List(b.sess.CurrentID())
+		if err != nil {
+			return protocol.CommandMenu{Title: "Worktree tasks", Empty: err.Error()}, true
+		}
+		items := make([]protocol.CommandMenuItem, 0, len(infos))
+		for _, info := range infos {
+			items = append(items, protocol.CommandMenuItem{
+				Value: "/worktree " + action + " " + info.TaskID,
+				Label: info.TaskID, Description: info.Path, Submit: true,
+			})
+			if action == "remove" {
+				items = append(items, protocol.CommandMenuItem{
+					Value:       "/worktree remove " + info.TaskID + " --discard",
+					Label:       info.TaskID + " --discard",
+					Description: "WARNING: permanently discard all unapplied changes",
+					Submit:      true,
+				})
+			}
+		}
+		return protocol.CommandMenu{Title: "Worktree tasks", Empty: "No retained worktrees in this session", Items: items}, true
+	})
+
+	p.RegisterMenu("workspace", func(_ context.Context, cmd *command.Command) (protocol.CommandMenu, bool) {
+		if len(cmd.Args) != 0 {
+			return protocol.CommandMenu{}, false
+		}
+		return protocol.CommandMenu{Title: "Workspace", Items: []protocol.CommandMenuItem{
+			{Value: "/workspace", Label: "查看配置", Description: "Show project configuration", Submit: true},
+			{Value: "/workspace reload", Label: "reload", Description: "Refresh project configuration", Submit: true},
+		}}, true
+	})
+
 	p.RegisterMenu("model", func(_ context.Context, cmd *command.Command) (protocol.CommandMenu, bool) {
 		if len(cmd.Args) != 0 {
 			return protocol.CommandMenu{}, false
 		}
 		active := b.cfg.Active
-		items := make([]protocol.CommandMenuItem, 0, len(b.cfg.Models))
-		for _, model := range b.cfg.Models {
+		items := make([]protocol.CommandMenuItem, 0, len(b.cfg.AllModels()))
+		for _, model := range b.cfg.AllModels() {
 			items = append(items, protocol.CommandMenuItem{
 				Value: "/model " + model.Name, Label: model.Name,
 				Description: model.Provider + " / " + model.Model,

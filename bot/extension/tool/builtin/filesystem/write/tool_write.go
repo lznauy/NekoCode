@@ -77,7 +77,7 @@ func (t *WriteTool) Execute(ctx context.Context, args map[string]any) (core.Tool
 		return core.ToolOutput{}, fmt.Errorf("failed to write file: %w", err)
 	}
 	// Record snapshot for read/edit continuity within the session.
-	tag := execution.RecordSnapshot(safePath, content)
+	tag := execution.RecordSnapshotInContext(ctx, safePath, content)
 
 	diffOutput := formatWriteDiff(safePath, existing, content)
 	if diffOutput == "" {

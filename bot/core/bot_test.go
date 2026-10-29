@@ -28,7 +28,7 @@ func TestNewBuildsRunnableBot(t *testing.T) {
 		t.Fatal("New registered no commands")
 	}
 	menu, ok := b.CommandMenu(context.Background(), "/model")
-	if !ok || menu.Title != "Choose model" || len(menu.Items) != len(b.cfg.Models) || !menu.Items[0].Submit {
+	if !ok || menu.Title != "Choose model" || len(menu.Items) != len(b.cfg.AllModels()) || !menu.Items[0].Submit {
 		t.Fatalf("model command menu = %+v, %v", menu, ok)
 	}
 	effortMenu, ok := b.CommandMenu(context.Background(), "/effort")

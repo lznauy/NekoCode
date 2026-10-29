@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"nekocode/bot/agent/internal/kernel"
+	"nekocode/bot/agent/internal/toolpolicy"
 	"nekocode/bot/checkpoint"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/extension/tool"
@@ -50,8 +51,10 @@ type Output struct {
 // Interaction contains optional application callbacks used by agent tools.
 type Interaction struct {
 	Confirm protocol.ConfirmFunc
-	Ask     protocol.QuestionFunc
-	Todos   protocol.TodoFunc
+	// ConfirmSource overrides Confirm and may return nil when no handler exists.
+	ConfirmSource func() protocol.ConfirmFunc
+	Ask           protocol.QuestionFunc
+	Todos         protocol.TodoFunc
 }
 
 type agentDeps struct {
@@ -110,11 +113,12 @@ func New(ctx context.Context, cfg Config) *Agent {
 		gate: kernel.NewGate(defaultMaxRetries),
 	}
 	a.deps.gov = cfg.Policy
+	toolpolicy.ObservePermissions(a.deps.toolExecutor, cfg.Policy, "main")
 	a.deps.toolExecutor.SetMaxConcurrentTasks(cfg.MaxConcurrentSubagents)
 	a.deps.toolExecutor.ExecutionState().Checkpoints = cfg.Checkpoints
 	a.setOutput(cfg.Output)
 	a.interaction = cfg.Interaction
-	a.deps.toolExecutor.SetConfirmFn(a.confirm)
+	a.deps.toolExecutor.SetConfirmSource(a.confirmHandler)
 	a.loopRunner = newLoopRunner(a)
 	a.modelRunner = newModelRunner(a)
 	a.turnRunner = newTurnRunner(a)
@@ -348,10 +352,18 @@ func (a *Agent) ToolInteraction() (protocol.QuestionFunc, protocol.TodoFunc) {
 	return a.ask, a.updateTodos
 }
 
-func (a *Agent) confirm(req protocol.ConfirmRequest) protocol.ConfirmReply {
+func (a *Agent) confirmHandler() protocol.ConfirmFunc {
 	a.interactionMu.RLock()
-	fn := a.interaction.Confirm
+	interaction := a.interaction
 	a.interactionMu.RUnlock()
+	if interaction.ConfirmSource != nil {
+		return interaction.ConfirmSource()
+	}
+	return interaction.Confirm
+}
+
+func (a *Agent) confirm(req protocol.ConfirmRequest) protocol.ConfirmReply {
+	fn := a.confirmHandler()
 	if fn == nil {
 		return protocol.Deny()
 	}

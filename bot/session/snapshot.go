@@ -20,7 +20,9 @@ import (
 )
 
 type Snapshot struct {
-	Subagent *SubagentMetadata `json:"subagent,omitempty"`
+	Subagent    *SubagentMetadata `json:"subagent,omitempty"`
+	ForkedFrom  string            `json:"forked_from,omitempty"`
+	ForkedAtSeq int               `json:"forked_at_seq,omitempty"`
 
 	FormatVersion int    `json:"format_version"`
 	ID            string `json:"id"`
@@ -76,11 +78,13 @@ type Snapshot struct {
 }
 
 type Meta struct {
-	ID        string `json:"id"`
-	CWD       string `json:"cwd"`
-	CreatedAt int64  `json:"created_at"`
-	UpdatedAt int64  `json:"updated_at"`
-	MsgCount  int    `json:"msg_count"`
+	ID                string `json:"id"`
+	CWD               string `json:"cwd"`
+	CreatedAt         int64  `json:"created_at"`
+	UpdatedAt         int64  `json:"updated_at"`
+	MsgCount          int    `json:"msg_count"`
+	ForkedFrom        string `json:"forked_from,omitempty"`
+	ForkSourceDeleted bool   `json:"fork_source_deleted,omitempty"`
 }
 
 func dir() string {
@@ -382,6 +386,7 @@ type sessionMeta struct {
 	CWD           string          `json:"cwd"`
 	CreatedAt     int64           `json:"created_at"`
 	UpdatedAt     int64           `json:"updated_at"`
+	ForkedFrom    string          `json:"forked_from,omitempty"`
 	FormatVersion int             `json:"format_version"`
 	Messages      json.RawMessage `json:"messages"`
 	TranscriptSeq int             `json:"transcript_seq,omitempty"`
@@ -415,7 +420,7 @@ func loadMeta(id string) (Meta, error) {
 	return Meta{
 		ID: sm.ID, CWD: sm.CWD,
 		CreatedAt: sm.CreatedAt, UpdatedAt: sm.UpdatedAt,
-		MsgCount: max(messageCount, sm.TranscriptSeq),
+		MsgCount: max(messageCount, sm.TranscriptSeq), ForkedFrom: sm.ForkedFrom,
 	}, nil
 }
 
@@ -423,6 +428,12 @@ func list() []Meta {
 	entries, err := os.ReadDir(dir())
 	if err != nil {
 		return nil
+	}
+	directories := make(map[string]struct{}, len(entries))
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			directories[e.Name()] = struct{}{}
+		}
 	}
 	var out []Meta
 	for _, e := range entries {
@@ -432,6 +443,10 @@ func list() []Meta {
 		m, err := loadMeta(e.Name())
 		if err != nil {
 			continue
+		}
+		if m.ForkedFrom != "" {
+			_, sourceExists := directories[m.ForkedFrom]
+			m.ForkSourceDeleted = !sourceExists
 		}
 		out = append(out, m)
 	}

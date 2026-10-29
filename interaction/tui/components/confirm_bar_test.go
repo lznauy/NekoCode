@@ -170,18 +170,19 @@ func TestCombinedApprovalShowsCommandRiskAndCapabilities(t *testing.T) {
 		},
 		Kind: controlruntime.ConfirmKindPermission,
 		Approval: &controlruntime.ApprovalContext{
-			Risk:         "dynamic shell execution",
-			Reason:       "command requests sandbox profile: net.outbound",
-			Capabilities: []string{"net.outbound"},
-			Scope:        controlruntime.ApprovalScopeProject,
-			Structures:   []string{"command_substitution", "shell_command_string"},
-			WritePaths:   []string{"/tmp/cache"},
-			Combined:     true,
+			Risk:            "dynamic shell execution",
+			Reason:          "command requests sandbox profile: net.outbound",
+			Capabilities:    []string{"net.outbound"},
+			Scope:           controlruntime.ApprovalScopeProject,
+			Structures:      []string{"command_substitution", "shell_command_string"},
+			WritePaths:      []string{"/tmp/cache"},
+			OutboundDomains: []string{"registry.npmjs.org"},
+			Combined:        true,
 		},
 	}, nil)
 
 	view := cb.View(100, 40)
-	for _, want := range []string{"执行确认", `bash -c`, "命令替换", "Shell -c", "出站网络", "/tmp/cache", "始终允许"} {
+	for _, want := range []string{"执行确认", `bash -c`, "命令替换", "Shell -c", "出站网络", "/tmp/cache", "registry.npmjs.org", "始终允许"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("combined approval missing %q:\n%s", want, view)
 		}

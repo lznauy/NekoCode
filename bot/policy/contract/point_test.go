@@ -8,7 +8,7 @@ func TestPointControlCompatibility(t *testing.T) {
 	guards := map[Point]bool{UserSubmit: true, PreModel: true, PreToolUse: true, Stop: true}
 	post := map[Point]bool{PostToolUse: true, PostToolBatch: true}
 	points := Points()
-	if len(points) != 14 {
+	if len(points) != 16 {
 		t.Fatalf("unexpected canonical point count: %d", len(points))
 	}
 	names, ids := map[string]bool{}, map[Point]bool{}

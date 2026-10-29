@@ -154,3 +154,9 @@ func (m *Manager) RegisterTool() {
 	m.tools.Unregister("skill")
 	m.tools.Register(newSkillTool(m.reg))
 }
+
+// ForModel resolves a skill for automatic invocation or delegated preloading.
+func (m *Manager) ForModel(name string) (*Skill, error) { return m.reg.ForModel(name) }
+
+// LoadErrors returns an independent snapshot of invalid skill files.
+func (m *Manager) LoadErrors() map[string]string { return m.reg.LoadErrors() }

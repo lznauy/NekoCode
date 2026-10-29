@@ -24,7 +24,7 @@ func (a *adapter) wireTaskLister(rt *controlruntime.Runtime) {
 		}
 		out := taskbridge.TaskPage{SessionID: page.SessionID, Total: page.Total, NextOffset: page.NextOffset, HasMore: page.HasMore, Items: make([]taskbridge.TaskSummary, 0, len(page.Items))}
 		for _, item := range page.Items {
-			summary := taskbridge.TaskSummary{Recorded: item.Recorded, ID: item.ID, Title: item.Title, Profile: item.Profile, Status: item.Status, Prompt: item.Prompt, Result: item.Result, RunCount: item.RunCount}
+			summary := taskbridge.TaskSummary{Isolation: item.Isolation, Recorded: item.Recorded, ID: item.ID, Title: item.Title, Profile: item.Profile, Status: item.Status, Prompt: item.Prompt, Result: item.Result, RunCount: item.RunCount}
 			if attempt := item.LatestAttempt; attempt != nil {
 				summary.LatestAttempt = &taskbridge.TaskAttemptSummary{ID: attempt.ID, Seq: attempt.Seq, Status: attempt.Status, Prompt: attempt.Prompt, Result: attempt.Result, TranscriptStart: attempt.TranscriptStart, TranscriptEnd: attempt.TranscriptEnd, TotalTokens: attempt.TotalTokens, CacheHitTokens: attempt.CacheHitTokens, CacheMissTokens: attempt.CacheMissTokens, ToolUseCount: attempt.ToolUseCount, ContextTokens: attempt.ContextTokens, ContextWindow: attempt.ContextWindow}
 			}
@@ -50,7 +50,7 @@ func (a *adapter) Subagents(parentID string) ([]controlruntime.SubagentSummary, 
 			converted := convertSubagentAttempt(*info.LatestAttempt)
 			latest = &converted
 		}
-		out = append(out, controlruntime.SubagentSummary{Recorded: info.Status != "unavailable", ID: info.ID, SessionID: info.ParentSessionID, Title: info.Title, Profile: info.Profile, Skills: info.Skills, Prompt: info.Prompt, Status: info.Status, RunCount: info.RunCount, Result: info.Result, Error: info.Error, TranscriptSeq: info.TranscriptSeq, CreatedAt: time.Unix(info.CreatedAt, 0), UpdatedAt: updated, LatestAttempt: latest})
+		out = append(out, controlruntime.SubagentSummary{Isolation: info.Isolation, Recorded: info.Status != "unavailable", ID: info.ID, SessionID: info.ParentSessionID, Title: info.Title, Profile: info.Profile, Skills: info.Skills, Prompt: info.Prompt, Status: info.Status, RunCount: info.RunCount, Result: info.Result, Error: info.Error, TranscriptSeq: info.TranscriptSeq, CreatedAt: time.Unix(info.CreatedAt, 0), UpdatedAt: updated, LatestAttempt: latest})
 	}
 	return out, nil
 }

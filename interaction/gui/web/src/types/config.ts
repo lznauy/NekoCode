@@ -1,3 +1,20 @@
+export interface ModelDefinition {
+  name?: string
+  model: string
+  protocol?: 'openai' | 'anthropic' | ''
+  reasoning_effort?: ModelConfig['reasoning_effort']
+  context_window?: number
+  vision?: boolean
+}
+
+export interface ProviderConfig {
+  name: string
+  base_url?: string
+  api_key?: string
+  protocol?: 'openai' | 'anthropic' | ''
+  models: Array<string | ModelDefinition>
+}
+
 export interface ModelConfig {
   name: string
   provider: string
@@ -7,6 +24,7 @@ export interface ModelConfig {
   protocol?: 'openai' | 'anthropic' | ''
   reasoning_effort?: '' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   context_window?: number
+  vision?: boolean
   profile?: ModelProfile
 }
 
@@ -78,7 +96,9 @@ export interface ConfigView {
   exists: boolean
   active: string
   auto_compact_percent: number
-  flash_model?: string
+  max_concurrent_subagents?: number
+  compaction_model?: string
+  providers: ProviderConfig[]
   models: ModelConfig[]
   image_gen_models?: ImageGenConfig[]
   image_understand_models?: ImageUnderstandConfig[]

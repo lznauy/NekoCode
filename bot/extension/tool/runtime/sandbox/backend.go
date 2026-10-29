@@ -17,6 +17,9 @@ import "nekocode/bot/extension/tool/runtime/sandbox/impl"
 //
 //   - Network: authorize network use (the native backend shares the host
 //     network namespace; a reduced fallback may already lack isolation).
+//   - OutboundDomains: optional exact HTTP/HTTPS domain ceiling, enforced by
+//     the Linux native backend; empty requires isolated offline execution.
+//     Unsupported backends reject it rather than falling back.
 //   - WritePaths: extra host directories bind-mounted as read-write.
 //
 // The sandbox package does NOT enforce a whitelist on WritePaths — the
@@ -45,3 +48,7 @@ type Process = impl.Process
 // package exposes the same error type callers match on, while the canonical
 // definition lives with the implementations.
 type UnavailableError = impl.UnavailableError
+
+// NetworkIsolationError reports a required egress boundary that cannot be
+// enforced. It must not be treated as permission to execute on the host.
+type NetworkIsolationError = impl.NetworkIsolationError

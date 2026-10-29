@@ -144,15 +144,14 @@ go build -o nekocode-tui ./cmd/tui
 mkdir -p ~/.nekocode
 cat > ~/.nekocode/config.json << 'EOF'
 {
-  "active": "deepseek",
-  "models": [
+  "active": "deepseek/deepseek-v4-flash",
+  "providers": [
     {
       "name": "deepseek",
-      "provider": "deepseek",
-      "api_key": "sk-你的Key写这里",
-      "model": "deepseek-v4-flash",
       "base_url": "https://api.deepseek.com/v1",
-      "protocol": "openai"
+      "api_key": "sk-你的Key写这里",
+      "protocol": "openai",
+      "models": ["deepseek-v4-flash"]
     }
   ]
 }

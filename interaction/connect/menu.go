@@ -269,6 +269,116 @@ func (m *CommandMenus) cleanupLocked(now time.Time) {
 	}
 }
 
+type connectorMenuAction struct {
+	name        string
+	description string
+	input       bool
+	profiles    bool
+	choices     []string
+}
+
+var connectorMenuTitles = map[string]string{
+	"telegram": "Telegram",
+	"feishu":   "Feishu",
+	"wecom":    "WeCom",
+	"qqbot":    "QQBot",
+}
+
+var connectorMenuActions = map[string][]connectorMenuAction{
+	"telegram": {
+		{name: "connect", description: "Connect using the active profile"},
+		{name: "add", description: "Add a bot: [name] <bot-token>", input: true},
+		{name: "token", description: "Add a bot: [name] <bot-token>", input: true},
+		{name: "profiles", description: "List bot profiles"},
+		{name: "list", description: "List bot profiles"},
+		{name: "use", description: "Switch active profile", profiles: true},
+		{name: "pair", description: "Pair a profile (active by default)", profiles: true},
+		{name: "unpair", description: "Unpair a profile (active by default)", profiles: true},
+		{name: "remove", description: "Remove a profile", profiles: true},
+		{name: "delete", description: "Remove a profile", profiles: true},
+		{name: "reset", description: "Reset Telegram configuration"},
+		{name: "status", description: "Show connector status"},
+		{name: "disconnect", description: "Stop the connector"},
+		{name: "stop", description: "Stop the connector"},
+	},
+	"feishu": {
+		{name: "connect", description: "Connect using saved configuration"},
+		{name: "add", description: "Save app credentials: <app-id> <app-secret>", input: true},
+		{name: "pair", description: "Pair your Feishu account"},
+		{name: "unpair", description: "Unpair your Feishu account"},
+		{name: "reset", description: "Reset Feishu configuration"},
+		{name: "status", description: "Show connector status"},
+		{name: "disconnect", description: "Stop the connector"},
+		{name: "stop", description: "Stop the connector"},
+	},
+	"wecom": {
+		{name: "connect", description: "Connect using saved configuration"},
+		{name: "add", description: "Save bot credentials: <bot-id> <secret>", input: true},
+		{name: "pair", description: "Pair your WeCom account"},
+		{name: "unpair", description: "Unpair your WeCom account"},
+		{name: "reset", description: "Reset WeCom configuration"},
+		{name: "start", description: "Start the connector"},
+		{name: "status", description: "Show connector status"},
+		{name: "disconnect", description: "Stop the connector"},
+		{name: "stop", description: "Stop the connector"},
+	},
+	"qqbot": {
+		{name: "add", description: "Save app credentials: <appid> <appsecret>", input: true},
+		{name: "sandbox", description: "Select sandbox or production", choices: []string{"on", "off"}},
+		{name: "start", description: "Start the connector"},
+		{name: "stop", description: "Stop the connector"},
+		{name: "disconnect", description: "Stop the connector"},
+		{name: "status", description: "Show connector status"},
+	},
+}
+
+// ConnectorCommandMenu exposes only finite connector actions. Actions that
+// need credentials stay as input prefixes and never include configured values.
+func ConnectorCommandMenu(platform string, args []string, profiles []string) (protocol.CommandMenu, bool) {
+	platform = strings.ToLower(platform)
+	actions, ok := connectorMenuActions[platform]
+	if !ok || len(args) > 1 {
+		return protocol.CommandMenu{}, false
+	}
+	prefix := "/connect " + platform
+	if len(args) == 0 {
+		items := make([]protocol.CommandMenuItem, 0, len(actions))
+		for _, action := range actions {
+			items = append(items, protocol.CommandMenuItem{
+				Value: prefix + " " + action.name, Label: action.name,
+				Description: action.description,
+				Submit:      !action.input && !action.profiles && len(action.choices) == 0,
+			})
+		}
+		return protocol.CommandMenu{Title: connectorMenuTitles[platform] + " actions", Items: items}, true
+	}
+	name := strings.ToLower(args[0])
+	for _, action := range actions {
+		if action.name != name {
+			continue
+		}
+		values := action.choices
+		if action.profiles {
+			values = append([]string(nil), profiles...)
+			sort.Strings(values)
+		}
+		if len(values) == 0 && !action.profiles {
+			return protocol.CommandMenu{}, false
+		}
+		items := make([]protocol.CommandMenuItem, 0, len(values))
+		for _, value := range values {
+			items = append(items, protocol.CommandMenuItem{
+				Value: prefix + " " + name + " " + value,
+				Label: value, Submit: true,
+			})
+		}
+		return protocol.CommandMenu{
+			Title: prefix + " " + name, Empty: "No profiles configured", Items: items,
+		}, true
+	}
+	return protocol.CommandMenu{}, false
+}
+
 // FormatMenu is the universal text fallback for transports without buttons.
 func FormatMenu(prompt *MenuPrompt) string {
 	if prompt == nil {

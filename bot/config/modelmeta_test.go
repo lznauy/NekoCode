@@ -71,10 +71,7 @@ func writeConfig(t *testing.T, data string) {
 
 func TestLoadAutoResolvesContextWindow(t *testing.T) {
 	// No per-model override: resolve from the active model's name.
-	writeConfig(t, `{
-		"active": "ds",
-		"models": [{"name": "ds", "provider": "deepseek", "model": "deepseek-v4-flash", "api_key": "k"}]
-	}`)
+	writeConfig(t, `{"active": "deepseek/ds", "providers": [{"name": "deepseek", "api_key": "k", "base_url": "", "protocol": "", "models": [{"name": "ds", "model": "deepseek-v4-flash"}]}]}`)
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -85,10 +82,7 @@ func TestLoadAutoResolvesContextWindow(t *testing.T) {
 }
 
 func TestLoadPerModelWindowWinsOverTable(t *testing.T) {
-	writeConfig(t, `{
-		"active": "ds",
-		"models": [{"name": "ds", "provider": "deepseek", "model": "deepseek-v4-flash", "api_key": "k", "context_window": 96000}]
-	}`)
+	writeConfig(t, `{"active": "deepseek/ds", "providers": [{"name": "deepseek", "api_key": "k", "base_url": "", "protocol": "", "models": [{"name": "ds", "model": "deepseek-v4-flash", "context_window": 96000}]}]}`)
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -99,10 +93,7 @@ func TestLoadPerModelWindowWinsOverTable(t *testing.T) {
 }
 
 func TestLoadUnknownModelFallsBackToDefault(t *testing.T) {
-	writeConfig(t, `{
-		"active": "x",
-		"models": [{"name": "x", "provider": "custom", "model": "my-finetune", "api_key": "k"}]
-	}`)
+	writeConfig(t, `{"active": "custom/x", "providers": [{"name": "custom", "api_key": "k", "base_url": "", "protocol": "", "models": [{"name": "x", "model": "my-finetune"}]}]}`)
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -113,13 +104,7 @@ func TestLoadUnknownModelFallsBackToDefault(t *testing.T) {
 }
 
 func TestSwitchModelReResolvesWindow(t *testing.T) {
-	writeConfig(t, `{
-		"active": "ds",
-		"models": [
-			{"name": "ds", "provider": "deepseek", "model": "deepseek-v4-flash", "api_key": "k"},
-			{"name": "claude", "provider": "anthropic", "model": "claude-haiku-4-5", "api_key": "k"}
-		]
-	}`)
+	writeConfig(t, `{"active": "deepseek/ds", "providers": [{"name": "deepseek", "api_key": "k", "base_url": "", "protocol": "", "models": [{"name": "ds", "model": "deepseek-v4-flash"}]}, {"name": "anthropic", "api_key": "k", "base_url": "", "protocol": "", "models": [{"name": "claude", "model": "claude-haiku-4-5"}]}]}`)
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +112,7 @@ func TestSwitchModelReResolvesWindow(t *testing.T) {
 	if got := cfg.EffectiveContextWindow(); got != 1048576 {
 		t.Fatalf("initial window = %d, want 1048576", got)
 	}
-	if !cfg.SwitchModel("claude") {
+	if !cfg.SwitchModel("anthropic/claude") {
 		t.Fatal("SwitchModel failed")
 	}
 	if got := cfg.EffectiveContextWindow(); got != 200000 {
@@ -138,10 +123,7 @@ func TestSwitchModelReResolvesWindow(t *testing.T) {
 func TestSaveOmitsUnsetGlobalWindow(t *testing.T) {
 	// A config that never pinned a window must not get one written back —
 	// otherwise auto-resolution would freeze into an explicit value.
-	writeConfig(t, `{
-		"active": "ds",
-		"models": [{"name": "ds", "provider": "deepseek", "model": "deepseek-v4-flash", "api_key": "k"}]
-	}`)
+	writeConfig(t, `{"active": "deepseek/ds", "providers": [{"name": "deepseek", "api_key": "k", "base_url": "", "protocol": "", "models": [{"name": "ds", "model": "deepseek-v4-flash"}]}]}`)
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)

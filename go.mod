@@ -17,6 +17,7 @@ require (
 	github.com/larksuite/oapi-sdk-go/v3 v3.9.9
 	github.com/mattn/go-runewidth v0.0.23
 	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/smacker/go-tree-sitter v0.0.0-20240827094217-dd81d9e9be82
 	github.com/tirdyhouse/sandbox v0.0.0-20260609072247-611c7f282d40

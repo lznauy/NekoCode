@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"nekocode/bot/extension/tool/runtime/netpolicy"
 	"strings"
 
 	tools "nekocode/bot/extension/tool"
@@ -55,6 +56,15 @@ func mergeSandboxArgs(args map[string]any, profile permission.SandboxProfile) ma
 	if profile.Network {
 		if _, ok := next["network"]; !ok {
 			next["network"] = true
+		}
+	}
+	if profile.OutboundDomains != nil {
+		if raw, ok := next["outbound_domains"]; ok {
+			if domains, err := netpolicy.Parse(raw); err == nil {
+				next["outbound_domains"] = netpolicy.Intersect(domains, profile.OutboundDomains)
+			}
+		} else {
+			next["outbound_domains"] = netpolicy.Intersect(nil, profile.OutboundDomains)
 		}
 	}
 	if len(profile.WritableRoots) > 0 {

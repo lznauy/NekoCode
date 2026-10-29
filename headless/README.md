@@ -13,6 +13,31 @@
 
 ---
 
+## 一次性脚本入口
+
+无需实现双向协议即可运行一个任务：
+
+```bash
+nekocode-headless exec "解释这个项目"
+printf '解释这个项目' | nekocode-headless -p --output-format json
+nekocode-headless exec "汇总代码问题" --output-schema result.schema.json --output-format json
+nekocode-headless exec --resume SESSION_ID "继续检查"
+```
+
+`nekocode-tui` 支持相同参数。参数中没有任务，或任务为 `-` 时，读取 stdin 到 EOF；已有参数任务时不等待 stdin 关闭。`exec` 接受一个完整任务参数，包含空格时需加引号；以 `-` 开头的任务可写成 `exec -- "-任务"`。
+
+默认文本模式只输出最终答案并补末尾换行；`--output-format json` 输出一个 JSON 对象，沿用下文 `result` 帧中的 `result`、`is_error`、`subtype`、`session_id`、`run_id`、`stop_reason` 等字段。工具输出、思考和流式预览不会进入 stdout。失败时文本 stdout 为空，诊断写 stderr。JSON 模式任务终止后尽可能返回错误对象；参数、输入、Schema 或运行时初始化错误，以及不可写的输出管道，不保证有 JSON 对象。
+
+`--output-schema PATH` 使用 JSON Schema 校验**最终答案**，而不是结果封装。使用本地 Schema 提示模型，然后本地校验；不使用供应商原生强约束、不自动重试。成功时 JSON 结果增加 `structured_output`（保留数字精度），文本模式输出原始 JSON 答案。禁止 Markdown 代码围栏、额外文本及多个 JSON 值。最终答案 JSON 解析失败、包含额外 JSON 值或尾随内容、以及 Schema 校验失败时，JSON `result.subtype` 均为 `error_output_validation`，退出码为 `1`；运行取消优先报告 `error_cancelled` 和退出码 `130`。启动前的 Schema 文件或编译错误仍为退出码 `2`，不会启动运行或输出结果对象。校验失败不会撤销工具执行或文件改动。
+
+Schema 必须是普通文件、最大 1 MiB，默认 Draft 2020-12，也可显式指定验证库支持的标准 Draft；启用 `format` 断言，外部 `$ref` 和自定义远程 meta-schema 均禁用，同一文档中的 `$defs` 引用可用。任务最大 8 MiB，追加 Schema 提示后的总输入同样受限。
+
+一次性入口不提供人工交互：出现审批或提问时拒绝请求并终止运行，不自动增加权限。退出码为成功 `0`、执行/交互/步数/答案校验失败 `1`、参数/输入/Schema 配置错误 `2`、取消 `130`。在原有配置下使用已有模型，无需额外服务或 API key。
+
+需要自行处理审批、多轮输入或增量事件时，使用 `--headless` 或显式 `--output-format stream-json`；这些原有协议入口行为保持不变，不能与 `--output-schema` 混用。
+
+---
+
 ## 两种接入方式
 
 | 方式 | 适用 | 入口 |

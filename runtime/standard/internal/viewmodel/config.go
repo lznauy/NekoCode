@@ -32,30 +32,11 @@ func modelConfigsToView(in []config.ModelConfig) []controlruntime.ModelConfig {
 	return out
 }
 
-func modelConfigsFromView(in []controlruntime.ModelConfig) []config.ModelConfig {
-	if in == nil {
-		return nil
-	}
-	out := make([]config.ModelConfig, 0, len(in))
-	for _, m := range in {
-		out = append(out, modelConfigFromView(m))
-	}
-	return out
-}
-
 func modelConfigToView(m config.ModelConfig) controlruntime.ModelConfig {
 	return controlruntime.ModelConfig{
 		Name: m.Name, Provider: m.Provider, APIKey: m.APIKey, Model: m.Model,
 		BaseURL: m.BaseURL, Protocol: m.Protocol, ReasoningEffort: m.ReasoningEffort,
-		ContextWindow: m.ContextWindow, Profile: ModelProfile(m),
-	}
-}
-
-func modelConfigFromView(m controlruntime.ModelConfig) config.ModelConfig {
-	return config.ModelConfig{
-		Name: m.Name, Provider: m.Provider, APIKey: m.APIKey, Model: m.Model,
-		BaseURL: m.BaseURL, Protocol: m.Protocol, ReasoningEffort: m.ReasoningEffort,
-		ContextWindow: m.ContextWindow,
+		Vision: cloneVision(m.Vision), ContextWindow: m.ContextWindow, Profile: ModelProfile(m),
 	}
 }
 
@@ -256,6 +237,38 @@ func stringMap(in map[string]string) map[string]string {
 	out := make(map[string]string, len(in))
 	for k, v := range in {
 		out[k] = v
+	}
+	return out
+}
+
+func cloneVision(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func providerConfigsToView(in []config.ProviderConfig) []controlruntime.ProviderConfig {
+	out := make([]controlruntime.ProviderConfig, len(in))
+	for i, provider := range in {
+		models := append([]config.ModelDefinition(nil), provider.Models...)
+		for j := range models {
+			models[j].Vision = cloneVision(models[j].Vision)
+		}
+		out[i] = controlruntime.ProviderConfig{Name: provider.Name, BaseURL: provider.BaseURL, APIKey: provider.APIKey, Protocol: provider.Protocol, Models: models}
+	}
+	return out
+}
+
+func providerConfigsFromView(in []controlruntime.ProviderConfig) []config.ProviderConfig {
+	out := make([]config.ProviderConfig, len(in))
+	for i, provider := range in {
+		models := append([]config.ModelDefinition(nil), provider.Models...)
+		for j := range models {
+			models[j].Vision = cloneVision(models[j].Vision)
+		}
+		out[i] = config.ProviderConfig{Name: provider.Name, BaseURL: provider.BaseURL, APIKey: provider.APIKey, Protocol: provider.Protocol, Models: models}
 	}
 	return out
 }

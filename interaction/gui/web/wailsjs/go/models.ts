@@ -235,6 +235,7 @@ export namespace runtime {
 	    protocol?: string;
 	    reasoning_effort?: string;
 	    context_window?: number;
+	    vision?: boolean;
 	    profile: ModelProfile;
 	
 	    static createFrom(source: any = {}) {
@@ -251,6 +252,7 @@ export namespace runtime {
 	        this.protocol = source["protocol"];
 	        this.reasoning_effort = source["reasoning_effort"];
 	        this.context_window = source["context_window"];
+	        this.vision = source["vision"];
 	        this.profile = this.convertValues(source["profile"], ModelProfile);
 	    }
 	
@@ -296,7 +298,9 @@ export namespace runtime {
 	    exists: boolean;
 	    active: string;
 	    auto_compact_percent: number;
-	    flash_model?: string;
+	    max_concurrent_subagents?: number;
+	    compaction_model?: string;
+	    providers: import("../../src/types/config").ProviderConfig[];
 	    models: ModelConfig[];
 	    image_gen_models?: ImageGenConfig[];
 	    image_understand_models?: ImageUnderstandConfig[];
@@ -315,7 +319,9 @@ export namespace runtime {
 	        this.exists = source["exists"];
 	        this.active = source["active"];
 	        this.auto_compact_percent = source["auto_compact_percent"];
-	        this.flash_model = source["flash_model"];
+	        this.max_concurrent_subagents = source["max_concurrent_subagents"];
+	        this.compaction_model = source["compaction_model"];
+	        this.providers = source["providers"];
 	        this.models = this.convertValues(source["models"], ModelConfig);
 	        this.image_gen_models = this.convertValues(source["image_gen_models"], ImageGenConfig);
 	        this.image_understand_models = this.convertValues(source["image_understand_models"], ImageUnderstandConfig);

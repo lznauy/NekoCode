@@ -1,6 +1,7 @@
 package viewmodel
 
 import (
+	"encoding/json"
 	"testing"
 
 	"nekocode/bot/config"
@@ -18,11 +19,9 @@ func TestModel(t *testing.T) {
 
 func TestConfigPreservesReasoningEffort(t *testing.T) {
 	source := config.Config{
-		Active:             "main",
+		Active:             "openai/main",
 		AutoCompactPercent: 75,
-		Models: []config.ModelConfig{{
-			Name: "main", Provider: "openai", Model: "gpt-5", ReasoningEffort: "medium",
-		}},
+		Providers:          []config.ProviderConfig{{Name: "openai", Models: []config.ModelDefinition{{Name: "main", Model: "gpt-5", ReasoningEffort: "medium"}}}},
 	}
 	view := Config(source)
 	if view.AutoCompactPercent != 75 || ToConfig(view).AutoCompactPercent != 75 {
@@ -34,8 +33,34 @@ func TestConfigPreservesReasoningEffort(t *testing.T) {
 	if got := view.Models[0].Profile.ReasoningEfforts; len(got) != 4 || got[0] != "minimal" {
 		t.Fatalf("config view supported efforts = %v", got)
 	}
-	if got := ToConfig(view).Models[0].ReasoningEffort; got != "medium" {
+	if got := ToConfig(view).AllModels()[0].ReasoningEffort; got != "medium" {
 		t.Fatalf("round-trip effort = %q", got)
+	}
+}
+
+func TestProviderViewRoundTripPreservesSourceAndIgnoresCatalogEdits(t *testing.T) {
+	var source config.Config
+	if err := json.Unmarshal([]byte(`{"auto_compact_percent":80,"providers":[{"name":"relay","api_key":"key","models":["model-a",{"name":"coder","model":"gpt-5","vision":false}]}],"active":"relay/coder","compaction_model":"relay/model-a"}`), &source); err != nil {
+		t.Fatal(err)
+	}
+	before, err := json.Marshal(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := Config(source)
+	view.Models[0].APIKey = "catalog-must-not-write-credentials"
+	view.Models[1].Vision = nil
+	restored := ToConfig(view)
+	after, err := json.Marshal(restored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatalf("config view changed source structure:\nbefore=%s\nafter=%s", before, after)
+	}
+	*view.Providers[0].Models[1].Vision = true
+	if *source.Providers[0].Models[1].Vision || *restored.Providers[0].Models[1].Vision {
+		t.Fatal("view shares model state with configuration")
 	}
 }
 
@@ -73,12 +98,21 @@ func TestModelProfileResolvesOverrideKnownAndDefaultWindows(t *testing.T) {
 	}
 }
 
+func TestSessionMeta(t *testing.T) {
+	got := SessionMetas([]session.Meta{{
+		ID: "s1", ForkedFrom: "source", ForkSourceDeleted: true,
+	}})
+	if len(got) != 1 || got[0].ForkedFrom != "source" || !got[0].ForkSourceDeleted {
+		t.Fatalf("session metadata view = %+v", got)
+	}
+}
+
 func TestSessionSnapshot(t *testing.T) {
 	got := SessionSnapshot(&session.Snapshot{
-		ID: "s1", CWD: "/work", CreatedAt: 1, UpdatedAt: 2,
+		ID: "s1", CWD: "/work", CreatedAt: 1, UpdatedAt: 2, ForkedFrom: "source",
 		Messages: []types.Message{{Role: "user", Content: "hello"}},
 	})
-	if got.ID != "s1" || got.CWD != "/work" || got.MsgCount != 1 {
+	if got.ID != "s1" || got.CWD != "/work" || got.MsgCount != 1 || got.ForkedFrom != "source" {
 		t.Fatalf("session view = %+v", got)
 	}
 	if got := SessionSnapshot(nil); got != (controlruntime.SessionMeta{}) {

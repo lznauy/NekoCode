@@ -17,9 +17,9 @@ func TestSaveDoesNotMutateInput(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
-			cfg := Config{Models: []ModelConfig{{Name: " default ", Provider: " openai ", Model: " model "}}}
+			cfg := Config{Providers: []ProviderConfig{{Name: " openai ", Models: []ModelDefinition{{Name: " default ", Model: " model "}}}}}
 			if !valid {
-				cfg.Models = append(cfg.Models, ModelConfig{Name: "broken"})
+				cfg.Providers[0].Models = append(cfg.Providers[0].Models, ModelDefinition{Name: "broken"})
 			}
 			before := cfg.Clone()
 			err := Save(cfg)
@@ -41,10 +41,7 @@ func TestSaveReplacesFileWithoutChangingOpenReaders(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
-			cfg := Config{Active: "first", Models: []ModelConfig{
-				{Name: "first", Provider: "openai", Model: "first"},
-				{Name: "second", Provider: "openai", Model: "second"},
-			}}
+			cfg := Config{Active: "openai/first", Providers: []ProviderConfig{{Name: "openai", Models: []ModelDefinition{{Name: "first", Model: "first"}, {Name: "second", Model: "second"}}}}}
 			if err := Save(cfg); err != nil {
 				t.Fatal(err)
 			}
@@ -66,7 +63,7 @@ func TestSaveReplacesFileWithoutChangingOpenReaders(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer reader.Close()
-			cfg.Active = "second"
+			cfg.Active = "openai/second"
 			if err := Save(cfg); err != nil {
 				t.Fatal(err)
 			}
@@ -78,7 +75,7 @@ func TestSaveReplacesFileWithoutChangingOpenReaders(t *testing.T) {
 				t.Error("saving changed a reader's existing configuration snapshot")
 			}
 			saved, err := Load()
-			if err != nil || saved.Active != "second" {
+			if err != nil || saved.Active != "openai/second" {
 				t.Fatalf("new configuration was not installed: %v", err)
 			}
 			info, err := os.Stat(Path())
@@ -163,7 +160,7 @@ func TestSaveResolvesDirectoryLinksBeforeParentTraversal(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
 			actualDir := t.TempDir()
 			actualPath := filepath.Join(actualDir, "settings.json")
-			cfg := Config{Active: "first", Models: []ModelConfig{{Name: "first", Provider: "openai", Model: "first"}, {Name: "second", Provider: "openai", Model: "second"}}}
+			cfg := Config{Active: "openai/first", Providers: []ProviderConfig{{Name: "openai", Models: []ModelDefinition{{Name: "first", Model: "first"}, {Name: "second", Model: "second"}}}}}
 			if err := Save(cfg); err != nil {
 				t.Fatal(err)
 			}
@@ -191,7 +188,7 @@ func TestSaveResolvesDirectoryLinksBeforeParentTraversal(t *testing.T) {
 			if err := os.Symlink(target, Path()); err != nil {
 				t.Fatal(err)
 			}
-			cfg.Active = "second"
+			cfg.Active = "openai/second"
 			if err := Save(cfg); err != nil {
 				t.Fatal(err)
 			}
@@ -199,7 +196,7 @@ func TestSaveResolvesDirectoryLinksBeforeParentTraversal(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Active != "second" {
+			if got.Active != "openai/second" {
 				t.Fatalf("saved configuration differs from linked target: active=%q", got.Active)
 			}
 		})

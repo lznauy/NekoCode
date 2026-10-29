@@ -80,3 +80,6 @@ func hasManifest(dir string) bool {
 	_, err := os.Stat(filepath.Join(dir, ".claude-plugin", "plugin.json"))
 	return err == nil
 }
+
+// ParseManifestData validates manifest bytes without installing or activating.
+func ParseManifestData(data []byte) (*Manifest, error) { return parseManifestData(data) }

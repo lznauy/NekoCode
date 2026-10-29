@@ -174,6 +174,7 @@ export interface ApprovalContext {
   workspace?: string
   sandbox?: string
   write_paths?: string[]
+  outbound_domains?: string[] | null
   combined?: boolean
 }
 
