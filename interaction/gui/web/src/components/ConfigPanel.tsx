@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { cn } from '../lib/classnames'
 import { isWailsEnvironment, safeGetConfig, safeResolveModelProfile, safeSaveConfig, safeSkillManagementView, safeMCPAuthorizationAction } from '../lib/wails'
@@ -143,10 +143,15 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
+  const cfgRef = useRef(cfg)
+  cfgRef.current = cfg
+  const panelGeneration = useRef(0)
   const mcpHealth = useMCPHealth(open && tab === 'mcp')
 
   useEffect(() => {
+    const generation = ++panelGeneration.current
     if (!open) return
+    setSaving(false)
     setTab(initialTab)
     setLoading(true)
     setError('')
@@ -157,8 +162,10 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
       setLoading(false)
       return
     }
+    let current = true
     safeGetConfig()
       .then((next) => {
+        if (!current) return
         if (!next) {
           setError('无法读取配置：Wails 配置接口没有返回数据')
           return
@@ -166,8 +173,9 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
         setCfg(editableConfig(next))
         setSelectedMcp(Object.keys(next.mcp_servers ?? {})[0] ?? '')
       })
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setLoading(false))
+      .catch((err: unknown) => { if (current) setError(err instanceof Error ? err.message : String(err)) })
+      .finally(() => { if (current) setLoading(false) })
+    return () => { current = false; if (panelGeneration.current === generation) panelGeneration.current++ }
   }, [initialTab, open])
 
   const validation = useMemo(() => validateConfig(cfg), [cfg])
@@ -325,6 +333,11 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
   }
 
   const renameMcpServer = (oldName: string, nextNameValue: string) => {
+    if (nextNameValue !== oldName && Object.prototype.hasOwnProperty.call(cfg?.mcp_servers ?? {}, nextNameValue)) {
+      setError(`MCP 服务名称重复：${nextNameValue}`)
+      return false
+    }
+    setError('')
     setCfg((prev) => {
       if (!prev) return prev
       const servers = { ...(prev.mcp_servers ?? {}) }
@@ -335,6 +348,7 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
       return { ...prev, mcp_servers: servers }
     })
     setSaved(false)
+    return true
   }
 
   const updateMcpServer = (name: string, patch: Partial<MCPServerConfig>) => {
@@ -366,7 +380,9 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
   }
 
   const save = async () => {
-    if (!cfg || validation) return
+    if (!cfg || validation || saving) return
+    const generation = panelGeneration.current
+    const submitted = cfg
     setSaving(true)
     setError('')
     setSaved(false)
@@ -381,17 +397,21 @@ export function ConfigPanel({ open, onClose, onSaved, initialTab = 'overview' }:
         mcp_servers: trimMcpServers(cfg.mcp_servers ?? {}),
       })
       if (!savedCfg) {
-        setError('保存失败：Wails 配置接口没有返回数据')
+        if (generation === panelGeneration.current) setError('保存失败：Wails 配置接口没有返回数据')
         return
       }
-      setCfg(editableConfig(savedCfg))
-      setSaved(true)
+      // The backend commit still refreshes global controls after this panel closes.
       onSaved()
+      if (generation !== panelGeneration.current) return
+      if (cfgRef.current === submitted) {
+        setCfg(editableConfig(savedCfg))
+        setSaved(true)
+      }
       return savedCfg
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (generation === panelGeneration.current) setError(err instanceof Error ? err.message : String(err))
     } finally {
-      setSaving(false)
+      if (generation === panelGeneration.current) setSaving(false)
     }
   }
 
@@ -796,7 +816,7 @@ function McpServerCard({
 }: {
   name: string
   server: MCPServerConfig
-  onRename: (name: string) => void
+  onRename: (name: string) => boolean
   onAuthorize: (action: string) => Promise<void>
   health?: import('../types/skills').MCPServerView
   onChange: (patch: Partial<MCPServerConfig>) => void
@@ -820,7 +840,7 @@ function McpServerCard({
     .join('\n')
   const commitName = () => {
     const next = draftName.trim()
-    if (next && next !== name) onRename(next)
+    if (next && next !== name) { if (!onRename(next)) setDraftName(name) }
     else setDraftName(name)
   }
 

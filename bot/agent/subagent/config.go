@@ -69,8 +69,10 @@ type RunConfig struct {
 	OnReasoning         func(string)
 	OnOutput            func(OutputEvent)
 	// OnMessage receives non-empty complete model text, not a per-step end marker.
-	OnMessage            func(string)
-	OnPhase              func(string)
+	OnMessage func(string)
+	OnPhase   func(string)
+	// AddTokens receives live estimates followed by signed corrections when
+	// provider usage arrives. Summing the deltas yields the per-run usage.
 	AddTokens            func(int, int)
 	RecordLLMUsage       func(providertypes.StreamUsage)
 	SessionID            string

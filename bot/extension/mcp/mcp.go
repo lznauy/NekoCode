@@ -195,47 +195,31 @@ func (m *Manager) consumeAuthOverrideLocked(id string, gen uint64) {
 // Add starts or replaces a server owned by id. Name remains the MCP tool
 // prefix visible to the model.
 func (m *Manager) Add(ctx context.Context, id, name string, cfg ServerConfig) error {
-	m.mu.Lock()
-	if m.closed {
+	var merged ServerConfig
+	var gen uint64
+	for {
+		m.mu.Lock()
+		if m.closed {
+			m.mu.Unlock()
+			return fmt.Errorf("manager is closed")
+		}
+		if owner := m.owners[name]; owner != "" && owner != id {
+			m.mu.Unlock()
+			return fmt.Errorf("server name %q is already owned by %s", name, owner)
+		}
+		merged, gen = m.applyAuthOverrideLocked(id, cfg)
+		if merged.interactive {
+			// Browser authorization must run outside the manager lock.
+			m.mu.Unlock()
+			return m.AddBackground(id, name, cfg)
+		}
+		previous := m.detachLocked(id)
+		if previous == nil {
+			break
+		}
 		m.mu.Unlock()
-		return fmt.Errorf("manager is closed")
-	}
-	if owner := m.owners[name]; owner != "" && owner != id {
-		m.mu.Unlock()
-		return fmt.Errorf("server name %q is already owned by %s", name, owner)
-	}
-	merged, _ := m.applyAuthOverrideLocked(id, cfg)
-	interactive := merged.interactive
-	m.mu.Unlock()
-	if interactive {
-		// An interactive start waits on a browser callback for minutes while
-		// holding the remote client's own locks. It must never hold m.mu:
-		// the watcher that publishes the auth link, health polls and the
-		// cancel path all need it, so running inline would deadlock the
-		// whole Manager. AddBackground runs the start outside the lock.
-		return m.AddBackground(id, name, cfg)
-	}
-
-	m.mu.Lock()
-	if m.closed {
-		m.mu.Unlock()
-		return fmt.Errorf("manager is closed")
-	}
-	if owner := m.owners[name]; owner != "" && owner != id {
-		m.mu.Unlock()
-		return fmt.Errorf("server name %q is already owned by %s", name, owner)
-	}
-	m.removeLocked(id)
-
-	merged, gen := m.applyAuthOverrideLocked(id, cfg)
-	if merged.interactive {
-		// A login override may have landed between the pre-check above and
-		// this re-lock (concurrent AuthorizationAction). Re-check under the
-		// lock: an interactive start waits on a browser callback for minutes
-		// and must never run while m.mu is held — the watcher that publishes
-		// the auth link, health polls and the cancel path all need it.
-		m.mu.Unlock()
-		return m.AddBackground(id, name, cfg)
+		m.closeDetached(previous)
+		// Closing may block. Recheck ownership and shutdown before registering.
 	}
 	client := newClient(name, merged)
 	m.servers[id] = &server{name: name, client: client, overrideGen: gen}
@@ -243,19 +227,20 @@ func (m *Manager) Add(ctx context.Context, id, name string, cfg ServerConfig) er
 	m.health[name] = Health{Status: StatusStarting}
 
 	if err := client.Start(ctx); err != nil {
-		m.removeLocked(id)
+		retired := m.detachLocked(id)
 		// The interactive flag only governs the authorize pass inside Start.
 		m.consumeAuthOverrideLocked(id, gen)
 		m.mu.Unlock()
+		m.closeDetached(retired)
 		return fmt.Errorf("start: %w", err)
 	}
 
 	defs, err := client.ListTools(ctx)
 	if err != nil {
-		_ = client.Close()
-		m.removeLocked(id)
+		retired := m.detachLocked(id)
 		m.consumeAuthOverrideLocked(id, gen)
 		m.mu.Unlock()
+		m.closeDetached(retired)
 		return fmt.Errorf("list tools: %w", err)
 	}
 
@@ -500,8 +485,11 @@ func (m *Manager) startBackground(ctx context.Context, id string, s *server) {
 // capability proxy's routing (the provider-visible schema is unaffected).
 func (m *Manager) Remove(id string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.removeLocked(id)
+	s := m.detachLocked(id)
+	m.mu.Unlock()
+	if s != nil {
+		m.closeDetached(s)
+	}
 }
 
 // Close stops every managed server.
@@ -635,20 +623,27 @@ func (m *Manager) Owner(name string) string {
 	return m.owners[name]
 }
 
-func (m *Manager) removeLocked(id string) {
+func (m *Manager) detachLocked(id string) *server {
 	s, ok := m.servers[id]
 	if !ok {
-		return
+		return nil
 	}
+	m.wg.Add(1)
 	if s.cancel != nil {
 		s.cancel()
 	}
-	_ = s.client.Close()
 	delete(m.servers, id)
 	if m.owners[s.name] == id {
 		delete(m.owners, s.name)
 		delete(m.health, s.name)
 	}
+	return s
+}
+
+// closeDetached completes the cleanup registered by detachLocked.
+func (m *Manager) closeDetached(s *server) {
+	defer m.wg.Done()
+	_ = s.client.Close()
 }
 
 // ListCapabilities renders the available servers and their tools in a

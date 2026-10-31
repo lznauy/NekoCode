@@ -1,10 +1,31 @@
+export namespace core {
+	
+	export class ImageAttachment {
+	    label: string;
+	    path: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageAttachment(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.label = source["label"];
+	        this.path = source["path"];
+	    }
+	}
+
+}
+
 export namespace protocol {
 	
 	export class CommandMenuItem {
+	    key?: string;
 	    value: string;
 	    label: string;
 	    description?: string;
 	    submit?: boolean;
+	    current?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new CommandMenuItem(source);
@@ -12,10 +33,12 @@ export namespace protocol {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
 	        this.value = source["value"];
 	        this.label = source["label"];
 	        this.description = source["description"];
 	        this.submit = source["submit"];
+	        this.current = source["current"];
 	    }
 	}
 	export class CommandMenu {
@@ -52,302 +75,7 @@ export namespace protocol {
 		    return a;
 		}
 	}
-
-}
-
-export namespace runtime {
-	export class ImageAttachment {
-	    label: string;
-	    path: string;
-
-	    static createFrom(source: any = {}) {
-	        return new ImageAttachment(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.label = source["label"];
-	        this.path = source["path"];
-	    }
-	}
 	
-	export class WorkspaceConfig {
-	    path: string;
-	    access?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new WorkspaceConfig(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.path = source["path"];
-	        this.access = source["access"];
-	    }
-	}
-	export class SandboxConfig {
-	    sandbox_mode?: string;
-	    network?: boolean;
-	    writable_roots?: string[];
-	
-	    static createFrom(source: any = {}) {
-	        return new SandboxConfig(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.sandbox_mode = source["sandbox_mode"];
-	        this.network = source["network"];
-	        this.writable_roots = source["writable_roots"];
-	    }
-	}
-	export class PermissionsConfig {
-	    allow?: string[];
-	    ask?: string[];
-	    deny?: string[];
-	    sandbox?: Record<string, SandboxConfig>;
-	
-	    static createFrom(source: any = {}) {
-	        return new PermissionsConfig(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.allow = source["allow"];
-	        this.ask = source["ask"];
-	        this.deny = source["deny"];
-	        this.sandbox = this.convertValues(source["sandbox"], SandboxConfig, true);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class MCPServerConfig {
-	    url?: string;
-	    oauth_client_id?: string;
-	    oauth_client_secret?: string;
-	    oauth_client_metadata_url?: string;
-	    oauth_callback_port?: number;
-	    command: string;
-	    args?: string[];
-	    env?: Record<string, string>;
-	    enabled: boolean;
-
-	    static createFrom(source: any = {}) {
-	        return new MCPServerConfig(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.url = source["url"];
-	        this.oauth_client_id = source["oauth_client_id"];
-	        this.oauth_client_secret = source["oauth_client_secret"];
-	        this.oauth_client_metadata_url = source["oauth_client_metadata_url"];
-	        this.oauth_callback_port = source["oauth_callback_port"];
-
-	        this.command = source["command"];
-	        this.args = source["args"];
-	        this.env = source["env"];
-	        this.enabled = source["enabled"];
-	    }
-	}
-	export class ImageGenConfig {
-	    name: string;
-	    provider: string;
-	    api_key: string;
-	    secret_key: string;
-	    base_url?: string;
-	    model?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new ImageGenConfig(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.provider = source["provider"];
-	        this.api_key = source["api_key"];
-	        this.secret_key = source["secret_key"];
-	        this.base_url = source["base_url"];
-	        this.model = source["model"];
-	    }
-	}
-	export class ImageUnderstandConfig {
-	    name: string;
-	    provider: string;
-	    api_key: string;
-	    model: string;
-	    base_url?: string;
-	    protocol?: string;
-
-	    static createFrom(source: any = {}) {
-	        return new ImageUnderstandConfig(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.provider = source["provider"];
-	        this.api_key = source["api_key"];
-	        this.model = source["model"];
-	        this.base_url = source["base_url"];
-	        this.protocol = source["protocol"];
-	    }
-	}
-	export class ModelProfile {
-	    context_window: number;
-	    context_window_source: string;
-	    reasoning_efforts?: string[];
-	
-	    static createFrom(source: any = {}) {
-	        return new ModelProfile(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.context_window = source["context_window"];
-	        this.context_window_source = source["context_window_source"];
-	        this.reasoning_efforts = source["reasoning_efforts"];
-	    }
-	}
-	export class ModelConfig {
-	    name: string;
-	    provider: string;
-	    api_key: string;
-	    model: string;
-	    base_url?: string;
-	    protocol?: string;
-	    reasoning_effort?: string;
-	    context_window?: number;
-	    vision?: boolean;
-	    profile: ModelProfile;
-	
-	    static createFrom(source: any = {}) {
-	        return new ModelConfig(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.provider = source["provider"];
-	        this.api_key = source["api_key"];
-	        this.model = source["model"];
-	        this.base_url = source["base_url"];
-	        this.protocol = source["protocol"];
-	        this.reasoning_effort = source["reasoning_effort"];
-	        this.context_window = source["context_window"];
-	        this.vision = source["vision"];
-	        this.profile = this.convertValues(source["profile"], ModelProfile);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class JevConfig {
-	    api_key?: string;
-	    model?: string;
-	    base_url?: string;
-	    keep_threshold?: number | null;
-	    enabled?: boolean | null;
-
-	    static createFrom(source: any = {}) { return new JevConfig(source); }
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.api_key = source["api_key"];
-	        this.model = source["model"];
-	        this.base_url = source["base_url"];
-	        this.keep_threshold = source["keep_threshold"];
-	        this.enabled = source["enabled"];
-	    }
-	}
-
-	export class ConfigView {
-	    jev?: JevConfig;
-	    path: string;
-	    exists: boolean;
-	    active: string;
-	    auto_compact_percent: number;
-	    max_concurrent_subagents?: number;
-	    compaction_model?: string;
-	    providers: import("../../src/types/config").ProviderConfig[];
-	    models: ModelConfig[];
-	    image_gen_models?: ImageGenConfig[];
-	    image_understand_models?: ImageUnderstandConfig[];
-	    mcp_servers?: Record<string, MCPServerConfig>;
-	    permissions?: PermissionsConfig;
-	    workspaces?: WorkspaceConfig[];
-	
-	    static createFrom(source: any = {}) {
-	        return new ConfigView(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.jev = this.convertValues(source["jev"], JevConfig);
-	        this.path = source["path"];
-	        this.exists = source["exists"];
-	        this.active = source["active"];
-	        this.auto_compact_percent = source["auto_compact_percent"];
-	        this.max_concurrent_subagents = source["max_concurrent_subagents"];
-	        this.compaction_model = source["compaction_model"];
-	        this.providers = source["providers"];
-	        this.models = this.convertValues(source["models"], ModelConfig);
-	        this.image_gen_models = this.convertValues(source["image_gen_models"], ImageGenConfig);
-	        this.image_understand_models = this.convertValues(source["image_understand_models"], ImageUnderstandConfig);
-	        this.mcp_servers = this.convertValues(source["mcp_servers"], MCPServerConfig, true);
-	        this.permissions = this.convertValues(source["permissions"], PermissionsConfig);
-	        this.workspaces = this.convertValues(source["workspaces"], WorkspaceConfig);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
 	export class ContextSegment {
 	    key: string;
 	    label: string;
@@ -446,6 +174,351 @@ export namespace runtime {
 		    return a;
 		}
 	}
+	export class ModelDefinition {
+	    name?: string;
+	    model: string;
+	    protocol?: string;
+	    reasoning_effort?: string;
+	    context_window?: number;
+	    vision?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelDefinition(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.model = source["model"];
+	        this.protocol = source["protocol"];
+	        this.reasoning_effort = source["reasoning_effort"];
+	        this.context_window = source["context_window"];
+	        this.vision = source["vision"];
+	    }
+	}
+
+}
+
+export namespace runtime {
+	
+	export class JevConfig {
+	    api_key?: string;
+	    model?: string;
+	    base_url?: string;
+	    keep_threshold?: number;
+	    enabled?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new JevConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.api_key = source["api_key"];
+	        this.model = source["model"];
+	        this.base_url = source["base_url"];
+	        this.keep_threshold = source["keep_threshold"];
+	        this.enabled = source["enabled"];
+	    }
+	}
+	export class WorkspaceConfig {
+	    path: string;
+	    access?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkspaceConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.access = source["access"];
+	    }
+	}
+	export class SandboxConfig {
+	    sandbox_mode?: string;
+	    network?: boolean;
+	    writable_roots?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new SandboxConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sandbox_mode = source["sandbox_mode"];
+	        this.network = source["network"];
+	        this.writable_roots = source["writable_roots"];
+	    }
+	}
+	export class PermissionsConfig {
+	    allow?: string[];
+	    ask?: string[];
+	    deny?: string[];
+	    sandbox?: Record<string, SandboxConfig>;
+	
+	    static createFrom(source: any = {}) {
+	        return new PermissionsConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.allow = source["allow"];
+	        this.ask = source["ask"];
+	        this.deny = source["deny"];
+	        this.sandbox = this.convertValues(source["sandbox"], SandboxConfig, true);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class MCPServerConfig {
+	    url?: string;
+	    headers?: Record<string, string>;
+	    oauth_client_id?: string;
+	    oauth_client_secret?: string;
+	    oauth_client_metadata_url?: string;
+	    oauth_callback_port?: number;
+	    command: string;
+	    args?: string[];
+	    env?: Record<string, string>;
+	    enabled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new MCPServerConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.url = source["url"];
+	        this.headers = source["headers"];
+	        this.oauth_client_id = source["oauth_client_id"];
+	        this.oauth_client_secret = source["oauth_client_secret"];
+	        this.oauth_client_metadata_url = source["oauth_client_metadata_url"];
+	        this.oauth_callback_port = source["oauth_callback_port"];
+	        this.command = source["command"];
+	        this.args = source["args"];
+	        this.env = source["env"];
+	        this.enabled = source["enabled"];
+	    }
+	}
+	export class ImageUnderstandConfig {
+	    name: string;
+	    provider: string;
+	    api_key: string;
+	    model: string;
+	    base_url?: string;
+	    protocol?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageUnderstandConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.provider = source["provider"];
+	        this.api_key = source["api_key"];
+	        this.model = source["model"];
+	        this.base_url = source["base_url"];
+	        this.protocol = source["protocol"];
+	    }
+	}
+	export class ImageGenConfig {
+	    name: string;
+	    provider: string;
+	    api_key: string;
+	    secret_key: string;
+	    base_url?: string;
+	    model?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageGenConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.provider = source["provider"];
+	        this.api_key = source["api_key"];
+	        this.secret_key = source["secret_key"];
+	        this.base_url = source["base_url"];
+	        this.model = source["model"];
+	    }
+	}
+	export class ModelProfile {
+	    context_window: number;
+	    context_window_source: string;
+	    reasoning_efforts?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelProfile(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.context_window = source["context_window"];
+	        this.context_window_source = source["context_window_source"];
+	        this.reasoning_efforts = source["reasoning_efforts"];
+	    }
+	}
+	export class ModelConfig {
+	    name: string;
+	    provider: string;
+	    api_key: string;
+	    model: string;
+	    base_url?: string;
+	    protocol?: string;
+	    reasoning_effort?: string;
+	    context_window?: number;
+	    vision?: boolean;
+	    profile: ModelProfile;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.provider = source["provider"];
+	        this.api_key = source["api_key"];
+	        this.model = source["model"];
+	        this.base_url = source["base_url"];
+	        this.protocol = source["protocol"];
+	        this.reasoning_effort = source["reasoning_effort"];
+	        this.context_window = source["context_window"];
+	        this.vision = source["vision"];
+	        this.profile = this.convertValues(source["profile"], ModelProfile);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ProviderConfig {
+	    name: string;
+	    base_url?: string;
+	    api_key?: string;
+	    protocol?: string;
+	    models: protocol.ModelDefinition[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ProviderConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.base_url = source["base_url"];
+	        this.api_key = source["api_key"];
+	        this.protocol = source["protocol"];
+	        this.models = this.convertValues(source["models"], protocol.ModelDefinition);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ConfigView {
+	    path: string;
+	    exists: boolean;
+	    active: string;
+	    auto_compact_percent: number;
+	    max_concurrent_subagents?: number;
+	    compaction_model?: string;
+	    providers: ProviderConfig[];
+	    models: ModelConfig[];
+	    image_gen_models?: ImageGenConfig[];
+	    image_understand_models?: ImageUnderstandConfig[];
+	    mcp_servers?: Record<string, MCPServerConfig>;
+	    permissions?: PermissionsConfig;
+	    workspaces?: WorkspaceConfig[];
+	    jev?: JevConfig;
+	
+	    static createFrom(source: any = {}) {
+	        return new ConfigView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.exists = source["exists"];
+	        this.active = source["active"];
+	        this.auto_compact_percent = source["auto_compact_percent"];
+	        this.max_concurrent_subagents = source["max_concurrent_subagents"];
+	        this.compaction_model = source["compaction_model"];
+	        this.providers = this.convertValues(source["providers"], ProviderConfig);
+	        this.models = this.convertValues(source["models"], ModelConfig);
+	        this.image_gen_models = this.convertValues(source["image_gen_models"], ImageGenConfig);
+	        this.image_understand_models = this.convertValues(source["image_understand_models"], ImageUnderstandConfig);
+	        this.mcp_servers = this.convertValues(source["mcp_servers"], MCPServerConfig, true);
+	        this.permissions = this.convertValues(source["permissions"], PermissionsConfig);
+	        this.workspaces = this.convertValues(source["workspaces"], WorkspaceConfig);
+	        this.jev = this.convertValues(source["jev"], JevConfig);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class DisplayBlock {
 	    toolName: string;
 	    args?: string;
@@ -523,6 +596,8 @@ export namespace runtime {
 	
 	
 	
+	
+	
 	export class MCPServerView {
 	    url?: string;
 	    authUrl?: string;
@@ -543,7 +618,6 @@ export namespace runtime {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.url = source["url"];
 	        this.authUrl = source["authUrl"];
-
 	        this.name = source["name"];
 	        this.plugin = source["plugin"];
 	        this.command = source["command"];
@@ -588,6 +662,9 @@ export namespace runtime {
 	    commands?: string[];
 	    mcpServers?: string[];
 	    hasHooks?: boolean;
+	    activeAgents?: string[];
+	    hookError?: string;
+	    agentError?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new PluginView(source);
@@ -607,8 +684,12 @@ export namespace runtime {
 	        this.commands = source["commands"];
 	        this.mcpServers = source["mcpServers"];
 	        this.hasHooks = source["hasHooks"];
+	        this.activeAgents = source["activeAgents"];
+	        this.hookError = source["hookError"];
+	        this.agentError = source["agentError"];
 	    }
 	}
+	
 	
 	export class SessionMeta {
 	    id: string;
@@ -616,6 +697,8 @@ export namespace runtime {
 	    createdAt: number;
 	    updatedAt: number;
 	    msgCount: number;
+	    forkedFrom?: string;
+	    forkSourceDeleted?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new SessionMeta(source);
@@ -628,6 +711,8 @@ export namespace runtime {
 	        this.createdAt = source["createdAt"];
 	        this.updatedAt = source["updatedAt"];
 	        this.msgCount = source["msgCount"];
+	        this.forkedFrom = source["forkedFrom"];
+	        this.forkSourceDeleted = source["forkSourceDeleted"];
 	    }
 	}
 	export class SkillView {
@@ -693,3 +778,4 @@ export namespace runtime {
 	
 
 }
+

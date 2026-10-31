@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ConfigPanel } from '../ConfigPanel'
@@ -296,4 +296,67 @@ describe('ConfigPanel', () => {
     expect(saved).not.toHaveProperty('compactionModelKey')
     expect(saved.providers[0]).not.toHaveProperty('uiKey')
   })
+
+it('ignores a config load from an earlier opening', async () => {
+  let resolveOld!: (value: ConfigView) => void
+  vi.mocked(GetConfig).mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve }) as never)
+  vi.mocked(GetConfig).mockResolvedValueOnce(config as never)
+  const props = { onClose: vi.fn(), onSaved: vi.fn(), initialTab: 'models' as const }
+  const view = render(<ConfigPanel {...props} open />)
+  view.rerender(<ConfigPanel {...props} open={false} />)
+  view.rerender(<ConfigPanel {...props} open />)
+  const name = await screen.findByDisplayValue('main')
+  fireEvent.change(name, { target: { value: 'my-edited-draft' } })
+  await act(async () => resolveOld(config))
+  expect(screen.getByDisplayValue('my-edited-draft')).toBeInTheDocument()
+})
+
+  it('rejects a duplicate MCP name without replacing either configuration', async () => {
+    vi.mocked(GetConfig).mockResolvedValueOnce({ ...config, mcp_servers: {
+      one: { command: 'first', enabled: true }, two: { command: 'second', enabled: true },
+    } } as never)
+    render(<ConfigPanel open initialTab="mcp" onClose={vi.fn()} onSaved={vi.fn()} />)
+    const name = await screen.findByLabelText('服务名称')
+    fireEvent.change(name, { target: { value: 'two' } })
+    fireEvent.blur(name)
+    expect(screen.getByText('MCP 服务名称重复：two')).toBeInTheDocument()
+    expect(name).toHaveValue('one')
+    fireEvent.click(screen.getByRole('button', { name: '保存配置' }))
+    await waitFor(() => expect(SaveConfig).toHaveBeenCalled())
+    expect(vi.mocked(SaveConfig).mock.calls[0][0].mcp_servers).toEqual({
+      one: expect.objectContaining({ command: 'first', enabled: true }),
+      two: expect.objectContaining({ command: 'second', enabled: true }),
+    })
+  })
+
+  it('preserves edits made while saving and leaves them unsaved', async () => {
+    let finish!: (value: ConfigView) => void
+    vi.mocked(SaveConfig).mockReturnValueOnce(new Promise(resolve => { finish = resolve }) as never)
+    render(<ConfigPanel open onClose={vi.fn()} onSaved={vi.fn()} />)
+    const percent = await screen.findByLabelText('自动压缩门限 (%)')
+    fireEvent.click(screen.getByRole('button', { name: '保存配置' }))
+    fireEvent.change(percent, { target: { value: '65' } })
+    await act(async () => finish(config))
+    expect(percent).toHaveValue('65')
+    expect(screen.queryByText('已保存')).not.toBeInTheDocument()
+  })
+
+  it('ignores a save response from an earlier opening', async () => {
+    let finish!: (value: ConfigView) => void
+    vi.mocked(SaveConfig).mockReturnValueOnce(new Promise(resolve => { finish = resolve }) as never)
+    const onSaved = vi.fn()
+    const props = { onClose: vi.fn(), onSaved }
+    const view = render(<ConfigPanel {...props} open />)
+    await screen.findByLabelText('自动压缩门限 (%)')
+    fireEvent.click(screen.getByRole('button', { name: '保存配置' }))
+    view.rerender(<ConfigPanel {...props} open={false} />)
+    view.rerender(<ConfigPanel {...props} open />)
+    await waitFor(() => expect(screen.queryByText('正在识别配置文件...')).not.toBeInTheDocument())
+    const percent = screen.getByLabelText('自动压缩门限 (%)')
+    fireEvent.change(percent, { target: { value: '65' } })
+    await act(async () => finish(config))
+    expect(percent).toHaveValue('65')
+    expect(onSaved).toHaveBeenCalledTimes(1)
+  })
+
 })

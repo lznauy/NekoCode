@@ -2,6 +2,7 @@ package connect
 
 import (
 	"context"
+	"nekocode/interaction"
 	"time"
 
 	controlruntime "nekocode/runtime"
@@ -145,7 +146,7 @@ func DispatchReady(ctx context.Context, rt controlruntime.ConnectorRuntime, sink
 }
 
 func dispatch(ctx context.Context, rt controlruntime.ConnectorRuntime, sink Sink, ready chan<- error) error {
-	events, err := rt.Events(ctx, controlruntime.EventFilter{})
+	events, err := interaction.SubscribeRunEvents(ctx, rt, controlruntime.EventFilter{})
 	if err != nil {
 		if ready != nil {
 			ready <- err

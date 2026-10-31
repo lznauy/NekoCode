@@ -78,6 +78,7 @@ func (b *ContentBlock) SetPreview(preview string, decision protocol.ToolDecision
 	note, ok := map[protocol.ToolDecision]string{
 		protocol.ToolDecisionJevSafe:           "Jev 判定安全 · 自动放行",
 		protocol.ToolDecisionJevDangerous:      "Jev 判定存在风险 · 需要授权确认",
+		protocol.ToolDecisionJevFailed:         "jev判断失败 · 按权限规则处理",
 		protocol.ToolDecisionJevURLSafe:        "Jev 判定 URL 安全",
 		protocol.ToolDecisionJevURLUnavailable: "Jev 暂不可用 · 按权限规则处理",
 		protocol.ToolDecisionJevURLRisky:       "Jev 判定 URL 存在风险 · 需要授权确认",

@@ -119,7 +119,8 @@ type Engine struct {
 	sandboxRules []SandboxRule
 	// autoJudge can allow shell commands after deny and explicit user ask
 	// checks. A failed or dangerous verdict retains normal rule evaluation.
-	autoJudge func(ctx context.Context, command string) (allow bool, decided bool)
+	autoJudge        func(ctx context.Context, command string) (allow bool, decided bool)
+	autoJudgeEnabled func() bool
 }
 
 // SetAutoJudge registers the optional safety judge for shell calls.
@@ -129,6 +130,10 @@ type Engine struct {
 func (e *Engine) SetAutoJudge(fn func(ctx context.Context, command string) (allow bool, decided bool)) {
 	e.autoJudge = fn
 }
+
+// SetAutoJudgeEnabled distinguishes an inactive judge from a failed judgment.
+// Without a predicate, a registered judge is considered active.
+func (e *Engine) SetAutoJudgeEnabled(fn func() bool) { e.autoJudgeEnabled = fn }
 
 // NewEngine creates an engine with the given matchers (tool name → matcher).
 func NewEngine(matchers map[string]SpecifierMatcher) *Engine {
@@ -224,7 +229,11 @@ func (e *Engine) Evaluate(toolName string, callInfo map[string]any, defaultEffec
 // Tool names are compared case-insensitively so users can write "Bash(...)"
 // (claude-code style) while the engine keys on the lowercase canonical name.
 func (e *Engine) EvaluateContext(ctx context.Context, toolName string, callInfo map[string]any, defaultEffect Effect) (decision Decision) {
+	judgeReason := ""
 	defer func() {
+		if judgeReason != "" && decision.Assessment.Reason == "" {
+			decision.Assessment.Reason = judgeReason
+		}
 		decision = e.applyAssessment(toolName, callInfo, decision)
 	}()
 	// 1. deny from any source (hard rules — the judge never overrides them)
@@ -255,13 +264,19 @@ func (e *Engine) EvaluateContext(ctx context.Context, toolName string, callInfo 
 	// immediately; a dangerous verdict falls through to the chain, where
 	// builtin ask rules produce the prompt.
 	judgedDangerous := false
-	if defaultEffect == EffectAsk && e.autoJudge != nil && toolName == "shell" {
+	if defaultEffect == EffectAsk && e.autoJudge != nil && toolName == "shell" && (e.autoJudgeEnabled == nil || e.autoJudgeEnabled()) {
 		if command, _ := callInfo["command"].(string); command != "" {
-			if allow, decided := e.autoJudge(ctx, command); decided {
+			allow, decided := e.autoJudge(ctx, command)
+			// The request may outlive a switch to manual mode. Discard stale
+			// verdicts and use ordinary rules/structure checks in that case.
+			active := e.autoJudgeEnabled == nil || e.autoJudgeEnabled()
+			if active && decided {
 				if allow {
 					return Decision{Effect: EffectAllow, Assessment: CallAssessment{Reason: "jev: judged safe"}}
 				}
 				judgedDangerous = true
+			} else if active {
+				judgeReason = "jev: judgment failed"
 			}
 		}
 	}
@@ -298,12 +313,14 @@ func (e *Engine) applyAssessment(toolName string, callInfo map[string]any, decis
 		return decision
 	}
 	assessment := assessor.Assess(callInfo)
-	if assessment.Reason == "" && decision.Assessment.Reason != "" {
-		// Preserve an earlier reason (e.g. the auto judge's verdict) when the
-		// structural assessment has nothing to add.
+	if strings.HasPrefix(decision.Assessment.Reason, "jev:") || assessment.Reason == "" && decision.Assessment.Reason != "" {
+		// Keep the judge's verdict independently of dynamic structure signals.
 		assessment.Reason = decision.Assessment.Reason
 	}
 	decision.Assessment = assessment
+	if decision.Effect == EffectAllow && assessment.Reason == "jev: judged safe" {
+		return decision // Auto judges the complete command, including dynamic syntax.
+	}
 	if !assessment.RequiresApproval() || decision.Effect == EffectDeny {
 		return decision
 	}

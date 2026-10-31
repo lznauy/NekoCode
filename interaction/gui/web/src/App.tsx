@@ -32,12 +32,12 @@ import {
 import type { GUICommandMenu } from './lib/wails'
 import type { ConfirmEvent, Msg, QuestionEvent } from './types/events'
 import type { ModelConfig } from './types/config'
-import type { runtime } from '../wailsjs/go/models'
-type ContextSnapshot = runtime.ContextSnapshot
+import type { protocol } from '../wailsjs/go/models'
+type ContextSnapshot = protocol.ContextSnapshot
 import type { SkillView } from './types/skills'
 
 export default function App() {
-  const { msgs, text, setText, busy, send, stop, toggleStep, setMessages, clearMessages, imageAttachments, pasteImages } = useChat()
+  const { msgs, text, setText, busy, stopping, error: chatError, send, stop, toggleStep, setMessages, clearMessages, imageAttachments, pasteImages } = useChat()
   const [modelRefreshKey, setModelRefreshKey] = useState(0)
   const model = useModelInfo(modelRefreshKey)
   const { containerRef, endRef, follow } = useAutoScroll([msgs])
@@ -47,6 +47,7 @@ export default function App() {
     sessions,
     currentId,
     loading: sessionsLoading,
+    error: sessionError,
     createSession,
     switchSession,
     deleteSession,
@@ -64,11 +65,15 @@ export default function App() {
   const [models, setModels] = useState<ModelConfig[]>([])
   const [skills, setSkills] = useState<SkillView[]>([])
   const [selectedSkill, setSelectedSkill] = useState('')
+  const [controlError, setControlError] = useState('')
 	const attachmentDraftSessionRef = useRef<string | null>(null)
+  const sessionActionRef = useRef(0)
   const [contextOpen, setContextOpen] = useState(false)
   const [contextLoading, setContextLoading] = useState(false)
   const [contextSnapshot, setContextSnapshot] = useState<ContextSnapshot | null>(null)
 	const [commandMenu, setCommandMenu] = useState<GUICommandMenu | null>(null)
+  const [commandMenuQuery, setCommandMenuQuery] = useState('')
+  const activeCommandMenu = !busy && commandMenuQuery === text.trim() ? commandMenu : null
 
 	useEffect(() => {
 	  const input = text.trim()
@@ -76,12 +81,18 @@ export default function App() {
 		setCommandMenu(null)
 		return
 	  }
+      setCommandMenu(null)
 	  let current = true
+      const publish = (menu: GUICommandMenu | null) => {
+        if (!current) return
+        setCommandMenuQuery(input)
+        setCommandMenu(menu)
+      }
 	  const load = async () => {
 		const direct = await safeCommandMenu(input)
 		if (!current) return
 		if (direct) {
-		  setCommandMenu(direct)
+		  publish(direct)
 		  return
 		}
 		if (/\s/.test(input)) {
@@ -95,19 +106,24 @@ export default function App() {
 		  return
 		}
 		root.items = root.items.filter((item) => item.value.startsWith(input))
-		setCommandMenu(root)
+		publish(root)
 	  }
-	  void load()
+      void load().catch((err: unknown) => {
+        if (!current) return
+        publish(null)
+        setControlError('读取命令菜单失败：' + String(err))
+      })
 	  return () => { current = false }
 	}, [busy, text])
 
   const refreshControls = useCallback(async () => {
-    const [cfg, skillSnapshot] = await Promise.all([
-      safeGetConfig(),
-      safeSkillManagementView(),
-    ])
-    setModels(cfg?.models ?? [])
-    setSkills(skillSnapshot?.skills ?? [])
+    try {
+      const [cfg, skillSnapshot] = await Promise.all([safeGetConfig(), safeSkillManagementView()])
+      setModels(cfg?.models ?? [])
+      setSkills(skillSnapshot?.skills ?? [])
+    } catch (err) {
+      setControlError('读取控制信息失败：' + String(err))
+    }
   }, [])
 
   useEffect(() => {
@@ -125,20 +141,33 @@ export default function App() {
   }, [])
 
   const switchModel = useCallback(async (name: string) => {
-    await safeSwitchModel(name)
-    setModelRefreshKey((key) => key + 1)
+    setControlError('')
+    try {
+      await safeSwitchModel(name)
+      setModelRefreshKey(key => key + 1)
+    } catch (err) { setControlError('切换模型失败：' + String(err)) }
   }, [])
 
   const selectSkill = useCallback(async (name: string) => {
-    await safeSelectSkill(name)
-    setSelectedSkill(name)
-    refreshControls()
+    const sessionAction = sessionActionRef.current
+    setControlError('')
+    try {
+      await safeSelectSkill(name)
+      if (sessionAction !== sessionActionRef.current) return
+      setSelectedSkill(name)
+      void refreshControls()
+    } catch (err) { if (sessionAction === sessionActionRef.current) setControlError('选择技能失败：' + String(err)) }
   }, [refreshControls])
 
   const clearSkill = useCallback(async () => {
-    await safeClearSelectedSkill()
-    setSelectedSkill('')
-    refreshControls()
+    const sessionAction = sessionActionRef.current
+    setControlError('')
+    try {
+      await safeClearSelectedSkill()
+      if (sessionAction !== sessionActionRef.current) return
+      setSelectedSkill('')
+      void refreshControls()
+    } catch (err) { if (sessionAction === sessionActionRef.current) setControlError('清除技能失败：' + String(err)) }
   }, [refreshControls])
 
   const handleTextChange = useCallback(
@@ -150,6 +179,7 @@ export default function App() {
   )
 
   const handleSend = useCallback(() => {
+    setControlError('')
     send()
     follow()
     requestAnimationFrame(() => {
@@ -160,6 +190,8 @@ export default function App() {
   }, [send, taRef, follow])
 
 	const handleCommandSelect = useCallback((item: GUICommandMenu['items'][number]) => {
+      if (!activeCommandMenu) return
+      setControlError('')
 	  if (item.submit) {
 		send(item.value)
 		follow()
@@ -170,7 +202,7 @@ export default function App() {
 		taRef.current?.focus()
 		resize()
 	  })
-	}, [follow, resize, send, setText, taRef])
+	}, [activeCommandMenu, follow, resize, send, setText, taRef])
 
   const handlePromptSelect = useCallback(
     (prompt: string) => {
@@ -184,16 +216,18 @@ export default function App() {
   )
 
   const handleCreateSession = useCallback(async () => {
+    const action = ++sessionActionRef.current
     const meta = await createSession()
-    if (meta) clearMessages()
+    if (meta && action === sessionActionRef.current) clearMessages()
   }, [createSession, clearMessages])
 
   const handleSwitchSession = useCallback(
     async (id: string): Promise<Msg[] | null> => {
       if (id === currentId) return null
       if (busy) return null
+      const action = ++sessionActionRef.current
       const loaded = await switchSession(id)
-      if (loaded) {
+      if (loaded && action === sessionActionRef.current) {
         setMessages(loaded)
         follow()
       }
@@ -205,8 +239,9 @@ export default function App() {
   const handleDeleteSession = useCallback(
     async (id: string) => {
       const wasCurrent = id === currentId
+      const action = ++sessionActionRef.current
       const result = await deleteSession(id)
-	  if (result.deleted && wasCurrent) clearMessages()
+	  if (result.deleted && wasCurrent && action === sessionActionRef.current) clearMessages()
     },
     [currentId, deleteSession, clearMessages],
   )
@@ -216,8 +251,9 @@ export default function App() {
 	  return
 	}
 	if (currentId && shouldHydrateEmptySession(currentId, attachmentDraftSessionRef.current) && msgs.length === 0 && !sessionsLoading && !busy) {
+      const action = sessionActionRef.current
       switchSession(currentId).then((loaded) => {
-        if (loaded) {
+        if (loaded && action === sessionActionRef.current) {
           setMessages(loaded)
           follow()
         }
@@ -227,7 +263,7 @@ export default function App() {
 
   // 监听 agent:confirm 事件
   useEffect(() => {
-    return safeEventsOn('agent:confirm', (e: unknown) => {
+    const offRequested = safeEventsOn('agent:confirm', (e: unknown) => {
       const ce = e as ConfirmEvent
       if (ce?.id && ce?.toolName) {
         setConfirmEntry({
@@ -240,10 +276,15 @@ export default function App() {
         })
       }
     })
+    const offResolved = safeEventsOn('agent:confirm_resolved', (e: unknown) => {
+      const resolved = e as { id?: string }
+      if (resolved?.id) setConfirmEntry((current) => current?.id === resolved.id ? null : current)
+    })
+    return () => { offRequested(); offResolved() }
   }, [])
 
   useEffect(() => {
-    return safeEventsOn('agent:question', (e: unknown) => {
+    const offRequested = safeEventsOn('agent:question', (e: unknown) => {
       const qe = e as QuestionEvent
       if (qe?.id && Array.isArray(qe.questions)) {
         setQuestionEntry({
@@ -252,20 +293,28 @@ export default function App() {
         })
       }
     })
+    const offResolved = safeEventsOn('agent:question_resolved', (event: unknown) => {
+      const resolved = event as { id?: string }
+      if (resolved?.id) setQuestionEntry(current => current?.id === resolved.id ? null : current)
+    })
+    return () => { offRequested(); offResolved() }
   }, [])
 
   useEffect(() => {
     return safeEventsOn('agent:done', () => {
-      refreshSessions()
+      void refreshSessions()
+      setModelRefreshKey(key => key + 1)
     })
   }, [refreshSessions])
 
   useEffect(() => {
 	return safeEventsOn('session:changed', (event: unknown) => {
 	  const change = event as Parameters<typeof shouldReloadSessionMessages>[0]
-	  if (change.attachmentDraft) attachmentDraftSessionRef.current = change.id ?? null
+      sessionActionRef.current++
+	  if (change.attachmentDraft || change.reason === 'new') attachmentDraftSessionRef.current = change.id ?? null
 	  else attachmentDraftSessionRef.current = null
 	  if (!shouldReloadSessionMessages(change)) return
+      setSelectedSkill('')
       const messages = change.messages
       setMessages(Array.isArray(messages) ? messages.map(mapDisplayMessage) : [])
       follow()
@@ -284,7 +333,7 @@ export default function App() {
         onSwitch={handleSwitchSession}
         onDelete={handleDeleteSession}
       />
-      <div className="grid h-full min-w-0 flex-1 grid-rows-[52px_1fr_auto] bg-surface-2">
+      <div className="grid h-full min-w-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[52px_minmax(0,1fr)_auto] bg-surface-2">
         <TopBar
           model={model}
           models={models}
@@ -307,9 +356,12 @@ export default function App() {
         ) : (
           <MessageList ref={containerRef} msgs={msgs} endRef={endRef} toggleStep={toggleStep} onPromptSelect={handlePromptSelect} />
         )}
+        <div className="min-w-0">
+          {(controlError || chatError || sessionError) && <div role="alert" className="max-h-24 overflow-y-auto break-words border-t border-danger/30 bg-danger/10 px-5 py-2 text-xs text-danger">{controlError || chatError || sessionError}</div>}
         <InputBar
           text={text}
           busy={busy}
+          stopping={stopping}
           skills={skills}
           selectedSkill={selectedSkill}
           textareaRef={taRef}
@@ -319,23 +371,24 @@ export default function App() {
           onTextareaChange={resize}
           onSelectSkill={selectSkill}
           onClearSkill={clearSkill}
-		  commandMenu={commandMenu}
+		  commandMenu={activeCommandMenu}
 		  onSelectCommand={handleCommandSelect}
 		  imageAttachments={imageAttachments}
 		  onPasteImages={pasteImages}
         />
+        </div>
       </div>
 
       {confirmEntry && (
         <ConfirmDialog
           entry={confirmEntry}
-          onDone={() => setConfirmEntry(null)}
+          onDone={() => setConfirmEntry(current => current?.id === confirmEntry.id ? null : current)}
         />
       )}
       {questionEntry && (
         <QuestionDialog
           entry={questionEntry}
-          onDone={() => setQuestionEntry(null)}
+          onDone={() => setQuestionEntry(current => current?.id === questionEntry.id ? null : current)}
         />
       )}
       <ConfigPanel
@@ -355,6 +408,7 @@ export default function App() {
       />
       <SkillPanel
         open={skillsOpen}
+        busy={busy}
         onClose={() => setSkillsOpen(false)}
         onConfigureMcp={() => {
           setSkillsOpen(false)

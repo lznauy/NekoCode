@@ -10,8 +10,7 @@ import { ImageGrid } from './ImageGrid'
 import { TasksList } from './TasksList'
 import { ThinkingCard } from './ThinkingCard'
 
-const PERSISTENT = new Set(['edit', 'diff', 'shell', 'write'])
-const persistentTool = (name: string) => PERSISTENT.has(name)
+import { persistentTool } from '../../lib/toolPolicy'
 
 interface RunCardProps {
   msg: Msg
@@ -31,9 +30,10 @@ export const RunCard = memo(function RunCard({ msg, toggleStep }: RunCardProps) 
   const phase = msg.phase ?? (streaming ? 'thinking' : 'ready')
   // 流式中显示全部工具步骤；结束后只保留持久化工具，与 session view 一致。
   const allSteps = msg.steps ?? []
-  const steps = streaming ? allSteps : allSteps.filter((s) => persistentTool(s.toolName))
+  const persistentSteps = allSteps.filter((s) => persistentTool(s.toolName))
+  const steps = streaming ? allSteps : persistentSteps
   const toolCount = allSteps.length
-  const persistCount = allSteps.filter((s) => persistentTool(s.toolName)).length
+  const persistCount = persistentSteps.length
   const visibleToolCount = steps.length
   const hiddenToolCount = Math.max(0, toolCount - visibleToolCount)
   const activity = msg.activity

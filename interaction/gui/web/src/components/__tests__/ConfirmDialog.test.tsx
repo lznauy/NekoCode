@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ConfirmDialog from '../ConfirmDialog'
 
 const replyConfirm = vi.fn()
@@ -9,7 +9,68 @@ vi.mock('../../lib/wails', () => ({
 }))
 
 describe('ConfirmDialog', () => {
-  it('shows bash command once and keeps decision buttons visible', () => {
+  beforeEach(() => replyConfirm.mockReset())
+  it('waits for acknowledgement and prevents duplicate submission', async () => {
+    let resolve!: () => void
+    replyConfirm.mockReturnValueOnce(new Promise<void>((done) => { resolve = done }))
+    const onDone = vi.fn()
+    render(<ConfirmDialog entry={{ id: 'pending', toolName: 'shell', args: { command: 'make all' }, kind: 'permission' }} onDone={onDone} />)
+    fireEvent.click(screen.getByRole('button', { name: '仅本次允许' }))
+    fireEvent.keyDown(window, { key: 'Enter' })
+    expect(replyConfirm).toHaveBeenCalledTimes(1)
+    expect(onDone).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: '拒绝' })).toBeDisabled()
+    await act(async () => resolve())
+    expect(onDone).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a failed submission open and allows retry', async () => {
+    replyConfirm.mockRejectedValueOnce(new Error('transport failed'))
+    const onDone = vi.fn()
+    render(<ConfirmDialog entry={{ id: 'retry', toolName: 'shell', args: {}, kind: 'permission' }} onDone={onDone} />)
+    fireEvent.click(screen.getByRole('button', { name: '仅本次允许' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('提交未成功')
+    expect(onDone).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '拒绝' }))
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1))
+    expect(replyConfirm).toHaveBeenLastCalledWith('retry', false, false)
+  })
+
+  it('binds keyboard decisions to the current request and resets selection', async () => {
+    const onDone = vi.fn()
+    const { rerender } = render(<ConfirmDialog entry={{ id: 'old', toolName: 'shell', args: {}, kind: 'permission' }} onDone={onDone} />)
+    fireEvent.keyDown(window, { key: 'ArrowDown' })
+    rerender(<ConfirmDialog entry={{ id: 'new', toolName: 'shell', args: {}, kind: 'permission' }} onDone={onDone} />)
+    fireEvent.keyDown(window, { key: 'Enter' })
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1))
+    expect(replyConfirm).toHaveBeenCalledWith('new', true, false)
+  })
+
+  it('does not close a new request when an old submission finishes', async () => {
+    let resolve!: () => void
+    replyConfirm.mockReturnValueOnce(new Promise<void>((done) => { resolve = done }))
+    const onDone = vi.fn()
+    const { rerender } = render(<ConfirmDialog entry={{ id: 'old', toolName: 'shell', args: {} }} onDone={onDone} />)
+    fireEvent.click(screen.getByRole('button', { name: '仅本次允许' }))
+    rerender(<ConfirmDialog entry={{ id: 'new', toolName: 'shell', args: {} }} onDone={onDone} />)
+    await act(async () => resolve())
+    expect(onDone).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: '仅本次允许' })).toBeEnabled()
+  })
+
+  it('previews the actual remembered literal and project', () => {
+    render(<ConfirmDialog entry={{ id: 'literal', toolName: 'shell', args: {}, kind: 'permission', approval: { source: 'user_rule', rule: 'shell(*)', scope: 'project', remember_workspace: '/repo', remember_rules: [{ tool: 'shell', literal: "bash -c 'echo ok'" }] } }} onDone={vi.fn()} />)
+    expect(screen.getByText('完整命令，仅精确匹配')).toBeInTheDocument()
+    expect(screen.getByText("bash -c 'echo ok'")).toBeInTheDocument()
+    expect(screen.getByText('生效项目：/repo')).toBeInTheDocument()
+    expect(screen.getByText('shell(*)')).toBeInTheDocument()
+    expect(screen.queryByText('未提供 JEV 判定')).not.toBeInTheDocument()
+  })
+  it('states that JEV judgment failed instead of implying a dangerous verdict', () => {
+    render(<ConfirmDialog entry={{ id: 'jev-failed', toolName: 'shell', args: { command: 'make all' }, kind: 'permission', approval: { risk: 'jev: judgment failed', reason: 'jev: judgment failed', scope: 'project' } }} onDone={vi.fn()} />)
+    expect(screen.getByText('jev判断失败，请手动决定。')).toBeInTheDocument()
+  })
+  it('shows bash command once and keeps decision buttons visible', async () => {
     const command = [
       "cat > /tmp/test_edit.txt << 'EOF'",
       'line 1: hello world',
@@ -39,7 +100,7 @@ describe('ConfirmDialog', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '仅本次允许' }))
     expect(replyConfirm).toHaveBeenCalledWith('confirm-1', true, false)
-    expect(onDone).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1))
   })
 
   it('shows replaceAll replacement count and warning', () => {
@@ -80,7 +141,7 @@ describe('ConfirmDialog', () => {
     expect(screen.getByText('上方差异是本次 revert 将恢复的内容。')).toBeInTheDocument()
   })
 
-  it('shows permission details and can remember project grants', () => {
+  it('shows permission details and can remember project grants', async () => {
     render(
       <ConfirmDialog
         entry={{
@@ -106,15 +167,16 @@ describe('ConfirmDialog', () => {
     )
 
     expect(screen.getByText('审批详情')).toBeInTheDocument()
-    expect(screen.getByText('command requires public network access')).toBeInTheDocument()
+    expect(screen.getByText(/命令需要访问公共网络/)).toBeInTheDocument()
     expect(screen.getByText('/tmp/cache')).toBeInTheDocument()
     expect(screen.getByText('registry.npmjs.org')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '仅本次允许' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '始终允许' }))
     expect(replyConfirm).toHaveBeenCalledWith('confirm-permission', true, true)
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull())
   })
 
-  it('combines command and predictable capability approval', () => {
+  it('combines command and predictable capability approval', async () => {
     render(
       <ConfirmDialog
         entry={{
@@ -140,9 +202,10 @@ describe('ConfirmDialog', () => {
     expect(screen.queryByText('始终允许并授权')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '始终允许' }))
     expect(replyConfirm).toHaveBeenCalledWith('confirm-bash', true, true)
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull())
   })
 
-  it('hides remember for once-only capability approval', () => {
+  it('hides remember for once-only capability approval', async () => {
     render(
       <ConfirmDialog
         entry={{
@@ -164,6 +227,7 @@ describe('ConfirmDialog', () => {
     expect(screen.queryByRole('button', { name: '始终允许' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '仅本次允许' }))
     expect(replyConfirm).toHaveBeenCalledWith('confirm-bash-plain', true, false)
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull())
   })
 
   it('describes dynamic command approval without inventing capabilities', () => {
@@ -185,7 +249,7 @@ describe('ConfirmDialog', () => {
       />,
     )
 
-    expect(screen.getByText('此决定可记住为该命令的精确授权。')).toBeInTheDocument()
+    expect(screen.getByText('始终允许的范围')).toBeInTheDocument()
     expect(screen.queryByText(/列出的.*能力/)).toBeNull()
   })
 })

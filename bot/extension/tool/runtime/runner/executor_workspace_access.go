@@ -88,6 +88,7 @@ func (e *Executor) ensureWorkspaceAccess(tc core.ToolCallItem, confirmFn protoco
 		return tc, err.Error(), false
 	}
 	approval := &protocol.ApprovalContext{
+		Source:    "workspace",
 		Reason:    fmt.Sprintf("add %s workspace for %s", access, tc.Name),
 		Scope:     protocol.ApprovalScopeProject,
 		Workspace: rootPath,

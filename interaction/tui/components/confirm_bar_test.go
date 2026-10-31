@@ -233,7 +233,7 @@ func TestJevJudgedApprovalShowsFooterNote(t *testing.T) {
 	}, nil)
 
 	view := cb.View(100, 40)
-	for _, want := range []string{"Jev 判定该命令存在风险", "※ 本命令经过 Jev 判定，需要授权确认"} {
+	for _, want := range []string{"确认原因: Jev 判定该命令存在风险"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("jev approval missing %q:\n%s", want, view)
 		}
@@ -256,5 +256,15 @@ func TestNonJevApprovalHasNoJevFooter(t *testing.T) {
 
 	if view := cb.View(100, 40); strings.Contains(view, "经过 Jev 判定") {
 		t.Fatalf("non-jev approval must not show the jev footer:\n%s", view)
+	}
+}
+
+func TestFailedJevApprovalDoesNotClaimACompletedJudgment(t *testing.T) {
+	sty := styles.DefaultStyles()
+	cb := NewConfirmBar(&sty)
+	cb.SetRequest(&controlruntime.ConfirmRequest{ToolName: "shell", Args: map[string]any{"command": "make all"}, Kind: controlruntime.ConfirmKindPermission, Approval: &controlruntime.ApprovalContext{Risk: "jev: judgment failed", Reason: "jev: judgment failed", Scope: controlruntime.ApprovalScopeProject}}, nil)
+	view := cb.View(100, 40)
+	if strings.Count(view, "jev判断失败") != 1 || strings.Contains(view, "经过 Jev 判定") {
+		t.Fatalf("misleading failure status:\n%s", view)
 	}
 }

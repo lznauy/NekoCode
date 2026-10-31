@@ -1,10 +1,14 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { safeReplyQuestion } from '../lib/wails'
 import type { QuestionEvent } from '../types/events'
 
 export interface QuestionEntry extends QuestionEvent {}
 
-function QuestionDialog({
+function QuestionDialog(props: { entry: QuestionEntry; onDone: () => void }) {
+  return <QuestionDialogRequest key={props.entry.id} {...props} />
+}
+
+function QuestionDialogRequest({
   entry,
   onDone,
 }: {
@@ -18,25 +22,48 @@ function QuestionDialog({
   const [answers, setAnswers] = useState<string[][]>(initial)
   const [custom, setCustom] = useState<string[]>(() => entry.questions.map(() => ''))
 
-  const submit = () => {
-    const merged = entry.questions.map((q, i) => {
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
+  const inFlight = useRef(false)
+  const active = useRef(true)
+  const dialog = useRef<HTMLElement>(null)
+  useEffect(() => {
+    active.current = true
+    const previous = document.activeElement
+    const element = dialog.current
+    element?.focus()
+    return () => {
+      active.current = false
+      if (element?.contains(document.activeElement) && previous instanceof HTMLElement) previous.focus()
+    }
+  }, [])
+
+  const reply = async (rejected: boolean) => {
+    if (inFlight.current) return
+    inFlight.current = true
+    setSubmitting(true)
+    setError('')
+    const merged = rejected ? [] : entry.questions.map((q, i) => {
       const picked = [...(answers[i] ?? [])]
       const extra = custom[i]?.trim()
       if (q.custom && extra) picked.push(extra)
       return picked
     })
-    safeReplyQuestion(entry.id, merged, false)
-    onDone()
-  }
-
-  const reject = () => {
-    safeReplyQuestion(entry.id, [], true)
-    onDone()
+    try {
+      await safeReplyQuestion(entry.id, merged, rejected)
+      if (active.current) onDone()
+    } catch {
+      if (active.current) setError('提交未成功，请重试。')
+    } finally {
+      if (active.current) { inFlight.current = false; setSubmitting(false) }
+    }
   }
 
   return (
     <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/45 px-3 py-4 backdrop-blur-[2px] sm:items-center">
       <section
+        ref={dialog}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="question-title"
@@ -45,7 +72,7 @@ function QuestionDialog({
         <header className="shrink-0 border-b border-border/45 px-4 py-3">
           <div className="mb-1 font-mono text-[11px] text-primary">question</div>
           <h2 id="question-title" className="text-[14px] font-semibold text-text">
-            Agent needs your input
+            需要你补充信息
           </h2>
         </header>
 
@@ -69,6 +96,7 @@ function QuestionDialog({
                       <button
                         key={option.label}
                         type="button"
+                        disabled={submitting}
                         onClick={() => {
                           setAnswers((prev) => {
                             const next = prev.map((row) => [...row])
@@ -110,6 +138,7 @@ function QuestionDialog({
 
               {q.custom && (
                 <input
+                  disabled={submitting}
                   value={custom[index] ?? ''}
                   onChange={(e) => {
                     const value = e.currentTarget.value
@@ -119,7 +148,7 @@ function QuestionDialog({
                       return next
                     })
                   }}
-                  placeholder="Custom answer"
+                  placeholder="自定义回答"
                   className="h-9 w-full rounded-md border border-border/45 bg-surface px-3 text-[13px] text-text outline-none focus:border-primary/60"
                 />
               )}
@@ -128,13 +157,13 @@ function QuestionDialog({
         </div>
 
         <footer className="flex shrink-0 flex-col gap-2 border-t border-border/45 bg-surface-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-[12px] text-text-3">Your answer will be returned to the running tool call.</p>
+          {error ? <p role="alert" className="text-[12px] text-danger">{error}</p> : <p className="text-[12px] text-text-3">{submitting ? '正在提交…' : '回答将返回给当前任务。'}</p>}
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={reject} className="secondary-button h-8 px-3">
-              Dismiss
+            <button type="button" disabled={submitting} onClick={() => void reply(true)} className="secondary-button h-8 px-3">
+              取消
             </button>
-            <button type="button" onClick={submit} className="primary-button h-8 px-3">
-              Answer
+            <button type="button" disabled={submitting} onClick={() => void reply(false)} className="primary-button h-8 px-3">
+              回答
             </button>
           </div>
         </footer>

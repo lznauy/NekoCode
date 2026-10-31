@@ -19,6 +19,15 @@ function setup(overrides: Partial<Parameters<typeof InputBar>[0]> = {}) {
 }
 
 describe('InputBar', () => {
+  it.each([{ isComposing: true }, { keyCode: 229 }])('does not submit an IME confirmation %j', (composition) => {
+    const onSend = vi.fn()
+    const onSelectCommand = vi.fn()
+    setup({ text: '中文', onSend, onSelectCommand })
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter', ...composition })
+    expect(onSend).not.toHaveBeenCalled()
+    expect(onSelectCommand).not.toHaveBeenCalled()
+  })
+
   it('renders textarea and send button', () => {
     setup()
     expect(screen.getByRole('textbox')).toBeInTheDocument()

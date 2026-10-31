@@ -11,9 +11,13 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"nekocode/util/fs"
 )
+
+// fileStoreMu protects read/merge/write across independently created stores.
+var fileStoreMu sync.Mutex
 
 // FileStore reads and writes ~/.nekocode/connect.json one section at a
 // time. Sections owned by other connectors are preserved verbatim as raw
@@ -51,22 +55,53 @@ func (s *FileStore) Load(section string, out any) error {
 	return json.Unmarshal(raw, out)
 }
 
-// Save replaces one section, preserving every other section as-is, and
-// writes the file atomically-ish with 0600 permissions.
+// Save replaces one section, preserving other sections, and atomically
+// replaces the file with 0600 permissions. Saves within this process serialize.
 func (s *FileStore) Save(section string, v any) error {
-	file := map[string]json.RawMessage{}
-	if data, err := os.ReadFile(s.path); err == nil {
-		_ = json.Unmarshal(data, &file)
-	}
 	raw, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
+	fileStoreMu.Lock()
+	defer fileStoreMu.Unlock()
+	file := map[string]json.RawMessage{}
+	data, err := os.ReadFile(s.path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil {
+		if err := json.Unmarshal(data, &file); err != nil {
+			return err
+		}
+	}
+	if file == nil {
+		file = make(map[string]json.RawMessage)
+	}
 	file[section] = raw
-	data, err := json.MarshalIndent(file, "", "  ")
+	data, err = json.MarshalIndent(file, "", "  ")
 	if err != nil {
 		return err
 	}
-	data = append(data, '\n')
-	return fs.WriteFileWithDir(s.path, data, 0o600)
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(s.path), ".connect-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	defer tmp.Close()
+	if err := tmp.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), s.path)
 }

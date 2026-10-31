@@ -262,10 +262,15 @@ func TestCompactConfirmArgsKeepsApprovalMetadataOutOfToolArgs(t *testing.T) {
 func TestReplyConfirmDecisionCarriesUnifiedApproval(t *testing.T) {
 	app, id, replies := startApprovalApp(t)
 
-	app.ReplyConfirmDecision(id, true, true)
+	if err := app.ReplyConfirmDecision(id, true, true); err != nil {
+		t.Fatal(err)
+	}
 	reply := waitConfirmReply(t, replies)
 	if !reply.Allowed || !reply.Remember {
 		t.Fatalf("reply = %+v, want allowed+remember", reply)
+	}
+	if err := app.ReplyConfirmDecision(id, true, false); err == nil {
+		t.Fatal("stale approval error was hidden from caller")
 	}
 }
 
@@ -322,5 +327,25 @@ func waitConfirmReply(t *testing.T, replies <-chan controlruntime.ConfirmReply) 
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for confirm reply")
 		return controlruntime.ConfirmReply{}
+	}
+}
+
+func TestReplyQuestionSurfacesInvalidAndExpiredAnswers(t *testing.T) {
+	app, _, _ := startApprovalApp(t)
+	if err := app.ReplyQuestion("missing", "[]", false); err == nil {
+		t.Fatal("expired question error was hidden from frontend")
+	}
+	if err := app.ReplyQuestion("missing", "invalid-json", false); err == nil {
+		t.Fatal("invalid question answer JSON was accepted")
+	}
+}
+
+func TestExtensionMutationsSurfaceErrors(t *testing.T) {
+	app, _, _ := startApprovalApp(t)
+	if err := app.ClearSelectedSkill(); err == nil {
+		t.Fatal("clear skill failure was hidden from frontend")
+	}
+	if _, err := app.RefreshSkillManagement(); err == nil {
+		t.Fatal("failed refresh returned an apparently valid empty extension list")
 	}
 }

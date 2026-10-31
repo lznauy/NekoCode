@@ -6,6 +6,7 @@ import {
   safeCurrentModel,
 	safeCommandMenu,
   safeSendMessage,
+  safeReplyConfirm,
 } from '../wails'
 
 describe('isWailsEnvironment', () => {
@@ -17,9 +18,10 @@ describe('isWailsEnvironment', () => {
 describe('safe wrappers', () => {
   it('return no-ops when Wails is unavailable', async () => {
     expect(safeEventsOn('test', () => {})).toBeInstanceOf(Function)
-    expect(safeAbort()).toBeUndefined()
+    await expect(safeAbort()).resolves.toBeUndefined()
     await expect(safeCurrentModel()).resolves.toBe('')
     await expect(safeSendMessage('hello')).resolves.toBeUndefined()
+    await expect(safeReplyConfirm('unavailable', true)).rejects.toBeDefined()
 	await expect(safeCommandMenu('/')).resolves.toBeNull()
   })
 })

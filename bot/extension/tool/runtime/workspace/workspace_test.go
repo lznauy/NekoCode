@@ -6,6 +6,24 @@ import (
 	"testing"
 )
 
+func TestWorkspaceFilesystemRootAccess(t *testing.T) {
+	child := t.TempDir()
+	root := filepath.VolumeName(child) + string(filepath.Separator)
+	manager := New(root, nil)
+	for name, check := range map[string]func(string) (string, Root, bool, error){
+		"read": manager.CheckRead, "write": manager.CheckWrite, "lexical read": manager.CheckReadLexical,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, ok, err := check(child); err != nil || !ok {
+				t.Fatalf("filesystem root must cover child: ok=%v err=%v", ok, err)
+			}
+		})
+	}
+	if insideRoot(child+"-sibling", child) {
+		t.Fatal("root must not cover a sibling with the same prefix")
+	}
+}
+
 func TestWorkspaceReadWriteAccess(t *testing.T) {
 	primary := t.TempDir()
 	docs := t.TempDir()

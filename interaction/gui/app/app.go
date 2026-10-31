@@ -33,6 +33,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"nekocode/interaction"
 	controlruntime "nekocode/runtime"
 	"nekocode/runtime/standard"
 	"nekocode/util/attachment"
@@ -124,7 +125,7 @@ func (a *App) Shutdown(_ context.Context) {
 // DomReady 在前端 DOM 就绪时调用。
 func (a *App) DomReady(_ context.Context) {
 	wailsruntime.LogInfo(a.ctx, "Frontend DOM ready")
-	events, err := a.rt.Events(a.ctx, controlruntime.EventFilter{})
+	events, err := interaction.SubscribeRunEvents(a.ctx, a.rt, controlruntime.EventFilter{})
 	if err != nil {
 		wailsruntime.LogError(a.ctx, "runtime subscribe failed: "+err.Error())
 		return
@@ -433,12 +434,20 @@ func (a *App) dispatchRuntimeEvent(ev controlruntime.Event) {
 				"approval": req.Approval,
 			})
 		}
+	case controlruntime.EventApprovalResolved:
+		if p, ok := ev.Payload.(controlruntime.ApprovalView); ok {
+			wailsruntime.EventsEmit(a.ctx, "agent:confirm_resolved", map[string]string{"id": p.ID})
+		}
 	case controlruntime.EventQuestionRequested:
 		if p, ok := ev.Payload.(controlruntime.QuestionView); ok {
 			wailsruntime.EventsEmit(a.ctx, "agent:question", map[string]any{
 				"id":        p.ID,
 				"questions": p.Questions,
 			})
+		}
+	case controlruntime.EventQuestionResolved:
+		if p, ok := ev.Payload.(controlruntime.QuestionView); ok {
+			wailsruntime.EventsEmit(a.ctx, "agent:question_resolved", map[string]string{"id": p.ID})
 		}
 	case controlruntime.EventRunDone:
 		payload, _ := ev.Payload.(controlruntime.RunResult)
@@ -520,6 +529,7 @@ func (a *App) dispatchToolEvent(eventType controlruntime.EventType, p controlrun
 		})
 	case controlruntime.EventToolPreview:
 		wailsruntime.EventsEmit(a.ctx, "agent:tool_preview", map[string]any{
+			"id":       p.CallID,
 			"toolName": p.ToolName,
 			"preview":  p.Preview,
 		})
@@ -545,11 +555,10 @@ func toolEventID(p controlruntime.ToolPayload) string {
 	return uuid.NewString()
 }
 
-func (a *App) Abort() {
-	_ = a.rt.CancelRun(a.ctx, "")
-	wailsruntime.EventsEmit(a.ctx, "agent:status", map[string]string{
-		"status": "idle",
-	})
+func (a *App) Abort() error {
+	// The terminal event is published after cleanup. An early idle here lets
+	// the next send race cancellation and misattributes the old run's events.
+	return a.rt.CancelRun(a.ctx, "")
 }
 
 func (a *App) CurrentModel() string {
@@ -580,8 +589,8 @@ func (a *App) SelectSkill(name string) error {
 	return a.rt.SelectSkill(name)
 }
 
-func (a *App) ClearSelectedSkill() {
-	_ = a.rt.ClearSelectedSkill()
+func (a *App) ClearSelectedSkill() error {
+	return a.rt.ClearSelectedSkill()
 }
 
 func (a *App) GetConfig() controlruntime.ConfigView {
@@ -604,9 +613,8 @@ func (a *App) GetSkillManagement() controlruntime.SkillManagementView {
 	return a.rt.SkillManagementView()
 }
 
-func (a *App) RefreshSkillManagement() controlruntime.SkillManagementView {
-	view, _ := a.rt.RefreshSkillManagement()
-	return view
+func (a *App) RefreshSkillManagement() (controlruntime.SkillManagementView, error) {
+	return a.rt.RefreshSkillManagement()
 }
 
 func (a *App) SetPluginEnabled(name string, enabled bool) (controlruntime.SkillManagementView, error) {
@@ -752,26 +760,28 @@ func (a *App) currentSessionCWD() string {
 }
 
 // ReplyConfirm 由前端调用，回复确认弹窗。
-func (a *App) ReplyConfirm(id string, ok bool) {
-	a.ReplyConfirmDecision(id, ok, false)
+func (a *App) ReplyConfirm(id string, ok bool) error {
+	return a.ReplyConfirmDecision(id, ok, false)
 }
 
 // ReplyConfirmDecision 由前端调用，回复统一审批并可选择记住项目级权限。
 // 请求卡已经列出当前命令和可预测的沙箱能力；一次决定原子覆盖两者。
-func (a *App) ReplyConfirmDecision(id string, ok bool, remember bool) {
-	_ = a.rt.DecideApproval(a.ctx, id, controlruntime.ApprovalDecision{
+func (a *App) ReplyConfirmDecision(id string, ok bool, remember bool) error {
+	return a.rt.DecideApproval(a.ctx, id, controlruntime.ApprovalDecision{
 		Allowed:  ok,
 		Remember: ok && remember,
 	})
 }
 
 // ReplyQuestion 由前端调用，回复 agent 发起的问题。
-func (a *App) ReplyQuestion(id string, answersJSON string, rejected bool) {
+func (a *App) ReplyQuestion(id string, answersJSON string, rejected bool) error {
 	var answers [][]string
 	if answersJSON != "" {
-		_ = json.Unmarshal([]byte(answersJSON), &answers)
+		if err := json.Unmarshal([]byte(answersJSON), &answers); err != nil {
+			return err
+		}
 	}
-	_ = a.rt.AnswerQuestion(a.ctx, id, controlruntime.QuestionReply{Answers: answers, Rejected: rejected})
+	return a.rt.AnswerQuestion(a.ctx, id, controlruntime.QuestionReply{Answers: answers, Rejected: rejected})
 }
 
 func (a *App) MCPAuthorizationAction(name, action string) error {

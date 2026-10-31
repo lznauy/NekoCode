@@ -17,17 +17,22 @@ export const ImageGrid = memo(function ImageGrid({ images }: ImageGridProps) {
   const [lightbox, setLightbox] = useState<number | null>(null)
 
   useEffect(() => {
+    let current = true
     setLoaded(images)
+    setLightbox(null)
     for (const img of images) {
-      if (!img.path) continue
-      safeReadImageBase64(img.path).then((uri) => {
+      const update = (uri: string | null) => {
+        if (!current) return
         setLoaded((prev) =>
           prev.map((li) =>
-            li.path === img.path ? { ...li, dataUri: uri ?? undefined, error: uri === null } : li,
+            li.path === img.path ? { ...li, dataUri: uri ?? undefined, error: !uri } : li,
           ),
         )
-      })
+      }
+      if (!img.path) { update(null); continue }
+      void safeReadImageBase64(img.path).then(update).catch(() => update(null))
     }
+    return () => { current = false }
   }, [images])
 
   useEffect(() => {

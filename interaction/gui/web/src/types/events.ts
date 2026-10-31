@@ -83,7 +83,8 @@ export interface ReasoningEvent {
 }
 
 export interface PhaseEvent {
-  phase: AgentPhase
+  // Transport value can include details, such as "running shell".
+  phase: string
 }
 
 export interface ToolStartPayload {
@@ -96,6 +97,7 @@ export interface ToolStartPayload {
 }
 
 export interface ToolPreviewPayload {
+  id?: string
   toolName: string
   preview: string
 }
@@ -166,6 +168,10 @@ export interface ConfirmEvent {
 }
 
 export interface ApprovalContext {
+  source?: string
+  rule?: string
+  remember_rules?: { tool: string; specifier?: string; literal?: string }[]
+  remember_workspace?: string
   risk?: string
   reason?: string
   structures?: string[]

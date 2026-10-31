@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import type { MutableRefObject } from 'react'
+import { persistentTool } from '../lib/toolPolicy'
 import { genId } from '../lib/id'
 import { isUnifiedDiffContent } from '../lib/diffFormat'
 import { safeAbort, safeDeleteClipboardImage, safeSaveClipboardImage, safeSendMessage } from '../lib/wails'
@@ -7,12 +8,14 @@ import { useWailsEvents } from './useWailsEvents'
 import type {
   CompactionEvent,
   AgentPhase,
+  PhaseEvent,
   MetricsPayload,
   Msg,
   SubAgent,
   TodoItem,
   ToolStep,
   InputAcceptedEvent,
+  ToolPreviewPayload,
 } from '../types/events'
 import type { UIImageRef } from '../types/events'
 
@@ -21,6 +24,7 @@ export interface UseChatReturn {
   text: string
   setText: (text: string) => void
   busy: boolean
+  stopping: boolean
   error: string | null
   send: (input?: string) => void
   stop: () => void
@@ -68,11 +72,22 @@ export function useChat(): UseChatReturn {
   const [text, setTextState] = useState('')
   const [imageAttachments, setImageAttachments] = useState<ImageInputAttachment[]>([])
   const [busy, setBusy] = useState(false)
+  const [stopping, setStopping] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const sidRef = useRef<string | null>(null)
   const userSidRef = useRef<string | null>(null)
   const sendingRef = useRef(false)
+  const startupRef = useRef<Promise<void> | null>(null)
+  const cancellationRef = useRef<{ terminal: boolean; acknowledged: boolean } | null>(null)
+  const finishCancellation = useCallback(() => {
+    const cancellation = cancellationRef.current
+    if (!cancellation?.terminal || !cancellation.acknowledged) return
+    cancellationRef.current = null
+    sendingRef.current = false
+    setStopping(false)
+    setBusy(false)
+  }, [])
   const abortedRef = useRef(false)
   const textBufferRef = useRef('')
   const responseTextRef = useRef({ sid: '', length: 0 })
@@ -197,8 +212,10 @@ export function useChat(): UseChatReturn {
   }, [flushBuffers])
 
   // 顺着 phase 切换更新 UI 状态。
-  const onPhase = useCallback((e: { phase: AgentPhase }) => {
-    setMsgs((prev) => upsert(prev, sidRef.current, (m) => ({ ...m, phase: e.phase })))
+  const onPhase = useCallback((e: PhaseEvent) => {
+    const phase = normalizePhase(e.phase)
+    if (!phase) return
+    setMsgs((prev) => upsert(prev, sidRef.current, (m) => ({ ...m, phase })))
   }, [])
 
   const onDelta = useCallback((e: { id: number; delta: string; done: boolean; reset?: boolean }) => {
@@ -269,16 +286,16 @@ export function useChat(): UseChatReturn {
     })))
   }, [])
 
-  const onToolPreview = useCallback((e: { toolName: string; preview: string }) => {
+  const onToolPreview = useCallback((e: ToolPreviewPayload) => {
     const sid = sidRef.current
     if (!sid) return
     if (interactiveTool(e.toolName)) return
     if (compactTool(e.toolName)) return
-    // FIFO 匹配: 找第一个 running 且同 toolName 的 step, 替换其 preview。
+    // Older backends omit the call ID; retain their latest-running fallback.
     setMsgs((prev) => upsert(prev, sid, (m) => {
       const steps = [...(m.steps ?? [])]
       for (let i = steps.length - 1; i >= 0; i--) {
-        if (steps[i].toolName === e.toolName && steps[i].status === 'running') {
+        if ((e.id ? steps[i].id === e.id : steps[i].toolName === e.toolName) && steps[i].status === 'running') {
           steps[i] = { ...steps[i], preview: e.preview }
           return { ...m, steps }
         }
@@ -405,54 +422,37 @@ export function useChat(): UseChatReturn {
     // A run error is unrelated to an in-flight compaction: settle with the
     // fixed note so the card never shows a foreign error (the run's own
     // failure is displayed separately below).
-    setMsgs((prev) => settleCompactions(prev, '压缩已结束，未收到完成详情'))
     const sid = sidRef.current
-    if (e.error) {
-      setError(e.error)
-      setMsgs((prev) => [
-        ...prev,
-        { id: genId(), role: 'assistant' as const, text: 'Error: ' + e.error, streaming: false },
-      ])
-    }
-    if (sid) {
-      setMsgs((prev) => prev.map((m) => {
+    const failure: Msg | undefined = e.error
+      ? { id: genId(), role: 'assistant', text: 'Error: ' + e.error, streaming: false }
+      : undefined
+    if (e.error) setError(e.error)
+    const finalText = (e.output ?? '').trim()
+    const safeText = isSystemOutput(finalText) ? '' : finalText
+    setMsgs((prev) => {
+      const next = prev.map((message): Msg => {
+        const m = settleCompaction(message, '压缩已结束，未收到完成详情')
         if (m.id !== sid) return m
-        const finalText = (e.output ?? '').trim()
-        // 防御性过滤：后端已过滤系统消息，此处兜底防止流式残留
-        const safeText = isSystemOutput(finalText) ? '' : finalText
         const finalSteps = (m.steps ?? []).filter((s) => persistentTool(s.toolName))
-        const keepRunCard = finalSteps.length > 0 || !!m.images?.length
-        if (!e.error && !keepRunCard) {
-          return {
-            ...m,
-            text: safeText || (m.text && !isSystemOutput(m.text) ? m.text : m.streamText && !isSystemOutput(m.streamText ?? '') ? m.streamText : ''),
-            streamText: '',
-            streaming: false,
-            phase: undefined,
-            tokens: undefined,
-            steps: undefined,
-            reasoning: undefined,
-            reasoningDone: undefined,
-            todos: undefined,
-            subagents: undefined,
-            activity: undefined,
-          }
-        }
+        const plainMessage = !e.error && finalSteps.length === 0 && !m.images?.length
         return {
           ...m,
           text: safeText || (m.text && !isSystemOutput(m.text) ? m.text : m.streamText && !isSystemOutput(m.streamText ?? '') ? m.streamText : ''),
           streamText: '',
           streaming: false,
-          phase: 'ready',
-          steps: finalSteps,
-          reasoning: '',
-          reasoningDone: true,
-          todos: [],
-          subagents: [],
+          phase: plainMessage ? undefined : 'ready',
+          tokens: plainMessage ? undefined : m.tokens,
+          steps: plainMessage ? undefined : finalSteps,
+          reasoning: plainMessage ? undefined : '',
+          reasoningDone: plainMessage ? undefined : true,
+          todos: plainMessage ? undefined : [],
+          subagents: plainMessage ? undefined : [],
           activity: undefined,
         }
-      }))
-    }
+      })
+      if (failure) next.push(failure)
+      return next
+    })
     sidRef.current = null
     userSidRef.current = null
     sendingRef.current = false
@@ -460,9 +460,15 @@ export function useChat(): UseChatReturn {
   }, [flushBuffers, settlePendingSubmission])
 
   const onStatus = useCallback((e: { status: string }) => {
-    if (abortedRef.current) return
+    if (abortedRef.current) {
+      if (e.status === 'idle') {
+        if (cancellationRef.current) cancellationRef.current.terminal = true
+        finishCancellation()
+      }
+      return
+    }
     setBusy(e.status !== 'idle')
-  }, [])
+  }, [finishCancellation])
 
   const onInputAccepted = useCallback((e: InputAcceptedEvent) => {
 	if (e.source?.kind !== 'gui') return
@@ -550,7 +556,13 @@ export function useChat(): UseChatReturn {
     sidRef.current = sid
     setMsgs((prev) => [...prev, emptyRunMsg(sid)])
 
-	void safeSendMessage(t, sendImages).catch((err: unknown) => {
+    const startup = safeSendMessage(t, sendImages)
+    startupRef.current = startup
+	void startup.catch((err: unknown) => {
+      // A stopped or replaced submission no longer owns this run or draft.
+      // stop/setMessages already settled its unaccepted attachments.
+      if (sidRef.current !== sid || userSidRef.current !== userSid) return
+
       const errStr = String(err)
 	  setError(errStr)
 	  if (draftGeneration !== draftGenerationRef.current) {
@@ -586,7 +598,36 @@ export function useChat(): UseChatReturn {
     abortedRef.current = true
     flushBuffers()
     setMsgs((prev) => settleCompactions(prev, '已取消，未收到压缩完成确认'))
-    safeAbort()
+    setStopping(true)
+    const startup = startupRef.current
+    const cancellation = { terminal: cancellationRef.current?.terminal ?? false, acknowledged: false }
+    cancellationRef.current = cancellation
+    const stillCancelling = () => abortedRef.current && cancellationRef.current === cancellation
+    // StartRun and CancelRun are separate RPCs. Await startup so cancellation
+    // cannot overtake it; a failed startup has no terminal event to wait for.
+    void (async () => {
+      try { await startup } catch (err) {
+        if (stillCancelling()) {
+          cancellationRef.current = null
+          sendingRef.current = false
+          setBusy(false)
+          setStopping(false)
+          setError('发送未启动：' + String(err))
+        }
+        return
+      }
+      if (!stillCancelling()) return
+      try {
+        await safeAbort()
+        if (!stillCancelling()) return
+        cancellation.acknowledged = true
+        finishCancellation()
+      } catch (err) {
+        if (!stillCancelling()) return
+        setStopping(false)
+        setError('停止失败，请重试：' + String(err))
+      }
+    })()
     const sid = sidRef.current
     const userSid = userSidRef.current
     if (sid || userSid) {
@@ -594,18 +635,26 @@ export function useChat(): UseChatReturn {
     }
     sidRef.current = null
     userSidRef.current = null
-    sendingRef.current = false
-    setBusy(false)
-  }, [flushBuffers, settlePendingSubmission])
+    // Wait for both terminal idle and acknowledgment of the untargeted Abort
+    // before allowing a new run to start.
+    sendingRef.current = true
+    setBusy(true)
+  }, [flushBuffers, settlePendingSubmission, finishCancellation])
 
   const toggleStep = useCallback((stepId: string) => {
-    setMsgs((prev) => prev.map((m) => ({
-      ...m,
-      steps: (m.steps ?? []).map((s) => (s.id === stepId ? { ...s, collapsed: !s.collapsed } : s)),
-    })))
+    setMsgs((prev) => {
+      let changed = false
+      const next = prev.map((m) => {
+        if (!m.steps?.some((s) => s.id === stepId)) return m
+        changed = true
+        return { ...m, steps: m.steps.map((s) => s.id === stepId ? { ...s, collapsed: !s.collapsed } : s) }
+      })
+      return changed ? next : prev
+    })
   }, [])
 
   const setMessages = useCallback((next: Msg[]) => {
+    startupRef.current = null
 	settlePendingSubmission(false)
 	draftGenerationRef.current += 1
     resetBuffers(textBufferRef, reasoningBufferRef, textDoneRef, reasoningDoneRef, activityBufferRef, hasStreamTextRef, streamBreakPendingRef, flushTimerRef)
@@ -617,27 +666,37 @@ export function useChat(): UseChatReturn {
     setTextState('')
     nextImageIDRef.current = 0
     setError(null)
+    // Replacing the displayed session must not release an in-flight Abort.
+    // Its acknowledgment still needs to settle the cancellation barrier.
+    if (!cancellationRef.current) {
+      setStopping(false)
+      sendingRef.current = false
+      abortedRef.current = false
+    }
     sidRef.current = null
     userSidRef.current = null
-    sendingRef.current = false
-    abortedRef.current = false
 	}, [deleteClipboardImage, settlePendingSubmission])
 
-  const clearMessages = useCallback(() => {
-	settlePendingSubmission(false)
-	draftGenerationRef.current += 1
-    resetBuffers(textBufferRef, reasoningBufferRef, textDoneRef, reasoningDoneRef, activityBufferRef, hasStreamTextRef, streamBreakPendingRef, flushTimerRef)
-    setMsgs([])
-    setText('')
-    nextImageIDRef.current = 0
-    setError(null)
-    sidRef.current = null
-    userSidRef.current = null
-    sendingRef.current = false
-    abortedRef.current = false
-  }, [setText, settlePendingSubmission])
+  const clearMessages = useCallback(() => setMessages([]), [setMessages])
 
-  return { msgs, text, setText, busy, error, send, stop, toggleStep, setMessages, clearMessages, imageAttachments, pasteImages }
+  return { msgs, text, setText, busy, stopping, error, send, stop, toggleStep, setMessages, clearMessages, imageAttachments, pasteImages }
+}
+
+// Runtime phases may carry tool details, e.g. "Running shell". Keep the UI
+// state finite; tool names and arguments are rendered by the tool steps.
+function normalizePhase(value: unknown): AgentPhase | null {
+  if (typeof value !== 'string') return null
+  const phase = value.trim().toLowerCase().split(/\s+/, 1)[0]
+  switch (phase) {
+    case 'ready':
+    case 'waiting':
+    case 'thinking':
+    case 'reasoning':
+    case 'running':
+      return phase
+    default:
+      return null
+  }
 }
 
 function fileDataURL(file: File): Promise<string> {
@@ -661,8 +720,12 @@ function insertImageMarkers(text: string, markers: string[], start: number, end:
 }
 
 function settleCompactions(msgs: Msg[], error: string): Msg[] {
-  return msgs.map((m) => m.compaction && (m.compaction.status === 'started' || m.compaction.status === 'delta')
-    ? { ...m, compaction: { ...m.compaction, status: 'failed', error } } : m)
+  return msgs.map((m) => settleCompaction(m, error))
+}
+
+function settleCompaction(m: Msg, error: string): Msg {
+  return m.compaction && (m.compaction.status === 'started' || m.compaction.status === 'delta')
+    ? { ...m, compaction: { ...m.compaction, status: 'failed', error } } : m
 }
 
 // A finished manual compaction already rendered its result card; the command
@@ -679,8 +742,10 @@ function upsert(prev: Msg[], sid: string | null, mutate: (m: Msg) => Msg): Msg[]
   if (!sid) return prev
   const i = prev.findIndex((m) => m.id === sid)
   if (i === -1) return prev
+  const updated = mutate(prev[i])
+  if (updated === prev[i]) return prev
   const next = [...prev]
-  next[i] = mutate(next[i])
+  next[i] = updated
   return next
 }
 
@@ -727,10 +792,6 @@ function addActivity(current: Msg['activity'] | undefined, delta: NonNullable<Ms
     fetches: base.fetches + delta.fetches,
     other: base.other + delta.other,
   }
-}
-
-function persistentTool(name: string): boolean {
-  return name === 'edit' || name === 'diff' || name === 'shell' || name === 'write'
 }
 
 function resetBuffers(

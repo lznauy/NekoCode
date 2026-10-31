@@ -58,8 +58,8 @@ func (a *App) CommandMenu(input string) *controlruntime.CommandMenu {
 	return a.impl.CommandMenu(input)
 }
 
-func (a *App) Abort() {
-	a.impl.Abort()
+func (a *App) Abort() error {
+	return a.impl.Abort()
 }
 
 func (a *App) CurrentModel() string {
@@ -78,8 +78,8 @@ func (a *App) SelectSkill(name string) error {
 	return a.impl.SelectSkill(name)
 }
 
-func (a *App) ClearSelectedSkill() {
-	a.impl.ClearSelectedSkill()
+func (a *App) ClearSelectedSkill() error {
+	return a.impl.ClearSelectedSkill()
 }
 
 func (a *App) GetConfig() controlruntime.ConfigView {
@@ -94,11 +94,15 @@ func (a *App) SaveConfig(cfg controlruntime.ConfigView) (controlruntime.ConfigVi
 	return a.impl.SaveConfig(cfg)
 }
 
+func (a *App) MCPAuthorizationAction(name, action string) error {
+	return a.impl.MCPAuthorizationAction(name, action)
+}
+
 func (a *App) GetSkillManagement() controlruntime.SkillManagementView {
 	return a.impl.GetSkillManagement()
 }
 
-func (a *App) RefreshSkillManagement() controlruntime.SkillManagementView {
+func (a *App) RefreshSkillManagement() (controlruntime.SkillManagementView, error) {
 	return a.impl.RefreshSkillManagement()
 }
 
@@ -126,16 +130,16 @@ func (a *App) ReadImageBase64(path string) (string, error) {
 	return a.impl.ReadImageBase64(path)
 }
 
-func (a *App) ReplyConfirm(id string, ok bool) {
-	a.impl.ReplyConfirm(id, ok)
+func (a *App) ReplyConfirm(id string, ok bool) error {
+	return a.impl.ReplyConfirm(id, ok)
 }
 
-func (a *App) ReplyConfirmDecision(id string, ok bool, remember bool) {
-	a.impl.ReplyConfirmDecision(id, ok, remember)
+func (a *App) ReplyConfirmDecision(id string, ok bool, remember bool) error {
+	return a.impl.ReplyConfirmDecision(id, ok, remember)
 }
 
-func (a *App) ReplyQuestion(id string, answersJSON string, rejected bool) {
-	a.impl.ReplyQuestion(id, answersJSON, rejected)
+func (a *App) ReplyQuestion(id string, answersJSON string, rejected bool) error {
+	return a.impl.ReplyQuestion(id, answersJSON, rejected)
 }
 
 func main() {

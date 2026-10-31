@@ -4,6 +4,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"nekocode/interaction"
 	"strings"
 	"time"
 
@@ -88,7 +89,7 @@ func NewModel(rt RuntimeClient) (*Model, error) {
 	if canObserveTasks(rt) {
 		filter.ExcludeSubagentDetails = true
 	}
-	events, err := rt.Events(context.Background(), filter)
+	events, err := interaction.SubscribeRunEvents(context.Background(), rt, filter)
 	if err != nil {
 		return nil, fmt.Errorf("subscribe runtime events: %w", err)
 	}

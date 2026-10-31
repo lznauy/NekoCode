@@ -376,7 +376,15 @@ func (s *Snapshot) saveAt(root string) error {
 			return fmt.Errorf("persist session messages: %w", err)
 		}
 	}
-	return writeAtomic(manifestPath, data, 0o600)
+	if err := writeAtomic(manifestPath, data, 0o600); err != nil {
+		return err
+	}
+	// Subagents use their own observation index. Only top-level sessions
+	// need picker metadata; a cache failure cannot invalidate a commit.
+	if root == dir() {
+		_, _ = loadMetaAt(root, s.ID)
+	}
+	return nil
 }
 
 // sessionMeta is a lightweight struct for deserializing only metadata from
@@ -392,14 +400,8 @@ type sessionMeta struct {
 	TranscriptSeq int             `json:"transcript_seq,omitempty"`
 }
 
-func loadMeta(id string) (Meta, error) {
+func decodeMeta(data []byte) (Meta, error) {
 	var sm sessionMeta
-	path := filepath.Join(dir(), id, "session.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return Meta{}, err
-	}
-	_ = os.Chmod(path, 0o600)
 	if err := json.Unmarshal(data, &sm); err != nil {
 		return Meta{}, err
 	}

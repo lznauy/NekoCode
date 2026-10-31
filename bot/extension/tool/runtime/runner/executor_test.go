@@ -910,8 +910,9 @@ func TestExecutor_PermissionDeniedByUserDoesNotLeakDialogToModel(t *testing.T) {
 	promptIdx := 0
 	e.SetConfirmFn(func(req protocol.ConfirmRequest) protocol.ConfirmReply {
 		promptIdx++
-		// The basic prompt has no approval context; the escalation prompt does.
-		if req.Approval != nil {
+		// The escalation asks for capabilities; the basic prompt only explains
+		// the command decision and previews remembered command rules.
+		if req.Approval != nil && len(req.Approval.Capabilities) > 0 {
 			return protocol.Deny() // user dismissed the escalation dialog
 		}
 		return protocol.AllowOnce() // basic prompt: allow
@@ -968,7 +969,7 @@ func TestExecutorShellRunPromptsCommandThenNetwork(t *testing.T) {
 	if len(prompts) != 2 {
 		t.Fatalf("expected command prompt then network prompt, got %d: %+v", len(prompts), prompts)
 	}
-	if prompts[0].Approval != nil {
+	if prompts[0].Approval == nil || len(prompts[0].Approval.Capabilities) > 0 {
 		t.Fatalf("first prompt must be command approval, got %+v", prompts[0])
 	}
 	if prompts[0].ToolName != "shell" {

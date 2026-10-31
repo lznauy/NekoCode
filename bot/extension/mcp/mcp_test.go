@@ -432,3 +432,78 @@ func TestAuthOverrideFailedStartConsumesOverride(t *testing.T) {
 	}
 	t.Fatal("failed background start must still consume the override")
 }
+
+func TestManagerRemoveClosesOutsideLock(t *testing.T) {
+	m := New()
+	defer m.Close()
+	closing := make(chan struct{})
+	old := &server{name: "test", client: &client{}, cancel: func() { close(closing) }}
+	m.servers["id"] = old
+	m.owners["test"] = "id"
+	m.health["test"] = Health{Status: StatusReady}
+	old.client.mu.Lock()
+	removed := make(chan struct{})
+	go func() { m.Remove("id"); close(removed) }()
+	var release sync.Once
+	defer func() { release.Do(old.client.mu.Unlock); <-removed }()
+	select {
+	case <-closing:
+	case <-time.After(time.Second):
+		t.Fatal("removal did not begin")
+	}
+	replacement := &server{name: "test", client: &client{}}
+	responsive := make(chan struct{})
+	go func() {
+		m.Health()
+		m.mu.Lock()
+		m.servers["id"] = replacement
+		m.owners["test"] = "id"
+		m.health["test"] = Health{Status: StatusReady}
+		m.mu.Unlock()
+		close(responsive)
+	}()
+	select {
+	case <-responsive:
+	case <-time.After(time.Second):
+		t.Fatal("manager lock held while waiting for client close")
+	}
+	release.Do(old.client.mu.Unlock)
+	<-removed
+	m.mu.Lock()
+	current := m.servers["id"]
+	m.mu.Unlock()
+	if current != replacement || m.Owner("test") != "id" {
+		t.Fatal("old removal changed the replacement registration")
+	}
+}
+
+func TestManagerCloseWaitsForDetachedClient(t *testing.T) {
+	m := New()
+	closing := make(chan struct{})
+	old := &server{name: "test", client: &client{}, cancel: func() { close(closing) }}
+	m.servers["id"] = old
+	m.owners["test"] = "id"
+	old.client.mu.Lock()
+	var release sync.Once
+	removed := make(chan struct{})
+	go func() { m.Remove("id"); close(removed) }()
+	defer func() { release.Do(old.client.mu.Unlock); <-removed; m.Close() }()
+	select {
+	case <-closing:
+	case <-time.After(time.Second):
+		t.Fatal("removal did not begin")
+	}
+	closed := make(chan struct{})
+	go func() { m.Close(); close(closed) }()
+	select {
+	case <-closed:
+		t.Fatal("manager closed before detached client finished")
+	case <-time.After(100 * time.Millisecond):
+	}
+	release.Do(old.client.mu.Unlock)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("manager did not finish closing")
+	}
+}

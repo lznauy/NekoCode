@@ -1,6 +1,7 @@
 package syncer
 
 import (
+	"errors"
 	"fmt"
 	"nekocode/logger"
 	"os"
@@ -18,20 +19,23 @@ import (
 
 // Syncer watches for file changes and updates the graph incrementally.
 type Syncer struct {
-	indexer  *indexerpkg.Indexer
-	graph    *graphpkg.Graph
-	graphMu  *sync.RWMutex
-	watcher  *fsnotify.Watcher
-	cwd      string
-	mu       sync.Mutex
-	stopCh   chan struct{}
-	doneCh   chan struct{}
-	start    sync.Once
-	stop     sync.Once
-	stopErr  error
-	healthMu sync.RWMutex
-	state    string
-	lastErr  error
+	indexer *indexerpkg.Indexer
+	graph   *graphpkg.Graph
+	graphMu *sync.RWMutex
+	watcher *fsnotify.Watcher
+	// Owned by the watcher goroutine after Start; retain identities even
+	// when fsnotify automatically removes a deleted directory's watch.
+	watchDirs map[string]struct{}
+	cwd       string
+	mu        sync.Mutex
+	stopCh    chan struct{}
+	doneCh    chan struct{}
+	start     sync.Once
+	stop      sync.Once
+	stopErr   error
+	healthMu  sync.RWMutex
+	state     string
+	lastErr   error
 }
 
 const (
@@ -45,12 +49,13 @@ var newWatcher = fsnotify.NewWatcher
 // NewSyncer creates a new file syncer.
 func NewSyncer(indexer *indexerpkg.Indexer, cwd string, graphMu *sync.RWMutex) (*Syncer, error) {
 	s := &Syncer{
-		indexer: indexer,
-		graphMu: graphMu,
-		cwd:     cwd,
-		stopCh:  make(chan struct{}),
-		doneCh:  make(chan struct{}),
-		state:   StateStopped,
+		indexer:   indexer,
+		graphMu:   graphMu,
+		cwd:       cwd,
+		stopCh:    make(chan struct{}),
+		doneCh:    make(chan struct{}),
+		state:     StateStopped,
+		watchDirs: make(map[string]struct{}),
 	}
 	watcher, err := newWatcher()
 	if err != nil {
@@ -61,7 +66,7 @@ func NewSyncer(indexer *indexerpkg.Indexer, cwd string, graphMu *sync.RWMutex) (
 	s.watcher = watcher
 
 	// Add directories to watch
-	if err := s.addWatchDirs(cwd); err != nil {
+	if err := s.addWatchDirs(cwd, nil); err != nil {
 		if closeErr := watcher.Close(); closeErr != nil {
 			err = fmt.Errorf("%w (close watcher: %v)", err, closeErr)
 		}
@@ -97,13 +102,16 @@ func (s *Syncer) setState(state string, err error) {
 }
 
 // addWatchDirs recursively adds directories to the watcher.
-func (s *Syncer) addWatchDirs(dir string) error {
+func (s *Syncer) addWatchDirs(dir string, files map[string]fsnotify.Op) error {
 	const maxDepth = 10
 	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}
 		if !info.IsDir() {
+			if files != nil && indexerpkg.SupportsFile(path) {
+				files[path] |= fsnotify.Create
+			}
 			return nil
 		}
 		name := info.Name()
@@ -111,11 +119,15 @@ func (s *Syncer) addWatchDirs(dir string) error {
 			return filepath.SkipDir
 		}
 		// Depth limit
-		rel, _ := filepath.Rel(dir, path)
+		rel, _ := filepath.Rel(s.cwd, path)
 		if rel != "." && strings.Count(rel, string(filepath.Separator)) >= maxDepth {
 			return filepath.SkipDir
 		}
-		return s.watcher.Add(path)
+		if err := s.watcher.Add(path); err != nil {
+			return err
+		}
+		s.watchDirs[path] = struct{}{}
+		return nil
 	})
 }
 
@@ -155,25 +167,47 @@ func (s *Syncer) run() {
 				s.degrade(fmt.Errorf("watcher events channel closed"))
 				return
 			}
-			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove) == 0 {
+			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove|fsnotify.Rename) == 0 {
 				continue
 			}
-
-			if event.Op&fsnotify.Create != 0 {
-				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-					if !indexerpkg.ShouldSkipDir(info.Name()) {
-						if err := s.watcher.Add(event.Name); err != nil {
-							s.degrade(fmt.Errorf("watch new directory: %w", err))
+			// Watches on moved directory inodes can keep reporting their old
+			// paths. Remove them before registering the destination tree.
+			removedDirectory := false
+			if event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
+				prefix := strings.TrimSuffix(event.Name, string(filepath.Separator)) + string(filepath.Separator)
+				for watched := range s.watchDirs {
+					if watched == event.Name || strings.HasPrefix(watched, prefix) {
+						removedDirectory = true
+						delete(s.watchDirs, watched)
+						if err := s.watcher.Remove(watched); err != nil && !errors.Is(err, fsnotify.ErrNonExistentWatch) {
+							s.degrade(fmt.Errorf("remove moved directory watch: %w", err))
 						}
 					}
-					continue
 				}
 			}
 
-			if !indexerpkg.SupportsFile(event.Name) {
+			isDirectory := false
+			if event.Op&fsnotify.Create != 0 {
+				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
+					isDirectory = true
+					before := len(pendingChanges)
+					if err := s.addWatchDirs(event.Name, pendingChanges); err != nil {
+						s.degrade(fmt.Errorf("watch new directory: %w", err))
+					}
+					if len(pendingChanges) == before {
+						continue // Empty or ignored directories do not delay a pending batch.
+					}
+				}
+			}
+			if !isDirectory {
+				if !indexerpkg.SupportsFile(event.Name) && !removedDirectory {
+					continue
+				}
+				pendingChanges[event.Name] |= event.Op
+			}
+			if len(pendingChanges) == 0 {
 				continue
 			}
-			pendingChanges[event.Name] |= event.Op
 			if debounceTimer == nil {
 				debounceTimer = time.NewTimer(500 * time.Millisecond)
 			} else {
@@ -211,6 +245,30 @@ func (s *Syncer) run() {
 // handleFileChanges reads the final file states before taking the graph lock.
 // One batch performs reference resolution only after all updates are published.
 func (s *Syncer) handleFileChanges(events map[string]fsnotify.Op) {
+	var removed []string
+	for path, op := range events {
+		if op&(fsnotify.Remove|fsnotify.Rename) != 0 {
+			removed = append(removed, path)
+		}
+	}
+	if len(removed) > 0 {
+		indexed, err := s.indexer.IndexedFilePaths()
+		if err != nil {
+			s.degrade(fmt.Errorf("list removed index paths: %w", err))
+			return
+		}
+		// Include descendants of moved directories, then read their final
+		// states below so a recreated path is updated rather than deleted.
+		for _, path := range indexed {
+			for _, root := range removed {
+				prefix := strings.TrimSuffix(root, string(filepath.Separator)) + string(filepath.Separator)
+				if path == root || strings.HasPrefix(path, prefix) {
+					events[path] |= fsnotify.Remove
+					break
+				}
+			}
+		}
+	}
 	paths := make([]string, 0, len(events))
 	for path := range events {
 		paths = append(paths, path)
@@ -218,6 +276,9 @@ func (s *Syncer) handleFileChanges(events map[string]fsnotify.Op) {
 	sort.Strings(paths)
 	changes := make([]indexerpkg.FileChange, 0, len(paths))
 	for _, path := range paths {
+		if !indexerpkg.SupportsFile(path) {
+			continue
+		}
 		content, err := os.ReadFile(path)
 		if os.IsNotExist(err) {
 			changes = append(changes, indexerpkg.FileChange{Path: path, Deleted: true})

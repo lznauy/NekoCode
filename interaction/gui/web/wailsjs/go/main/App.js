@@ -22,12 +22,12 @@ export function CurrentModel() {
   return window['go']['main']['App']['CurrentModel']();
 }
 
-export function DeleteSession(arg1) {
-  return window['go']['main']['App']['DeleteSession'](arg1);
-}
-
 export function DeleteClipboardImage(arg1) {
   return window['go']['main']['App']['DeleteClipboardImage'](arg1);
+}
+
+export function DeleteSession(arg1) {
+  return window['go']['main']['App']['DeleteSession'](arg1);
 }
 
 export function GetConfig() {
@@ -44,6 +44,10 @@ export function ListSessions() {
 
 export function LoadSession(arg1) {
   return window['go']['main']['App']['LoadSession'](arg1);
+}
+
+export function MCPAuthorizationAction(arg1, arg2) {
+  return window['go']['main']['App']['MCPAuthorizationAction'](arg1, arg2);
 }
 
 export function NewSession() {
@@ -74,12 +78,12 @@ export function ResolveModelProfile(arg1) {
   return window['go']['main']['App']['ResolveModelProfile'](arg1);
 }
 
-export function SaveConfig(arg1) {
-  return window['go']['main']['App']['SaveConfig'](arg1);
-}
-
 export function SaveClipboardImage(arg1) {
   return window['go']['main']['App']['SaveClipboardImage'](arg1);
+}
+
+export function SaveConfig(arg1) {
+  return window['go']['main']['App']['SaveConfig'](arg1);
 }
 
 export function SelectSkill(arg1) {
@@ -97,5 +101,3 @@ export function SetPluginEnabled(arg1, arg2) {
 export function SwitchModel(arg1) {
   return window['go']['main']['App']['SwitchModel'](arg1);
 }
-
-export function MCPAuthorizationAction(name, action) { return window["go"]["main"]["App"]["MCPAuthorizationAction"](name, action); }

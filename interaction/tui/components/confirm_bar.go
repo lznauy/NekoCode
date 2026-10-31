@@ -384,8 +384,17 @@ func (c *ConfirmBar) formatPermissionDesc() string {
 		return strings.Join(lines, "\n")
 	}
 	approvalReason := approval.Risk
+	if approvalReason == "" {
+		approvalReason = approval.Reason
+	}
 	if approvalReason != "" {
-		lines = append(lines, "风险: "+friendlyPermissionReason(approvalReason))
+		lines = append(lines, "确认原因: "+friendlyPermissionReason(approvalReason))
+	}
+	if source := map[string]string{"user_rule": "命中用户设置的询问规则", "builtin_rule": "命中内置询问规则", "default_policy": "当前权限策略需要人工确认", "workspace": "需要扩展工作区访问范围", "capability": "需要授予额外执行权限"}[approval.Source]; source != "" {
+		lines = append(lines, "审批来源: "+source)
+	}
+	if approval.Rule != "" {
+		lines = append(lines, "触发规则: "+approval.Rule)
 	}
 	if len(approval.Structures) > 0 {
 		lines = append(lines, "结构: "+friendlyShellStructures(approval.Structures))
@@ -421,10 +430,20 @@ func (c *ConfirmBar) formatPermissionDesc() string {
 	if len(approval.WritePaths) > 0 {
 		lines = append(lines, "可写目录: "+strings.Join(approval.WritePaths, "、"))
 	}
-	// Footer note for jev-judged approvals: the dialog must make it obvious
-	// that the machine judge (not a rule) sent this call to the user.
-	if strings.HasPrefix(approval.Risk, "jev:") || strings.HasPrefix(approval.Reason, "jev:") {
-		lines = append(lines, "※ 本命令经过 Jev 判定，需要授权确认")
+	if approval.CanRemember() {
+		if approval.RememberWorkspace != "" {
+			lines = append(lines, "记住后生效项目: "+approval.RememberWorkspace)
+		}
+		for _, rule := range approval.RememberRules {
+			text := rule.Tool + "(" + rule.Specifier + ")"
+			if rule.Literal != "" {
+				text = "完整命令，仅精确匹配: " + rule.Literal
+			}
+			lines = append(lines, "将记住: "+text)
+		}
+		if len(approval.Capabilities) > 0 {
+			lines = append(lines, "同时记住所使用的目录和网络授权范围。")
+		}
 	}
 	return strings.Join(lines, "\n")
 }
@@ -464,6 +483,8 @@ func friendlyPermissionReason(reason string) string {
 		return "命令需要访问公共网络。"
 	case "jev: judged dangerous":
 		return "Jev 判定该命令存在风险。"
+	case "jev: judgment failed":
+		return "jev判断失败，请手动决定。"
 	case "jev: URL judged risky by the risk judge":
 		return "Jev 判定该 URL 存在风险。"
 	}

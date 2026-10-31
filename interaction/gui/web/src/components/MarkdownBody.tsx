@@ -2,7 +2,7 @@ import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { CodeBlock } from './CodeBlock'
-import { memo, useMemo } from 'react'
+import { memo } from 'react'
 
 interface MarkdownBodyProps {
   text: string
@@ -40,16 +40,11 @@ const markdownComponents: Components = {
 const remarkPlugins = [remarkGfm]
 
 export const MarkdownBody = memo(function MarkdownBody({ text }: MarkdownBodyProps) {
-  // text 不变时复用上次的 React 元素树, 避免每次父级渲染都重新走 ReactMarkdown 的 AST 解析。
-  const rendered = useMemo(
-    () => (
-      <div className="markdown">
-        <ReactMarkdown remarkPlugins={remarkPlugins} components={markdownComponents}>
-          {text}
-        </ReactMarkdown>
-      </div>
-    ),
-    [text],
+  return (
+    <div className="markdown">
+      <ReactMarkdown remarkPlugins={remarkPlugins} components={markdownComponents}>
+        {text}
+      </ReactMarkdown>
+    </div>
   )
-  return rendered
 })

@@ -263,6 +263,7 @@ func permissionToolAliases(toolName string) []string {
 func approvalContextFromPermission(req core.PermissionRequest) *protocol.ApprovalContext {
 	domains, _ := netpolicy.FromDetails(req.Details)
 	context := &protocol.ApprovalContext{
+		Source:          "capability",
 		OutboundDomains: domains,
 		Reason:          req.Reason,
 		Capabilities:    append([]string(nil), req.Capabilities...),

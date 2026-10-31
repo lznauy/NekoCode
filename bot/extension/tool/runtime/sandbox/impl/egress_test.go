@@ -15,6 +15,16 @@ import (
 	"time"
 )
 
+func BenchmarkPublicEgressAddress(b *testing.B) {
+	ip := netip.MustParseAddr("8.8.8.8")
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if !publicEgressAddress(ip) {
+			b.Fatal("public address rejected")
+		}
+	}
+}
+
 func TestPublicEgressAddressRejectsSiteLocalIPv6(t *testing.T) {
 	for _, tc := range []struct {
 		address string

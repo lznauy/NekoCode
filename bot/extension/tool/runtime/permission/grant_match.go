@@ -107,7 +107,8 @@ func intersectsWritePath(left, right []string) bool {
 }
 
 func pathWithinRoot(path, root string) bool {
-	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
+	prefix := strings.TrimSuffix(root, string(filepath.Separator)) + string(filepath.Separator)
+	return path == root || strings.HasPrefix(path, prefix)
 }
 
 // WritePathsFromRequest extracts and normalizes writePaths from a permission

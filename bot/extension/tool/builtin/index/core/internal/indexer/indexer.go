@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 
 	dbpkg "nekocode/bot/extension/tool/builtin/index/core/internal/db"
@@ -36,6 +37,22 @@ func (i *Indexer) Close() error {
 }
 
 func (i *Indexer) RecordSync() error { return i.db.RecordSync() }
+
+// IndexedFilePaths includes metadata-only files, even when no graph is loaded.
+func (i *Indexer) IndexedFilePaths() ([]string, error) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	hashes, err := i.db.LoadFileHashes()
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(hashes))
+	for path := range hashes {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
 
 func (i *Indexer) Status() (dbpkg.Status, error) {
 	i.mu.Lock()

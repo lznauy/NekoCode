@@ -40,6 +40,45 @@ describe('useSessions', () => {
     mockSafeDeleteSession.mockResolvedValue()
   })
 
+  it('settles loading when a session event supersedes a refresh and its list request fails', async () => {
+    let finishOld!: (value: SessionMeta[]) => void
+    mockSafeListSessions.mockReturnValueOnce(new Promise(resolve => { finishOld = resolve }))
+      .mockRejectedValueOnce(new Error('bridge failed'))
+    const { result } = renderHook(() => useSessions())
+    expect(result.current.loading).toBe(true)
+    await act(async () => sessionChanged?.({ id: 'draft', reason: 'new' }))
+    await act(async () => finishOld([]))
+    expect(result.current.error).toContain('bridge failed')
+    expect(result.current.loading).toBe(false)
+  })
+
+  it('ignores an old load after an authoritative session change', async () => {
+    const { result } = renderHook(() => useSessions())
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    let resolveOld!: (value: []) => void
+    mockSafeLoadSession.mockReturnValue(new Promise<[]>((resolve) => { resolveOld = resolve }))
+    let old!: Promise<unknown>
+    act(() => { old = result.current.switchSession('old') })
+    act(() => sessionChanged?.({ id: 'new', reason: 'resume' }))
+    await act(async () => { resolveOld([]); expect(await old).toBeNull() })
+    expect(result.current.currentId).toBe('new')
+  })
+
+  it.each(['resume', 'delete'])('preserves an own %s finalization error after its committed event', async (reason) => {
+    mockSafeListSessions.mockResolvedValue([meta('current')])
+    const { result } = renderHook(() => useSessions())
+    await waitFor(() => expect(result.current.currentId).toBe('current'))
+    let reject!: (error: Error) => void
+    const pending = new Promise<never>((_, fail) => { reject = fail })
+    if (reason === 'delete') mockSafeDeleteSession.mockReturnValue(pending)
+    else mockSafeLoadSession.mockReturnValue(pending)
+    let operation!: Promise<unknown>
+    act(() => { operation = reason === 'delete' ? result.current.deleteSession('current') : result.current.switchSession('current') })
+    act(() => sessionChanged?.({ id: reason === 'delete' ? '' : 'current', reason, changedId: 'current', currentChanged: true }))
+    await act(async () => { reject(new Error('finalization failed')); await operation })
+    expect(result.current.error).toContain('finalization failed')
+  })
+
   it('does not reload current messages when another session is deleted', () => {
 	expect(shouldReloadSessionMessages({
 	  id: 'current', reason: 'delete', changedId: 'other', currentChanged: false, messages: [],

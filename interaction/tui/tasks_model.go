@@ -51,6 +51,8 @@ type taskOverlay struct {
 }
 
 type taskDetail struct {
+	fullPrompt          string
+	fullPromptLoaded    bool
 	id                  string
 	info                controlruntime.SubagentSummary
 	page                controlruntime.SubagentHistoryPage
@@ -103,6 +105,8 @@ type taskListMsg struct {
 	err                 error
 }
 type taskHistoryMsg struct {
+	prompt              string
+	promptLoaded        bool
 	generation, request uint64
 	id                  string
 	before              int
@@ -319,9 +323,56 @@ func (m *Model) loadTaskHistory(before int) tea.Cmd {
 	}
 	generation, request, parent, id := s.generation, d.request, s.sessionID, d.id
 	reader := m.Runtime.(controlruntime.SubagentReader)
+	promptStart, promptEnd := 1, 0
+	if d.attempt != nil {
+		promptStart, promptEnd = d.attempt.TranscriptStart, d.attempt.TranscriptEnd
+	}
+	needPrompt := !d.fullPromptLoaded && promptStart > 0
 	return func() tea.Msg {
 		page, err := reader.SubagentHistory(parent, id, before, 100)
-		return taskHistoryMsg{generation, request, id, before, page, err}
+		reply := taskHistoryMsg{generation: generation, request: request, id: id, before: before, page: page, err: err}
+		if err != nil || !needPrompt {
+			return reply
+		}
+		end := page.Total
+		if promptEnd > 0 {
+			end = min(end, promptEnd)
+		}
+		for sequence := promptStart; sequence <= end; sequence++ {
+			find := func(p controlruntime.SubagentHistoryPage) *controlruntime.SubagentRecord {
+				for _, record := range p.Records {
+					if record.Sequence == sequence && !record.ContextOnly {
+						return &record
+					}
+				}
+				return nil
+			}
+			record := find(page)
+			if record == nil {
+				// Resume can append interrupted tool outcomes before the task.
+				// Read only that prefix, one indexed record at a time, without
+				// loading older attempts or scanning the entire transcript.
+				head, promptErr := reader.SubagentHistory(parent, id, sequence+1, 1)
+				if promptErr != nil {
+					reply.err = fmt.Errorf("读取完整任务提示词: %w", promptErr)
+					return reply
+				}
+				record = find(head)
+			}
+			if record == nil {
+				break
+			}
+			if record.Role == "user" && !record.RuntimeEvent {
+				reply.prompt = strings.TrimPrefix(record.Content, "[Current delegated task]\n")
+				reply.promptLoaded = true
+				return reply
+			}
+			if record.Role != "tool" {
+				break
+			}
+		}
+		reply.err = fmt.Errorf("未找到本轮完整任务提示词（起始记录 %d）", promptStart)
+		return reply
 	}
 }
 
@@ -500,6 +551,9 @@ func (m *Model) handleTaskMessage(msg tea.Msg) (bool, tea.Cmd) {
 			return true, nil
 		}
 		d.err = ""
+		if msg.promptLoaded {
+			d.fullPrompt, d.fullPromptLoaded = msg.prompt, true
+		}
 		tailRefresh := d.attempt != nil && d.isLatestAttempt() && len(d.cursors) == 1 && msg.before >= d.loadedCursor
 		if !d.follow && len(d.page.Records) > 0 && (msg.before == d.loadedCursor || tailRefresh) && msg.page.End > d.page.End {
 			d.newRecords = max(d.newRecords, msg.page.Total-d.seenTranscriptSeq)
@@ -778,6 +832,7 @@ func (m *Model) toggleTaskAttempts() tea.Cmd {
 func (m *Model) selectTaskAttempt(attempt *controlruntime.SubagentAttemptSummary) tea.Cmd {
 	d := m.tasks.detail
 	d.attempt = cloneTaskAttempt(attempt)
+	d.fullPrompt, d.fullPromptLoaded = "", false
 	d.showAttempts = false
 	d.showProcess = false
 	d.newAttempt = false

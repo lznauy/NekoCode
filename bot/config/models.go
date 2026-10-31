@@ -49,25 +49,29 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 
 // Match field names exactly before decoding: encoding/json otherwise accepts
 // case variants and silently applies duplicate fields in sequence.
-func configFields(data []byte) (map[string]json.RawMessage, error) {
+var configFieldNames = func() map[string]bool {
 	allowed := make(map[string]bool)
 	typ := reflect.TypeOf(Config{})
 	for i := 0; i < typ.NumField(); i++ {
 		name, _, _ := strings.Cut(typ.Field(i).Tag.Get("json"), ",")
 		allowed[name] = true
 	}
+	return allowed
+}()
+
+func configFields(data []byte) (map[string]bool, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	if _, err := decoder.Token(); err != nil {
 		return nil, err
 	}
-	fields := make(map[string]json.RawMessage)
+	fields := make(map[string]bool)
 	for decoder.More() {
 		token, err := decoder.Token()
 		if err != nil {
 			return nil, err
 		}
 		name, ok := token.(string)
-		if !ok || !allowed[name] {
+		if !ok || !configFieldNames[name] {
 			return nil, fmt.Errorf("unknown field %q", token)
 		}
 		if _, duplicate := fields[name]; duplicate {
@@ -77,7 +81,7 @@ func configFields(data []byte) (map[string]json.RawMessage, error) {
 		if err := decoder.Decode(&value); err != nil {
 			return nil, err
 		}
-		fields[name] = value
+		fields[name] = true
 	}
 	if _, err := decoder.Token(); err != nil {
 		return nil, err

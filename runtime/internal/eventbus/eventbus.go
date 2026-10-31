@@ -150,25 +150,29 @@ func (s *subscriber) enqueue(ev core.Event) {
 		return
 	}
 	if len(s.queue) >= defaultSubscriberQueueLimit {
-		if s.filter.Reliable {
+		if !s.filter.Reliable {
+			if !mustDeliverEvent(ev) {
+				s.mu.Unlock()
+				return
+			}
+			for i, queued := range s.queue {
+				if mustDeliverEvent(queued) {
+					continue
+				}
+				copy(s.queue[i:], s.queue[i+1:])
+				s.queue[len(s.queue)-1] = core.Event{}
+				s.queue = s.queue[:len(s.queue)-1]
+				break
+			}
+		}
+		// If no expendable event remains, disconnect rather than silently
+		// losing a control event or allowing an unbounded backlog.
+		if len(s.queue) >= defaultSubscriberQueueLimit {
 			s.failed = true
 			s.queue = nil
 			s.close()
 			s.mu.Unlock()
 			return
-		}
-		if !mustDeliverEvent(ev) {
-			s.mu.Unlock()
-			return
-		}
-		for i, queued := range s.queue {
-			if mustDeliverEvent(queued) {
-				continue
-			}
-			copy(s.queue[i:], s.queue[i+1:])
-			s.queue[len(s.queue)-1] = core.Event{}
-			s.queue = s.queue[:len(s.queue)-1]
-			break
 		}
 	}
 	s.queue = append(s.queue, ev)

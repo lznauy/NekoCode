@@ -103,6 +103,8 @@ func TestSubagentModelsConcurrentAndResume(t *testing.T) {
 			data, _ := json.Marshal(map[string]any{"choices": []any{choice}})
 			fmt.Fprintf(w, "data: %s\n\n", data)
 		}
+		// Valid usage without cache fields must still count toward task usage.
+		fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"total_tokens\":110}}\n\n")
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	defer server.Close()
@@ -183,6 +185,10 @@ func TestSubagentModelsConcurrentAndResume(t *testing.T) {
 	write(filepath.Join(dir, "agents", "fast.md"), profile("fast", "openai/deep"))
 	b.ext.Reload()
 	run("fast", "", true)
+	usage := b.ctxMgr.Report()
+	if usage.SubCount != 4 || usage.SubTokens != 440 || usage.SubCacheHit != 0 || usage.SubCacheMiss != 0 {
+		t.Fatalf("subagent usage without cache details: count=%d tokens=%d hit=%d miss=%d", usage.SubCount, usage.SubTokens, usage.SubCacheHit, usage.SubCacheMiss)
+	}
 	child, err := session.OpenSubagent(b.sess.CurrentID(), "fast", root, true)
 	if err != nil {
 		t.Fatal(err)

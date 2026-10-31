@@ -26,6 +26,7 @@ type ToolDecision string
 const (
 	ToolDecisionJevSafe           ToolDecision = "jev_safe"
 	ToolDecisionJevDangerous      ToolDecision = "jev_dangerous"
+	ToolDecisionJevFailed         ToolDecision = "jev_failed"
 	ToolDecisionJevURLSafe        ToolDecision = "jev_url_safe"
 	ToolDecisionJevURLUnavailable ToolDecision = "jev_url_unavailable"
 	ToolDecisionJevURLRisky       ToolDecision = "jev_url_risky"
@@ -214,16 +215,27 @@ const (
 // these facts separate from tool Args gives policy enforcement and every UI a
 // single typed contract; Args remains the original tool invocation only.
 type ApprovalContext struct {
-	Risk            string        `json:"risk,omitempty"`
-	Reason          string        `json:"reason,omitempty"`
-	Structures      []string      `json:"structures,omitempty"`
-	Capabilities    []string      `json:"capabilities,omitempty"`
-	Scope           ApprovalScope `json:"scope,omitempty"`
-	Workspace       string        `json:"workspace,omitempty"`
-	Sandbox         string        `json:"sandbox,omitempty"`
-	OutboundDomains []string      `json:"outbound_domains"`
-	WritePaths      []string      `json:"write_paths,omitempty"`
-	Combined        bool          `json:"combined,omitempty"`
+	Source            string                 `json:"source,omitempty"`
+	Rule              string                 `json:"rule,omitempty"`
+	RememberRules     []ApprovalRememberRule `json:"remember_rules,omitempty"`
+	RememberWorkspace string                 `json:"remember_workspace,omitempty"`
+	Risk              string                 `json:"risk,omitempty"`
+	Reason            string                 `json:"reason,omitempty"`
+	Structures        []string               `json:"structures,omitempty"`
+	Capabilities      []string               `json:"capabilities,omitempty"`
+	Scope             ApprovalScope          `json:"scope,omitempty"`
+	Workspace         string                 `json:"workspace,omitempty"`
+	Sandbox           string                 `json:"sandbox,omitempty"`
+	OutboundDomains   []string               `json:"outbound_domains"`
+	WritePaths        []string               `json:"write_paths,omitempty"`
+	Combined          bool                   `json:"combined,omitempty"`
+}
+
+// ApprovalRememberRule previews the same rule that the executor will persist.
+type ApprovalRememberRule struct {
+	Tool      string `json:"tool"`
+	Specifier string `json:"specifier,omitempty"`
+	Literal   string `json:"literal,omitempty"`
 }
 
 func (c *ApprovalContext) CanRemember() bool {
@@ -235,6 +247,7 @@ func (c *ApprovalContext) Clone() *ApprovalContext {
 		return nil
 	}
 	clone := *c
+	clone.RememberRules = append([]ApprovalRememberRule(nil), c.RememberRules...)
 	clone.Structures = append([]string(nil), c.Structures...)
 	clone.Capabilities = append([]string(nil), c.Capabilities...)
 	clone.WritePaths = append([]string(nil), c.WritePaths...)

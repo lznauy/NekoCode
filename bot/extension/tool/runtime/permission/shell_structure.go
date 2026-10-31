@@ -24,7 +24,8 @@ const (
 
 // ShellStructureReport is a stable, ordered classification of one shell
 // command. Dynamic reports whether command-level allow patterns are
-// insufficient and an explicit approval is required.
+// insufficient; authorization then needs an exact approval or an active
+// auto judge's safe verdict for the complete command.
 type ShellStructureReport struct {
 	Structures []ShellStructure
 }

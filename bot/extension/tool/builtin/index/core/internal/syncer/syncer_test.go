@@ -58,6 +58,132 @@ func TestSyncerIndexesAndRemovesSupportedFileEvents(t *testing.T) {
 	})
 }
 
+func TestSyncerRemovesRenamedPaths(t *testing.T) {
+	for _, mode := range []string{"file", "directory", "directory_moved_out"} {
+		t.Run(mode, func(t *testing.T) {
+			cwd := t.TempDir()
+			old := filepath.Join(cwd, "old")
+			next := filepath.Join(cwd, "next")
+			oldFile, nextFile := filepath.Join(old, "nested", "source.go"), filepath.Join(next, "nested", "source.go")
+			if mode == "file" {
+				old, next = old+".go", next+".go"
+				oldFile, nextFile = old, next
+			}
+			if mode == "directory_moved_out" {
+				next = filepath.Join(t.TempDir(), "moved")
+			}
+			if err := os.MkdirAll(filepath.Dir(oldFile), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(oldFile, []byte("package sample\nfunc Original() {}\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			idx, err := indexerpkg.NewIndexer(filepath.Join(t.TempDir(), "index.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer idx.Close()
+			var mu sync.RWMutex
+			g := graphpkg.NewGraph()
+			s, err := NewSyncer(idx, cwd, &mu)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.SetGraph(g)
+			s.handleFileChanges(map[string]fsnotify.Op{oldFile: fsnotify.Create})
+			s.Start()
+			defer s.Stop()
+			if err := os.Rename(old, next); err != nil {
+				t.Fatal(err)
+			}
+			waitForGraph(t, &mu, g, func(g *graphpkg.Graph) bool {
+				return !g.HasFileInfo(oldFile) && (mode == "directory_moved_out" || g.HasFileInfo(nextFile))
+			})
+			if mode != "directory_moved_out" {
+				if err := os.WriteFile(nextFile, []byte("package sample\nfunc Updated() {}\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				waitForGraph(t, &mu, g, func(g *graphpkg.Graph) bool {
+					return len(g.FindNodesByName("Updated")) == 1 && len(g.FindNodesByName("Original")) == 0
+				})
+			}
+		})
+	}
+}
+
+func TestRemovedDirectoryPreservesSiblingIndex(t *testing.T) {
+	for _, metadataOnly := range []bool{false, true} {
+		cwd := t.TempDir()
+		idx, err := indexerpkg.NewIndexer(filepath.Join(t.TempDir(), "index.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var g *graphpkg.Graph
+		if !metadataOnly {
+			g = graphpkg.NewGraph()
+		}
+		removed := filepath.Join(cwd, "old", "source.go")
+		sibling := filepath.Join(cwd, "old-sibling", "source.go")
+		for _, path := range []string{removed, sibling} {
+			if err := idx.UpsertFile(g, cwd, path, []byte("package sample\nfunc Example() {}\n")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		s := &Syncer{indexer: idx, graph: g, cwd: cwd}
+		s.handleFileChanges(map[string]fsnotify.Op{filepath.Join(cwd, "old"): fsnotify.Rename})
+		paths, err := idx.IndexedFilePaths()
+		if err != nil || len(paths) != 1 || paths[0] != sibling {
+			t.Fatalf("metadataOnly=%v paths=%v err=%v", metadataOnly, paths, err)
+		}
+		if err := idx.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestUnsupportedRemovalsDoNotDelayPendingIndexUpdate(t *testing.T) {
+	cwd := t.TempDir()
+	ignored := filepath.Join(cwd, ".ignored")
+	if err := os.Mkdir(ignored, 0700); err != nil {
+		t.Fatal(err)
+	}
+	idx, err := indexerpkg.NewIndexer(filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	var mu sync.RWMutex
+	g := graphpkg.NewGraph()
+	s, err := NewSyncer(idx, cwd, &mu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetGraph(g)
+	s.Start()
+	defer s.Stop()
+	if err := os.WriteFile(filepath.Join(cwd, "source.go"), []byte("package sample\nfunc Ready() {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case <-tick.C:
+			mu.RLock()
+			ready := len(g.FindNodesByName("Ready")) == 1
+			mu.RUnlock()
+			if ready {
+				return
+			}
+			s.watcher.Events <- fsnotify.Event{Name: filepath.Join(cwd, "ignored.tmp"), Op: fsnotify.Remove}
+			s.watcher.Events <- fsnotify.Event{Name: ignored, Op: fsnotify.Create}
+		case <-deadline:
+			t.Fatal("unrelated removals starved the supported file update")
+		}
+	}
+}
+
 func TestSyncerIgnoresUnsupportedFiles(t *testing.T) {
 	cwd := t.TempDir()
 	idx, err := indexerpkg.NewIndexer(filepath.Join(cwd, "index.db"))

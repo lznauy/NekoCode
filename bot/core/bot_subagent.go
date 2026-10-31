@@ -24,6 +24,10 @@ import (
 	"time"
 )
 
+func (b *Bot) WireTaskLister(list taskbridge.TaskLister) {
+	b.toolbox.WireTaskLister(list)
+}
+
 func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provider.LLM, ag *agentcore.Agent) {
 	registry := b.toolbox.Registry
 	ctxMgr := b.ctxMgr
@@ -215,7 +219,7 @@ func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provi
 			ag.Governance().Observe(cleanup, policy.SubagentStop, policy.Facts{ActorID: id, Tool: policy.ToolFacts{Args: map[string]any{"profile": profile.Name, "attempt_id": attempt.ID, "status": status}}})
 			cancel()
 		}
-		if result != nil && (result.CacheHitTokens > 0 || result.CacheMissTokens > 0) {
+		if result != nil {
 			ctxMgr.RecordSubagent(result.TotalTokens, result.CacheHitTokens, result.CacheMissTokens)
 		}
 		converted := subagentTaskResult(result)
@@ -266,26 +270,27 @@ func buildSubagentRunConfig(
 		}
 	}
 	if subCB, ok := taskbridge.TaskCallbackFromCtx(ctx); ok {
+		emit := func(ev protocol.StepEvent) {
+			ev.SubAgentAttemptID, ev.SubAgentAttemptSeq = attemptID, attemptSeq
+			subCB(ev)
+		}
 		cfg.OnOutput = func(output subagent.OutputEvent) {
-			subCB(protocol.StepEvent{Action: output.Action, Output: output.Text, SubAgentReasoning: output.Reasoning, SubAgentMessageSeq: output.MessageSeq, SubAgentAttemptID: attemptID, SubAgentAttemptSeq: attemptSeq})
+			emit(protocol.StepEvent{Action: output.Action, Output: output.Text, SubAgentReasoning: output.Reasoning, SubAgentMessageSeq: output.MessageSeq})
 		}
 
 		cfg.OnToolCall = func(ev subagent.ToolCallEvent) {
-			subCB(protocol.StepEvent{
+			emit(protocol.StepEvent{
 				Action:   ev.Action,
 				CallID:   ev.CallID,
 				ToolName: ev.ToolName,
 				ToolArgs: ev.ToolArgs, ToolInput: ev.ToolInput,
-				Output:            ev.Output,
-				Decision:          ev.Decision,
-				IsError:           ev.IsError,
-				SubAgentAttemptID: attemptID, SubAgentAttemptSeq: attemptSeq,
+				Output:   ev.Output,
+				Decision: ev.Decision,
+				IsError:  ev.IsError,
 			})
 		}
-	}
-	if subCB, ok := taskbridge.TaskCallbackFromCtx(ctx); ok {
 		cfg.OnPhase = func(phase string) {
-			subCB(protocol.StepEvent{Action: protocol.StepActionSubAgentUpdate, SubAgentStatus: "running", SubAgentPhase: phase, SubAgentAttemptID: attemptID, SubAgentAttemptSeq: attemptSeq})
+			emit(protocol.StepEvent{Action: protocol.StepActionSubAgentUpdate, SubAgentStatus: "running", SubAgentPhase: phase})
 		}
 	}
 	return cfg

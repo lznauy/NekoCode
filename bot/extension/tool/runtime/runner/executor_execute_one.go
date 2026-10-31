@@ -236,6 +236,8 @@ func (e *Executor) annotateJevVerdict(ctx context.Context, tc core.ToolCallItem,
 		e.emitJevNote(ctx, tc, protocol.ToolDecisionJevSafe)
 	} else if reason == "jev: judged dangerous" && decision.prompt {
 		e.emitJevNote(ctx, tc, protocol.ToolDecisionJevDangerous)
+	} else if reason == "jev: judgment failed" {
+		e.emitJevNote(ctx, tc, protocol.ToolDecisionJevFailed)
 	}
 }
 
@@ -377,12 +379,30 @@ func (e *Executor) permissionDecisionForRule(dec permission.Decision, tc core.To
 			dec.Assessment.Reason == "" && e.permissionAllowed(tc.Name, *predictedReq) {
 			return permissionDecision{}
 		}
+		approval := approvalContextFromAssessment(dec.Assessment)
+		if approval == nil {
+			approval = &protocol.ApprovalContext{Scope: protocol.ApprovalScopeProject}
+		}
+		switch {
+		case dec.Rule.Tool != "":
+			approval.Source = "user_rule"
+			if dec.Rule.Source == "builtin" {
+				approval.Source = "builtin_rule"
+			}
+			approval.Rule = dec.Rule.Tool + "(" + dec.Rule.Specifier + ")"
+		case strings.HasPrefix(dec.Assessment.Reason, "jev:"):
+			approval.Source = "jev"
+		case dec.Assessment.RequiresApproval():
+			approval.Source = "shell_structure"
+		default:
+			approval.Source = "default_policy"
+		}
 		return permissionDecision{
 			prompt:      true,
 			promptTool:  tc.Name,
 			promptArgs:  tc.Args,
 			matchedRule: dec.Rule,
-			approval:    approvalContextFromAssessment(dec.Assessment),
+			approval:    approval,
 		}
 	default:
 		return permissionDecision{}
@@ -472,6 +492,18 @@ func (e *Executor) promptConfirm(tc core.ToolCallItem, confirmFn protocol.Confir
 		}
 		approval.Combined = true
 	}
+	if approval == nil {
+		approval = &protocol.ApprovalContext{Scope: protocol.ApprovalScopeProject}
+	}
+	if approval.CanRemember() {
+		e.fnMu.RLock()
+		ws, home := e.permWorkspace, e.permHome
+		e.fnMu.RUnlock()
+		approval.RememberWorkspace = ws
+		for _, rule := range rulesToRemember(toolName, args, dec.matchedRule, ws, home) {
+			approval.RememberRules = append(approval.RememberRules, protocol.ApprovalRememberRule{Tool: rule.Tool, Specifier: rule.Specifier, Literal: rule.Literal})
+		}
+	}
 	req := protocol.NewApprovalRequest(toolName, protocol.ApprovalArgs(args), protocol.ConfirmKindPermission, approval)
 	req.CallID = tc.ID
 	reply := confirmFn(req)
@@ -495,6 +527,14 @@ func (e *Executor) rememberAllowRule(toolName string, args map[string]any, match
 	if store == nil || ws == "" || engine == nil {
 		return
 	}
+	rules := rulesToRemember(toolName, args, matched, ws, home)
+	for _, rule := range rules {
+		_ = store.RememberRule(ws, rule)
+	}
+	e.rebuildEngine(decl, store, ws)
+}
+
+func rulesToRemember(toolName string, args map[string]any, matched permission.Rule, ws, home string) []permission.Rule {
 	var rules []permission.Rule
 	// Build a specifier from the call: shell uses the command prefix, file
 	// tools use the path anchor, web tools use the URL's host. Fall back to
@@ -515,10 +555,7 @@ func (e *Executor) rememberAllowRule(toolName string, args map[string]any, match
 	if len(rules) == 0 {
 		rules = append(rules, permission.Rule{Tool: toolName, Specifier: spec, Effect: permission.EffectAllow})
 	}
-	for _, rule := range rules {
-		_ = store.RememberRule(ws, rule)
-	}
-	e.rebuildEngine(decl, store, ws)
+	return rules
 }
 
 // isWebFetchTool reports whether the tool is a URL-fetching builtin covered

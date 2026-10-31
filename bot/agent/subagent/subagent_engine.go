@@ -278,6 +278,9 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 	}
 	result, err := llmstream.CallLLMWithRetry(ctx, e.llmClient, func() llmstream.LLMCallOptions {
 		emitOutput(protocol.StepActionSubAgentReset, "", "")
+		// Each retry has its own estimate. Reconcile it once with the final
+		// provider usage; calls without usage retain their streamed estimate.
+		var estimatedPrompt, estimatedCompletion int
 		return llmstream.LLMCallOptions{
 			Ctx:      ctx,
 			Messages: messages,
@@ -298,11 +301,16 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 				},
 				OnTextReset: func() { emitOutput(protocol.StepActionSubAgentReset, "", "") },
 				AddTokens: func(p, c int) {
+					estimatedPrompt += p
+					estimatedCompletion += c
 					if addTokens != nil {
 						addTokens(p, c)
 					}
 				},
 				OnUsage: func(usage types.StreamUsage) {
+					if addTokens != nil {
+						addTokens(usage.PromptTokens-estimatedPrompt, usage.CompletionTokens-estimatedCompletion)
+					}
 					mgr.RecordModelUsage(usage)
 					if recordCall != nil {
 						recordCall(usage)

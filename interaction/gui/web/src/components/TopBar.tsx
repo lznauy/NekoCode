@@ -19,22 +19,24 @@ interface TopBarProps {
 
 export function TopBar({ model, models = [], busy, theme, onToggleTheme, onSwitchModel, onOpenContext, onOpenConfig, onOpenSkills, onClose }: TopBarProps) {
   return (
-    <header className="flex items-center gap-2 border-b border-border/60 bg-surface-2/95 px-5">
+    <header className="flex items-center gap-2 border-b border-border/60 bg-surface-2/95 px-3 sm:px-5 min-w-0">
       <LogoMark size="sm" showWordmark />
       {model && (
-        <div className="group relative ml-2">
+        <div className="group relative ml-2 min-w-0">
           <button
             type="button"
-            className="block max-w-[40vw] truncate rounded-md border border-border/60 bg-surface px-2 py-1 text-[10px] leading-none text-text-2 transition-all hover:border-primary/60 hover:text-text active:scale-95"
+            disabled={busy}
+            className="block max-w-full truncate rounded-md border border-border/60 bg-surface px-2 py-1 text-[10px] leading-none text-text-2 transition-all hover:border-primary/60 hover:text-text active:scale-95"
           >
             {model}
           </button>
           {models.length > 0 && (
-            <div className="invisible absolute left-0 top-full z-50 mt-1 w-56 rounded-md border border-border/70 bg-surface p-1 opacity-0 surface-shadow transition-all group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100">
+            <div className="invisible absolute left-0 top-full z-50 mt-1 max-h-[calc(100dvh-60px)] w-56 overflow-y-auto rounded-md border border-border/70 bg-surface p-1 opacity-0 surface-shadow transition-all group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100">
               {models.map((m) => (
                 <button
                   key={m.name}
                   type="button"
+                  disabled={busy}
                   onClick={() => onSwitchModel?.(m.name)}
                   className="block w-full rounded px-2 py-1.5 text-left text-[11px] text-text-2 hover:bg-surface-3 hover:text-text"
                 >

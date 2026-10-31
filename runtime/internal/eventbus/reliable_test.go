@@ -22,6 +22,24 @@ func TestReliableOverflowClosesInsteadOfSilentlyDropping(t *testing.T) {
 	}
 }
 
+func TestOrdinaryControlOverflowClosesInsteadOfGrowing(t *testing.T) {
+	s := &subscriber{wake: make(chan struct{}, 1), stop: make(chan struct{})}
+	for i := 0; i < defaultSubscriberQueueLimit*3; i++ {
+		s.enqueue(core.Event{Type: core.EventRunDone})
+	}
+	if len(s.queue) > defaultSubscriberQueueLimit {
+		t.Fatalf("unbounded control backlog: %d", len(s.queue))
+	}
+	select {
+	case <-s.stop:
+	default:
+		t.Fatal("subscriber must close when control events cannot be retained")
+	}
+	if !s.failed || len(s.queue) != 0 {
+		t.Fatal("overflowed subscriber retained events")
+	}
+}
+
 func TestReliableRetainsToolAndTextEventsBelowLimit(t *testing.T) {
 	s := &subscriber{filter: core.EventFilter{Reliable: true}, wake: make(chan struct{}, 1), stop: make(chan struct{})}
 	for _, typ := range []core.EventType{core.EventAssistantDelta, core.EventAssistantMessage, core.EventToolStarted, core.EventToolCompleted, core.EventRunDone} {

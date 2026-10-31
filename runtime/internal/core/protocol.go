@@ -102,6 +102,7 @@ type Event struct {
 }
 
 type EventFilter struct {
+	// All subscriptions close if their queue is full of must-deliver controls.
 	// Reliable closes the subscription on overflow instead of silently dropping
 	// events. A transport must treat unexpected closure as a failed stream.
 	Reliable   bool

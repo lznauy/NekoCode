@@ -783,3 +783,118 @@ func TestRotateMessageFailureKeepsPreviousAnchorActive(t *testing.T) {
 		t.Fatalf("restored file = %q err=%v", data, err)
 	}
 }
+
+func TestChangedFileStates(t *testing.T) {
+	const chunk = 32 * 1024
+	for _, tc := range []struct {
+		name                      string
+		before, after             string
+		absentBefore, absentAfter bool
+		mode                      os.FileMode
+		wantChanged               bool
+		wantKind                  ChangeKind
+	}{
+		{name: "unchanged empty", wantKind: ChangeModified},
+		{name: "unchanged multiple chunks", before: strings.Repeat("a", chunk*3+1), after: strings.Repeat("a", chunk*3+1), wantKind: ChangeModified},
+		{name: "unchanged exact chunk", before: strings.Repeat("a", chunk), after: strings.Repeat("a", chunk), wantKind: ChangeModified},
+		{name: "changed last byte", before: strings.Repeat("a", chunk*3), after: strings.Repeat("a", chunk*3-1) + "b", wantChanged: true, wantKind: ChangeModified},
+		{name: "different size", before: "before", after: "after", wantChanged: true, wantKind: ChangeModified},
+		{name: "permissions only", before: "same", after: "same", mode: 0644, wantChanged: true, wantKind: ChangeModified},
+		{name: "created", absentBefore: true, after: "new", wantChanged: true, wantKind: ChangeCreated},
+		{name: "still absent", absentBefore: true, absentAfter: true},
+		{name: "deleted", before: "old", absentAfter: true, wantChanged: true, wantKind: ChangeDeleted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New(t.TempDir())
+			if _, err := m.Begin("session"); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "file")
+			if !tc.absentBefore {
+				if err := os.WriteFile(path, []byte(tc.before), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := m.Capture(path); err != nil {
+				t.Fatal(err)
+			}
+			if tc.absentAfter {
+				if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.WriteFile(path, []byte(tc.after), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if tc.mode != 0 {
+					if err := os.Chmod(path, tc.mode); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			changed, kind, err := m.changed(m.active.Entries[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if changed != tc.wantChanged || kind != tc.wantKind {
+				t.Fatalf("got (%v,%q), want (%v,%q)", changed, kind, tc.wantChanged, tc.wantKind)
+			}
+		})
+	}
+}
+
+func TestChangedRetainsSnapshotErrorsForDifferentSize(t *testing.T) {
+	m := New(t.TempDir())
+	if _, err := m.Begin("session"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(path, []byte("before"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Capture(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("changed size"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	item := m.active.Entries[0]
+	snapshot := filepath.Join(m.activeDir(), item.Snapshot)
+	if err := os.Remove(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := m.changed(item); err == nil {
+		t.Fatal("missing snapshot was ignored")
+	}
+	if err := os.Mkdir(snapshot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := m.changed(item); err == nil {
+		t.Fatal("non-file snapshot was ignored")
+	}
+}
+
+func BenchmarkChangedLargeUnmodifiedFile(b *testing.B) {
+	m := New(b.TempDir())
+	if _, err := m.Begin("session"); err != nil {
+		b.Fatal(err)
+	}
+	path := filepath.Join(b.TempDir(), "file")
+	const size = 8 * 1024 * 1024
+	if err := os.WriteFile(path, []byte(strings.Repeat("a", size)), 0600); err != nil {
+		b.Fatal(err)
+	}
+	if err := m.Capture(path); err != nil {
+		b.Fatal(err)
+	}
+	item := m.active.Entries[0]
+	b.SetBytes(size * 2)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		changed, _, err := m.changed(item)
+		if err != nil || changed {
+			b.Fatalf("changed=%v, err=%v", changed, err)
+		}
+	}
+}

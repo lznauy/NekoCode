@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { safeReplyConfirm } from '../lib/wails'
 import { isUnifiedDiffContent } from '../lib/diffFormat'
 import { UnifiedDiff } from './run/UnifiedDiff'
@@ -13,7 +13,11 @@ export interface ConfirmEntry {
   approval?: ApprovalContext
 }
 
-function ConfirmDialog({
+function ConfirmDialog(props: { entry: ConfirmEntry; onDone: () => void }) {
+  return <ConfirmDialogRequest key={props.entry.id} {...props} />
+}
+
+function ConfirmDialogRequest({
   entry,
   onDone,
 }: {
@@ -34,9 +38,45 @@ function ConfirmDialog({
   options.push({ label: '拒绝', ok: false, remember: false })
 
   const [selected, setSelected] = useState(0)
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState('')
+  const inFlight = useRef(false)
+  const active = useRef(true)
+  const dialog = useRef<HTMLElement>(null)
+
+  useEffect(() => {
+    active.current = true
+    const previous = document.activeElement
+    const element = dialog.current
+    element?.focus()
+    return () => {
+      active.current = false
+      if (element?.contains(document.activeElement) && previous instanceof HTMLElement) previous.focus()
+    }
+  }, [])
+
+  const handle = useCallback(async (ok: boolean, remember = false) => {
+    if (inFlight.current) return
+    inFlight.current = true
+    setSubmitting(true)
+    setSubmitError('')
+    try {
+      await safeReplyConfirm(entry.id, ok, remember)
+      if (active.current) onDone()
+    } catch {
+      if (active.current) setSubmitError('提交未成功，请重试或检查请求状态。')
+    } finally {
+      if (active.current) {
+        inFlight.current = false
+        setSubmitting(false)
+      }
+    }
+  }, [entry.id, onDone])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (e.repeat || e.isComposing || e.ctrlKey || e.altKey || e.metaKey || inFlight.current) return
+      if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable="true"]')) return
       if (e.key === 'ArrowDown') {
         e.preventDefault()
         setSelected((s) => (s + 1) % options.length)
@@ -44,24 +84,18 @@ function ConfirmDialog({
         e.preventDefault()
         setSelected((s) => (s - 1 + options.length) % options.length)
       } else if (e.key === 'Enter') {
+        if (e.target instanceof HTMLElement && e.target.closest('button')) return
         e.preventDefault()
         const opt = options[selected]
-        safeReplyConfirm(entry.id, opt.ok, opt.remember)
-        onDone()
+        void handle(opt.ok, opt.remember)
       } else if (e.key === 'Escape') {
         e.preventDefault()
-        safeReplyConfirm(entry.id, false, false)
-        onDone()
+        void handle(false)
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [selected, options.length])
-
-  const handle = (ok: boolean, remember = false) => {
-    safeReplyConfirm(entry.id, ok, remember)
-    onDone()
-  }
+  }, [selected, options.length, handle])
 
   const kind = kindFor(entry)
   const isEdit = entry.toolName === 'edit'
@@ -74,10 +108,12 @@ function ConfirmDialog({
   return (
     <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/45 px-3 py-4 backdrop-blur-[2px] sm:items-center">
       <section
+        ref={dialog}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="confirm-title"
-        className="flex max-h-[calc(100dvh-32px)] w-full max-w-3xl flex-col overflow-hidden card-radius border border-border/70 bg-surface-2 surface-shadow sm:max-h-[760px]"
+        className="flex max-h-[calc(100dvh-32px)] w-full max-w-3xl flex-col overflow-hidden card-radius border border-border/70 bg-surface-2 surface-shadow sm:max-h-[min(760px,calc(100dvh-32px))]"
       >
         <header className="shrink-0 border-b border-border/45 px-4 py-3">
           <div className="flex items-start justify-between gap-3">
@@ -144,21 +180,18 @@ function ConfirmDialog({
         </div>
 
         <footer className="flex shrink-0 flex-col gap-2 border-t border-border/45 bg-surface-2 px-4 py-3">
-          <p className="min-w-0 text-[12px] text-text-3">
-            {footerCopy(entry)}
-          </p>
+          {submitError && <p role="alert" className="text-[12px] text-warning">{submitError}</p>}
+          {submitting && <p role="status" className="text-[12px] text-text-2">正在提交决定…</p>}
+          {footerCopy(entry) && <p className="min-w-0 text-[12px] text-text-3">{footerCopy(entry)}</p>}
           <div className="flex shrink-0 flex-col gap-2">
             {options.map((opt, i) => (
               <button
                 key={opt.label}
                 type="button"
-                onClick={() => handle(opt.ok, opt.remember)}
+                disabled={submitting}
+                onClick={() => void handle(opt.ok, opt.remember)}
                 className={`h-9 w-full justify-center text-[13px] ${i === selected ? 'ring-2 ring-primary/60' : ''} ${
-                  !opt.ok
-                    ? 'secondary-button'
-                    : opt.remember
-                    ? 'primary-button'
-                    : 'secondary-button'
+                  opt.ok && !opt.remember ? 'primary-button' : 'secondary-button'
                 }`}
               >
                 <span aria-hidden="true">{i === selected ? '▸ ' : '  '}</span>{opt.label}
@@ -174,14 +207,34 @@ function ConfirmDialog({
   )
 }
 
+function friendlyPermissionReason(reason?: string): string {
+  switch (reason) {
+    case 'jev: judgment failed': return 'jev判断失败，请手动决定。'
+    case 'jev: judged dangerous': return 'JEV 判定命令存在风险。'
+    case 'jev: URL judged risky by the risk judge': return 'JEV 判定网址存在风险。'
+    case 'dynamic shell execution': return '命令包含动态执行，需要手动确认。'
+    case 'command requires public network access': return '命令需要访问公共网络。'
+    default: return reason ?? ''
+  }
+}
+
+function approvalReason(entry: ConfirmEntry): string {
+  const approval = entry.approval
+  const reasons: string[] = []
+  if (approval?.risk) reasons.push(friendlyPermissionReason(approval.risk))
+  if (approval?.reason && approval.reason !== approval.risk) reasons.push(friendlyPermissionReason(approval.reason))
+  const source = ({ user_rule: '命中用户设置的询问规则。', builtin_rule: '命中内置询问规则。', default_policy: '当前权限策略需要人工确认。', workspace: '需要扩展工作区访问范围。', capability: '需要授予额外执行权限。' } as Record<string, string>)[approval?.source ?? '']
+  if (source && (!reasons.length || approval?.source === 'user_rule' || approval?.source === 'builtin_rule')) reasons.push(source)
+  return reasons.join(' ') || '此操作需要你明确授权。'
+}
+
 function PermissionDetails({ entry, canRemember }: { entry: ConfirmEntry; canRemember: boolean }) {
   const approval = entry.approval
   const rows = [
-    ['风险', approval?.risk ?? ''],
-    ['原因', approval?.reason !== approval?.risk ? approval?.reason ?? '' : ''],
+    ['触发规则', approval?.rule ?? ''],
     ['动态结构', friendlyShellStructures(approval?.structures)],
     ['能力', approval?.capabilities?.join('、') ?? ''],
-    ['范围', approval?.scope ?? ''],
+    ['授权范围', approval?.scope === 'once' ? '仅本次' : approval?.scope === 'project' ? '当前项目' : approval?.scope ?? ''],
     ['工作区', approval?.workspace ?? ''],
     ['网络域名', approval?.outbound_domains != null ? (approval.outbound_domains.join('、') || '禁止联网') : ''],
     ['可写目录', approval?.write_paths?.join('、') ?? ''],
@@ -192,6 +245,9 @@ function PermissionDetails({ entry, canRemember }: { entry: ConfirmEntry; canRem
   return (
     <section className="border-t border-border/35 px-4 py-3">
       <div className="mb-2 text-[12px] font-medium text-text-2">审批详情</div>
+      <dl className="mb-3 space-y-2 text-[12px]">
+        <div><dt className="text-text-3">确认原因</dt><dd className="mt-1 leading-relaxed text-text-2">{approvalReason(entry)}</dd></div>
+      </dl>
       <div className="grid gap-2 sm:grid-cols-2">
         {rows.map(([label, value]) => (
           <div key={label} className="min-w-0 rounded-md bg-surface px-2.5 py-2">
@@ -200,11 +256,29 @@ function PermissionDetails({ entry, canRemember }: { entry: ConfirmEntry; canRem
           </div>
         ))}
       </div>
-      <p className="mt-2 text-[11px] text-text-3">
-        {canRemember ? '选择“始终允许”后，相同项目中的同类请求会自动通过。' : '此权限只支持本次允许，不会写入持久授权。'}
-      </p>
+      <RememberPreview entry={entry} canRemember={canRemember} />
     </section>
   )
+}
+
+function RememberPreview({ entry, canRemember }: { entry: ConfirmEntry; canRemember: boolean }) {
+  const approval = entry.approval
+  if (!canRemember) return <p className="mt-2 text-[11px] text-text-3">仅本次生效，不保存授权。</p>
+  const rules = approval?.remember_rules ?? []
+  const hasCapabilities = !!approval?.capabilities?.length
+  const workspaceRequest = entry.toolName === 'workspace'
+  return <div className="mt-3 border-t border-border/35 pt-3 text-[11px] text-text-2">
+    <p className="font-medium">始终允许的范围</p>
+    {approval?.remember_workspace && <p className="mt-1 break-all">生效项目：{approval.remember_workspace}</p>}
+    {rules.map((rule, i) => <div key={i} className="mt-2 rounded-md bg-surface p-2">
+      <p className="text-text-3">{rule.literal ? '完整命令，仅精确匹配' : '权限匹配规则'}</p>
+      <code className="block whitespace-pre-wrap break-all">{rule.literal || `${rule.tool}(${rule.specifier ?? ''})`}</code>
+    </div>)}
+    {hasCapabilities && <p className="mt-2">同时记住所使用的目录和网络授权范围。</p>}
+    {workspaceRequest && <p className="mt-2 break-all">工作区访问：{approval?.workspace || String(entry.args.path ?? '')}（{String(entry.args.access ?? '')}）</p>}
+    {!rules.length && !hasCapabilities && !workspaceRequest && <p className="mt-1 text-text-3">未提供规则预览，建议仅本次允许。</p>}
+    <p className="mt-2 text-text-3">仅本次允许不保存规则；已有询问、拒绝规则和风险检查仍生效。</p>
+  </div>
 }
 
 function PrimaryPreview({ entry }: { entry: ConfirmEntry }) {
@@ -279,17 +353,8 @@ function subjectFor(entry: ConfirmEntry): string {
 }
 
 function footerCopy(entry: ConfirmEntry): string {
-  if (entry.approval?.combined && (entry.approval.capabilities?.length ?? 0) > 0) {
-    return permissionScope(entry) === 'project'
-      ? '一次决定将同时覆盖命令和上方列出的能力，并可记住到当前项目。'
-      : '一次决定将同时覆盖命令和上方列出的临时能力。'
-  }
-  if ((entry.approval?.structures?.length ?? 0) > 0) {
-    return permissionScope(entry) === 'project'
-      ? '此决定可记住为该命令的精确授权。'
-      : '此动态命令只能允许本次执行。'
-  }
-  if (isPermissionConfirm(entry)) return permissionScope(entry) === 'project' ? '可选择仅本次允许，或将同类权限记住到当前项目。' : '此权限请求不会持久化，只能本次允许。'
+  if (entry.approval?.combined && (entry.approval.capabilities?.length ?? 0) > 0) return '本次决定同时适用于命令和所列权限。'
+  if (isPermissionConfirm(entry)) return ''
   if (entry.toolName === 'edit' && entry.args.revert === true) return '上方差异是本次 revert 将恢复的内容。'
   if (entry.toolName === 'edit' && entry.args.replaceAll === true) return 'replaceAll 会替换所有精确匹配，请确认替换范围。'
   if (entry.toolName === 'edit' && entry.preview) return '上方差异是本次 edit 将应用的内容。'

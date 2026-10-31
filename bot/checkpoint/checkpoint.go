@@ -653,31 +653,68 @@ func (m *Manager) Delete(session string) error {
 }
 
 func (m *Manager) changed(entry entry) (bool, ChangeKind, error) {
-	data, err := os.ReadFile(entry.Path)
-	if entry.Before == "absent" {
-		if errors.Is(err, os.ErrNotExist) {
+	current, err := os.Open(entry.Path)
+	if errors.Is(err, os.ErrNotExist) {
+		if entry.Before == "absent" {
 			return false, "", nil
 		}
-		if err != nil {
-			return false, "", fmt.Errorf("checkpoint: inspect result %s: %w", entry.Path, err)
-		}
-		return true, ChangeCreated, nil
-	}
-	if errors.Is(err, os.ErrNotExist) {
 		return true, ChangeDeleted, nil
 	}
 	if err != nil {
 		return false, "", fmt.Errorf("checkpoint: inspect result %s: %w", entry.Path, err)
 	}
-	before, err := os.ReadFile(filepath.Join(m.activeDir(), entry.Snapshot))
-	if err != nil {
-		return false, "", fmt.Errorf("checkpoint: read snapshot %s: %w", entry.Path, err)
-	}
-	info, err := os.Stat(entry.Path)
+	defer current.Close()
+	info, err := current.Stat()
 	if err != nil {
 		return false, "", fmt.Errorf("checkpoint: stat result %s: %w", entry.Path, err)
 	}
-	return !bytes.Equal(data, before) || uint32(info.Mode().Perm()) != entry.Mode, ChangeModified, nil
+	if !info.Mode().IsRegular() {
+		return false, "", fmt.Errorf("checkpoint: unsupported non-file result %s", entry.Path)
+	}
+	if entry.Before == "absent" {
+		return true, ChangeCreated, nil
+	}
+	before, err := os.Open(filepath.Join(m.activeDir(), entry.Snapshot))
+	if err != nil {
+		return false, "", fmt.Errorf("checkpoint: read snapshot %s: %w", entry.Path, err)
+	}
+	defer before.Close()
+	snapshotInfo, err := before.Stat()
+	if err != nil {
+		return false, "", fmt.Errorf("checkpoint: stat snapshot %s: %w", entry.Path, err)
+	}
+	if !snapshotInfo.Mode().IsRegular() {
+		return false, "", fmt.Errorf("checkpoint: unsupported non-file snapshot %s", entry.Path)
+	}
+	if info.Size() != snapshotInfo.Size() || uint32(info.Mode().Perm()) != entry.Mode {
+		return true, ChangeModified, nil
+	}
+	equal, err := equalFileContents(current, before)
+	if err != nil {
+		return false, "", fmt.Errorf("checkpoint: compare result %s: %w", entry.Path, err)
+	}
+	return !equal, ChangeModified, nil
+}
+
+// equalFileContents compares regular files with bounded memory.
+func equalFileContents(a, b io.Reader) (bool, error) {
+	var left, right [32 * 1024]byte
+	for {
+		na, errA := io.ReadFull(a, left[:])
+		if errA != nil && errA != io.EOF && errA != io.ErrUnexpectedEOF {
+			return false, errA
+		}
+		nb, errB := io.ReadFull(b, right[:])
+		if errB != nil && errB != io.EOF && errB != io.ErrUnexpectedEOF {
+			return false, errB
+		}
+		if !bytes.Equal(left[:na], right[:nb]) {
+			return false, nil
+		}
+		if na < len(left) {
+			return true, nil
+		}
+	}
 }
 
 type fileState struct {

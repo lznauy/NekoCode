@@ -34,8 +34,10 @@ func (a *adapter) wireTaskLister(rt *controlruntime.Runtime) {
 	})
 }
 
+// Read with an explicit parent identity so delayed requests cannot switch
+// conversations when the user navigates to another session.
 func (a *adapter) Subagents(parentID string) ([]controlruntime.SubagentSummary, error) {
-	infos, err := a.bot.Subagents(parentID)
+	infos, err := session.ListSubagents(parentID)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +71,7 @@ func convertSubagentAttempt(attempt session.SubagentAttempt) controlruntime.Suba
 }
 
 func (a *adapter) SubagentAttempts(parentID, id string, before, limit int) (controlruntime.SubagentAttemptPage, error) {
-	page, err := a.bot.SubagentAttempts(parentID, id, before, limit)
+	page, err := session.SubagentAttempts(parentID, id, before, limit)
 	if err != nil {
 		return controlruntime.SubagentAttemptPage{}, err
 	}
@@ -81,7 +83,7 @@ func (a *adapter) SubagentAttempts(parentID, id string, before, limit int) (cont
 }
 
 func (a *adapter) SubagentHistory(parentID, id string, before, limit int) (controlruntime.SubagentHistoryPage, error) {
-	page, err := a.bot.SubagentHistory(parentID, id, before, limit)
+	page, err := session.SubagentHistory(parentID, id, before, limit)
 	if err != nil {
 		return controlruntime.SubagentHistoryPage{}, err
 	}
@@ -106,7 +108,7 @@ func (a *adapter) SubagentHistory(parentID, id string, before, limit int) (contr
 }
 
 func (a *adapter) SubagentToolOutput(parentID, id string, sequence int, offset int64) (controlruntime.SubagentOutputPage, error) {
-	page, err := a.bot.SubagentToolOutput(parentID, id, sequence, offset)
+	page, err := session.SubagentToolOutput(parentID, id, sequence, offset)
 	if err != nil {
 		return controlruntime.SubagentOutputPage{}, err
 	}

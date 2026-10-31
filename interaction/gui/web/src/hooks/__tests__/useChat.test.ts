@@ -24,6 +24,221 @@ function emit(event: string, data: unknown): void {
 })
 
 describe('useChat', () => {
+  it('does not cancel until the pending start has been acknowledged', async () => {
+    let finishStart!: () => void
+    const abort = vi.fn().mockResolvedValue(undefined)
+    ;(window as unknown as { go: unknown }).go = { main: { App: { SendMessage: () => new Promise<void>(resolve => { finishStart = resolve }), Abort: abort } } }
+    const { result } = renderHook(() => useChat())
+    act(() => result.current.send('pending'))
+    act(() => result.current.stop())
+    expect(abort).not.toHaveBeenCalled()
+    await act(async () => finishStart())
+    expect(abort).toHaveBeenCalledTimes(1)
+    await act(async () => emit('agent:status', { status: 'idle' }))
+    expect(result.current.busy).toBe(false)
+  })
+
+  it('blocks new submissions until the pending Abort is acknowledged', async () => {
+    let finishAbort!: () => void
+    const send = vi.fn().mockResolvedValue(undefined)
+    const abort = vi.fn(() => new Promise<void>(resolve => { finishAbort = resolve }))
+    ;(window as unknown as { go: unknown }).go = { main: { App: { SendMessage: send, Abort: abort } } }
+    const { result } = renderHook(() => useChat())
+    act(() => result.current.send('old'))
+    act(() => result.current.stop())
+    await act(async () => { await Promise.resolve() })
+    expect(abort).toHaveBeenCalledTimes(1)
+    act(() => { emit('agent:done', { output: '', error: '' }); emit('agent:status', { status: 'idle' }) })
+    expect(result.current.busy).toBe(true)
+    act(() => result.current.send('too early'))
+    expect(send).toHaveBeenCalledTimes(1)
+    await act(async () => finishAbort())
+    expect(result.current.busy).toBe(false)
+    act(() => result.current.send('new'))
+    expect(send).toHaveBeenCalledTimes(2)
+  })
+
+  it('settles cancellation after replacing messages while Abort is pending', async () => {
+    let finishAbort!: () => void
+    const send = vi.fn().mockResolvedValue(undefined)
+    ;(window as unknown as { go: unknown }).go = { main: { App: {
+      SendMessage: send, Abort: () => new Promise<void>(resolve => { finishAbort = resolve }),
+    } } }
+    const { result } = renderHook(() => useChat())
+    act(() => result.current.send('old'))
+    act(() => result.current.stop())
+    await act(async () => { await Promise.resolve() })
+    act(() => emit('agent:status', { status: 'idle' }))
+    act(() => result.current.setMessages([]))
+    expect(result.current.busy).toBe(true)
+    act(() => result.current.send('too early'))
+    expect(send).toHaveBeenCalledTimes(1)
+    await act(async () => finishAbort())
+    expect(result.current.busy).toBe(false)
+    expect(result.current.stopping).toBe(false)
+  })
+
+  it('unlocks a cancelled submission when startup fails without terminal events', async () => {
+    let rejectStart!: (error: Error) => void
+    const abort = vi.fn().mockResolvedValue(undefined)
+    ;(window as unknown as { go: unknown }).go = { main: { App: { SendMessage: () => new Promise<void>((_, reject) => { rejectStart = reject }), Abort: abort } } }
+    const { result } = renderHook(() => useChat())
+    act(() => result.current.send('pending'))
+    act(() => result.current.stop())
+    await act(async () => rejectStart(new Error('startup failed')))
+    expect(result.current.busy).toBe(false)
+    expect(result.current.stopping).toBe(false)
+    expect(result.current.error).toContain('startup failed')
+    expect(abort).not.toHaveBeenCalled()
+  })
+
+  it('waits for cancellation completion before accepting another run', async () => {
+    const send = vi.fn().mockResolvedValue(undefined)
+    ;(window as unknown as { go: unknown }).go = { main: { App: { SendMessage: send, Abort: vi.fn().mockResolvedValue(undefined) } } }
+    const { result } = renderHook(() => useChat())
+    act(() => result.current.send('old'))
+    act(() => result.current.stop())
+    expect(result.current.busy).toBe(true)
+    act(() => result.current.send('too early'))
+    expect(send).toHaveBeenCalledTimes(1)
+    await act(async () => { emit('agent:done', { output: '', error: 'cancelled' }); emit('agent:status', { status: 'idle' }) })
+    expect(result.current.busy).toBe(false)
+    act(() => result.current.send('new'))
+    act(() => emit('agent:tool_start', { id: 'new-tool', toolName: 'shell', args: '' }))
+    expect(result.current.msgs[1].steps).toHaveLength(1)
+    expect(result.current.busy).toBe(true)
+  })
+
+  it('ignores rejection from a replaced session after a new run starts', async () => {
+    let rejectOld!: (reason: Error) => void
+    const send = vi.fn().mockImplementationOnce(() => new Promise<void>((_, reject) => { rejectOld = reject })).mockResolvedValue(undefined)
+    ;(window as unknown as { go: unknown }).go = { main: { App: { SendMessage: send, Abort: vi.fn() } } }
+    const { result } = renderHook(() => useChat())
+    act(() => result.current.send('old'))
+    act(() => result.current.setMessages([]))
+    act(() => emit('agent:status', { status: 'idle' }))
+    act(() => result.current.send('new'))
+    await act(async () => { rejectOld(new Error('old rejected')); await Promise.resolve() })
+    expect(result.current.busy).toBe(true)
+    expect(result.current.error).toBeNull()
+    act(() => emit('agent:tool_start', { id: 'new-tool', toolName: 'shell', args: '' }))
+    expect(result.current.msgs[1].steps).toHaveLength(1)
+    expect(result.current.msgs).toHaveLength(2)
+  })
+
+  it.each(['running shell', 'Running process', 'running bash'])('normalizes tool phase %s to a displayable state', (phase) => {
+    const { result } = renderHook(() => useChat())
+    act(() => result.current.send('run tool'))
+    act(() => emit('agent:phase', { phase }))
+    expect(result.current.msgs[1].phase).toBe('running')
+    act(() => emit('agent:phase', { phase: 'unexpected phase' }))
+    expect(result.current.msgs[1].phase).toBe('running')
+  })
+
+  it.each(['process', 'bash'])('retains %s output and steps when the run finishes', (toolName) => {
+    const { result } = renderHook(() => useChat())
+    act(() => result.current.send('run tool'))
+    act(() => {
+      emit('agent:tool_start', { id: 'execution', toolName, args: '' })
+      emit('agent:tool_done', { id: 'execution', toolName, args: '', output: 'persistent execution output', isError: false })
+    })
+    expect(result.current.msgs[1].steps?.[0].output).toBe('persistent execution output')
+    act(() => emit('agent:done', { output: 'finished', error: '' }))
+    expect(result.current.msgs[1].steps).toHaveLength(1)
+    expect(result.current.msgs[1].steps?.[0]).toMatchObject({ toolName, output: 'persistent execution output', status: 'done' })
+  })
+
+  it('clears pending stream timers and permits a fresh run after clearing messages', () => {
+    vi.useFakeTimers()
+    try {
+      const { result } = renderHook(() => useChat())
+      act(() => result.current.send('old run'))
+      act(() => {
+        emit('agent:delta', { id: 1, delta: 'old buffered text', done: false })
+        emit('agent:reasoning', { delta: 'old reasoning', done: false })
+      })
+      expect(vi.getTimerCount()).toBeGreaterThan(0)
+      act(() => result.current.clearMessages())
+      expect(vi.getTimerCount()).toBe(0)
+      expect(result.current.msgs).toEqual([])
+      act(() => {
+        emit('agent:delta', { id: 1, delta: 'late old text', done: false })
+        emit('agent:tool_start', { id: 'late', toolName: 'shell', args: '' })
+        vi.runAllTimers()
+        emit('agent:status', { status: 'idle' })
+      })
+      expect(result.current.msgs).toEqual([])
+      expect(vi.getTimerCount()).toBe(0)
+      // No old done event was sent: this also checks sendingRef was reset.
+      act(() => result.current.send('new run'))
+      act(() => {
+        emit('agent:delta', { id: 2, delta: 'fresh text', done: false })
+        vi.runAllTimers()
+      })
+      expect(result.current.msgs).toHaveLength(2)
+      expect(result.current.msgs[0].text).toBe('new run')
+      expect(result.current.msgs[1].streamText).toBe('fresh text')
+      expect(result.current.msgs[1].reasoning).toBe('')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('clears the draft and error together with messages', () => {
+    const { result } = renderHook(() => useChat())
+    act(() => result.current.send('old run'))
+    act(() => emit('agent:done', { output: '', error: 'old error' }))
+    act(() => result.current.setText('old draft'))
+    expect(result.current.error).toBe('old error')
+    expect(result.current.text).toBe('old draft')
+    act(() => result.current.clearMessages())
+    expect(result.current.msgs).toEqual([])
+    expect(result.current.text).toBe('')
+    expect(result.current.error).toBeNull()
+  })
+
+	it('matches concurrent tool previews by call ID and ignores stale IDs', () => {
+	  const { result } = renderHook(() => useChat())
+	  act(() => result.current.send('inspect'))
+	  act(() => {
+	    emit('agent:tool_start', { id: 'a', toolName: 'edit', args: '', preview: 'first' })
+	    emit('agent:tool_start', { id: 'b', toolName: 'edit', args: '', preview: 'second' })
+	    emit('agent:tool_preview', { id: 'a', toolName: 'edit', preview: 'updated first' })
+	    emit('agent:tool_preview', { id: 'stale', toolName: 'edit', preview: 'stale preview' })
+	  })
+	  expect(result.current.msgs[1].steps?.map((step) => step.preview)).toEqual(['updated first', 'second'])
+	  act(() => {
+	    emit('agent:tool_done', { id: 'a', toolName: 'edit', args: '', output: 'finished', isError: false })
+	    emit('agent:tool_preview', { id: 'a', toolName: 'edit', preview: 'late preview' })
+	  })
+	  expect(result.current.msgs[1].steps?.map((step) => step.preview)).toEqual([undefined, 'second'])
+	})
+
+	it('retains latest-running preview matching for backends without call IDs', () => {
+	  const { result } = renderHook(() => useChat())
+	  act(() => result.current.send('inspect'))
+	  act(() => {
+	    emit('agent:tool_start', { id: 'a', toolName: 'edit', args: '', preview: 'first' })
+	    emit('agent:tool_start', { id: 'b', toolName: 'edit', args: '', preview: 'second' })
+	    emit('agent:tool_preview', { toolName: 'edit', preview: 'legacy preview' })
+	  })
+	  expect(result.current.msgs[1].steps?.map((step) => step.preview)).toEqual(['first', 'legacy preview'])
+	})
+
+	it('preserves unrelated messages when toggling a tool step', () => {
+	  const { result } = renderHook(() => useChat())
+	  act(() => result.current.setMessages([
+	    { id: 'first', role: 'assistant', text: 'older', streaming: false, steps: [{ id: 'a', toolName: 'edit', args: '', status: 'done', isError: false, collapsed: true }] },
+	    { id: 'second', role: 'assistant', text: 'newer', streaming: false, steps: [{ id: 'b', toolName: 'edit', args: '', status: 'done', isError: false, collapsed: true }] },
+	  ]))
+	  const before = result.current.msgs
+	  act(() => result.current.toggleStep('b'))
+	  expect(result.current.msgs[0]).toBe(before[0])
+	  expect(result.current.msgs[1].steps?.[0].collapsed).toBe(false)
+	  const unchanged = result.current.msgs
+	  act(() => result.current.toggleStep('missing'))
+	  expect(result.current.msgs).toBe(unchanged)
+	})
 	it('persists pasted images, inserts a placeholder, and sends the attachment', async () => {
 	  const save = vi.fn().mockResolvedValue('/tmp/paste.png')
 	  const remove = vi.fn().mockResolvedValue(undefined)
@@ -328,7 +543,7 @@ describe('useChat', () => {
     })
 
     expect(result.current.msgs).toHaveLength(0)
-    expect(result.current.busy).toBe(false)
+    expect(result.current.busy).toBe(true)
 
     act(() => {
       emit('agent:done', { output: 'Interrupted', error: 'request cancelled' })
@@ -699,7 +914,7 @@ describe('useChat', () => {
     await waitFor(() => expect(result.current.busy).toBe(false))
   })
 
-  it('stops and resets busy state', async () => {
+  it('resets busy state after stopping is confirmed', async () => {
     const { result } = renderHook(() => useChat())
 
     act(() => {
@@ -711,6 +926,8 @@ describe('useChat', () => {
       result.current.stop()
     })
 
+    expect(result.current.busy).toBe(true)
+    await act(async () => emit('agent:status', { status: 'idle' }))
     expect(result.current.busy).toBe(false)
   })
 

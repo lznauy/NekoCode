@@ -10,6 +10,14 @@ const toolMsg: Msg = { id: '3', role: 'tool', text: '🔧 `ls`\n\n```\nfile.txt\
 const streamingMsg: Msg = { id: '4', role: 'assistant', text: 'Thinking...', streaming: true }
 
 describe('MessageItem', () => {
+  it.each(['process', 'bash'])('renders persisted %s output in a completed run', (toolName) => {
+    const msg: Msg = { id: 'completed', role: 'assistant', text: 'finished', streaming: false, phase: 'ready', steps: [
+      { id: 'execution', toolName, args: '', output: 'persistent execution output', status: 'done', isError: false, collapsed: false },
+    ] }
+    render(<MessageItem msg={msg} toggleStep={toggleStep} />)
+    expect(screen.getByText('persistent execution output')).toBeInTheDocument()
+  })
+
   it('renders user message text in a bubble', () => {
     render(<MessageItem msg={userMsg} toggleStep={toggleStep} />)
     expect(screen.getByText('Hello world')).toBeInTheDocument()

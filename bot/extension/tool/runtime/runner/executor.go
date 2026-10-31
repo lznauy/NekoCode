@@ -358,6 +358,7 @@ func (e *Executor) rebuildEngine(decl permission.PermissionsDecl, store *permiss
 	}
 	// Re-wire on every rebuild so the auto-mode judge survives rule reloads.
 	eng.SetAutoJudge(e.autoJudgeDecide)
+	eng.SetAutoJudgeEnabled(func() bool { return e.permissionMode() == permission.ModeAuto })
 	e.fnMu.Lock()
 	e.permEngine = eng
 	e.fnMu.Unlock()

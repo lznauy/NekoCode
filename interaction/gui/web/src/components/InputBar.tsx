@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { cn } from '../lib/classnames'
 import type { GUICommandMenu } from '../lib/wails'
 import type { SkillView } from '../types/skills'
@@ -7,6 +7,7 @@ import type { ImageInputAttachment } from '../hooks/useChat'
 interface InputBarProps {
   text: string
   busy: boolean
+  stopping?: boolean
   skills?: SkillView[]
   selectedSkill?: string
   textareaRef: React.RefObject<HTMLTextAreaElement>
@@ -25,6 +26,7 @@ interface InputBarProps {
 export function InputBar({
   text,
   busy,
+  stopping = false,
   skills = [],
   selectedSkill,
   textareaRef,
@@ -42,6 +44,24 @@ export function InputBar({
 	const [commandIndex, setCommandIndex] = useState(0)
 	const [menuDismissed, setMenuDismissed] = useState(false)
 	const [pastingImages, setPastingImages] = useState(false)
+  const shellRef = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const [menuHeight, setMenuHeight] = useState(240)
+  useLayoutEffect(() => {
+    const element = shellRef.current
+    if (!element || !commandMenu || menuDismissed) return
+    const measure = () => setMenuHeight(Math.max(0, element.getBoundingClientRect().top - 60))
+    measure()
+    window.addEventListener('resize', measure)
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    observer?.observe(element)
+    return () => { window.removeEventListener('resize', measure); observer?.disconnect() }
+  }, [commandMenu, menuDismissed])
+  useEffect(() => {
+    const selected = menuRef.current?.querySelector<HTMLElement>('[data-command-selected="true"]')
+    selected?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+  }, [commandIndex, commandMenu, menuDismissed, menuHeight])
+
 	useEffect(() => {
 	  setCommandIndex(0)
 	  setMenuDismissed(false)
@@ -70,6 +90,7 @@ export function InputBar({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return
 	  const atomic = imageMarkerForKey(text, imageAttachments, e.currentTarget.selectionStart, e.currentTarget.selectionEnd, e.key)
 	  if (atomic) {
 		e.preventDefault()
@@ -99,7 +120,7 @@ export function InputBar({
 	  }
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault()
-		if (items.length > 0) onSelectCommand?.(items[commandIndex])
+		if (items.length > 0) onSelectCommand?.(items[Math.min(commandIndex, items.length - 1)])
 		else onSend()
       }
     },
@@ -139,20 +160,21 @@ export function InputBar({
 
   return (
     <div className="border-t border-border/50 bg-surface-2 px-5 pb-5 pt-3">
-      <div className="mx-auto flex w-full max-w-[980px] flex-col gap-2 card-radius border border-border/60 bg-surface p-2.5 transition-colors focus-within:border-primary/70">
+      <div ref={shellRef} className="relative mx-auto flex w-full max-w-[980px] flex-col gap-2 card-radius border border-border/60 bg-surface p-2.5 transition-colors focus-within:border-primary/70">
 		{commandMenu && !menuDismissed && (
-		  <div className="mb-1 overflow-hidden rounded-lg border border-border/60 bg-surface-2/80">
-			<div className="flex items-center justify-between border-b border-border/50 px-3 py-2">
+		  <div style={{ maxHeight: menuHeight }} className="absolute inset-x-0 bottom-full z-30 mb-2 flex flex-col overflow-hidden rounded-lg border border-border/60 bg-surface-2">
+			<div className="flex shrink-0 items-center justify-between border-b border-border/50 px-3 py-2">
 			  <span className="text-[11px] font-semibold tracking-wide text-text-2">{commandMenu.title || 'Commands'}</span>
 			  <span className="text-[10px] text-text-3">↑↓ 选择 · Enter 确认 · Esc 关闭</span>
 			</div>
-			<div className="max-h-60 overflow-y-auto p-1.5">
+			<div ref={menuRef} className="min-h-0 max-h-60 overflow-y-auto p-1.5">
 			  {commandMenu.items.length === 0 ? (
 				<div className="px-2 py-4 text-center text-[11px] text-text-3">{commandMenu.empty || '暂无可选项'}</div>
 			  ) : commandMenu.items.map((item, index) => (
 				<button
 				  key={`${item.value}-${index}`}
 				  type="button"
+                  data-command-selected={index === Math.min(commandIndex, commandMenu.items.length - 1)}
 				  onMouseEnter={() => setCommandIndex(index)}
 				  onClick={() => onSelectCommand?.(item)}
 				  className={cn(
@@ -177,12 +199,13 @@ export function InputBar({
           disabled={busy || pastingImages}
           rows={1}
           placeholder={busy ? '正在处理...' : pastingImages ? '正在附加图片...' : '描述要修改、排查或构建的内容'}
-          className="mx-1 my-0.5 max-h-[180px] min-h-[24px] w-full resize-none bg-transparent text-sm leading-[1.5] text-text outline-none placeholder:text-text-3 disabled:opacity-40"
+          className="mx-1 my-0.5 max-h-[min(180px,30dvh)] min-h-[24px] w-full resize-none bg-transparent text-sm leading-[1.5] text-text outline-none placeholder:text-text-3 disabled:opacity-40"
         />
         <div className="flex min-h-[30px] items-center gap-2 px-1">
           <div className="group relative flex h-[30px] items-center">
             <button
               type="button"
+              disabled={busy}
               className={cn(
                 'inline-flex h-7 max-w-[220px] items-center rounded-md px-2.5 text-[11px] font-medium leading-none transition-all active:scale-95',
                 selectedSkill ? 'bg-primary/15 text-primary' : 'bg-surface-2 text-text-3 hover:bg-surface-3 hover:text-text',
@@ -194,6 +217,7 @@ export function InputBar({
               {selectedSkill && (
                 <button
                   type="button"
+                  disabled={busy}
                   onClick={onClearSkill}
                   className="mb-1 block w-full rounded px-2 py-1.5 text-left text-[11px] text-danger hover:bg-danger/10"
                 >
@@ -204,6 +228,7 @@ export function InputBar({
                 <button
                   key={skill.name}
                   type="button"
+                  disabled={busy}
                   onClick={() => onSelectSkill?.(skill.name)}
                   className="block w-full rounded px-2 py-1.5 text-left hover:bg-surface-3"
                 >
@@ -216,7 +241,7 @@ export function InputBar({
               )}
             </div>
           </div>
-          <span className="hidden h-7 items-center text-[10.5px] leading-none text-text-3 sm:inline-flex">
+          <span className="hidden h-7 items-center text-[10.5px] leading-none text-text-3 lg:inline-flex">
             {pastingImages ? '正在附加图片…' : 'Enter 发送 · Shift+Enter 换行 · 可粘贴图片'}
           </span>
           <span className="flex-1" />
@@ -224,9 +249,10 @@ export function InputBar({
             <button
               type="button"
               onClick={onStop}
+              disabled={stopping}
               className="flex h-7 min-w-20 items-center justify-center gap-1.5 rounded-md bg-danger/90 px-3 text-[12.5px] font-medium leading-none text-white transition-all hover:bg-danger active:scale-95"
             >
-              <span className="h-2.5 w-2.5 rounded-sm bg-white/90" /> 停止
+              <span className="h-2.5 w-2.5 rounded-sm bg-white/90" /> {stopping ? '正在停止…' : '停止'}
             </button>
           ) : (
             <button

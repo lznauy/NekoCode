@@ -620,6 +620,9 @@ func (m *Model) rebuildTaskDetail() {
 		if d.attempt != nil {
 			prompt = d.attempt.Prompt
 		}
+		if d.fullPromptLoaded {
+			prompt = d.fullPrompt
+		}
 		if prompt != "" {
 			addText("delegated-prompt", "user", prompt, "")
 		}

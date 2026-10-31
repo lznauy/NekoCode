@@ -24,6 +24,7 @@ import (
 
 type scriptedLLM struct {
 	scripts  [][]types.StreamToken
+	errors   []error
 	calls    int
 	messages [][]types.Message
 	tools    [][]types.ToolDef
@@ -44,7 +45,9 @@ func (f *scriptedLLM) ChatStream(_ context.Context, messages []types.Message, to
 		tokens <- token
 	}
 	close(tokens)
-	errs <- nil
+	if index < len(f.errors) {
+		errs <- f.errors[index]
+	}
 	close(errs)
 	return tokens, errs
 }

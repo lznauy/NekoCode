@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/permission"
 	"nekocode/protocol"
@@ -17,6 +18,98 @@ func TestUnavailableURLJudgeNeverReportsSafe(t *testing.T) {
 	e.applyAutoWebGate(context.Background(), permissionDecision{}, core.ToolCallItem{Name: "web_fetch", Args: map[string]any{"url": "https://example.com", "_preview": "GET"}})
 	if decision != protocol.ToolDecisionJevURLUnavailable {
 		t.Fatalf("unavailable judge decision = %q", decision)
+	}
+}
+
+func TestShellAutoVerdictSurvivesDynamicAssessment(t *testing.T) {
+	for _, command := range []string{`echo "$(pwd)"`, `bash -c 'echo ok'`, `source ./script.sh`, "bash <<'EOF'\necho ok\nEOF"} {
+		for _, tc := range []struct {
+			name                         string
+			dangerous, available, prompt bool
+			reason, note                 string
+		}{
+			{"safe", false, true, false, "", "jev_safe"},
+			{"dangerous", true, true, true, "jev: judged dangerous", "jev_dangerous"},
+			{"failed", false, false, true, "jev: judgment failed", "jev_failed"},
+		} {
+			t.Run(command+"/"+tc.name, func(t *testing.T) {
+				e := NewExecutor(nil)
+				e.SetPermissionMode(permission.ModeAuto)
+				calls := 0
+				e.SetBashAutoJudge(func(context.Context, string) (bool, bool) { calls++; return tc.dangerous, tc.available })
+				var note protocol.ToolDecision
+				e.SetPreviewDecisionFn(func(_ string, _ string, _ map[string]any, _ string, d protocol.ToolDecision) { note = d })
+				d := e.evaluatePermission(t.Context(), core.ToolCallItem{Name: "shell", Args: map[string]any{"command": command}}, nil)
+				if d.block || d.prompt != tc.prompt || d.jevSafe != (!tc.prompt) || calls != 1 || string(note) != tc.note {
+					t.Fatalf("decision=%+v note=%q calls=%d", d, note, calls)
+				}
+				if tc.prompt && (d.approval == nil || d.approval.Risk != tc.reason || len(d.approval.Structures) == 0) {
+					t.Fatalf("approval lost verdict or structure: %+v", d.approval)
+				}
+			})
+		}
+	}
+}
+
+func TestShellFailedJudgeIsVisibleOnlyInAutoMode(t *testing.T) {
+	for _, mode := range []permission.Mode{permission.ModeAuto, permission.ModeManual} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			e := NewExecutor(nil)
+			e.SetPermissionMode(mode)
+			calls := 0
+			e.SetBashAutoJudge(func(context.Context, string) (bool, bool) { calls++; return false, false })
+			var note protocol.ToolDecision
+			e.SetPreviewDecisionFn(func(_ string, _ string, _ map[string]any, _ string, d protocol.ToolDecision) { note = d })
+			d := e.evaluatePermission(t.Context(), core.ToolCallItem{Name: "shell", Args: map[string]any{"command": "make all"}}, nil)
+			if !d.prompt || d.jevSafe {
+				t.Fatalf("failed judge allowed execution: %+v", d)
+			}
+			if mode == permission.ModeAuto {
+				if calls != 1 || string(note) != "jev_failed" || d.approval == nil || d.approval.Risk != "jev: judgment failed" {
+					t.Fatalf("missing failure status: decision=%+v note=%q calls=%d", d, note, calls)
+				}
+			} else if calls != 0 || note != "" {
+				t.Fatalf("manual mode incorrectly judged: calls=%d note=%q", calls, note)
+			}
+		})
+	}
+}
+
+func TestDynamicShellSafeVerdictDiscardedAfterSwitchToManual(t *testing.T) {
+	e := NewExecutor(nil)
+	e.SetPermissionMode(permission.ModeAuto)
+	entered, release := make(chan struct{}), make(chan struct{})
+	e.SetBashAutoJudge(func(context.Context, string) (bool, bool) { close(entered); <-release; return false, true })
+	result := make(chan permissionDecision, 1)
+	go func() {
+		result <- e.evaluatePermission(t.Context(), core.ToolCallItem{Name: "shell", Args: map[string]any{"command": `bash -c 'echo ok'`}}, nil)
+	}()
+	<-entered
+	e.SetPermissionMode(permission.ModeManual)
+	close(release)
+	d := <-result
+	if !d.prompt || d.jevSafe || d.approval == nil || d.approval.Risk != "dynamic shell execution" {
+		t.Fatalf("stale auto verdict applied in manual mode: %+v", d)
+	}
+}
+
+func TestDynamicShellJudgeCannotOverrideExplicitRules(t *testing.T) {
+	for _, deny := range []bool{false, true} {
+		t.Run(fmt.Sprint(deny), func(t *testing.T) {
+			e := NewExecutor(nil)
+			e.SetPermissionMode(permission.ModeAuto)
+			decl := permission.PermissionsDecl{Ask: []string{"shell"}}
+			if deny {
+				decl = permission.PermissionsDecl{Deny: []string{"shell"}}
+			}
+			e.SetPermissionPolicy(decl, t.TempDir(), t.TempDir())
+			calls := 0
+			e.SetBashAutoJudge(func(context.Context, string) (bool, bool) { calls++; return false, true })
+			d := e.evaluatePermission(t.Context(), core.ToolCallItem{Name: "shell", Args: map[string]any{"command": `bash -c 'echo ok'`}}, nil)
+			if calls != 0 || d.block != deny || d.prompt == deny || d.jevSafe {
+				t.Fatalf("explicit rule bypassed: decision=%+v calls=%d", d, calls)
+			}
+		})
 	}
 }
 func TestShellJudgeCalledOncePerToolCall(t *testing.T) {

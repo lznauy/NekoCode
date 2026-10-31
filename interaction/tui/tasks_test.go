@@ -1114,3 +1114,96 @@ func TestToolInspectorReceivesErrorStatusWithUnchangedOutput(t *testing.T) {
 	}
 	t.Fatal("missing tool entry")
 }
+
+type taskPromptRuntime struct {
+	*taskFakeRuntime
+	prompt      string
+	start       int
+	headReads   int
+	interrupted bool
+}
+
+func (r *taskPromptRuntime) SubagentHistory(parent, id string, before, limit int) (controlruntime.SubagentHistoryPage, error) {
+	if r.interrupted && before == r.start+1 && limit == 1 {
+		r.headReads++
+		return controlruntime.SubagentHistoryPage{SessionID: parent, SubagentID: id, Before: r.start, End: r.start, Total: r.start + 150, Records: []controlruntime.SubagentRecord{{Sequence: r.start, Role: "tool", Content: "interrupted previous tool"}}}, nil
+	}
+	taskSequence := r.start
+	if r.interrupted {
+		taskSequence++
+	}
+	if before == taskSequence+1 && limit == 1 {
+		r.headReads++
+		return controlruntime.SubagentHistoryPage{SessionID: parent, SubagentID: id, Before: taskSequence, End: taskSequence, Total: r.start + 150, Records: []controlruntime.SubagentRecord{{Sequence: taskSequence, Role: "user", Content: "[Current delegated task]\n" + r.prompt}}}, nil
+	}
+	return controlruntime.SubagentHistoryPage{SessionID: parent, SubagentID: id, Before: r.start + 51, End: r.start + 150, Total: r.start + 150, Records: []controlruntime.SubagentRecord{{Sequence: r.start + 150, Role: "assistant", Content: "progress"}}}, nil
+}
+
+func TestTaskDetailLoadsCompletePromptOutsideHistoryTail(t *testing.T) {
+	for _, start := range []int{1, 200} {
+		t.Run(fmt.Sprint(start), func(t *testing.T) {
+			m := openedTaskModel(t)
+			openTestDetail(m)
+			full := strings.Repeat("详细任务要求。", 400) + "PROMPT_END"
+			m.Runtime = &taskPromptRuntime{taskFakeRuntime: &taskFakeRuntime{}, prompt: full, start: start, interrupted: start > 1}
+			d := m.tasks.detail
+			d.info.Recorded = true
+			d.attempt = &controlruntime.SubagentAttemptSummary{ID: "selected", Seq: 2, Status: "running", Prompt: full[:1024], TranscriptStart: start, TranscriptEnd: start + 150}
+			d.info.LatestAttempt = cloneTaskAttempt(d.attempt)
+			d.showProcess = false
+			d.historyLoaded = false
+			d.cursors = []int{start + 151}
+			d.loadedCursor = start + 151
+			cmd := m.loadTaskHistory(start + 151)
+			if cmd == nil {
+				t.Fatal("missing detail load")
+			}
+			m.handleTaskMessage(cmd())
+			rendered := ""
+			for _, entry := range d.entries {
+				rendered += ansi.Strip(entry.item.Render(70))
+			}
+			if !strings.Contains(rendered, "PROMPT_END") {
+				t.Fatal("detail still displays truncated prompt")
+			}
+			if !strings.Contains(rendered, "详细任务要求") {
+				t.Fatal("prompt content missing")
+			}
+			// Background list refreshes must not replace the complete prompt with its preview.
+			m.handleTaskMessage(taskListMsg{generation: m.tasks.generation, request: m.tasks.listRequest, page: controlruntime.SubagentPage{SessionID: m.tasks.sessionID, Items: []controlruntime.SubagentSummary{d.info}}})
+			rendered = ""
+			for _, entry := range d.entries {
+				rendered += ansi.Strip(entry.item.Render(70))
+			}
+			if !strings.Contains(rendered, "PROMPT_END") {
+				t.Fatal("list refresh truncated the detail prompt")
+			}
+			reader := m.Runtime.(*taskPromptRuntime)
+			m.handleTaskMessage(m.loadTaskHistory(start + 151)())
+			expectedReads := 1
+			if reader.interrupted {
+				expectedReads++
+			}
+			if reader.headReads != expectedReads {
+				t.Fatalf("full prompt repeatedly fetched: %d", reader.headReads)
+			}
+			staleReply := taskHistoryMsg{generation: m.tasks.generation, request: d.request, id: d.id, prompt: "old prompt", promptLoaded: true}
+			next := &controlruntime.SubagentAttemptSummary{ID: "next", Seq: 3, Status: "completed", Prompt: "short preview", TranscriptStart: start + 300, TranscriptEnd: start + 450}
+			m.selectTaskAttempt(next)
+			m.handleTaskMessage(staleReply)
+			if d.fullPromptLoaded {
+				t.Fatal("old attempt prompt leaked into newly selected attempt")
+			}
+			reader.start, reader.prompt = next.TranscriptStart, strings.Repeat("新轮次任务。", 400)+"NEXT_END"
+			cmd = m.loadTaskHistory(next.TranscriptEnd + 1)
+			m.handleTaskMessage(cmd())
+			rendered = ""
+			for _, entry := range d.entries {
+				rendered += ansi.Strip(entry.item.Render(70))
+			}
+			if !strings.Contains(rendered, "NEXT_END") || strings.Contains(rendered, "PROMPT_END") {
+				t.Fatal("attempt switch did not replace the full prompt")
+			}
+		})
+	}
+}

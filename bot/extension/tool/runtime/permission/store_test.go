@@ -11,6 +11,26 @@ import (
 	"nekocode/bot/extension/tool/runtime/core"
 )
 
+func TestWritePathGrantCoversFilesystemRoot(t *testing.T) {
+	child := t.TempDir()
+	root := filepath.VolumeName(child) + string(filepath.Separator)
+	store := NewStore(t.TempDir())
+	request := core.PermissionRequest{
+		Capabilities: []string{core.CapFsWritePath},
+		Details:      map[string]any{"writePaths": []string{root}},
+	}
+	if err := store.Allow("shell", request); err != nil {
+		t.Fatal(err)
+	}
+	request.Details["writePaths"] = []string{child}
+	if _, ok := store.Match("shell", request); !ok {
+		t.Fatal("filesystem root grant must cover a child path")
+	}
+	if ContainsAllWritePaths([]string{child}, []string{child + "-sibling"}) {
+		t.Fatal("grant must not cover a sibling with the same prefix")
+	}
+}
+
 func TestStorePersistsProjectGrant(t *testing.T) {
 	store := NewStore(t.TempDir())
 	req := core.PermissionRequest{

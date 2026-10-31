@@ -48,6 +48,8 @@ export function useSessions(): UseSessionsReturn {
   const [error, setError] = useState<string | null>(null)
   const initializedRef = useRef(false)
   const syncGenerationRef = useRef(0)
+  const operationRef = useRef(0)
+  const pendingOperationRef = useRef<{ reason: string; id: string } | null>(null)
 
   const refresh = useCallback(async () => {
     const generation = ++syncGenerationRef.current
@@ -57,9 +59,9 @@ export function useSessions(): UseSessionsReturn {
       const list = normalizeSessions(await safeListSessions())
       if (generation !== syncGenerationRef.current) return
       setSessions(list)
-      if (list.length === 0) {
-        setCurrentId(null)
-      } else {
+      // The saved list does not include an active, unsaved draft. Only a
+      // session event or an explicit operation may clear that identity.
+      if (list.length > 0) {
         setCurrentId((prev) => {
           if (initializedRef.current) return prev
           initializedRef.current = true
@@ -83,66 +85,92 @@ export function useSessions(): UseSessionsReturn {
         ? (event as { id: string }).id
         : ''
       const generation = ++syncGenerationRef.current
+      operationRef.current++
+      const change = event as SessionChangeEvent
+      const pending = pendingOperationRef.current
+      // An own committed event supersedes the returned snapshot, but its
+      // finalization error still belongs here. Other changes invalidate both.
+      if (!pending || change.reason !== pending.reason || (change.changedId ?? change.id) !== pending.id) {
+        pendingOperationRef.current = null
+      }
       initializedRef.current = true
       setCurrentId(id || null)
       void safeListSessions().then((list) => {
         if (generation !== syncGenerationRef.current) return
         setSessions(normalizeSessions(list))
-        setLoading(false)
       }).catch((err) => {
         if (generation === syncGenerationRef.current) setError(String(err))
+      }).finally(() => {
+        if (generation === syncGenerationRef.current) setLoading(false)
       })
     })
   }, [])
 
   const createSession = useCallback(async () => {
+    const operation = ++operationRef.current
+    const pending = { reason: 'new', id: '' }
+    pendingOperationRef.current = pending
     setError(null)
     try {
       const meta = await safeNewSession()
-      if (!meta) return null
+      if (!meta || operation !== operationRef.current) return null
       setCurrentId(meta.id)
       return meta
     } catch (err) {
-      setError(String(err))
+      if (pendingOperationRef.current === pending) setError(String(err))
       return null
+    } finally {
+      if (pendingOperationRef.current === pending) pendingOperationRef.current = null
     }
   }, [])
 
   const switchSession = useCallback(async (id: string) => {
+    const operation = ++operationRef.current
+    const pending = { reason: 'resume', id }
+    pendingOperationRef.current = pending
     setError(null)
     try {
       const raw = await safeLoadSession(id)
-      if (!raw) return null
+      if (!raw || operation !== operationRef.current) return null
       const msgs = raw.map(mapDisplayMessage)
       setCurrentId(id)
       return msgs
     } catch (err) {
-      setError(String(err))
+      if (pendingOperationRef.current === pending) setError(String(err))
       return null
+    } finally {
+      if (pendingOperationRef.current === pending) pendingOperationRef.current = null
     }
   }, [])
 
   const deleteSession = useCallback(async (id: string): Promise<{ sessions: SessionMeta[]; deleted: boolean }> => {
+    const operation = ++operationRef.current
+    const pending = { reason: 'delete', id }
+    pendingOperationRef.current = pending
     setError(null)
     try {
       await safeDeleteSession(id)
       const list = normalizeSessions(await safeListSessions())
-      setSessions(list)
-      if (currentId === id) {
-        setCurrentId(null)
+      if (operation === operationRef.current) {
+        setSessions(list)
+        setCurrentId(current => current === id ? null : current)
       }
       return { sessions: list, deleted: true }
     } catch (err) {
-      setError(String(err))
+      if (pendingOperationRef.current === pending) setError(String(err))
       try {
         const list = normalizeSessions(await safeListSessions())
-        setSessions(list)
         const deleted = !list.some((session) => session.id === id)
-        if (deleted && currentId === id) setCurrentId(null)
+        if (operation === operationRef.current) {
+          setSessions(list)
+          if (deleted) setCurrentId(current => current === id ? null : current)
+        }
         return { sessions: list, deleted }
       } catch {
         return { sessions, deleted: false }
       }
+    } finally {
+      if (pendingOperationRef.current === pending) pendingOperationRef.current = null
     }
   }, [currentId, sessions])
 

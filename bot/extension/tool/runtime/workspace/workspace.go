@@ -289,7 +289,8 @@ func rootAllows(root Root, need Access) bool {
 }
 
 func insideRoot(path, root string) bool {
-	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
+	prefix := strings.TrimSuffix(root, string(filepath.Separator)) + string(filepath.Separator)
+	return path == root || strings.HasPrefix(path, prefix)
 }
 
 func defaultPrimary() string {

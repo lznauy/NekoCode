@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	ctxmgr "nekocode/bot/contextmgr"
-	"nekocode/bot/core"
 	"nekocode/bot/provider/types"
 	"nekocode/bot/session"
 )
@@ -27,7 +26,7 @@ func TestSubagentHistoryKeepsReadToolAndMarksContextHeader(t *testing.T) {
 	if err := child.Checkpoint(ctxmgr.ManagerSnapshot{Messages: messages, Transcript: messages}, "completed", "done", session.SubagentAttemptUsage{CacheHitTokens: 80, CacheMissTokens: 20, ContextTokens: 1500, ContextWindow: 200000, ToolUseCount: 7}); err != nil {
 		t.Fatal(err)
 	}
-	adapter := &adapter{bot: &core.Bot{}}
+	adapter := &adapter{}
 	page, err := adapter.SubagentHistory("parent", "child", 0, 1)
 	if err != nil {
 		t.Fatal(err)

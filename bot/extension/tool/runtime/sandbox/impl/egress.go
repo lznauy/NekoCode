@@ -148,13 +148,26 @@ func (p *egressProxy) Close() {
 	})
 }
 
+var blockedEgressPrefixes = [...]netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("2001::/32"),
+	netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("fec0::/10"),
+}
+
 func publicEgressAddress(ip netip.Addr) bool {
 	ip = ip.Unmap()
 	if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
 		return false
 	}
-	for _, cidr := range []string{"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "198.18.0.0/15", "240.0.0.0/4", "64:ff9b::/96", "64:ff9b:1::/48", "2001::/32", "2002::/16", "fec0::/10"} {
-		if netip.MustParsePrefix(cidr).Contains(ip) {
+	for _, prefix := range blockedEgressPrefixes {
+		if prefix.Contains(ip) {
 			return false
 		}
 	}

@@ -23,10 +23,10 @@ export function SessionSidebar({
   onSwitch,
   onDelete,
 }: SessionSidebarProps) {
-  const [collapsed, setCollapsed] = useState(() => window.matchMedia?.('(max-width: 639px)').matches ?? false)
+  const [collapsed, setCollapsed] = useState(() => window.matchMedia?.('(max-width: 767px)').matches ?? false)
 
   useEffect(() => {
-    const media = window.matchMedia?.('(max-width: 639px)')
+    const media = window.matchMedia?.('(max-width: 767px)')
     if (!media) return
     const handleChange = (event: MediaQueryListEvent) => {
       if (event.matches) setCollapsed(true)
@@ -37,7 +37,7 @@ export function SessionSidebar({
 
   if (collapsed) {
     return (
-      <aside className="flex h-full w-12 flex-col items-center gap-3 border-r border-border/80 bg-surface py-3">
+      <aside className="flex h-full w-12 shrink-0 flex-col items-center gap-3 border-r border-border/80 bg-surface py-3">
         <NewSessionButton onClick={onCreate} collapsed />
         <button
           type="button"
@@ -52,7 +52,7 @@ export function SessionSidebar({
   }
 
   return (
-    <aside className="flex h-full w-[272px] flex-col border-r border-border/80 bg-surface max-sm:absolute max-sm:inset-y-0 max-sm:left-0 max-sm:z-40 max-sm:shadow-xl">
+    <aside className="flex h-full w-[272px] shrink-0 flex-col border-r border-border/80 bg-surface max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:shadow-xl">
       <div className="flex h-[52px] items-center justify-between px-3">
         <span className="text-[13px] font-semibold leading-none text-text-2">会话</span>
         <div className="flex items-center gap-1">

@@ -16,6 +16,7 @@ import type {
 
 interface SkillPanelProps {
   open: boolean
+  busy?: boolean
   onClose: () => void
   onConfigureMcp?: () => void
 }
@@ -25,7 +26,7 @@ type Filter = 'all' | 'loaded' | 'builtin' | 'local' | 'plugin'
 type PluginFilter = 'all' | 'enabled' | 'disabled'
 type McpFilter = 'all' | 'enabled' | 'disabled' | 'config' | 'plugin'
 
-export function SkillPanel({ open, onClose, onConfigureMcp }: SkillPanelProps) {
+export function SkillPanel({ open, busy = false, onClose, onConfigureMcp }: SkillPanelProps) {
   const [view, setView] = useState<SkillManagementView | null>(null)
   const [tab, setTab] = useState<Tab>('skills')
   const [query, setQuery] = useState('')
@@ -167,7 +168,7 @@ export function SkillPanel({ open, onClose, onConfigureMcp }: SkillPanelProps) {
               <HeaderStat label="MCP" value={`${readyMcpCount}/${mcpServers.length}`} />
             </div>
           </div>
-          <button className="secondary-button tooltip-anchor gap-1.5" type="button" disabled={refreshing || loading} onClick={refresh} data-tooltip="重新扫描技能、插件和 MCP">
+          <button className="secondary-button tooltip-anchor gap-1.5" type="button" disabled={busy || refreshing || loading} onClick={refresh} data-tooltip="重新扫描技能、插件和 MCP">
             <RefreshIcon spinning={refreshing} />
             刷新
           </button>

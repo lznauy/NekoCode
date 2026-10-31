@@ -27,9 +27,9 @@ import {
   SwitchModel,
 } from '../../wailsjs/go/main/App'
 import type { ConfigView, ModelConfig, ModelProfile } from '../types/config'
-import type { protocol, runtime } from '../../wailsjs/go/models'
+import type { core, protocol, runtime } from '../../wailsjs/go/models'
 export type GUICommandMenu = Omit<protocol.CommandMenu, 'convertValues'>
-type GUIContextSnapshot = runtime.ContextSnapshot
+type GUIContextSnapshot = protocol.ContextSnapshot
 type SessionMeta = runtime.SessionMeta
 type DisplayMessage = runtime.DisplayMessage
 import type { SkillManagementView as SkillManagement } from '../types/skills'
@@ -46,7 +46,7 @@ export function safeEventsOn(event: string, cb: (...args: unknown[]) => void): (
   }
 }
 
-export function safeSendMessage(msg: string, images: runtime.ImageAttachment[] = []): Promise<void> {
+export function safeSendMessage(msg: string, images: core.ImageAttachment[] = []): Promise<void> {
 	if (!isWailsEnvironment()) return Promise.resolve()
 	try {
 		return SendMessage(msg, images)
@@ -79,12 +79,9 @@ export function safeCommandMenu(input: string): Promise<GUICommandMenu | null> {
   }
 }
 
-export function safeAbort(): void {
-  try {
-    Abort()
-  } catch {
-    /* noop */
-  }
+export async function safeAbort(): Promise<void> {
+  if (!isWailsEnvironment()) return
+  await Abort()
 }
 
 export function safeCurrentModel(): Promise<string> {
@@ -119,12 +116,8 @@ export function safeSelectSkill(name: string): Promise<void> {
   }
 }
 
-export function safeClearSelectedSkill(): Promise<void> {
-  try {
-    return ClearSelectedSkill()
-  } catch {
-    return Promise.resolve()
-  }
+export async function safeClearSelectedSkill(): Promise<void> {
+  await ClearSelectedSkill()
 }
 
 export function safeGetConfig(): Promise<ConfigView | null> {
@@ -221,24 +214,13 @@ export function safeReadImageBase64(path: string): Promise<string | null> {
   }
 }
 
-export function safeReplyConfirm(id: string, ok: boolean, remember = false): void {
-  try {
-    if (remember) {
-      ReplyConfirmDecision(id, ok, remember)
-      return
-    }
-    ReplyConfirm(id, ok)
-  } catch {
-    /* noop */
-  }
+export async function safeReplyConfirm(id: string, ok: boolean, remember = false): Promise<void> {
+  if (remember) await ReplyConfirmDecision(id, ok, remember)
+  else await ReplyConfirm(id, ok)
 }
 
-export function safeReplyQuestion(id: string, answers: string[][], rejected: boolean): void {
-  try {
-    ReplyQuestion(id, JSON.stringify(answers), rejected)
-  } catch {
-    /* noop */
-  }
+export async function safeReplyQuestion(id: string, answers: string[][], rejected: boolean): Promise<void> {
+  await ReplyQuestion(id, JSON.stringify(answers), rejected)
 }
 
 export function safeQuit(): void {
