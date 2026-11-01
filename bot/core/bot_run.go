@@ -66,6 +66,7 @@ func (b *Bot) runAgent(ctx context.Context, input string, images []types.Message
 	// would surface as a run failure even though the turn itself was fine.
 	compactionCtx := protocol.WithPolicyConfiguration(context.WithoutCancel(ctx), b.policy.Configuration())
 	compactionCtx = protocol.WithProfileConfiguration(compactionCtx, "")
+	compactionCtx = protocol.WithAccessObservation(compactionCtx, ag.Executor().AccessObservation())
 	_, compactionErr := b.ctxMgr.AutoCompactIfNeeded(compactionCtx)
 	if compactionErr != nil && (errors.Is(compactionErr, context.Canceled) || errors.Is(compactionErr, context.DeadlineExceeded)) {
 		compactionErr = nil

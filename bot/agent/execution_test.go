@@ -111,3 +111,30 @@ func TestMainAgentDoesNotInheritParentProfileDiagnostic(t *testing.T) {
 		t.Fatal("main request mutated parent context")
 	}
 }
+
+func TestModelSamplesCurrentAccessInsteadOfInheritedObservation(t *testing.T) {
+	model := &executionLLM{}
+	parent := protocol.WithAccessObservation(t.Context(), protocol.AccessObservation{Schema: 99, Mode: "parent"})
+	a := New(parent, Config{Context: contextmgr.New(contextmgr.Config{}), Model: model, Tools: tools.New()})
+	var samples []protocol.AccessObservation
+	for _, full := range []bool{false, true} {
+		a.Executor().SetFullAccess(full)
+		if result := a.Run("question", nil, nil); result.Error != nil {
+			t.Fatal(result.Error)
+		}
+		got := protocol.AccessObservationFromContext(model.contexts[len(model.contexts)-1])
+		if got != a.Executor().AccessObservation() {
+			t.Fatalf("model saw stale access: %+v", got)
+		}
+		samples = append(samples, got)
+	}
+	if samples[0].Mode != "manual" || samples[1].Mode != "full" {
+		t.Fatalf("mode changes missing: %+v", samples)
+	}
+	if protocol.AccessObservationFromContext(model.contexts[0]) != samples[0] {
+		t.Fatal("later request changed earlier observation")
+	}
+	if protocol.AccessObservationFromContext(parent).Mode != "parent" {
+		t.Fatal("parent context changed")
+	}
+}

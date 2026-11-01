@@ -271,6 +271,7 @@ func (r *engineRun) stepOnce() bool {
 	ctx := r.ctx
 	if r.executor != nil {
 		ctx = execution.WithExecutionState(ctx, r.executor.ExecutionState())
+		ctx = protocol.WithAccessObservation(ctx, r.executor.AccessObservation())
 	}
 	calls, text, err := r.engine.reason(ctx, r.ctxMgr, allowedTools, buildSkillWorkflow(r.cfg), r.state.addTokens(r.cfg), r.cfg.RecordLLMUsage, r.cfg.SessionID, r.phase, r.cfg)
 	r.ctxMgr.SetHints("")

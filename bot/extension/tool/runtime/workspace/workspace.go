@@ -126,11 +126,15 @@ func (m *Manager) AddSessionRoot(path string, access Access) (Root, error) {
 
 func (m *Manager) Snapshot() []Root {
 	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.snapshotLocked()
+}
+
+func (m *Manager) snapshotLocked() []Root {
 	roots := append([]Root(nil), m.configured...)
 	for _, r := range m.sessions[m.sessionID] {
 		roots = upsertRoot(roots, r)
 	}
-	m.mu.RUnlock()
 	return roots
 }
 

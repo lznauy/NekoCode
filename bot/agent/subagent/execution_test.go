@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"nekocode/bot/extension/tool"
+	"nekocode/bot/extension/tool/runtime/runner"
 	"nekocode/bot/policy"
 	"nekocode/bot/provider/types"
 	"nekocode/protocol"
@@ -87,5 +88,22 @@ func TestSubagentBindsActualProfileAndSkillRequest(t *testing.T) {
 	}
 	if protocol.ProfileConfigurationFromContext(parent) != "parent-profile" {
 		t.Fatal("child mutated parent diagnostic")
+	}
+}
+
+func TestSubagentSamplesItsOwnAccess(t *testing.T) {
+	model := &scriptedLLM{scripts: [][]types.StreamToken{completionScript()}}
+	engine := New(Config{LLM: model, Tools: tools.New()})
+	parent := protocol.WithAccessObservation(t.Context(), protocol.AccessObservation{Schema: 99, Mode: "parent"})
+	cfg := RunConfig{Prompt: "check", Profile: Profile{Name: "explore"}, ConfigurePermissions: func(executor *runner.Executor) { executor.SetFullAccess(true) }}
+	if _, err := engine.Run(parent, cfg); err != nil {
+		t.Fatal(err)
+	}
+	got := protocol.AccessObservationFromContext(model.contexts[0])
+	if got.Schema != 1 || got.Mode != "full" || got.WorkspaceHash == "" {
+		t.Fatalf("child access missing: %+v", got)
+	}
+	if protocol.AccessObservationFromContext(parent).Mode != "parent" {
+		t.Fatal("child mutated parent observation")
 	}
 }

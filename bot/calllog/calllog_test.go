@@ -192,3 +192,16 @@ func TestProfileDiagnosticUsesOwnerHashOnly(t *testing.T) {
 		t.Fatal("profile leaked into unrelated call")
 	}
 }
+
+func TestNewRecordCarriesAccessObservation(t *testing.T) {
+	sample := protocol.AccessObservation{Schema: 1, Mode: "auto", RulesHash: "v1:rules", WorkspaceHash: "v1:workspace", StoreUnavailable: true}
+	ctx := protocol.WithAccessObservation(t.Context(), sample)
+	record := NewRecord(ctx, "main", "session", time.Now())
+	sample.Mode = "full"
+	if record.Access.Mode != "auto" || record.Access != protocol.AccessObservationFromContext(ctx) {
+		t.Fatalf("lost request sample: %+v", record.Access)
+	}
+	if NewRecord(t.Context(), "main", "session", time.Now()).Access != (protocol.AccessObservation{}) {
+		t.Fatal("invented access observation")
+	}
+}

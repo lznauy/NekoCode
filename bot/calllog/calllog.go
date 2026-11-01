@@ -54,6 +54,7 @@ func (d PrefixDiag) IsZero() bool {
 // Record is one LLM call. CacheUsageReported distinguishes a provider's real
 // zero values from calls where cache details were unavailable.
 type Record struct {
+	Access             protocol.AccessObservation   `json:"access,omitzero"`
 	ProfileHash        string                       `json:"profile_hash,omitempty"`
 	Policy             protocol.PolicyConfiguration `json:"policy,omitzero"`
 	Execution          protocol.ExecutionIdentity   `json:"execution,omitzero"`
@@ -93,6 +94,7 @@ func NewRecord(ctx context.Context, source, sessionID string, start time.Time) R
 		source = "unknown"
 	}
 	return Record{
+		Access:      protocol.AccessObservationFromContext(ctx),
 		ProfileHash: protocol.ProfileConfigurationFromContext(ctx),
 		Policy:      protocol.PolicyConfigurationFromContext(ctx),
 		Execution:   protocol.ExecutionFromContext(ctx), CallID: uuid.NewString(),
