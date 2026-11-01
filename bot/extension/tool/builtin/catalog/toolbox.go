@@ -3,6 +3,7 @@ package catalog
 import (
 	"nekocode/bot/config"
 	"nekocode/bot/extension/tool"
+	"nekocode/bot/extension/tool/builtin/contextrefs"
 	"nekocode/bot/extension/tool/builtin/index"
 	"nekocode/bot/extension/tool/builtin/lsp"
 	"nekocode/bot/extension/tool/builtin/question"
@@ -11,6 +12,7 @@ import (
 	"nekocode/bot/extension/tool/builtin/todo"
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/permission"
+	"nekocode/bot/extension/tool/runtime/refbridge"
 	"nekocode/bot/extension/tool/runtime/taskbridge"
 	"nekocode/bot/extension/tool/runtime/workspace"
 	"nekocode/protocol"
@@ -19,15 +21,16 @@ import (
 // Toolbox owns the builtin registry and the stateful runtimes shared by tools
 // across registry rebuilds: the shell process registry and the LSP server pool.
 type Toolbox struct {
-	Registry  *tools.Registry
-	shell     *shell.ShellTool
-	lsp       *lsp.LSPTool
-	index     *index.IndexTool
-	task      *task.TaskTool
-	taskList  *task.TaskListTool
-	question  *question.Tool
-	todo      *todo.TodoWriteTool
-	workspace *workspace.Manager
+	Registry   *tools.Registry
+	shell      *shell.ShellTool
+	lsp        *lsp.LSPTool
+	index      *index.IndexTool
+	task       *task.TaskTool
+	taskList   *task.TaskListTool
+	references *contextrefs.Tool
+	question   *question.Tool
+	todo       *todo.TodoWriteTool
+	workspace  *workspace.Manager
 	// extraTools survive registry rebuilds (triggered by config changes
 	// like /model) without being re-declared by the caller.
 	extraTools []core.Tool
@@ -84,6 +87,9 @@ func (e *Toolbox) RebuildRegistryWithConfig(cfg ToolboxConfig) {
 	if e.taskList == nil {
 		e.taskList = task.NewTaskListTool()
 	}
+	if e.references == nil {
+		e.references = contextrefs.New()
+	}
 	if e.question == nil {
 		e.question = question.NewTool()
 	}
@@ -95,7 +101,7 @@ func (e *Toolbox) RebuildRegistryWithConfig(cfg ToolboxConfig) {
 	}
 	e.Registry = tools.New()
 	e.Registry.SetWorkspace(e.workspace)
-	registerAll(e.Registry, cfg.ImageGenModels, cfg.ImageUnderstandModels, e.shell, e.lsp, e.index, e.task, e.taskList, e.question, e.todo)
+	registerAll(e.Registry, cfg.ImageGenModels, cfg.ImageUnderstandModels, e.shell, e.lsp, e.index, e.task, e.taskList, e.question, e.todo, e.references)
 	for _, t := range cfg.ExtraTools {
 		e.Registry.Register(t)
 	}
@@ -201,3 +207,5 @@ func (e *Toolbox) WireInteraction(ask protocol.QuestionFunc, todos protocol.Todo
 		e.todo.SetUpdateFn(todos)
 	}
 }
+
+func (e *Toolbox) WireReferences(read refbridge.Reader) { e.references.Wire(read) }

@@ -16,6 +16,11 @@ func (b *Bot) HistoryPage(before, limit, maxBytes int) (session.HistoryPage, err
 	}
 	b.historyMu.RLock()
 	defer b.historyMu.RUnlock()
+	return b.historyPageLocked(before, limit, maxBytes)
+}
+
+// Caller holds historyMu to keep raw records bound to one session.
+func (b *Bot) historyPageLocked(before, limit, maxBytes int) (session.HistoryPage, error) {
 	base, tail, lazy := b.ctxMgr.TranscriptTail()
 	if !lazy {
 		base = 0

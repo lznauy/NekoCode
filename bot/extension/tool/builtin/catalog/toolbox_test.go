@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"nekocode/bot/config"
+	"nekocode/bot/extension/tool/runtime/refbridge"
 	"nekocode/bot/extension/tool/runtime/taskbridge"
 	"nekocode/bot/extension/tool/runtime/workspace"
 )
@@ -93,5 +94,29 @@ func TestToolboxPreservesOwnedIndexOnRegistryRebuild(t *testing.T) {
 	}
 	if box.index != nil {
 		t.Fatal("toolbox retained closed index")
+	}
+}
+
+func TestReferenceToolSurvivesRebuildWithPlanReadOnlyRegistration(t *testing.T) {
+	box := NewToolboxWithConfig(ToolboxConfig{})
+	defer box.Close()
+	calls := 0
+	box.WireReferences(func(context.Context, refbridge.Query) (refbridge.Page, error) {
+		calls++
+		return refbridge.Page{SessionID: "parent"}, nil
+	})
+	for range 2 {
+		entry, err := box.Registry.Lookup("context_refs")
+		if err != nil || !entry.PlanAllowed {
+			t.Fatalf("registration: %+v %v", entry, err)
+		}
+		out, err := entry.Tool.Execute(t.Context(), map[string]any{"action": "list"})
+		if err != nil || !strings.Contains(out.Text, "parent") {
+			t.Fatalf("reference output: %q %v", out.Text, err)
+		}
+		box.RebuildRegistryWithConfig(ToolboxConfig{})
+	}
+	if calls != 2 {
+		t.Fatal("reader lost during rebuild")
 	}
 }

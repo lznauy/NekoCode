@@ -8,6 +8,7 @@ import (
 	"nekocode/bot/contextmgr"
 	"nekocode/bot/extension/tool"
 	"nekocode/bot/extension/tool/runtime/core"
+	"nekocode/bot/extension/tool/runtime/refbridge"
 	"nekocode/bot/policy"
 	"nekocode/bot/provider/types"
 	"nekocode/protocol"
@@ -192,6 +193,38 @@ func TestModelRefreshesRequestOnlyTaskReferences(t *testing.T) {
 	for _, message := range manager.Snapshot().Transcript {
 		if strings.Contains(message.Content, "task_references") {
 			t.Fatal("request refs persisted in transcript")
+		}
+	}
+}
+
+func TestModelAndSynthesisReceiveFreshContextReferences(t *testing.T) {
+	model := &executionLLM{}
+	current := "first-reference"
+	a := New(t.Context(), Config{Context: contextmgr.New(contextmgr.Config{}), Model: model, Tools: tools.New(), SessionID: func() string { return "parent" }, ContextReferences: func(ctx context.Context, scope string) refbridge.Page {
+		if scope != "parent" || ctx.Err() != nil {
+			t.Fatal("wrong reference scope")
+		}
+		return refbridge.Page{SessionID: scope, Items: []refbridge.Reference{{ID: current, Sequence: 2}}}
+	}})
+	if result := a.Run("question", nil, nil); result.Error != nil {
+		t.Fatal(result.Error)
+	}
+	current = "new-reference"
+	if _, err := a.modelRunner.streamSynthesize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range []string{"first-reference", "new-reference"} {
+		found := false
+		for _, msg := range model.messages[i] {
+			if strings.Contains(msg.Content, id) {
+				found = true
+				if msg.Role != "user" || msg.IsConversationUser() {
+					t.Fatal("reference acquired authority")
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("model request %d omitted current references", i)
 		}
 	}
 }

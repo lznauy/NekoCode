@@ -152,3 +152,9 @@ defer toolbox.Close()
 示例可以在临时目录内添加 `main_test.go`，用标准 Go 测试调用 `Execute`，然后运行 `go test ./.tool-demo`。直接调用只验证实现；接入 Agent 后，还要确认模型能看到参数定义，执行器实际应用了预期的权限和审计。
 
 完成后移走 `.tool-demo/`。需要通过事件控制工具调用时，继续阅读 [Hook 指南](HOOK_GUIDE.md)；需要让子 Agent 使用它时，阅读 [Agent 指南](AGENT_GUIDE.md)。
+
+## 已保存输出的引用查询
+
+内置 `context_refs` 复用主会话历史中的 `ToolOutputArtifact`，不会把自定义工具的普通路径文本猜成产物。自定义工具需要沿现有 `ToolOutput.Artifact` 返回结构化引用，并由当前执行者的 OutputStore 持有文件。
+
+模型使用 `action=list` 查来源页，`before=0` 从最新记录开始，`limit` 为 1–20 条来源记录；空页仍应检查 has_more。`action=inspect` 接受 list 返回的 ID，成功时仅返回当前有权限读取的文件位置，正文用 read 重取。它不提供任意路径查找、不新增授权，也不能用 available 推断业务成功或文件内容未被修改。当前仅主会话执行者可用，完整边界见 [产物引用与查询](../maintainers/ARCHITECTURE_BOUNDARIES.md#产物引用与查询)。

@@ -3,6 +3,7 @@ package catalog
 import (
 	"nekocode/bot/config"
 	"nekocode/bot/extension/tool"
+	"nekocode/bot/extension/tool/builtin/contextrefs"
 	"nekocode/bot/extension/tool/builtin/diff"
 	"nekocode/bot/extension/tool/builtin/filesystem/edit"
 	"nekocode/bot/extension/tool/builtin/filesystem/list"
@@ -20,7 +21,7 @@ import (
 	"nekocode/bot/extension/tool/builtin/web"
 )
 
-func registerAll(r *tools.Registry, imageGenModels []config.ImageGenConfig, imageUnderstandModels []config.ImageUnderstandConfig, shellTool *shell.ShellTool, lspTool *lsp.LSPTool, indexTool *index.IndexTool, taskTool *task.TaskTool, taskListTool *task.TaskListTool, questionTool *question.Tool, todoTool *todo.TodoWriteTool) {
+func registerAll(r *tools.Registry, imageGenModels []config.ImageGenConfig, imageUnderstandModels []config.ImageUnderstandConfig, shellTool *shell.ShellTool, lspTool *lsp.LSPTool, indexTool *index.IndexTool, taskTool *task.TaskTool, taskListTool *task.TaskListTool, questionTool *question.Tool, todoTool *todo.TodoWriteTool, referencesTool *contextrefs.Tool) {
 	plan := tools.RegistrationOptions{PlanAllowed: true}
 	r.RegisterWithOptions(shellTool, tools.RegistrationOptions{
 		Privileged:     shellTool.ExecuteWithPermission,
@@ -43,6 +44,7 @@ func registerAll(r *tools.Registry, imageGenModels []config.ImageGenConfig, imag
 	r.Register(todoTool)
 	r.Register(taskTool)
 	r.RegisterWithOptions(taskListTool, plan)
+	r.RegisterWithOptions(referencesTool, plan)
 	diffTool := diff.NewTool()
 	r.RegisterWithOptions(diffTool, tools.RegistrationOptions{Preview: diffTool.PreviewContext})
 	r.Register(indexTool)

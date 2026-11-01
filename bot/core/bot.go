@@ -255,6 +255,7 @@ func (b *Bot) initToolRegistry() {
 			Workspace:      workspace.New(b.cwd, b.configuredWorkspaceRoots()),
 			ImageGenModels: b.cfg.ImageGenModels, ImageUnderstandModels: b.cfg.ImageUnderstandModels,
 		})
+		b.toolbox.WireReferences(b.readContextReferences)
 		return
 	}
 	b.toolbox.RebuildRegistryWithConfig(catalog.ToolboxConfig{
@@ -319,6 +320,7 @@ func (b *Bot) initAgent() {
 		Checkpoints:            b.checkpoints,
 		SessionID:              b.sess.CurrentID,
 		TaskReferences:         b.taskReferences,
+		ContextReferences:      b.modelContextReferences,
 		Output: agent.Output{
 			Text:      b.stream,
 			Reason:    b.reasoning,
