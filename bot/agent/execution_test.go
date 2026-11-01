@@ -2,10 +2,12 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"nekocode/bot/contextmgr"
 	"nekocode/bot/extension/tool"
+	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/policy"
 	"nekocode/bot/provider/types"
 	"nekocode/protocol"
@@ -13,6 +15,7 @@ import (
 
 type executionLLM struct {
 	contexts []context.Context
+	messages [][]types.Message
 	onCall   func()
 }
 
@@ -20,8 +23,9 @@ func (*executionLLM) Chat(context.Context, []types.Message, []types.ToolDef) (*t
 	panic("unexpected non-streaming call")
 }
 
-func (m *executionLLM) ChatStream(ctx context.Context, _ []types.Message, _ []types.ToolDef) (<-chan types.StreamToken, <-chan error) {
+func (m *executionLLM) ChatStream(ctx context.Context, messages []types.Message, _ []types.ToolDef) (<-chan types.StreamToken, <-chan error) {
 	m.contexts = append(m.contexts, ctx)
+	m.messages = append(m.messages, append([]types.Message(nil), messages...))
 	if m.onCall != nil {
 		m.onCall()
 	}
@@ -136,5 +140,58 @@ func TestModelSamplesCurrentAccessInsteadOfInheritedObservation(t *testing.T) {
 	}
 	if protocol.AccessObservationFromContext(parent).Mode != "parent" {
 		t.Fatal("parent context changed")
+	}
+}
+
+func TestModelRefreshesRequestOnlyTaskReferences(t *testing.T) {
+	model := &executionLLM{}
+	manager := contextmgr.New(contextmgr.Config{})
+	current := "first-attempt"
+	calls := 0
+	a := New(t.Context(), Config{Context: manager, Model: model, Tools: tools.New(), SessionID: func() string { return "parent" }, TaskReferences: func(ctx context.Context, sessionID string) contextmgr.TaskReferences {
+		calls++
+		if sessionID != "parent" || ctx.Err() != nil {
+			t.Fatalf("wrong reference scope: %q", sessionID)
+		}
+		return contextmgr.TaskReferences{SessionID: sessionID, Total: 1, Items: []contextmgr.TaskReference{{ID: "task-ref", AttemptID: current, Status: "running"}}}
+	}})
+	for _, attempt := range []string{"first-attempt", "resumed-attempt"} {
+		current = attempt
+		if result := a.Run("continue", nil, nil); result.Error != nil {
+			t.Fatal(result.Error)
+		}
+		found := false
+		for _, message := range model.messages[len(model.messages)-1] {
+			if strings.Contains(message.Content, "task_references") {
+				found = true
+				if !strings.Contains(message.Content, attempt) || message.Role != "user" || message.IsConversationUser() {
+					t.Fatalf("incorrect task reference: %+v", message)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("actual model request omitted task refs")
+		}
+	}
+	if calls != 2 || len(model.messages) != 2 {
+		t.Fatalf("extra sampling/model calls: %d/%d", calls, len(model.messages))
+	}
+	if _, err := a.modelRunner.streamSynthesize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatal("synthesis repeated the same metadata scan")
+	}
+	a.toolRunner.executeAllowedTools([]core.ToolCallItem{{Name: "task_list", ID: "query"}}, nil)
+	if _, err := a.modelRunner.streamSynthesize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 3 {
+		t.Fatal("task query did not invalidate request projection")
+	}
+	for _, message := range manager.Snapshot().Transcript {
+		if strings.Contains(message.Content, "task_references") {
+			t.Fatal("request refs persisted in transcript")
+		}
 	}
 }

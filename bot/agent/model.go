@@ -68,7 +68,7 @@ func (r *modelRunner) callLLMForTool() (*llmstream.LLMCallResult, error) {
 	ctx = protocol.WithPolicyConfiguration(ctx, a.deps.gov.Configuration())
 	ctx = protocol.WithProfileConfiguration(ctx, "")
 	ctx = protocol.WithAccessObservation(ctx, a.deps.toolExecutor.AccessObservation())
-	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{Tools: toolDefs, PolicyHints: policyHints, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient)})
+	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{TaskReferences: r.taskReferences(ctx), Tools: toolDefs, PolicyHints: policyHints, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient)})
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +181,7 @@ func (r *modelRunner) streamSynthesize(ctx context.Context) (string, error) {
 	ctx = protocol.WithPolicyConfiguration(ctx, a.deps.gov.Configuration())
 	ctx = protocol.WithProfileConfiguration(ctx, "")
 	ctx = protocol.WithAccessObservation(ctx, a.deps.toolExecutor.AccessObservation())
-	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{PolicyHints: policyHints, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient), ExtraMessages: []types.Message{{Role: "user", Content: synthesizePrompt}}})
+	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{TaskReferences: r.taskReferences(ctx), PolicyHints: policyHints, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient), ExtraMessages: []types.Message{{Role: "user", Content: synthesizePrompt}}})
 	if err != nil {
 		return "", err
 	}
@@ -314,4 +314,22 @@ func fromLLM(toolCalls []core.ToolCallItem, textContent string, err error) *reas
 		ToolCalls:   toolCalls,
 		TextContent: textContent,
 	}
+}
+
+func (r *modelRunner) taskReferences(ctx context.Context) contextmgr.TaskReferences {
+	a := r.agent
+	if a.deps.taskReferences == nil {
+		return contextmgr.TaskReferences{}
+	}
+	sessionID := a.sessionID()
+	if cached := a.run.taskReferences; cached != nil && cached.SessionID == sessionID {
+		return *cached
+	}
+	refs := a.deps.taskReferences(ctx, sessionID)
+	if !refs.Unavailable && ctx.Err() == nil {
+		// Keep only the bounded request view, never source metadata or task bodies.
+		refs.Items = append([]contextmgr.TaskReference(nil), refs.Items[:min(len(refs.Items), contextmgr.MaxTaskReferences)]...)
+		a.run.taskReferences = &refs
+	}
+	return refs
 }

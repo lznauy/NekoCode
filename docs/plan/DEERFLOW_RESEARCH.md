@@ -151,13 +151,13 @@ NekoCode 已有 session transcript、snapshot、JSONL run recording、内存 Run
 
 **已确认实现：** NekoCode 的 context snapshot 保存 Archive、Messages 等；session 另存 LoadedSkills、todos、ledger，子代理元数据也独立保存。运行时上下文会重新投影环境、todo 和 policy。因此并非“压缩后什么都没有”。
 
-不足在于当前请求层缺少与 DeerFlow 类似的统一委派、技能引用和产物索引投影。子任务结果可以通过 `task_list` 找回，但模型需要先记得去查。LoadedSkills 是宿主记账，也不等于模型还持有技能步骤。
+调研时请求层缺少与 DeerFlow 类似的统一委派、技能引用和产物索引投影。子任务结果可以通过 `task_list` 找回，但模型需要先记得去查。LoadedSkills 是宿主记账，也不等于模型还持有技能步骤。
 
 另一个具体损失点：`formatSummaryMessages()` 在交给 summarizer 前，将普通消息截到 500 rune、tool 消息截到 800 rune，且主要序列化 role/content。很长的用户约束尾部、结果尾部和工具参数细节可能在总结模型看到之前就丢失。增加 summarizer 智能无法恢复未送达的信息。
 
-**该输入损失点已修复：** 摘要保留完整文本与工具调用关联，超窗时有界分批，失败不删除旧消息；见 [摘要压缩事务](../maintainers/ARCHITECTURE_BOUNDARIES.md#摘要压缩事务)。上述行为保留为调研基线，连续性引用仍属于后续范围。
+**该输入损失点已修复：** 摘要保留完整文本与工具调用关联，超窗时有界分批，失败不删除旧消息；见 [摘要压缩事务](../maintainers/ARCHITECTURE_BOUNDARIES.md#摘要压缩事务)。上述行为保留为调研基线。任务引用现已通过既有 TaskLister 投影到主请求，见 [任务连续性引用](../maintainers/ARCHITECTURE_BOUNDARIES.md#任务连续性引用)；技能与产物引用仍属于后续范围。
 
-**建议：** 先补一个小型 `ContinuityState`，保存任务目标与约束引用、委派状态与结果引用、已激活技能引用、产物引用；已有 todo 保持原来的事实来源。每次请求有界投影这些字段，长正文按需读取。摘要只补充叙事背景，不承担唯一事实存储。
+**剩余建议：** 在现有任务请求投影上补齐已交付技能和产物引用，长正文按需读取。已有任务元数据和 todo 保持原来的事实来源，不维护目标、委派状态的第二份副本；摘要继续补充历史背景。
 
 外部状态恢复要重新校验 scope、路径和内容摘要。旧摘要不能授权文件操作，已完成任务不能被迟到状态改回 running。模型写的 notes 单独标注，禁止直接作为 policy 事实。
 

@@ -20,6 +20,7 @@ import (
 	"nekocode/bot/extension/tool/builtin/catalog"
 	toolcore "nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/permission"
+	"nekocode/bot/extension/tool/runtime/taskbridge"
 	"nekocode/bot/extension/tool/runtime/workspace"
 	"nekocode/bot/policy"
 	"nekocode/bot/policy/builtin"
@@ -62,6 +63,7 @@ type Bot struct {
 	policy        *policy.Policy
 	ag            *agent.Agent
 	toolbox       *catalog.Toolbox
+	taskLister    taskbridge.TaskLister
 	cmd           *command.Handler
 	ext           *extension.Manager
 	sessionOutput struct {
@@ -316,6 +318,7 @@ func (b *Bot) initAgent() {
 		Policy:                 b.policy,
 		Checkpoints:            b.checkpoints,
 		SessionID:              b.sess.CurrentID,
+		TaskReferences:         b.taskReferences,
 		Output: agent.Output{
 			Text:      b.stream,
 			Reason:    b.reasoning,

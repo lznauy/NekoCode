@@ -42,10 +42,14 @@ type TaskSpec struct {
 type TaskRunner func(ctx context.Context, spec TaskSpec) (*TaskResult, error)
 
 type TaskListFilter struct {
-	Query  string
-	Status string
-	Offset int
-	Limit  int
+	// SessionID is set by trusted assembly, never from model tool arguments.
+	SessionID string
+	// PrioritizeActive selects unsettled tasks before recently updated completions.
+	PrioritizeActive bool
+	Query            string
+	Status           string
+	Offset           int
+	Limit            int
 }
 
 type TaskAttemptSummary struct {

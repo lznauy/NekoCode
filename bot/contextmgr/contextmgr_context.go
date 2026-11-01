@@ -14,8 +14,9 @@ import (
 
 // ModelRequest describes one complete provider request projection.
 type ModelRequest struct {
-	Tools       []types.ToolDef
-	PolicyHints string
+	TaskReferences TaskReferences
+	Tools          []types.ToolDef
+	PolicyHints    string
 	// ExtraMessages are transient request-only instructions, e.g. synthesis
 	// prompts and delegated workflows. They are included in the final budget.
 	ExtraMessages []types.Message
@@ -36,7 +37,7 @@ type ModelRequest struct {
 func (m *Manager) Build() []types.Message {
 	m.state.mu.RLock()
 	defer m.state.mu.RUnlock()
-	out, _ := m.buildLocked()
+	out, _ := m.buildLocked(TaskReferences{})
 	for i := range out {
 		out[i].Source = ""
 	}
@@ -59,7 +60,7 @@ func (m *Manager) projectRequest(request ModelRequest, observe bool) ([]types.Me
 	defer m.state.mu.Unlock()
 	m.appendRuntimeContextLocked(runtimePrompt)
 	m.appendHintsLocked(m.state.ctx.Hints, request.PolicyHints)
-	out, systemEnd := m.buildLocked()
+	out, systemEnd := m.buildLocked(request.TaskReferences)
 	out = append(out, request.ExtraMessages...)
 	out = types.ProjectReasoning(out, m.state.reasoning)
 	shape := buildPrefixShape(out[:systemEnd], out[systemEnd:], request.Tools)
@@ -69,10 +70,13 @@ func (m *Manager) projectRequest(request ModelRequest, observe bool) ([]types.Me
 	return out, shape
 }
 
-func (m *Manager) buildLocked() ([]types.Message, int) {
+func (m *Manager) buildLocked(refs TaskReferences) ([]types.Message, int) {
 	out := m.state.ctx.BuildLayer0()
 	systemEnd := len(out)
 	out = append(out, m.state.ctx.BuildData()...)
+	if msg := refs.message(); msg.Content != "" {
+		out = append(out, msg)
+	}
 	out = append(out, m.visibleHistory()...)
 	return out, systemEnd
 }

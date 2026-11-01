@@ -275,3 +275,27 @@ func TestSubagentOutputValidatesAndStopsAfterClose(t *testing.T) {
 		t.Fatal("closed runtime invoked output service")
 	}
 }
+
+func TestSubagentReferenceOrderPrioritizesUnsettledThenRecent(t *testing.T) {
+	rt := New(&testBot{}, ServiceGroups{Sessions: SessionsServices{Subagents: func(parent string) ([]SubagentSummary, error) {
+		items := make([]SubagentSummary, 1000)
+		for i := range items {
+			items[i] = SubagentSummary{ID: fmt.Sprintf("task-%04d", i), SessionID: parent, Status: "completed", CreatedAt: time.Unix(int64(i), 0), UpdatedAt: time.Unix(int64(i), 0)}
+		}
+		items[0].Status = "failed"
+		items[1].Status = "running"
+		return items, nil
+	}}})
+	defer rt.Close()
+	page, err := rt.Subagents(SubagentFilter{SessionID: "parent", PrioritizeActive: true, Limit: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 1000 || len(page.Items) != 16 || page.Items[0].ID != "task-0001" || page.Items[1].ID != "task-0000" || page.Items[2].ID != "task-0999" || !page.HasMore {
+		t.Fatalf("incorrect reference order: %+v", page)
+	}
+	original, err := rt.Subagents(SubagentFilter{SessionID: "parent", Limit: 16})
+	if err != nil || original.Items[0].ID != "task-0000" {
+		t.Fatal("default chronological pagination changed")
+	}
+}

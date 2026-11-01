@@ -18,7 +18,7 @@ func (a *adapter) wireTaskLister(rt *controlruntime.Runtime) {
 			return taskbridge.TaskPage{}, ctx.Err()
 		default:
 		}
-		page, err := rt.Subagents(controlruntime.SubagentFilter{Query: filter.Query, Status: filter.Status, Offset: filter.Offset, Limit: filter.Limit})
+		page, err := rt.Subagents(controlruntime.SubagentFilter{SessionID: filter.SessionID, PrioritizeActive: filter.PrioritizeActive, Query: filter.Query, Status: filter.Status, Offset: filter.Offset, Limit: filter.Limit})
 		if err != nil {
 			return taskbridge.TaskPage{}, err
 		}

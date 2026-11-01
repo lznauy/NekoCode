@@ -37,34 +37,33 @@
 
 | 待新增数据 | 权威来源 | 生命周期 | 持久化/恢复规则 |
 | --- | --- | --- | --- |
-| 活跃任务/技能/产物引用 | task metadata、skill 实际交付、ToolOutputArtifact | 会话索引，attempt 内有序 | 可重建；引用不授予路径权限 |
+| 技能/产物引用 | skill 实际交付、ToolOutputArtifact | 会话派生索引 | 可重建；引用不授予路径权限 |
 | ExecutionReceipt | executor/工具结果接纳边界 | 单次调用 | append-only 证据；失败和未知结果不补造成功 |
 
 禁止形成反向依赖：Runtime 不 import bot/core；Context 不 import session；文件工具不 import policy。需要跨层协调时由 bot/core/Agent 注入回调或值对象，并在锁外调用。
 
 ## 3. 剩余批次怎么推进
 
-### PR 5：新增有界的连续性引用投影
+### PR 5：补齐技能与产物的连续性引用
 
-**已有基础：** task metadata/attempt、task_list、LoadedSkills、SkillName 交付标记、ToolOutputArtifact、todos 和 session transcript。
+**已有基础：** 任务引用已接入主代理请求，复用原有任务/attempt 投影，不新增持久化任务索引；采样、16 条/4 KiB 上限和失效契约见 [任务连续性引用](../maintainers/ARCHITECTURE_BOUNDARIES.md#任务连续性引用)。其余基础包括 SkillName 交付标记、ToolOutputArtifact、todos 和 session transcript。
 
-**改动方案：**
+**剩余改动方案：**
 
-1. 在 bot/core 组装连续性索引，Context 只接收不可变值。数据包含委派任务及最新 attempt 状态/结果引用、实际交付过的技能名称/来源/内容摘要、工具产物引用。todos 继续沿用现有来源，不复制为第二份任务状态。
-2. 第一轮不从自然语言中“抽取真实目标”或“判定旧约束失效”。当前原始用户请求由 recent history 保留，旧要求由改善后的摘要携带；连续性索引不宣称可保证任意历史约束零损失。
-3. 身份分别使用父 session + task ID、task + attempt ID、技能来源 + 名称 + 内容摘要，以及宿主生成的 artifact ID。终态只在同一 attempt 内不可降级；显式 resume 是新 attempt，不能被“task 终态不可逆”的规则阻止。
-4. 只保存引用与有限摘要，不复制 SKILL.md、子任务全文或大工具正文。读取旧引用重新检查 session/actor 归属和 workspace 授权；missing、changed、unavailable 明确区分，不据此删除历史事实。
-5. 默认投影上限为委派 16 条、技能 8 条、产物 16 条，总文本不超过 8 KiB；先列运行/中断/失败任务，再列最近完成记录。超出时保留 omitted count 和查询入口。原始存储仍完整，不按投影上限删数据。
-6. 通过已有 task_list、skill/read 工具重取内容；增加只读 `context_refs` 的 list/inspect 操作查询产物与技能引用，按 ID 分页，单页最多 20 条、文本不超过现有工具输出上限。不支持自由路径查找，也不授予新读权限。
-7. 复用现有历史数据来源规则。投影放在 Archive 后、active history 前，以值变化更新请求副本；每次新请求计入 PrepareRequest。projection 不写回 transcript，条目更新不改旧历史，也不重复追加快照。
-8. session v3 新增可选、带自身 schema version 的 ContinuityIndex 字段，只保存可重建引用。旧会话缺字段则从当前快照、任务元数据和可分页历史重建；首次只恢复投影所需窗口，完整查询按页扩展。旧版程序重保存丢掉索引时，新版重建，不把它当数据损坏。
-9. 解析失败丢弃派生索引并报告可重建；权威 transcript/任务数据不受影响。模型切换、fork、会话切换和恢复后重新绑定 scope。恢复不把 LoadedSkills 当作“模型仍持有全文”，投影提示必要时重新加载。
+1. 在 bot/core 组装实际交付过的技能名称/来源/内容摘要及工具产物引用，Context 只接收不可变值。todos 沿用现有来源，不复制任务状态。
+2. 不从自然语言抽取真实目标或判定旧约束失效。当前原始用户请求由 recent history 保留，旧要求由摘要携带；引用不保证任意历史约束零损失。
+3. 技能身份使用来源 + 名称 + 内容摘要，产物使用宿主生成的 artifact ID。只保存引用与有限摘要，不复制 SKILL.md、子任务全文或大工具正文。重读时检查 session/actor 归属及 workspace 授权，区分 missing、changed、unavailable。
+4. 技能最多 8 条、产物最多 16 条，与任务引用合计不超过 8 KiB；超限保留 omitted count 和查询入口。原始存储仍完整，不按投影上限删数据。
+5. 通过已有 skill/read 工具重取内容；增加只读 `context_refs` list/inspect，按 ID 分页，单页最多 20 条、文本不超过现有工具输出上限。不支持自由路径查找，不授予新读权限。
+6. 复用已实现的请求投影位置及预算路径；每次请求重新计入 PrepareRequest，不写回 transcript，不重复追加快照。
+7. session v3 的技能/产物派生引用使用可选、带自身 schema version 的 ContinuityIndex。旧会话缺字段时从当前快照和可分页历史重建；首次只恢复投影所需窗口，完整查询按页扩展。任务继续从原有元数据重建，不复制进索引。
+8. 解析失败丢弃派生索引并报告可重建，权威数据不受影响。模型切换、fork、会话切换和恢复后重新绑定 scope；LoadedSkills 不代表模型仍持有技能全文，必要时提示重新加载。
 
-**主要落点：** bot/core/bot_session.go、bot_subagent.go、bot/session/snapshot.go/clone.go、contextmgr snapshot/projectRequest、skill 交付、catalog、context_refs 工具和主/子 profile 工具范围。
+**主要落点：** bot/core、session snapshot/clone、contextmgr 请求投影、skill 交付、catalog、context_refs 工具和主/子 profile 工具范围。
 
-**验收：** 两次压缩后仍能看到子任务结果引用、已加载技能引用和产物位置；resume 新 attempt 不被旧终态覆盖；旧事件不回退新 attempt；删除文件仅使引用 unavailable；缺索引旧会话可用；不全量读取全部任务正文；跨 session 引用拒绝。
+**剩余验收：** 两次压缩后仍能看到已交付技能引用和产物位置；删除文件仅使引用 unavailable；缺索引旧会话可用；不全量读取历史正文；跨 session 引用拒绝。保留已有任务引用的压缩、恢复和 scope 回归。
 
-**工作量/风险：** 大；风险在派生索引变成第二事实来源和冷启动全量扫描。通过源 revision/ID、惰性分页重建、固定投影预算避免两者。
+**工作量/风险：** 大；重点防止派生索引变成第二事实来源、冷启动全量扫描和多个投影各占满总预算。
 
 ### PR 6：执行证据与子代理交接
 

@@ -49,6 +49,7 @@ bot/
 - `plugin` 只管理插件清单、安装和启停状态；扩展激活由 `extension.Manager` 统一编排。
 - `mcp.Manager` 同时拥有 server 和对应工具的生命周期，外层不手工同步工具切片。
 - Skill 发现、上下文格式化和 loaded 状态归 `extension.Manager`；command 只接收动态命令注册数据。
+- 主代理的任务连续性引用复用 TaskLister；Context 只接收有界请求值，不维护任务状态。采样、失效及预算边界见 [任务连续性引用](ARCHITECTURE_BOUNDARIES.md#任务连续性引用)。
 - 无引用的 alias 包应删除；内部新代码应直接依赖真实实现包。
 
 ## 目录结构

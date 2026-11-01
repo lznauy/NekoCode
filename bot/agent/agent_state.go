@@ -3,6 +3,7 @@ package agent
 import (
 	"sync/atomic"
 
+	"nekocode/bot/contextmgr"
 	"nekocode/bot/policy"
 	"nekocode/bot/provider/types"
 	"nekocode/protocol"
@@ -14,8 +15,10 @@ const defaultMaxRetries = 2
 
 // runState holds the mutable state of a single Run.
 type runState struct {
-	identity    protocol.ExecutionIdentity
-	hookStopped bool
+	identity protocol.ExecutionIdentity
+	// Request projection only; reset each run and invalidated after task tools.
+	taskReferences *contextmgr.TaskReferences
+	hookStopped    bool
 	// Progress and termination.
 	step       int               // current iteration, capped by maxAgentSteps
 	stopReason policy.StopReason // why the run stopped; finishRun branches on it

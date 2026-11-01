@@ -25,6 +25,9 @@ import (
 )
 
 func (b *Bot) WireTaskLister(list taskbridge.TaskLister) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.taskLister = list
 	b.toolbox.WireTaskLister(list)
 }
 

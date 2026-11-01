@@ -60,11 +60,12 @@ type SubagentAttemptPage struct {
 }
 
 type SubagentFilter struct {
-	SessionID string `json:"session_id,omitempty"`
-	Query     string `json:"query,omitempty"`
-	Status    string `json:"status,omitempty"`
-	Offset    int    `json:"offset"`
-	Limit     int    `json:"limit"`
+	PrioritizeActive bool   `json:"prioritize_active,omitempty"`
+	SessionID        string `json:"session_id,omitempty"`
+	Query            string `json:"query,omitempty"`
+	Status           string `json:"status,omitempty"`
+	Offset           int    `json:"offset"`
+	Limit            int    `json:"limit"`
 }
 
 type SubagentPage struct {
@@ -254,6 +255,16 @@ func (r *Runtime) Subagents(filter SubagentFilter) (SubagentPage, error) {
 		selected = append(selected, item)
 	}
 	sort.Slice(selected, func(i, j int) bool {
+		if filter.PrioritizeActive {
+			a, b := selected[i], selected[j]
+			if (a.Status == "completed") != (b.Status == "completed") {
+				return a.Status != "completed"
+			}
+			if !a.UpdatedAt.Equal(b.UpdatedAt) {
+				return a.UpdatedAt.After(b.UpdatedAt)
+			}
+			return a.ID < b.ID
+		}
 		if !selected[i].CreatedAt.Equal(selected[j].CreatedAt) {
 			return selected[i].CreatedAt.Before(selected[j].CreatedAt)
 		}

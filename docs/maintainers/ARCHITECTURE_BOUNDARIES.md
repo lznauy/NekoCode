@@ -135,3 +135,15 @@ Skill 诊断由 Context 在最终请求投影中派生，不读取 Skill 注册�
 permission 所有者分别生成有序规则声明和当前项目持久授权的 `v1:` SHA-256；路径解释锚点参与规则摘要，时间戳和授权理由不参与。授权摘要每次只读加载当前项目权限文件，因此其他 Store 实例的持久授权更新也可见；读取失败仅标记 `store_unavailable`，不改变执行权限。一次性审批不伪装为持久授权。workspace 所有者在锁内取得主目录与当前会话有效目录的独立快照，在锁外排序和摘要；切换会话后临时目录按实际范围重新观察。
 
 日志只保存 schema、模式、plan 状态、摘要、存储不可用及外部判断器是否配置，不输出规则正文、目录清单、授权理由或凭据。观察不进入提示词，不写回会话，不执行 matcher 或判断器，不新增配置缓存、版本表或管理器。各领域分别采样，不构成原子授权事务；规则摘要不覆盖 matcher 实现，判断器存在性不代表其行为指纹，也不保证整个执行可复现。
+
+## 任务连续性引用
+
+bot/core 通过已有 TaskLister 取得当前父会话的任务元数据，Agent 将值传入 `ModelRequest.TaskReferences`。Context 不查询 Runtime、session 或任务目录；主模型与最终合成都在 Archive 后、活动 history 前接收一条 user-role JSON `context_data`，kind 为 `task_references`。它携带父 session、任务 ID、recorded、最新 attempt ID/序号、状态、简短标题和 Profile，以及总数、omitted count 和 `task_list` 查询入口。任务 ID 用于查询/恢复任务，attempt ID 仅标识一次执行，引用不代表授权或允许重放。
+
+任务与 attempt 的合并继续使用 Runtime.Subagents 原有权威投影，不在 Bot、Agent 或 Context 重新实现终态规则。宿主查询显式固定父 session，并核对返回 scope 和当前会话；模型的 task_list 参数不能指定其他 session。读取失败或 scope 不一致只产生 unavailable，不向模型透传存储错误或其他会话条目。引用是采样数据；实际恢复和工具读取仍检查当前状态与权限。
+
+投影最多 16 条且完整 JSON 不超过 4 KiB，标题和 Profile 先取有限预览，超限时移除条目并更新 omitted，不截短任务或 attempt ID。默认优先非 completed 任务，同组按最近更新时间排序，再以 ID 保持稳定；普通 task_list 的创建时间顺序不变。查询只读取元数据，不读取子任务 transcript 或完整模型上下文。首次及任务操作后的查询仍会遍历全部任务元数据，Limit 并不承诺底层分页 IO。
+
+为避免每次推理扫描磁盘，现有 runState 仅复用本轮最多 16 条请求引用；新 Run 自动清空，实际 task/task_list 工具批结束后失效，下次请求重新采样，不可用结果不缓存。普通工具和最终合成复用本轮视图；同轮外部进程修改在显式 task_list 或下一轮刷新。不新增任务索引、全局缓存或持久化状态。
+
+引用只进入请求副本和相同请求的预算、prefix 计算，不写入活动消息、transcript 或 session.json，不送入历史摘要。每次 PrepareRequest 重建都带入同一份引用，因此连续压缩、恢复和模型切换后仍可重新注入。旧会话无需迁移；技能、产物引用及其按 ID 查询/恢复仍属于未完成范围。

@@ -188,7 +188,15 @@ func (r *toolRunner) executeAllowedTools(allowed []core.ToolCallItem, callback R
 	if len(allowed) == 0 {
 		return nil
 	}
-	return executor.ExecuteBatch(r.agent.getCtx(), allowed)
+	results := executor.ExecuteBatch(r.agent.getCtx(), allowed)
+	for _, call := range allowed {
+		name, _ := call.Effective()
+		if name == "task" || name == "task_list" {
+			r.agent.run.taskReferences = nil
+			break
+		}
+	}
+	return results
 }
 
 func (r *toolRunner) recordToolResults(calls []core.ToolCallItem, blocked map[int]string, results []core.ToolCallResult) []policy.Result {
