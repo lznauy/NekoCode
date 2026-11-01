@@ -368,3 +368,51 @@ func TestApprovalEchoComparesOnlyToolInput(t *testing.T) {
 		})
 	}
 }
+
+func TestToolCompletionEvidenceIsOptionalAndKeepsResultShape(t *testing.T) {
+	evidence := protocol.ToolEvidence{Schema: 1, ReturnedHash: "delivery", Executions: []protocol.ExecutionReceipt{{ID: "physical", Tool: "shell", Status: "error", Execution: protocol.ExecutionIdentity{TaskID: "child", AttemptID: "one"}}}}
+	h := newHarness(t, func(_ context.Context, _ string, host rt.RunHost) (string, error) {
+		host.Step(protocol.StepEvent{Action: protocol.StepActionExecuteTool, CallID: "call", ToolName: "shell", SubAgentID: "child", SubAgentAttemptID: "one", Output: "failed", IsError: true, Evidence: evidence})
+		host.Step(protocol.StepEvent{Action: protocol.StepActionExecuteTool, CallID: "legacy", ToolName: "read", Output: "ok"})
+		return "done", nil
+	}, Options{})
+	h.send(t, user("one", "run"))
+	results := 0
+	for {
+		frame := h.next(t)
+		if frame["type"] == "result" {
+			break
+		}
+		if frame["type"] != "user" {
+			continue
+		}
+		message := frame["message"].(map[string]any)
+		result := message["content"].([]any)[0].(map[string]any)
+		if result["type"] != "tool_result" {
+			t.Fatalf("legacy result shape changed: %+v", result)
+		}
+		results++
+		if result["content"] == "failed" {
+			raw, err := json.Marshal(frame["nekocode_evidence"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got protocol.ToolEvidence
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Executions) != 1 || got.Executions[0].ID != "physical" || got.Executions[0].Execution.AttemptID != "one" || got.ReturnedHash != "delivery" || got.Admission != "" {
+				t.Fatalf("lost evidence: %+v", got)
+			}
+			if result["is_error"] != true || frame["nekocode_subagent_id"] != "child" {
+				t.Fatal("changed legacy result metadata")
+			}
+		} else if _, exists := frame["nekocode_evidence"]; exists {
+			t.Fatal("legacy result gained evidence")
+		}
+	}
+	if results != 2 {
+		t.Fatalf("results=%d", results)
+	}
+	h.finish(t)
+}

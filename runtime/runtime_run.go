@@ -502,6 +502,7 @@ func (r *Runtime) publishStep(runID RunID, step protocol.StepEvent) {
 		eventType = EventToolPreview
 		payload.Preview = textutil.NormalizeTerminalOutput(step.Output)
 	case protocol.StepActionExecuteTool:
+		payload.Evidence = step.Evidence
 		eventType = EventToolCompleted
 		payload.Output = textutil.NormalizeTerminalOutput(step.Output)
 	case protocol.StepActionSubAgentStart:

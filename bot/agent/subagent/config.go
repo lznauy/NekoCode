@@ -21,6 +21,7 @@ var builtinPrompt string
 type Profile = agentprofile.Profile
 
 type ToolCallEvent struct {
+	Evidence  protocol.ToolEvidence
 	Action    protocol.StepAction
 	CallID    string
 	ToolName  string

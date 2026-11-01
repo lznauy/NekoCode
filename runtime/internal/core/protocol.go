@@ -134,6 +134,7 @@ type PhasePayload struct {
 }
 
 type ToolPayload struct {
+	Evidence      protocol.ToolEvidence `json:"evidence,omitzero"`
 	ToolName      string                `json:"tool_name"`
 	CallID        string                `json:"call_id,omitempty"`
 	Args          string                `json:"args,omitempty"`

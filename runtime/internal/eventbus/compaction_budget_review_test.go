@@ -34,9 +34,10 @@ func TestOversizedSubAgentOutputDoesNotBypassHistoryBudget(t *testing.T) {
 func TestStructuredControlPayloadCountsTowardHistoryBudget(t *testing.T) {
 	large := strings.Repeat("x", defaultEventHistoryBytes+1)
 	for name, payload := range map[string]any{
-		"tool_input": core.ToolPayload{Input: []byte(`"` + large + `"`)},
-		"approval":   core.ApprovalView{Args: map[string]any{"value": large}},
-		"question":   core.QuestionView{Questions: []protocol.QuestionItem{{Question: large}}},
+		"tool_input":    core.ToolPayload{Input: []byte(`"` + large + `"`)},
+		"tool_evidence": core.ToolPayload{Evidence: protocol.ToolEvidence{Schema: 1, Executions: []protocol.ExecutionReceipt{{ID: "physical", Tool: large}}}},
+		"approval":      core.ApprovalView{Args: map[string]any{"value": large}},
+		"question":      core.QuestionView{Questions: []protocol.QuestionItem{{Question: large}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := NewEventBus()

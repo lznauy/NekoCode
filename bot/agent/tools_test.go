@@ -415,3 +415,18 @@ func TestCanonicalStopCancelsEntireToolBatch(t *testing.T) {
 		t.Fatalf("filter=%+v error=%v", out, a.run.err)
 	}
 }
+
+func TestCompletionEvidenceObserverCannotChangeTranscriptReceipt(t *testing.T) {
+	evidence := protocol.ToolEvidence{Schema: 1, Executions: []protocol.ExecutionReceipt{{ID: "physical", Tool: "shell", Status: "error"}}, ReturnedHash: "delivery"}
+	var observed protocol.ToolEvidence
+	messages := emitResultCallbacks([]core.ToolCallItem{{ID: "call", Name: "shell"}}, nil, []core.ToolCallResult{{ID: "call", Name: "shell", Error: "failed", Evidence: evidence}}, func(event protocol.StepEvent) {
+		observed = event.Evidence.Clone()
+		event.Evidence.Executions[0].ID = "observer-mutated"
+	})
+	if len(observed.Executions) != 1 || observed.Executions[0].ID != "physical" || observed.ReturnedHash != "delivery" || observed.Admission != "" {
+		t.Fatalf("wrong delivery: %+v", observed)
+	}
+	if messages[0].ToolEvidence.Executions[0].ID != "physical" || evidence.Executions[0].ID != "physical" {
+		t.Fatal("observer modified authoritative receipt")
+	}
+}

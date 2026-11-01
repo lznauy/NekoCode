@@ -219,7 +219,7 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 			}
 			cfg.OnToolCall(ToolCallEvent{
 				Action: protocol.StepActionExecuteTool, CallID: r.ID, ToolName: name,
-				ToolArgs: core.FormatArgs(args), ToolInput: core.JSONArgs(args), Output: content, IsError: r.Error != "",
+				ToolArgs: core.FormatArgs(args), ToolInput: core.JSONArgs(args), Output: content, IsError: r.Error != "", Evidence: r.Evidence.Clone(),
 			})
 		}
 	}

@@ -681,3 +681,29 @@ func TestManagerRecoversFromRunPanic(t *testing.T) {
 		t.Fatalf("expected error to mention panic, got %q", failedRun.Error)
 	}
 }
+
+func TestToolCompletionEvidenceIsDetachedAndNotInventedForOtherSteps(t *testing.T) {
+	rt := newTestRuntime(&testBot{})
+	defer rt.Close()
+	evidence := protocol.ToolEvidence{Schema: 1, Executions: []protocol.ExecutionReceipt{{ID: "physical", Tool: "shell", Status: "cancelled", Execution: protocol.ExecutionIdentity{RunID: "run", TaskID: "child", AttemptID: "attempt"}}}}
+	for _, action := range []protocol.StepAction{protocol.StepActionToolStart, protocol.StepActionToolPreview, protocol.StepActionToolBlocked, protocol.StepActionExecuteTool} {
+		rt.publishStep("run", protocol.StepEvent{Action: action, CallID: "same-call", ToolName: "shell", SubAgentID: "child", SubAgentAttemptID: "attempt", Evidence: evidence})
+	}
+	evidence.Executions[0].ID = "caller-mutated"
+	events := rt.events.History(EventFilter{RunID: "run", SubAgentID: "child"})
+	if len(events) != 4 {
+		t.Fatalf("events=%d", len(events))
+	}
+	for _, event := range events {
+		payload := event.Payload.(ToolPayload)
+		if event.Type != EventToolCompleted {
+			if payload.Evidence.Schema != 0 {
+				t.Fatal("nonexecution step claimed evidence")
+			}
+			continue
+		}
+		if payload.Evidence.Executions[0].ID != "physical" || payload.Evidence.Executions[0].Execution.AttemptID != payload.AttemptID {
+			t.Fatalf("receipt detached/identity: %+v", payload)
+		}
+	}
+}

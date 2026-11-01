@@ -1,6 +1,8 @@
 package acp
 
 import (
+	"nekocode/protocol"
+	"reflect"
 	"testing"
 
 	controlruntime "nekocode/runtime"
@@ -53,5 +55,36 @@ func TestBlockedToolEmitsToolCall(t *testing.T) {
 	}
 	if updates[1]["sessionUpdate"] != "tool_call_update" || updates[1]["toolCallId"] != "call-9" || updates[1]["status"] != "failed" {
 		t.Fatalf("tool_call_update = %#v", updates[1])
+	}
+}
+
+func TestToolEvidenceUsesOptionalACPMetadata(t *testing.T) {
+	evidence := protocol.ToolEvidence{Schema: 1, Executions: []protocol.ExecutionReceipt{{ID: "physical", Tool: "shell", Status: "error"}}, ReturnedHash: "delivery"}
+	payload := controlruntime.ToolPayload{CallID: "call", ToolName: "shell", Output: "failed", IsError: true, Evidence: evidence}
+	updates, ok := eventUpdate(controlruntime.Event{Type: controlruntime.EventToolCompleted, Payload: payload})
+	if !ok || len(updates) != 1 || updates[0]["status"] != "failed" {
+		t.Fatalf("updates=%+v", updates)
+	}
+	metadata, ok := updates[0]["_meta"].(map[string]any)
+	if !ok || !reflect.DeepEqual(metadata["nekocode/evidence"], evidence) {
+		t.Fatalf("evidence=%+v", updates)
+	}
+	// Existing content and rawOutput retain their original types/values.
+	if updates[0]["rawOutput"] != "failed" {
+		t.Fatal("changed legacy output")
+	}
+	payload.Evidence = protocol.ToolEvidence{}
+	updates, _ = eventUpdate(controlruntime.Event{Type: controlruntime.EventToolCompleted, Payload: payload})
+	if _, exists := updates[0]["_meta"]; exists {
+		t.Fatal("legacy completion gained metadata")
+	}
+	payload.Evidence = evidence
+	for _, kind := range []controlruntime.EventType{controlruntime.EventToolPreview, controlruntime.EventToolBlocked} {
+		updates, _ = eventUpdate(controlruntime.Event{Type: kind, Payload: payload})
+		for _, update := range updates {
+			if _, exists := update["_meta"]; exists {
+				t.Fatal("nonexecution update gained receipt")
+			}
+		}
 	}
 }

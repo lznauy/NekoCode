@@ -170,8 +170,13 @@ func TestSubagentSavesReceiptWithOwnAttemptIdentity(t *testing.T) {
 	model := &scriptedLLM{scripts: [][]types.StreamToken{
 		{{ToolCallDelta: &types.ToolCallDelta{Index: 0, ID: "same-call", Name: "inspect", Arguments: `{}`}}}, completionScript(),
 	}}
-	var evidence protocol.ToolEvidence
-	cfg := RunConfig{SessionID: "parent", SubagentID: "child", AttemptID: "child-attempt", Profile: Profile{Name: "custom", Tools: []string{"inspect"}}, SaveContext: func(snapshot ctxmgr.ManagerSnapshot, _, _ string, _ AttemptUsage) error {
+	var evidence, observed protocol.ToolEvidence
+	cfg := RunConfig{SessionID: "parent", SubagentID: "child", AttemptID: "child-attempt", Profile: Profile{Name: "custom", Tools: []string{"inspect"}}, OnToolCall: func(event ToolCallEvent) {
+		if event.Action == protocol.StepActionExecuteTool {
+			observed = event.Evidence.Clone()
+			event.Evidence.Executions[0].ID = "observer-mutated"
+		}
+	}, SaveContext: func(snapshot ctxmgr.ManagerSnapshot, _, _ string, _ AttemptUsage) error {
 		for _, msg := range snapshot.Transcript {
 			if msg.ToolCallID == "same-call" {
 				evidence = msg.ToolEvidence
@@ -185,6 +190,9 @@ func TestSubagentSavesReceiptWithOwnAttemptIdentity(t *testing.T) {
 	}
 	if len(evidence.Executions) != 1 || evidence.Executions[0].Execution != (protocol.ExecutionIdentity{RunID: "parent-run", TaskID: "child", AttemptID: "child-attempt"}) {
 		t.Fatalf("wrong child evidence: %+v", evidence)
+	}
+	if len(observed.Executions) != 1 || observed.Executions[0].ID != evidence.Executions[0].ID || observed.ReturnedHash != evidence.ReturnedHash || observed.Admission != "" || evidence.Admission == "" {
+		t.Fatalf("delivery/admission boundary lost: observed=%+v transcript=%+v", observed, evidence)
 	}
 	for _, messages := range model.messages {
 		for _, msg := range messages {

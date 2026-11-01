@@ -24,6 +24,9 @@ func eventBytes(ev core.Event) int {
 		}
 	case core.ToolPayload:
 		n += len(p.Args) + len(p.Input) + len(p.Output) + len(p.Preview) + len(p.ToolName) + len(p.CallID) + len(p.SubAgentID) + len(p.Decision)
+		if data, err := json.Marshal(p.Evidence); err == nil {
+			n += len(data)
+		}
 	case core.RunResult:
 		n += len(p.Output) + len(p.Error)
 	case protocol.CompactionEvent:

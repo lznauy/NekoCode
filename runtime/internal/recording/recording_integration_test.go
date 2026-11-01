@@ -3,13 +3,16 @@ package recording
 import (
 	"encoding/json"
 	"fmt"
+	"nekocode/protocol"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"nekocode/runtime/internal/core"
+	"nekocode/runtime/internal/eventbus"
 	"nekocode/runtime/internal/runstore"
 )
 
@@ -199,5 +202,35 @@ func TestRecordedV1SessionEventMigratesToV2(t *testing.T) {
 	}
 	if event.Type != core.EventSessionChanged || event.Version != core.ProtocolVersion {
 		t.Fatalf("migrated event = %#v", event)
+	}
+}
+
+func TestRecordingReplaysExecutorEvidenceWithoutInventingAdmission(t *testing.T) {
+	root := t.TempDir()
+	recorder, err := newTestRecorder(t, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := protocol.ToolEvidence{Schema: 1, ReturnedHash: "delivery", Executions: []protocol.ExecutionReceipt{
+		{ID: "ordinary", CallID: "same-call", Tool: "shell", Status: "error", Execution: protocol.ExecutionIdentity{TaskID: "child", AttemptID: "one"}},
+		{ID: "privileged", CallID: "same-call", Tool: "shell", Status: "success", Execution: protocol.ExecutionIdentity{TaskID: "child", AttemptID: "one"}},
+	}}
+	event := core.Event{ID: "evt_1", RunID: "run", Type: core.EventToolCompleted, Payload: core.ToolPayload{CallID: "same-call", ToolName: "shell", SubAgentID: "child", AttemptID: "one", Evidence: evidence}}
+	bus := eventbus.NewEventBus()
+	defer bus.Close()
+	bus.AddOrderedObserver(func(ev core.Event) { ev.Payload.(core.ToolPayload).Evidence.Executions[0].ID = "observer-mutated" })
+	var recordingErr error
+	bus.AddOrderedObserver(func(ev core.Event) { recordingErr = recorder.RecordError(ev) })
+	bus.Publish(event)
+	if recordingErr != nil {
+		t.Fatal(recordingErr)
+	}
+	events, err := LoadRecordedEvents(root)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("recording: %+v %v", events, err)
+	}
+	got := events[0].Payload.(core.ToolPayload)
+	if !reflect.DeepEqual(got.Evidence, evidence) || got.Evidence.Admission != "" || got.AttemptID != "one" {
+		t.Fatalf("replay altered evidence: %+v", got)
 	}
 }

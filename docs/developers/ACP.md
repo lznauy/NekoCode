@@ -101,6 +101,8 @@ v1 隐含"事件流发生在一个用户发起的 turn 内"：`session/prompt` �
    注意 `SessionUpdate` 变体名是规范枚举，不能自创（客户端会静默丢弃
    未知变体）；扩展 update 内容只能走 `_meta` 或 Ext 通知。
 
+NekoCode 在实际工具完成的 `tool_call_update` 中通过可选 `_meta["nekocode/evidence"]` 携带执行器交付凭证（schema=1）。原有 status、content 和 rawOutput 保持不变；旧客户端可忽略该元数据，无凭证时不添加 `_meta`。该快照早于 Context 接纳，不含后续 visible_hash/admission，不证明历史保存成功或业务完成；预览、阻止和终止补齐不补造凭证。
+
 ## 版本现状
 
 | 版本 | 状态 | 说明 |

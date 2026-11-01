@@ -106,7 +106,7 @@ func (b *EventBus) subscribeHistory(ctx context.Context, filter core.EventFilter
 		for _, ev := range recorded {
 			ev = NormalizeRecordedEvent(ev)
 			if !isCompactionDelta(ev) && eventMatches(filter, ev) {
-				history = append(history, ev)
+				history = append(history, cloneEvidence(ev))
 			}
 		}
 	} else if replay {
@@ -175,7 +175,7 @@ func (s *subscriber) enqueue(ev core.Event) {
 			return
 		}
 	}
-	s.queue = append(s.queue, ev)
+	s.queue = append(s.queue, cloneEvidence(ev))
 	s.mu.Unlock()
 	select {
 	case s.wake <- struct{}{}:
@@ -302,7 +302,7 @@ func (b *EventBus) Publish(ev core.Event) core.Event {
 		for _, observer := range ordered {
 			func() {
 				defer b.observerWG.Done()
-				observer(ev)
+				observer(cloneEvidence(ev))
 			}()
 		}
 		// Consumers may query the projections as soon as they receive an event.
@@ -320,7 +320,7 @@ func (b *EventBus) Publish(ev core.Event) core.Event {
 	for _, observer := range observers {
 		func() {
 			defer b.observerWG.Done()
-			observer(ev)
+			observer(cloneEvidence(ev))
 		}()
 	}
 	return ev
@@ -341,6 +341,7 @@ func (b *EventBus) appendHistoryLocked(ev core.Event) {
 	if size > defaultEventHistoryBytes {
 		return
 	}
+	ev = cloneEvidence(ev)
 	if b.historyLimit <= 0 {
 		b.history = append(b.history, ev)
 		b.historyCount = len(b.history)
@@ -369,7 +370,7 @@ func (b *EventBus) historyLocked(filter core.EventFilter) []core.Event {
 	for i := 0; i < b.historyCount; i++ {
 		ev := b.history[(b.historyStart+i)%len(b.history)]
 		if eventMatches(filter, ev) {
-			out = append(out, ev)
+			out = append(out, cloneEvidence(ev))
 		}
 	}
 	return out
@@ -518,3 +519,13 @@ func eventMatches(filter core.EventFilter, ev core.Event) bool {
 
 // Matches lets recorded replay apply the same filtering before cache budgeting.
 func Matches(filter core.EventFilter, ev core.Event) bool { return eventMatches(filter, ev) }
+
+// Each evidence consumer owns its receipt slice. An observer or replay client
+// must not change the copy retained by history or delivered to another sink.
+func cloneEvidence(ev core.Event) core.Event {
+	if payload, ok := ev.Payload.(core.ToolPayload); ok && len(payload.Evidence.Executions) > 0 {
+		payload.Evidence = payload.Evidence.Clone()
+		ev.Payload = payload
+	}
+	return ev
+}

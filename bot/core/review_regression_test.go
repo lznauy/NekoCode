@@ -12,6 +12,7 @@ import (
 	"nekocode/bot/extension/tool/runtime/permission"
 	"nekocode/bot/extension/tool/runtime/runner"
 	"nekocode/bot/extension/tool/runtime/taskbridge"
+	"nekocode/protocol"
 )
 
 type availableRiskJudge struct{}
@@ -100,5 +101,17 @@ func TestSubagentConfigCarriesJevPermissions(t *testing.T) {
 	dec := child.SandboxEngine().EvaluateContext(context.Background(), "shell", map[string]any{"command": "make all"}, permission.EffectAsk)
 	if calls != 1 || dec.Effect != permission.EffectAllow {
 		t.Fatalf("child judge missing: calls=%d decision=%+v", calls, dec)
+	}
+}
+
+func TestSubagentCompletionForwardsEvidenceWithAttemptIdentity(t *testing.T) {
+	b := newPersistTestBot(t)
+	var got protocol.StepEvent
+	ctx := taskbridge.WithTaskCallback(t.Context(), func(event protocol.StepEvent) { got = event })
+	cfg := buildSubagentRunConfig(ctx, taskbridge.TaskSpec{}, subagent.Profile{}, nil, 1000, 80, b.getAgent(), "parent", nil, "attempt", 2)
+	evidence := protocol.ToolEvidence{Schema: 1, Executions: []protocol.ExecutionReceipt{{ID: "physical", Tool: "read", Status: "success"}}, ReturnedHash: "delivery"}
+	cfg.OnToolCall(subagent.ToolCallEvent{Action: protocol.StepActionExecuteTool, CallID: "call", ToolName: "read", Evidence: evidence})
+	if got.SubAgentAttemptID != "attempt" || got.SubAgentAttemptSeq != 2 || len(got.Evidence.Executions) != 1 || got.Evidence.Executions[0].ID != "physical" {
+		t.Fatalf("child evidence lost in host bridge: %+v", got)
 	}
 }

@@ -447,6 +447,8 @@ events, err := rt.ReplayEvents(ctx, runtime.EventFilter{
 - `EventFilter`：支持 `RunID`、`SubAgentID`、`After`、`Types`、`Sources` 和 `Reliable`。
 - 默认订阅在积压时可能丢弃部分事件。传输层可设置 `Reliable: true`：积压超限直接关闭订阅，调用方必须把异常关闭视为流失败，并取消对应运行或重建连接；这不提供持久化或自动重传保证。
 
+`tool_completed` 的 `ToolPayload.Evidence` 为可选执行器交付快照，schema=1，保留实际物理调用 UUID 及 run/task/attempt 身份。codec 和 recording 回放保留该字段，旧记录缺省为零值。快照发生在 Context 接纳前，不含后续 visible_hash/admission，也不证明 transcript 已保存；事件消费者不得据此重试工具或覆盖权威历史。
+
 事件是实时投影，不是可靠消息队列。重连时以 `RunSnapshot` 为恢复基线，以
 `Sequence` 为增量游标。消费循环应快速投递到 UI 队列，避免被长操作阻塞。
 

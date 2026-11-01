@@ -170,7 +170,7 @@ func emitResultCallbacks(calls []core.ToolCallItem, blocked map[int]string, resu
 			if _, isBlocked := blocked[i]; isBlocked {
 				continue
 			}
-			callback(protocol.StepEvent{Action: protocol.StepActionExecuteTool, CallID: r.ID, ToolName: r.Name, ToolArgs: core.FormatArgs(call.Args), ToolInput: core.JSONArgs(call.Args), Output: content, IsError: r.Error != ""})
+			callback(protocol.StepEvent{Action: protocol.StepActionExecuteTool, CallID: r.ID, ToolName: r.Name, ToolArgs: core.FormatArgs(call.Args), ToolInput: core.JSONArgs(call.Args), Output: content, IsError: r.Error != "", Evidence: r.Evidence.Clone()})
 		}
 	}
 	return msgs

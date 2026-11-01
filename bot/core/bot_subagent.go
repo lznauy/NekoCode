@@ -294,7 +294,7 @@ func buildSubagentRunConfig(
 				Action:   ev.Action,
 				CallID:   ev.CallID,
 				ToolName: ev.ToolName,
-				ToolArgs: ev.ToolArgs, ToolInput: ev.ToolInput,
+				ToolArgs: ev.ToolArgs, ToolInput: ev.ToolInput, Evidence: ev.Evidence,
 				Output:   ev.Output,
 				Decision: ev.Decision,
 				IsError:  ev.IsError,

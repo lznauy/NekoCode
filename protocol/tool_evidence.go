@@ -1,5 +1,7 @@
 package protocol
 
+import "slices"
+
 // ProcessObservation is a sampled process fact, independent of tool errors.
 // Empty State means no observation. ExitCodeKnown is true only for a normal
 // exit. OutputComplete concerns captured bytes before text normalization.
@@ -29,7 +31,8 @@ type ExecutionReceipt struct {
 	Artifact      ToolOutputArtifact `json:"artifact,omitzero"`
 }
 
-// ToolEvidence is stored once on the authoritative tool transcript record.
+// ToolEvidence is authoritative on the tool transcript record. Completion
+// events may carry an earlier executor-delivery snapshot without admission.
 // ReturnedHash identifies the executor delivery; VisibleHash identifies the
 // initial context admission, not provider receipt or subsequent re-projection.
 type ToolEvidence struct {
@@ -41,4 +44,10 @@ type ToolEvidence struct {
 	Bounded            bool               `json:"bounded,omitempty"`
 	PreservationFailed bool               `json:"preservation_failed,omitempty"`
 	Admission          string             `json:"admission,omitempty"`
+}
+
+// Clone detaches the receipt slice before passing evidence to an observer.
+func (e ToolEvidence) Clone() ToolEvidence {
+	e.Executions = slices.Clone(e.Executions)
+	return e
 }

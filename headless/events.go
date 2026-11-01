@@ -205,6 +205,9 @@ func (s *server) event(ctx context.Context, event rt.Event) error {
 			return nil
 		}
 		tool.completed = true
+		if event.Type == rt.EventToolCompleted && p.Evidence.Schema != 0 {
+			extra["nekocode_evidence"] = p.Evidence
+		}
 		extra["parent_tool_use_id"] = nil
 		extra["message"] = map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": tool.id, "content": p.Output, "is_error": p.IsError || event.Type == rt.EventToolBlocked}}}
 		return s.sendTurn("user", extra)

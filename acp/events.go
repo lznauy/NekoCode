@@ -146,7 +146,11 @@ func toolCall(event controlruntime.Event, payload controlruntime.ToolPayload) ma
 }
 
 func toolUpdate(event controlruntime.Event, payload controlruntime.ToolPayload, status, output string) map[string]any {
-	return toolUpdateByID(toolCallID(event, payload), status, output)
+	update := toolUpdateByID(toolCallID(event, payload), status, output)
+	if event.Type == controlruntime.EventToolCompleted && payload.Evidence.Schema != 0 {
+		update["_meta"] = map[string]any{"nekocode/evidence": payload.Evidence}
+	}
+	return update
 }
 
 func toolUpdateByID(callID, status, output string) map[string]any {

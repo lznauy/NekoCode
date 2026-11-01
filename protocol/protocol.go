@@ -65,6 +65,7 @@ type SubAgentOutput struct {
 }
 
 type StepEvent struct {
+	Evidence           ToolEvidence // Executor-delivery snapshot; final admission belongs to transcript.
 	Summary            *RunSummary
 	Compaction         *CompactionEvent
 	Action             StepAction

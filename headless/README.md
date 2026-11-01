@@ -217,6 +217,7 @@ for line in proc.stdout:                       # 每行一个 JSON 帧
 - 工具 wire ID 在**当前 turn 内唯一**：模型复用调用 ID、或不同子代理用同名 ID 时，适配层会
   为后续调用分配新 ID；`tool_result` 与审批请求都使用对应的 wire ID。
 - 子代理发起的工具带扩展字段 `nekocode_subagent_id`；当前不伪造 `parent_tool_use_id`。
+- 实际工具完成时，`user` 结果帧可带 `nekocode_evidence`（schema=1 的执行器交付快照，包含物理调用 UUID 和 run/task/attempt 身份）；无凭证时省略。普通调用和权限重试分别保留 UUID。该快照早于 Context 接纳，不携带后续 `visible_hash`/`admission`，不能证明历史保存成功，也不代表业务完成。`message.content` 的 `tool_result` 格式不变，旧客户端可忽略扩展字段。
 - 权限被拒的工具同样输出配对的 `tool_use`/`tool_result`（`is_error:true`）。
 - 运行终止时，对已开始但未完成的工具补发 `is_error:true` 的结果，避免宿主留下悬空调用。
 
