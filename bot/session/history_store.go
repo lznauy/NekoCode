@@ -2,6 +2,7 @@ package session
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -12,12 +13,13 @@ import (
 	"path/filepath"
 	"sync"
 
+	"nekocode/bot/extension/tool/runtime/refbridge"
 	"nekocode/bot/provider/types"
 )
 
 const historyHeaderSize = 64
-const historyEntrySize = 32
-const historyIndexMagic = 0x314958484f4b454e
+const historyEntrySize = 40
+const historyIndexMagic = 0x324958484f4b454e // v2: reference links and per-entry CRC
 const HistoryPageBytes = 1 << 20
 
 // HistoryStore keeps only index metadata in memory. Contents remain in JSONL;
@@ -26,10 +28,11 @@ type HistoryStore struct {
 	mu  sync.Mutex
 	dir string
 }
-type historyMeta struct{ size, mtime, count, owner int64 }
+type historyMeta struct{ size, mtime, count, owner, reference int64 }
 type historyEntry struct {
 	offset, length, owner int64
 	crc                   uint32
+	reference             int64
 }
 type HistoryPage struct {
 	End      int
@@ -48,8 +51,8 @@ func readHistoryMeta(f *os.File) (historyMeta, error) {
 	if binary.LittleEndian.Uint64(b[:8]) != historyIndexMagic || crc32.ChecksumIEEE(b[:56]) != binary.LittleEndian.Uint32(b[56:60]) {
 		return historyMeta{}, errors.New("invalid history index")
 	}
-	m := historyMeta{int64(binary.LittleEndian.Uint64(b[8:16])), int64(binary.LittleEndian.Uint64(b[16:24])), int64(binary.LittleEndian.Uint64(b[24:32])), int64(binary.LittleEndian.Uint64(b[32:40]))}
-	if m.size < 0 || m.count < 0 || m.count > m.size || m.owner < 0 || m.owner > m.count {
+	m := historyMeta{int64(binary.LittleEndian.Uint64(b[8:16])), int64(binary.LittleEndian.Uint64(b[16:24])), int64(binary.LittleEndian.Uint64(b[24:32])), int64(binary.LittleEndian.Uint64(b[32:40])), int64(binary.LittleEndian.Uint64(b[40:48]))}
+	if m.size < 0 || m.count < 0 || m.count > m.size || m.owner < 0 || m.owner > m.count || m.reference < 0 || m.reference > m.count {
 		return historyMeta{}, errors.New("invalid history index bounds")
 	}
 	info, err := f.Stat()
@@ -64,7 +67,7 @@ func readHistoryMeta(f *os.File) (historyMeta, error) {
 func writeHistoryMeta(f *os.File, m historyMeta) error {
 	var b [historyHeaderSize]byte
 	binary.LittleEndian.PutUint64(b[:8], historyIndexMagic)
-	for i, n := range []int64{m.size, m.mtime, m.count, m.owner} {
+	for i, n := range []int64{m.size, m.mtime, m.count, m.owner, m.reference} {
 		binary.LittleEndian.PutUint64(b[8+i*8:16+i*8], uint64(n))
 	}
 	binary.LittleEndian.PutUint32(b[56:60], crc32.ChecksumIEEE(b[:56]))
@@ -77,8 +80,8 @@ func readHistoryEntry(f *os.File, seq int64) (historyEntry, error) {
 	}
 	var b [historyEntrySize]byte
 	_, err := f.ReadAt(b[:], historyHeaderSize+(seq-1)*historyEntrySize)
-	e := historyEntry{int64(binary.LittleEndian.Uint64(b[:8])), int64(binary.LittleEndian.Uint64(b[8:16])), int64(binary.LittleEndian.Uint64(b[16:24])), binary.LittleEndian.Uint32(b[24:28])}
-	if err == nil && (e.offset < 0 || e.length < 1 || e.length > 16<<20 || e.owner < 0 || e.owner > seq) {
+	e := historyEntry{int64(binary.LittleEndian.Uint64(b[:8])), int64(binary.LittleEndian.Uint64(b[8:16])), int64(binary.LittleEndian.Uint64(b[16:24])), binary.LittleEndian.Uint32(b[24:28]), int64(binary.LittleEndian.Uint64(b[28:36]))}
+	if err == nil && (e.offset < 0 || e.length < 1 || e.length > 16<<20 || e.owner < 0 || e.owner > seq || e.reference < 0 || e.reference > seq || crc32.ChecksumIEEE(b[:36]) != binary.LittleEndian.Uint32(b[36:40])) {
 		err = errors.New("invalid history index entry")
 	}
 	return e, err
@@ -104,6 +107,13 @@ func readHistoryRecord(f *os.File, e historyEntry, seq int64) (types.Message, er
 // ensure builds/extends the index in a streaming pass. Only resume repairs a
 // torn unconfirmed final record; ordinary page reads never truncate history.
 func (s *HistoryStore) ensure(confirmed int, repair bool) (historyMeta, error) {
+	return s.ensureContext(context.Background(), confirmed, repair)
+}
+
+func (s *HistoryStore) ensureContext(ctx context.Context, confirmed int, repair bool) (historyMeta, error) {
+	if err := ctx.Err(); err != nil {
+		return historyMeta{}, err
+	}
 	path := filepath.Join(s.dir, transcriptFileName)
 	source, err := os.Open(path)
 	if os.IsNotExist(err) {
@@ -152,6 +162,9 @@ func (s *HistoryStore) ensure(confirmed int, repair bool) (historyMeta, error) {
 	scanner := bufio.NewScanner(source)
 	scanner.Buffer(make([]byte, 64<<10), 16<<20)
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return m, err
+		}
 		data := scanner.Bytes()
 		var r transcriptRecord
 		decodeErr := json.Unmarshal(data, &r)
@@ -179,6 +192,9 @@ func (s *HistoryStore) ensure(confirmed int, repair bool) (historyMeta, error) {
 				return m, err
 			}
 		}
+		if refbridge.HasReference(r.Message, r.Seq) {
+			m.reference = m.count + 1
+		}
 		var b [historyEntrySize]byte
 		for i, n := range []int64{m.size, length, m.owner} {
 			binary.LittleEndian.PutUint64(b[i*8:(i+1)*8], uint64(n))
@@ -186,6 +202,8 @@ func (s *HistoryStore) ensure(confirmed int, repair bool) (historyMeta, error) {
 		// Scanner excludes the newline; records on disk always include it.
 		checksum := crc32.Update(crc32.ChecksumIEEE(data), crc32.IEEETable, []byte{'\n'})
 		binary.LittleEndian.PutUint32(b[24:28], checksum)
+		binary.LittleEndian.PutUint64(b[28:36], uint64(m.reference))
+		binary.LittleEndian.PutUint32(b[36:40], crc32.ChecksumIEEE(b[:36]))
 		if _, err := idx.WriteAt(b[:], historyHeaderSize+m.count*historyEntrySize); err != nil {
 			return m, err
 		}

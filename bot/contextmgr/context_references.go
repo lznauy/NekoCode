@@ -10,7 +10,7 @@ import (
 const contextReferencesBytes = 4096
 
 // Context references share an 8 KiB ceiling with the separate 4 KiB task view.
-// This is a recent history window, not a complete session artifact inventory.
+// This is a bounded window of reference-bearing records, not a full inventory.
 func contextReferencesMessage(page refbridge.Page) types.Message {
 	if page.SessionID == "" {
 		return types.Message{}
@@ -45,7 +45,7 @@ func contextReferencesMessage(page refbridge.Page) types.Message {
 		// recent-history window. A page with no references can restart list at 0.
 		if len(projection.Items) > 0 {
 			projection.Before = projection.Items[len(projection.Items)-1].Sequence
-			projection.HasMore = projection.Before > 1
+			projection.HasMore = page.HasMore || len(projection.Items) < count
 		} else {
 			projection.Before = 0
 			projection.HasMore = page.HasMore || count > 0

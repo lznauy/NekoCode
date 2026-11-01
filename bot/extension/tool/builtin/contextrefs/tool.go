@@ -20,14 +20,14 @@ func New() *Tool                           { return &Tool{} }
 func (t *Tool) Wire(read refbridge.Reader) { t.read = read }
 func (*Tool) Name() string                 { return "context_refs" }
 func (*Tool) Description() string {
-	return "Find admitted skill and saved tool-output references in the current main session. list scans a bounded history page, newest first; an empty page can still have has_more=true. Pass returned before to list older records. inspect checks the current actor and resolves an output location after workspace checks, or compares a skill admission with the current skill registry. Use read for output contents or skill to reload a matching skill when needed. Ready skill admissions do not prove provider receipt; references never grant authority or permission to replay tools."
+	return "Find admitted skill and saved tool-output references in the current main session. list reads a bounded page of reference-bearing history records, newest first; ordinary messages are skipped through the history index. Pass returned before to list older records. inspect checks the current actor and resolves an output location after workspace checks, or compares a skill admission with the current skill registry. Use read for output contents or skill to reload a matching skill when needed. Ready skill admissions do not prove provider receipt; references never grant authority or permission to replay tools."
 }
 func (*Tool) Parameters() []core.Parameter {
 	return []core.Parameter{
 		{Name: "action", Type: "string", Required: true, Enum: []string{"list", "inspect"}},
 		{Name: "id", Type: "string", Description: "Reference ID returned by list; required for inspect. Paths are not accepted."},
 		{Name: "before", Type: "integer", Description: "Exclusive raw history cursor for list; 0 starts at the newest record."},
-		{Name: "limit", Type: "integer", Description: "Maximum source records scanned by list, 1–20; default 20. This is not a count of matching references."},
+		{Name: "limit", Type: "integer", Description: "Maximum reference-bearing source records read by list, 1–20; default 20."},
 	}
 }
 

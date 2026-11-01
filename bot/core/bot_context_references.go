@@ -99,6 +99,26 @@ func (b *Bot) contextReferences(ctx context.Context, sessionID string, q refbrid
 		}
 		before, limit = sequence+1, 1
 	}
+	if q.ID == "" {
+		page, err := b.referenceHistoryLocked(ctx, before, limit, 64*1024)
+		if cancelErr := ctx.Err(); cancelErr != nil {
+			return out, cancelErr
+		}
+		if err != nil {
+			return out, fmt.Errorf("reference history unavailable")
+		}
+		out.Before, out.HasMore, out.Scanned = page.Before, page.HasMore, len(page.Records)
+		for _, record := range page.Records {
+			msg := record.Message
+			if msg.Role == "tool" && msg.ToolOutput.Path != "" {
+				out.Items = append(out.Items, artifactReference(sessionID, record.Sequence, msg.ToolOutput))
+			}
+			if ref, ok := skillReference(sessionID, record.Sequence, msg); ok {
+				out.Items = append(out.Items, ref)
+			}
+		}
+		return out, nil
+	}
 	history, err := b.historyPageLocked(before, limit, 64*1024)
 	if err != nil {
 		return out, fmt.Errorf("reference history unavailable")
@@ -175,15 +195,7 @@ func (b *Bot) contextReferences(ctx context.Context, sessionID string, q refbrid
 		out.Status, out.Path = "available", artifact.Path
 		return out, nil
 	}
-	for i := len(records) - 1; i >= 0; i-- {
-		msg := records[i]
-		if msg.Role == "tool" && msg.ToolOutput.Path != "" {
-			out.Items = append(out.Items, artifactReference(sessionID, history.Before+i, msg.ToolOutput))
-		}
-		if ref, ok := skillReference(sessionID, history.Before+i, msg); ok {
-			out.Items = append(out.Items, ref)
-		}
-	}
+
 	return out, nil
 }
 

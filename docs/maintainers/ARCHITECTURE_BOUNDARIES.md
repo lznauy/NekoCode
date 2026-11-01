@@ -146,15 +146,17 @@ bot/core 通过已有 TaskLister 取得当前父会话的任务元数据，Agent
 
 为避免每次推理扫描磁盘，现有 runState 仅复用本轮最多 16 条请求引用；新 Run 自动清空，实际 task/task_list 工具批结束后失效，下次请求重新采样，不可用结果不缓存。普通工具和最终合成复用本轮视图；同轮外部进程修改在显式 task_list 或下一轮刷新。不新增任务索引、全局缓存或持久化状态。
 
-引用只进入请求副本和相同请求的预算、prefix 计算，不写入活动消息、transcript 或 session.json，不送入历史摘要。每次 PrepareRequest 重建都带入同一份引用，因此连续压缩、恢复和模型切换后仍可重新注入。旧会话无需迁移；技能和产物的近期引用与按 ID 查询见下文；长期窗口与子执行者查询仍属于未完成范围。
+引用只进入请求副本和相同请求的预算、prefix 计算，不写入活动消息、transcript 或 session.json，不送入历史摘要。每次 PrepareRequest 重建都带入同一份引用，因此连续压缩、恢复和模型切换后仍可重新注入。旧会话无需迁移；技能和产物的长期发现与按 ID 查询见下文；子执行者查询仍属于未完成范围。
 
 ## 产物引用与查询
 
-主代理的 `ContextReferences` 回调由 bot/core 组装，复用当前会话的原始历史分页读取，Context 只接收 refbridge.Page 值。每次主模型与合成请求在 Archive、任务引用之后，活动 history 之前投影 user-role JSON `context_references`；不写回活动消息、transcript 或 session.json，不复制工具正文，不新增持久化索引。技能最多 8 条、产物最多 16 条，共享不超过 4 KiB 的完整 JSON 预算，与任务引用合计最多 8 KiB。只投影近期来源窗口；它不是全会话产物目录，也不声称完整保留任意久远产物。
+主代理的 `ContextReferences` 回调由 bot/core 组装，复用当前会话历史索引的引用链接，Context 只接收 refbridge.Page 值。每次主模型与合成请求在 Archive、任务引用之后，活动 history 之前投影 user-role JSON `context_references`；不写回活动消息、transcript 或 session.json，不复制工具正文，不新增独立引用存储。技能最多 8 条、产物最多 16 条，共享不超过 4 KiB 的完整 JSON 预算，与任务引用合计最多 8 KiB。只投影最新的有界引用页；更早引用按原始序号分页读取，不生成全会话产物目录。
 
-来源每次最多读取最近 20 条原始历史记录，使用现有 64 KiB 分页软预算；历史读取器保留“首条记录不能拆分”的规则，已有工具记录最高 4 MiB。缺失 transcript.idx 时仍可能触发现有历史索引重建，不能将该查询宣称为绝对恒定 IO。展示分页附带的 assistant header 不计入原始序号。自动投影不携带扫描计数、移动窗口边界或文件路径，较旧查询的游标锚定最早保留的引用；引用集合不变时，不因普通消息推进而改变缓存前缀。超限移除条目后游标不会跳过被省略项；没有近期引用时可从 list 的 0 游标开始查旧页。
+来源每次最多读取 20 条含引用的历史记录，复用 transcript.idx 跳过无关记录，使用 64 KiB 软预算；首条不可拆分，已有工具记录最高 4 MiB，底层记录解析上限为 16 MiB。已有索引每项从 32 字节增至 40 字节，增加引用链接和索引项校验，64 字节头不变；权威 transcript 和 session 格式不变。索引缺失或旧版格式时流式重建一次，可取消；查询不修复或改写 transcript。有效索引按引用跳转，新增历史仍需解析新增记录，尚未保存的尾部仍向后扫描，不能宣称冷恢复绝对恒定 IO。索引可删除重建，不缓存正文或增加全局状态。
 
-`context_refs` 是主会话执行者的只读工具，允许 Plan Mode；list 每页扫描 1–20 条来源记录，按新到旧返回其中的产物引用。`before` 是原始历史的排他游标，不是引用偏移，空页也可能 has_more=true。模型不能指定会话或文件路径。ID 使用 `artifact.<原始序号>.<SHA-256>`，绑定父 session、原始序号及结构化 ToolOutputArtifact；同一来源在压缩、保存和恢复后 ID 不变，fork/会话变化不会继承旧 ID 的 scope。
+自动投影不携带扫描计数、移动窗口边界或文件路径，较旧查询的游标锚定最早保留的引用；引用集合不变时，不因普通消息推进而改变缓存前缀。超限移除条目后游标不会跳过被省略项。展示分页附带的 assistant header 不计入原始序号。
+
+`context_refs` 是主会话执行者的只读工具，允许 Plan Mode；list 每页读取 1–20 条含引用的来源记录，按新到旧返回产物或技能引用。`before` 是原始历史的排他游标，不是引用偏移，has_more 表示还有更早引用。模型不能指定会话或文件路径。ID 使用 `artifact.<原始序号>.<SHA-256>`，绑定父 session、原始序号及结构化 ToolOutputArtifact；同一来源在压缩、保存和恢复后 ID 不变，fork/会话变化不会继承旧 ID 的 scope。
 
 inspect 按 ID 定位一条原始记录，核对 ID 与来源元数据，再验证执行者的 OutputStore、当前 workspace 读权限和文件归属，只有全部通过才返回文件位置；正文仍用现有 read 工具重取，读取时再次检查权限，不从引用恢复写前读许可。工具入口必须绑定执行者；TaskID 和当前主 OutputStore 身份共同拒绝子执行者访问父引用，包括未命名的旧子执行器。无执行者 context 的内部模型投影只读取引用元数据。状态 missing 表示来源/已授权文件缺失，changed 表示来源元数据与 ID 不匹配，unavailable 表示当前权限、归属或存储不可用；存储错误不向模型透传原文，不修改已有历史。
 
@@ -170,4 +172,4 @@ ID 的摘要不是保存文件内容的版本指纹；available 只说明采样�
 
 `context_refs list` 在同一分页边界中返回带 kind 的产物或技能引用；只有 schema 与所有者来源匹配的 ready 记录生成 `skill.<原始序号>.<scope及元数据SHA-256>`。近期自动投影使用统一 `context_references`，技能和产物共享现有 4 KiB 配额，不为技能额外扩容；达到类型上限或字节预算时保留连续的较新来源前缀与可查询的旧游标。压缩或保存不改变原始序号和引用 ID，较旧引用可继续分页或按已知 ID 查询。
 
-技能 inspect 检查原始记录、当前主执行者 scope 和当前 extension 注册版本的格式化正文摘要：缺技能为 missing，摘要不同为 changed，相同为 available，不能访问当前注册表或 actor 时为 unavailable。tool 来源按执行器相同的 ANSI/换行规范化后比较，selected/command/delegated 比较其原始选定文本。available 只说明当前注册内容匹配，不代表外部文件尚未修改、辅助文件相同、模型仍持有全文，或模型被允许重新加载；实际 skill/read 工具仍应用当前调用限制和权限。技能正文与辅助文件不复制进引用，子代理自己的查询入口及长期自动引用窗口仍待完善。
+技能 inspect 检查原始记录、当前主执行者 scope 和当前 extension 注册版本的格式化正文摘要：缺技能为 missing，摘要不同为 changed，相同为 available，不能访问当前注册表或 actor 时为 unavailable。tool 来源按执行器相同的 ANSI/换行规范化后比较，selected/command/delegated 比较其原始选定文本。available 只说明当前注册内容匹配，不代表外部文件尚未修改、辅助文件相同、模型仍持有全文，或模型被允许重新加载；实际 skill/read 工具仍应用当前调用限制和权限。技能正文与辅助文件不复制进引用，子代理自己的查询入口仍待完善。

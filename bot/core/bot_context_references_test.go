@@ -65,11 +65,11 @@ func TestContextReferencesSurvivePendingDurableAndRestore(t *testing.T) {
 		b.ctxMgr.Add("user", "later question")
 	}
 	recent := b.modelContextReferences(t.Context(), scope)
-	if recent.HasMore == false || len(recent.Items) != 0 {
-		t.Fatalf("window pretending to be inventory: %+v", recent)
+	if recent.HasMore || len(recent.Items) != 1 || recent.Items[0].ID != id {
+		t.Fatalf("unrelated history displaced old reference: %+v", recent)
 	}
 	older, err := b.contextReferences(t.Context(), scope, refbridge.Query{Before: recent.Before, Limit: 20})
-	if err != nil || len(older.Items) != 1 || older.Items[0].ID != id {
+	if err != nil || len(older.Items) != 0 {
 		t.Fatalf("old reference lost: %+v %v", older, err)
 	}
 	if err := os.Remove(path); err != nil {
@@ -140,12 +140,12 @@ func TestContextReferenceCursorExcludesNewerAppends(t *testing.T) {
 	addReferenceOutput(t, b, "one", false)
 	addReferenceOutput(t, b, "two", false)
 	scope := b.CurrentSessionID()
-	first, err := b.contextReferences(t.Context(), scope, refbridge.Query{Limit: 2})
+	first, err := b.contextReferences(t.Context(), scope, refbridge.Query{Limit: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	addReferenceOutput(t, b, "three", false)
-	next, err := b.contextReferences(t.Context(), scope, refbridge.Query{Before: first.Before, Limit: 2})
+	next, err := b.contextReferences(t.Context(), scope, refbridge.Query{Before: first.Before, Limit: 1})
 	if err != nil || len(first.Items) != 1 || len(next.Items) != 1 || next.Items[0].Sequence != 2 || first.Items[0].Sequence != 4 {
 		t.Fatalf("cursor shifted: %+v %+v %v", first, next, err)
 	}
