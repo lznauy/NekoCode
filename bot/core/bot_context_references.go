@@ -63,3 +63,16 @@ func (b *Bot) modelContextReferences(ctx context.Context, sessionID string) refb
 	}
 	return page
 }
+
+// The host samples its own metadata through the same actor/scope checks as the
+// query tool. An existing foreign store must never be replaced by this binding.
+func (b *Bot) modelEvidenceReferences(ctx context.Context, sessionID string) refbridge.Page {
+	if toolcore.OutputStoreFromContext(ctx) == nil {
+		ctx = toolcore.WithOutputStore(ctx, b.sessionOutput.store)
+	}
+	page, err := b.contextReferences(ctx, sessionID, refbridge.Query{Kind: refbridge.EvidenceKind, Limit: refbridge.MaxPageRecords})
+	if err != nil {
+		return refbridge.Page{SessionID: sessionID, Unavailable: true}
+	}
+	return page
+}

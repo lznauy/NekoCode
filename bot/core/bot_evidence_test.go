@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -132,5 +133,50 @@ func TestParentEvidenceQueryPinsTaskAttemptAndHandoffAssociations(t *testing.T) 
 	q.TaskID = "child"
 	if _, err := b.readContextReferences(referenceActorContext(t, b), q); err == nil {
 		t.Fatal("parent switch retained child authority")
+	}
+}
+
+func TestModelEvidenceReferencesRestoreAndActorIsolation(t *testing.T) {
+	b := newPersistTestBot(t)
+	receipt := protocol.ExecutionReceipt{ID: uuid.NewString(), Tool: "shell", Status: "error"}
+	b.ctxMgr.AddToolResultsBatch([]contextmgr.ToolResultMsg{{ToolName: "shell", Message: types.Message{ToolCallID: "receipt-call", Content: "visible", ToolEvidence: protocol.ToolEvidence{Schema: 1, Executions: []protocol.ExecutionReceipt{receipt}}}}})
+	scope := b.CurrentSessionID()
+	page := b.modelEvidenceReferences(t.Context(), scope)
+	if page.Unavailable || len(page.Evidence) != 1 {
+		t.Fatalf("pending metadata: %+v", page)
+	}
+	id := page.Evidence[0].ID
+	if err := b.saveSession(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.ResumeSession(scope); err != nil {
+		t.Fatal(err)
+	}
+	page = b.modelEvidenceReferences(t.Context(), scope)
+	if page.Unavailable || len(page.Evidence) != 1 || page.Evidence[0].ID != id {
+		t.Fatalf("restored metadata: %+v", page)
+	}
+	messages, err := b.ctxMgr.PrepareRequest(t.Context(), contextmgr.ModelRequest{EvidenceReferences: page})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, `"kind":"evidence_references"`) && strings.Contains(msg.Content, id) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("model did not receive restored evidence reference")
+	}
+	wrongStore := toolcore.WithOutputStore(t.Context(), toolcore.NewOutputStore(t.TempDir()))
+	child := protocol.WithExecutionIdentity(t.Context(), protocol.ExecutionIdentity{TaskID: "child", AttemptID: "attempt"})
+	for _, ctx := range []context.Context{wrongStore, child} {
+		if rejected := b.modelEvidenceReferences(ctx, scope); !rejected.Unavailable || len(rejected.Evidence) != 0 {
+			t.Fatal("foreign actor received main evidence")
+		}
+	}
+	if rejected := b.modelEvidenceReferences(t.Context(), "other-session"); !rejected.Unavailable {
+		t.Fatal("foreign session received evidence")
 	}
 }

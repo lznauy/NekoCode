@@ -296,6 +296,9 @@ func TestEvidenceOnlySubagentsUseOwnConcurrentReadersWithoutContextProjection(t 
 			if messagesContainText(model.messages[0], `"kind":"context_references"`) {
 				t.Error("evidence-only profile gained context_refs projection")
 			}
+			if !messagesContainText(model.messages[0], `"kind":"evidence_references"`) || !messagesContainText(model.messages[0], `"session_id":"`+referenceScope(cfg)+`"`) {
+				t.Error("child model lacks its own automatic evidence projection")
+			}
 			found := false
 			for _, m := range model.messages[1] {
 				if m.ToolCallID == "list" {

@@ -12,6 +12,10 @@ const contextReferencesBytes = 4096
 // Context references share an 8 KiB ceiling with the separate 4 KiB task view.
 // This is a bounded window of reference-bearing records, not a full inventory.
 func contextReferencesMessage(page refbridge.Page) types.Message {
+	return boundedContextReferencesMessage(page, contextReferencesBytes)
+}
+
+func boundedContextReferencesMessage(page refbridge.Page, budget int) types.Message {
 	if page.SessionID == "" {
 		return types.Message{}
 	}
@@ -56,7 +60,7 @@ func contextReferencesMessage(page refbridge.Page) types.Message {
 			Omitted   int    `json:"omitted"`
 			QueryTool string `json:"query_tool"`
 		}{"context_references", projection, count - len(projection.Items), "context_refs"}})
-		if len(data) <= contextReferencesBytes {
+		if len(data) <= budget {
 			return types.Message{Role: "user", Source: types.MessageSourceContextData, Content: string(data)}
 		}
 		if len(projection.Items) == 0 {

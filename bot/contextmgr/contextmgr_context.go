@@ -15,10 +15,11 @@ import (
 
 // ModelRequest describes one complete provider request projection.
 type ModelRequest struct {
-	TaskReferences    TaskReferences
-	ContextReferences refbridge.Page
-	Tools             []types.ToolDef
-	PolicyHints       string
+	TaskReferences     TaskReferences
+	ContextReferences  refbridge.Page
+	EvidenceReferences refbridge.Page
+	Tools              []types.ToolDef
+	PolicyHints        string
 	// ExtraMessages are transient request-only instructions, e.g. synthesis
 	// prompts and delegated workflows. They are included in the final budget.
 	ExtraMessages []types.Message
@@ -79,9 +80,7 @@ func (m *Manager) buildLocked(request ModelRequest) ([]types.Message, int) {
 	if msg := request.TaskReferences.message(); msg.Content != "" {
 		out = append(out, msg)
 	}
-	if msg := contextReferencesMessage(request.ContextReferences); msg.Content != "" {
-		out = append(out, msg)
-	}
+	out = append(out, referenceMessages(request.ContextReferences, request.EvidenceReferences)...)
 	out = append(out, m.visibleHistory()...)
 	return out, systemEnd
 }

@@ -103,7 +103,7 @@ list 的 limit 为 1–20 条原始历史记录，并最多返回 20 条凭证�
 
 返回 evidence 数组中的 ID 是 `evidence.<原始序号>.<scope及凭证元数据SHA-256>`，receipt_id 为宿主生成的物理 UUID。inspect 只定位该序号的一条记录并核对完整 ID，匹配时 status=recorded，否则 missing；recorded 仅表示记录关联，不表示 verified、测试通过或任务完成。list 不返回正文；inspect 的 detail 仅含目标物理调用和交付摘要，剔除 artifact 路径，has_artifact 只表示来源声称携带产物。查询不访问文件系统核实产物，不授予文件读取或工具重放许可；底层错误转为固定错误，取消保持原有错误语义。
 
-父代理选择子任务时，从权威 session.json 验证 ID、parent、格式、attempt 起止序号及已提交水位；固定该区间，再核对每条 receipt 的 task 和精确 attempt。不读取未提交尾部，也不因子代理正在追加而修复历史或重建索引。复用只读历史定位，索引缺失或落后时流式扫描，可取消；不保证冷查询常数 IO。子入口拒绝所有 task_id/attempt_id 选择器。模型自动凭证引用仍在后续范围。查询本身作为工具调用也会产生正常凭证，返回前的来源水位不包含该次查询尚未接纳的结果。
+父代理选择子任务时，从权威 session.json 验证 ID、parent、格式、attempt 起止序号及已提交水位；固定该区间，再核对每条 receipt 的 task 和精确 attempt。不读取未提交尾部，也不因子代理正在追加而修复历史或重建索引。复用只读历史定位，索引缺失或落后时流式扫描，可取消；不保证冷查询常数 IO。子入口拒绝所有 task_id/attempt_id 选择器。主模型、最终合成及允许 evidence 的子模型请求自动接收 `evidence_references`，最多 16 条，仅含 ID、原始序号、工具、状态及是否有产物。每次采样复用 evidence list 的最近 20 条原始记录和 64 KiB 软边界，不承诺稀疏旧凭证自动留存；较旧凭证可继续 list 分页或按已知 ID inspect。完整凭证、路径和输出不进入投影；投影不写回活动消息或 transcript。存在凭证页时，技能/产物先占最多 2 KiB，凭证使用 4 KiB 总额的余量；无凭证且没有更早页时原视图仍可用满 4 KiB，与任务视图合计保持 8 KiB。字节预算和 16 条上限均按原始记录整组裁剪，不拆开同一调用的普通执行与权限重试；游标锚定最旧保留记录，空页从 0 重查。扫描计数和移动原始页边界不进入缓存前缀。不可用只投影 unavailable，不暴露底层错误，不重放工具。查询本身作为工具调用也会产生正常凭证，返回前的来源水位不包含该次查询尚未接纳的结果。
 
 ## 子代理凭证交接
 
@@ -188,7 +188,7 @@ bot/core 通过已有 TaskLister 取得当前父会话的任务元数据，Agent
 
 ## 产物引用与查询
 
-主代理的 `ContextReferences` 回调由 bot/core 组装，复用当前会话历史索引的引用链接，Context 只接收 refbridge.Page 值。主模型、合成请求和开放 context_refs 的子模型请求在 Archive、任务引用之后，活动 history 之前投影 user-role JSON `context_references`；不写回活动消息、transcript 或 session.json，不复制工具正文，不新增独立引用存储。技能最多 8 条、产物最多 16 条，共享不超过 4 KiB 的完整 JSON 预算，与任务引用合计最多 8 KiB。只投影最新的有界引用页；更早引用按原始序号分页读取，不生成全会话产物目录。
+主代理的 `ContextReferences` 回调由 bot/core 组装，复用当前会话历史索引的引用链接，Context 只接收 refbridge.Page 值。主模型、合成请求和开放 context_refs 的子模型请求在 Archive、任务引用之后，活动 history 之前投影 user-role JSON `context_references`；不写回活动消息、transcript 或 session.json，不复制工具正文，不新增独立引用存储。技能最多 8 条、产物最多 16 条，与凭证引用共享不超过 4 KiB 的完整 JSON 预算，与任务引用合计最多 8 KiB。只投影最新的有界引用页；更早引用按原始序号分页读取，不生成全会话产物目录。
 
 来源每次最多读取 20 条含引用的历史记录，复用 transcript.idx 跳过无关记录，使用 64 KiB 软预算；首条不可拆分，已有工具记录最高 4 MiB，底层记录解析上限为 16 MiB。已有索引每项从 32 字节增至 40 字节，增加引用链接和索引项校验，64 字节头不变；权威 transcript 和 session 格式不变。索引缺失或旧版格式时流式重建一次，可取消；查询不修复或改写 transcript。有效索引按引用跳转，新增历史仍需解析新增记录，尚未保存的尾部仍向后扫描，不能宣称冷恢复绝对恒定 IO。索引可删除重建，不缓存正文或增加全局状态。
 

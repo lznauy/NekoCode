@@ -193,4 +193,4 @@ manifest 省略 `agents` 或填空数组时，仍会自动发现插件内 `agent
 
 父 Agent 的插件工具 Hook 不会直接复用到子 Agent；每个执行者保留自己的工具授权边界。更多边界见 [Hook 指南](HOOK_GUIDE.md)；子 Agent 后续能力见 [规划目录](../plan/README.md)。
 
-子代理的 `nekocode_submit_result` 可选 `evidence_ids`（最多 16 个唯一的 evidence 引用），省略时保持原有交接方式。父宿主在子执行最终保存后核对该 task/attempt，并在 task 工具结果附上 resolved/unknown/wrong_scope/error 关联结果；resolved 仅证明记录关联，原执行失败仍会原样标出。父模型可通过 `evidence(task_id="…", attempt_id="…", action="list"/"inspect")` 重查当前会话下的指定子执行，不能选择其他父会话。
+允许 evidence 的子代理会自动收到自己任务的近期凭证引用，受连续性投影总预算限制；引用本身不表示执行成功。子代理的 `nekocode_submit_result` 可选 `evidence_ids`（最多 16 个唯一的 evidence 引用），省略时保持原有交接方式。父宿主在子执行最终保存后核对该 task/attempt，并在 task 工具结果附上 resolved/unknown/wrong_scope/error 关联结果；resolved 仅证明记录关联，原执行失败仍会原样标出。父模型可通过 `evidence(task_id="…", attempt_id="…", action="list"/"inspect")` 重查当前会话下的指定子执行，不能选择其他父会话。

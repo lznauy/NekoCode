@@ -271,6 +271,13 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 		}
 		request.ContextReferences = page
 	}
+	if read, bound := refbridge.ReaderFromContext(ctx); bound && read != nil && slices.Contains(output.Profile.Tools, "evidence") {
+		page, err := read(ctx, refbridge.Query{Kind: refbridge.EvidenceKind, Limit: refbridge.MaxPageRecords})
+		if err != nil {
+			page = refbridge.Page{SessionID: referenceScope(output), Unavailable: true}
+		}
+		request.EvidenceReferences = page
+	}
 	if workflow != "" {
 		request.ExtraMessages = []types.Message{{Role: "user", Content: workflow, Source: types.MessageSourceSkillWorkflow}}
 	}

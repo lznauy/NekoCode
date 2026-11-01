@@ -69,7 +69,7 @@ func (r *modelRunner) callLLMForTool() (*llmstream.LLMCallResult, error) {
 	ctx = protocol.WithPolicyConfiguration(ctx, a.deps.gov.Configuration())
 	ctx = protocol.WithProfileConfiguration(ctx, "")
 	ctx = protocol.WithAccessObservation(ctx, a.deps.toolExecutor.AccessObservation())
-	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{TaskReferences: r.taskReferences(ctx), ContextReferences: r.contextReferences(ctx), Tools: toolDefs, PolicyHints: policyHints, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient)})
+	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{TaskReferences: r.taskReferences(ctx), ContextReferences: r.contextReferences(ctx), EvidenceReferences: r.evidenceReferences(ctx), Tools: toolDefs, PolicyHints: policyHints, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient)})
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +182,7 @@ func (r *modelRunner) streamSynthesize(ctx context.Context) (string, error) {
 	ctx = protocol.WithPolicyConfiguration(ctx, a.deps.gov.Configuration())
 	ctx = protocol.WithProfileConfiguration(ctx, "")
 	ctx = protocol.WithAccessObservation(ctx, a.deps.toolExecutor.AccessObservation())
-	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{TaskReferences: r.taskReferences(ctx), ContextReferences: r.contextReferences(ctx), PolicyHints: policyHints, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient), ExtraMessages: []types.Message{{Role: "user", Content: synthesizePrompt}}})
+	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{TaskReferences: r.taskReferences(ctx), ContextReferences: r.contextReferences(ctx), EvidenceReferences: r.evidenceReferences(ctx), PolicyHints: policyHints, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient), ExtraMessages: []types.Message{{Role: "user", Content: synthesizePrompt}}})
 	if err != nil {
 		return "", err
 	}
@@ -340,4 +340,11 @@ func (r *modelRunner) contextReferences(ctx context.Context) refbridge.Page {
 		return refbridge.Page{}
 	}
 	return r.agent.deps.contextReferences(ctx, r.agent.sessionID())
+}
+
+func (r *modelRunner) evidenceReferences(ctx context.Context) refbridge.Page {
+	if r.agent.deps.evidenceReferences == nil {
+		return refbridge.Page{}
+	}
+	return r.agent.deps.evidenceReferences(ctx, r.agent.sessionID())
 }

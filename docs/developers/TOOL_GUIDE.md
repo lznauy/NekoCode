@@ -165,4 +165,4 @@ defer toolbox.Close()
 
 只读 `evidence(action="list", before=0, limit=20)` 查询当前执行者历史，凭证条目位于 evidence 数组（无条目时该字段可省略）。limit 限原始记录扫描数，同时最多返回 20 条凭证；无凭证条目的页仍需检查 has_more 并用 before 继续。`evidence(action="inspect", id="evidence.…")` 定位 list 给出的引用，detail 返回该次物理调用及交付摘要，status=recorded 只表示来源匹配。receipt_id 是原始执行 UUID；查询引用另绑定当前 scope 和原始序号。
 
-查询不返回产物路径或内容，不读取文件，也不授予权限。主代理可配对提供 `task_id` 与 `attempt_id`，只查当前父会话下该子执行的已提交区间；子代理只能查自己的任务（含历史 attempt），不能使用范围选择器。内置 coder/explore 已开放，自定义 Profile 需显式允许 evidence；该工具与 context_refs 分别授权，不自动投影完整凭证到模型请求。
+查询不返回产物路径或内容，不读取文件，也不授予权限。主代理可配对提供 `task_id` 与 `attempt_id`，只查当前父会话下该子执行的已提交区间；子代理只能查自己的任务（含历史 attempt），不能使用范围选择器。内置 coder/explore 已开放，自定义 Profile 需显式允许 evidence；该工具与 context_refs 分别授权。主模型、合成请求和允许 evidence 的子模型自动接收最多 16 条近期凭证引用；与技能/产物合计仍限 4 KiB，仅投影元数据，不携带完整凭证。自动采样限最近 20 条原始记录，旧凭证需 list 分页或按已知 ID inspect。
