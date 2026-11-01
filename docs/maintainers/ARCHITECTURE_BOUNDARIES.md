@@ -93,7 +93,7 @@ ToolCallResult.Evidence 的 schema=1 聚合当前调用至多两次物理调用�
 
 主、子代理沿既有工具结果接纳链路传入 Context。Context 克隆执行列表，只在该工具的权威 transcript 记录附加 ToolEvidence，并记录初次接纳时的可见正文摘要及 ready/budgeted/deferred；该摘要不是 provider 接收回执，也不随后续 deferred 恢复改写。活动消息和 session.json 不保存凭证正文，恢复时保留 transcript 元数据并从活动历史移除；provider wire 与 prefix 指纹也排除该字段。继续使用现有 transcript 水位和保存事务，没有独立事件仓库或凭证索引。旧记录缺字段不补造；旧版本重写可能丢失新附加字段。
 
-凭证已生成、保存，并开放当前执行者及父会话指定子 attempt 的 evidence 查询；模型自动有界引用及父子 evidence IDs 交接见下节。主、子代理工具完成回调携带 executor 交付时的 ToolEvidence 快照，回调前克隆执行列表，Runtime 事件总线在历史保存、观察者/订阅者交付和回放出口统一分离凭证切片，防止观察者污染其他消费者；凭证字段计入原有事件历史字节预算；只有 tool_completed 的 ToolPayload 可带可选 evidence。复用既有 ToolPayload codec 与 recording 序列化/回放，不新增事件或凭证仓库。该快照早于 Context 接纳，不含后续 visible_hash/admission，不能证明 transcript 已落盘，也不由 Runtime 的终端输出归一化重算哈希。headless 的工具结果 user 帧可带 nekocode_evidence；ACP 的 tool_call_update 通过 _meta["nekocode/evidence"] 携带。无凭证时字段省略，旧事件和旧客户端保持原结果结构；工具阻止、预览、收尾补齐不补造凭证。事件是派生观察，不能反向覆盖 transcript 或作为恢复重放工具的依据。历史保存失败仍由原有调用方返回错误，不把失败解释为工具未执行或自动重试的许可；历史失败的结构化表达见下节，录制自身失败仍在计划中。
+凭证已生成、保存，并开放当前执行者及父会话指定子 attempt 的 evidence 查询；模型自动有界引用及父子 evidence IDs 交接见下节。主、子代理工具完成回调携带 executor 交付时的 ToolEvidence 快照，回调前克隆执行列表，Runtime 事件总线在历史保存、观察者/订阅者交付和回放出口统一分离凭证切片，防止观察者污染其他消费者；凭证字段计入原有事件历史字节预算；只有 tool_completed 的 ToolPayload 可带可选 evidence。复用既有 ToolPayload codec 与 recording 序列化/回放，不新增事件或凭证仓库。该快照早于 Context 接纳，不含后续 visible_hash/admission，不能证明 transcript 已落盘，也不由 Runtime 的终端输出归一化重算哈希。headless 的工具结果 user 帧可带 nekocode_evidence；ACP 的 tool_call_update 通过 _meta["nekocode/evidence"] 携带。无凭证时字段省略，旧事件和旧客户端保持原结果结构；工具阻止、预览、收尾补齐不补造凭证。事件是派生观察，不能反向覆盖 transcript 或作为恢复重放工具的依据。历史保存失败仍由原有调用方返回错误，不把失败解释为工具未执行或自动重试的许可；历史及录制失败的结构化表达见下节。
 
 ## 执行历史保存失败
 
@@ -103,7 +103,11 @@ ToolCallResult.Evidence 的 schema=1 聚合当前调用至多两次物理调用�
 
 Runtime 从 runner 的结构化错误派生终态 RunResult.evidence_incomplete，并沿同一事件更新 RunSnapshot、codec 和 recording 回放；不从错误文字推断该标记。取消和关闭先等待 runner 收尾，现有 runExecution 仅保存该次运行的布尔收尾事实，防止取消状态遮蔽随后发生的保存失败。标记不改变已有失败/取消状态，不增加 stop enum 或状态仓库。headless result 可带 nekocode_evidence_incomplete；ACP 失败响应的 error.data、取消/正常响应的 _meta 可带 "nekocode/evidence_incomplete"。false 时字段省略，旧调用者保持原结构。
 
-这里标记的是执行历史保存失败；录制自身写入、绑定和关闭失败的统一外部表达仍在计划中。终态事件中没有该标记不等于录制已可靠落盘。
+录制错误由 EventRecorder 的现有 runRecording 保留该 run 首个失败，EndRun 释放；全局首错仅供 Close 汇总，不污染下一轮。RecordError 在同一锁内把已知失败加入即将写入的终态，RecordRunEvent 继续复用该写入路径，并在终态关闭日志和文件锁句柄。编码、写入、指标 flush、绑定和句柄关闭失败均计入；载荷无法编码时不再以 marshal_error 替代正文并假装成功。Runtime.Close 通过相同的结构化标记返回录制原始错误，注册阶段失败则直接返回给 StartRun，不启动 runner。
+
+EventBus 的单一 recording sink 替换原录制观察者：分配原有事件身份后，先尝试录制和终态关闭，再把补充 evidence_incomplete 的同一个事件交给 history、RunStore、观察者及订阅者。sink 不重入 Publish、订阅或 Close；现有观察者等待机制覆盖这段 IO。取消和关闭也先绑定该 run，再通过同一终态入口发布。不增加事件、重传队列或长期错误索引；已有 run_done、输出和工具事实保留，录制失败由独立标记表达，不自动重放工具。
+
+最后一帧写入或其后关闭失败时，实时终态仍带标记；磁盘旧事件可能不包含该次失败，重启后无法保证恢复出丢失的标记。没有标记不等于可靠落盘或 fsync 回执。磁盘已写入的事实不会因录制失败反向覆盖 transcript。
 
 ## 执行凭证查询
 

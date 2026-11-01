@@ -15,7 +15,7 @@ func TestCompletedRunEvictedByBytesRemainsReadable(t *testing.T) {
 	defer rt.Close()
 	for i := 1; i <= 4; i++ {
 		id := RunID(fmt.Sprintf("run_%d_test", i))
-		if _, err := rt.beginRecordedRun(id); err != nil {
+		if err := rt.beginRecordedRun(id); err != nil {
 			t.Fatal(err)
 		}
 		ev := Event{RunID: id, Type: EventRunDone, Time: time.Now(), Payload: RunResult{Output: strings.Repeat("x", 3<<20)}}
@@ -58,7 +58,7 @@ func TestLargeSingleEventEvictedRunRemainsReadable(t *testing.T) {
 	defer rt.Close()
 	for i := 1; i <= 2; i++ {
 		id := RunID(fmt.Sprintf("run_%d_large", i))
-		if _, err := rt.beginRecordedRun(id); err != nil {
+		if err := rt.beginRecordedRun(id); err != nil {
 			t.Fatal(err)
 		}
 		ev := Event{RunID: id, Type: EventRunDone, Time: time.Now(), Payload: RunResult{Output: strings.Repeat("x", 5<<20)}}

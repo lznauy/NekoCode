@@ -239,7 +239,7 @@ func (h runHost) Ask(request QuestionRequest) QuestionReply {
 	return reply
 }
 
-func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runLease, execution *runExecution, bindLazySession bool) {
+func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runLease, execution *runExecution) {
 	ctx = protocol.WithExecutionIdentity(ctx, protocol.ExecutionIdentity{RunID: string(runID)})
 	stopMetricsUpdates := func() {}
 	withMetrics := false
@@ -248,9 +248,6 @@ func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runL
 		r.invalidateContext()
 		if recovered := recover(); recovered != nil {
 			r.finishRun(runID, "", fmt.Errorf("runtime: run %s panicked: %v", runID, recovered), withMetrics)
-		}
-		if bindLazySession {
-			r.bindRecordedRun(runID)
 		}
 		execution.settle(withMetrics)
 		r.endRun(runID)
@@ -427,7 +424,7 @@ func (r *Runtime) finishRun(runID RunID, output string, err error, withMetrics b
 		r.publishContext(runID)
 		r.publishMetrics(runID)
 	}
-	r.events.Publish(Event{RunID: runID, Type: eventType, Source: SourceRef{Kind: "bot"}, Payload: payload})
+	r.publishRunTerminal(Event{RunID: runID, Type: eventType, Source: SourceRef{Kind: "bot"}, Payload: payload})
 
 }
 

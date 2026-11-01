@@ -31,6 +31,7 @@ type EventRecorder struct {
 }
 
 type runRecording struct {
+	writeErr          error
 	dir               string
 	provisional       bool
 	lock              *os.File
@@ -94,13 +95,14 @@ func (r *EventRecorder) BindSession(sessionID string) error {
 	if r == nil {
 		return nil
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if err := validateSessionID(sessionID); err != nil {
 		return err
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	for id, run := range r.runs {
 		if err := r.bindRunLocked(id, run, sessionID); err != nil {
+			r.rememberErrorLocked(run, err)
 			return err
 		}
 	}
@@ -156,12 +158,13 @@ func (r *EventRecorder) beginRunLocked(id core.RunID, sessionID string) error {
 }
 
 // BindRunSession only moves a provisional run; a known session is immutable.
-func (r *EventRecorder) BindRunSession(id core.RunID, sessionID string) error {
+func (r *EventRecorder) BindRunSession(id core.RunID, sessionID string) (err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	defer func() { r.rememberErrorLocked(r.runs[id], err) }()
 	if err := validateSessionID(sessionID); err != nil {
 		return err
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	return r.bindRunLocked(id, r.runs[id], sessionID)
 }
 
@@ -197,12 +200,15 @@ func (r *EventRecorder) bindRunLocked(id core.RunID, run *runRecording, sessionI
 	return nil
 }
 
-// EndRun releases retention protection after every terminal event is recorded.
+// EndRun releases any remaining handles and forgets the settled run.
 func (r *EventRecorder) EndRun(id core.RunID) {
 	r.mu.Lock()
 	if run := r.runs[id]; run != nil {
 		_ = r.closeEventsLocked(run)
-		_ = run.lock.Close()
+		if run.lock != nil {
+			r.rememberErrorLocked(run, run.lock.Close())
+			run.lock = nil
+		}
 		delete(r.runs, id)
 	}
 	prune := !r.lastPrune.IsZero() && time.Since(r.lastPrune) >= time.Minute
@@ -276,7 +282,10 @@ func (r *EventRecorder) Close() error {
 	defer r.mu.Unlock()
 	for id, run := range r.runs {
 		_ = r.closeEventsLocked(run)
-		_ = run.lock.Close()
+		if run.lock != nil {
+			r.rememberErrorLocked(run, run.lock.Close())
+			run.lock = nil
+		}
 		delete(r.runs, id)
 	}
 	return r.writeErr
@@ -295,15 +304,19 @@ func (r *EventRecorder) RecordError(ev core.Event) (err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	defer func() {
-		if err != nil && r.writeErr == nil {
-			r.writeErr = err
-		}
+		r.rememberErrorLocked(r.runs[ev.RunID], err)
 	}()
 
 	if err := r.beginRunLocked(ev.RunID, r.sessionID); err != nil {
 		return err
 	}
 	run := r.runs[ev.RunID]
+	if ev.IsRunTerminal() && run.writeErr != nil {
+		if result, ok := ev.Payload.(core.RunResult); ok {
+			result.EvidenceIncomplete = true
+			ev.Payload = result
+		}
+	}
 	if ev.Type == core.EventMetricsUpdated {
 		// Observers run outside the event-bus lock, so an older sample may
 		// arrive after a newer pending sample. Keep the newest by replay time,
@@ -341,7 +354,11 @@ func (r *EventRecorder) flushMetricsLocked(run *runRecording) error {
 }
 
 func (r *EventRecorder) writeEventLocked(run *runRecording, ev core.Event) error {
-	data, err := json.Marshal(recordedEventFrom(ev))
+	record := recordedEventFrom(ev)
+	if record.PayloadType == "marshal_error" {
+		return fmt.Errorf("encode %s event payload", ev.Type)
+	}
+	data, err := json.Marshal(record)
 	if err != nil {
 		return err
 	}
@@ -623,17 +640,13 @@ func payloadTypeName(payload any) string {
 // unbuffered; a run owns at most one log descriptor until EndRun or Close.
 func (r *EventRecorder) closeEventsLocked(run *runRecording) error {
 	flushErr := r.flushMetricsLocked(run)
-	if flushErr != nil && r.writeErr == nil {
-		r.writeErr = flushErr
-	}
+	r.rememberErrorLocked(run, flushErr)
 	if run.events == nil {
 		return flushErr
 	}
 	err := run.events.Close()
 	run.events = nil
-	if err != nil && r.writeErr == nil {
-		r.writeErr = err
-	}
+	r.rememberErrorLocked(run, err)
 	if flushErr != nil {
 		return flushErr
 	}
@@ -744,4 +757,44 @@ func PruneRecordedRuns(sessionsRoot string, maxAge time.Duration, maxBytes int64
 		_ = os.Remove(filepath.Dir(dir)) // only succeeds if runs/ is empty
 	}
 	return nil
+}
+
+// RecordFailure retains a binding failure discovered by the session owner.
+// Runtime registers the run first; errors belong only to that active record.
+func (r *EventRecorder) RecordFailure(id core.RunID, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rememberErrorLocked(r.runs[id], err)
+}
+
+func (r *EventRecorder) rememberErrorLocked(run *runRecording, err error) {
+	if err == nil {
+		return
+	}
+	if r.writeErr == nil {
+		r.writeErr = err
+	}
+	if run != nil && run.writeErr == nil {
+		run.writeErr = err
+	}
+}
+
+// RecordRunEvent is the Runtime recording sink. Registered runs retain their
+// first failure until EndRun. Terminal delivery waits for writes and closes.
+func (r *EventRecorder) RecordRunEvent(ev core.Event) error {
+	err := r.RecordError(ev)
+	if !ev.IsRunTerminal() {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if run := r.runs[ev.RunID]; run != nil {
+		_ = r.closeEventsLocked(run)
+		if run.lock != nil {
+			r.rememberErrorLocked(run, run.lock.Close())
+			run.lock = nil
+		}
+		return run.writeErr
+	}
+	return err
 }

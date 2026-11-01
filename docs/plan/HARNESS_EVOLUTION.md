@@ -47,15 +47,14 @@
 
 **已有基础：** ToolCallResult、有效工具身份 resolver、OutputStore、StepEvent、录制、子代理 submit_result 和 attempt transcript。[结构化进程观察](../maintainers/ARCHITECTURE_BOUNDARIES.md#结构化进程观察)及[工具执行凭证](../maintainers/ARCHITECTURE_BOUNDARIES.md#工具执行凭证)已实现：实际调用与权限重试各自生成 UUID，记录边界摘要及真实进程事实，权威版本随 transcript 保存；模型请求不自动携带正文；当前执行者及父会话指定子 attempt 的只读[执行凭证查询](../maintainers/ARCHITECTURE_BOUNDARIES.md#执行凭证查询)已开放；可选 evidence_ids 的[子代理凭证交接](../maintainers/ARCHITECTURE_BOUNDARIES.md#子代理凭证交接)已实现，只核对关联。执行器交付凭证已通过原有 ToolPayload 接入 recording/codec 与 headless/ACP 可选字段；最近凭证的有界自动引用已实现，复用现有连续性预算，见[执行凭证查询](../maintainers/ARCHITECTURE_BOUNDARIES.md#执行凭证查询)。
 
-主、子代理历史保存失败及取消/关闭后的结构化错误传播已实现，见[执行历史保存失败](../maintainers/ARCHITECTURE_BOUNDARIES.md#执行历史保存失败)。
+主、子代理历史保存失败及录制自身失败（包括最后一帧、绑定和关闭）的结构化表达已实现，见[执行历史保存失败](../maintainers/ARCHITECTURE_BOUNDARIES.md#执行历史保存失败)。
 
 **剩余改动方案：**
 
 1. 明确调用前拒绝、未分派取消及治理阻止的决策记录表达，与已执行的物理调用凭证区分，不补造执行事实。保留未知结果，不由 Shell 文本推断“执行过测试”。
-2. 为录制自身的写入、绑定和关闭失败补齐证据不完整的外部表达，复用已实现的标记；覆盖最后一帧也无法写入的情况，不重试工具或补造成功凭证。
-3. 结束原因复用现有 RunSummary，统一主/子路径及 recording/headless 投影；预算原因归 RUN_BUDGET.md，不另建 stop enum。仅有凭证不触发自动续跑或交付验收硬门禁。
+2. 结束原因复用现有 RunSummary，统一主/子路径及 recording/headless 投影；预算原因归 RUN_BUDGET.md，不另建 stop enum。仅有凭证不触发自动续跑或交付验收硬门禁。
 
-**主要落点：** 决策记录、证据不完整的错误表达、RunSummary 及其外部投影。保留已有 runner/Context/session 凭证契约，避免重做保存路径。
+**主要落点：** 决策记录、RunSummary 及其外部投影。保留已有 runner/Context/session 凭证契约，避免重做保存路径。
 
 **验收：** 同名 provider call ID 跨 attempt 不混淆；capability 记录有效 MCP 目标；清理/截断后的可见摘要可核对；取消和存储失败不补造成功；压缩后 receipt ID 稳定；子代理引用不能越 scope；旧客户端可忽略新增可选字段。
 

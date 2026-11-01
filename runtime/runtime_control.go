@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"nekocode/protocol"
 	"net/url"
 	"strings"
 
@@ -83,8 +84,7 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 	r.mu.Unlock()
 	// Registration precedes Running: steering must not publish into the
 	// previous run's recording destination while this run is starting.
-	bindLazySession, err := r.beginRecordedRun(runID)
-	if err != nil {
+	if err := r.beginRecordedRun(runID); err != nil {
 		return "", err
 	}
 	r.invalidateContext()
@@ -108,7 +108,7 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 	r.runExecution = execution
 	r.mu.Unlock()
 
-	go r.run(runCtx, runID, input, lease, execution, bindLazySession)
+	go r.run(runCtx, runID, input, lease, execution)
 	return runID, nil
 }
 
@@ -231,7 +231,7 @@ func (r *Runtime) publishCancellation(control cancelControl, message string) {
 	if control.execution.hasMetrics() {
 		r.publishMetrics(control.runID)
 	}
-	r.events.Publish(Event{
+	r.publishRunTerminal(Event{
 		RunID:   control.runID,
 		Type:    EventRunCancelled,
 		Source:  SourceRef{Kind: "runtime"},
@@ -306,7 +306,7 @@ func (r *Runtime) Close() error {
 			if execution.hasMetrics() {
 				r.publishMetrics(runID)
 			}
-			r.events.Publish(Event{
+			r.publishRunTerminal(Event{
 				RunID:   runID,
 				Type:    EventRunCancelled,
 				Source:  SourceRef{Kind: "runtime"},
@@ -338,7 +338,7 @@ func (r *Runtime) Close() error {
 		}
 		if r.recorder != nil {
 			if err := r.recorder.Close(); err != nil {
-				errs = append(errs, err)
+				errs = append(errs, protocol.MarkEvidenceIncomplete(err))
 			}
 		}
 		r.closeErr = errors.Join(errs...)

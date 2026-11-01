@@ -101,6 +101,11 @@ type Event struct {
 	Payload  any       `json:"payload,omitempty"`
 }
 
+// IsRunTerminal identifies the existing run settlement boundary.
+func (e Event) IsRunTerminal() bool {
+	return e.Type == EventRunDone || e.Type == EventRunFailed || e.Type == EventRunCancelled
+}
+
 type EventFilter struct {
 	// All subscriptions close if their queue is full of must-deliver controls.
 	// Reliable closes the subscription on overflow instead of silently dropping

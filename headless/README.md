@@ -256,7 +256,7 @@ for line in proc.stdout:                       # 每行一个 JSON 帧
   `result`（`subtype` 为 `error_cancelled`）。
 - ACK 只表示指令已受理，**必须继续读取直到 `result`** 才算该轮清理完成。
 
-历史保存失败时，最终 `result` 帧可带 `nekocode_evidence_incomplete:true`；取消结果也保留该标记。原有 `result` 输出和失败/取消 subtype 不变。它只表示历史可能不完整，不能据此自动重放工具；未携带此标记也不构成录制落盘回执。
+历史保存或录制的编码、写入、绑定、关闭失败时，最终 `result` 帧可带 `nekocode_evidence_incomplete:true`；取消结果也保留该标记。原有 `result` 输出、成功/失败/取消 subtype 不变，录制失败也可出现在成功结果的独立标记中。它只表示证据可能不完整，不能据此自动重放工具；未携带此标记也不构成录制落盘回执。
 
 ## 错误与退出
 

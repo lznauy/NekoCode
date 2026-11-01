@@ -157,31 +157,33 @@ func (r *Runtime) BindRecordedSession(sessionID string) {
 	}
 	r.mu.Lock()
 	recorder := r.recorder
+	runID := r.currentRun
 	r.mu.Unlock()
 	if recorder == nil {
 		return
 	}
 	if err := recorder.BindSession(sessionID); err != nil {
+		recorder.RecordFailure(runID, err)
 		logger.Log("runtime: bind recorded session %s: %v", sessionID, err)
 	}
 }
 
-func (r *Runtime) beginRecordedRun(runID RunID) (bool, error) {
+func (r *Runtime) beginRecordedRun(runID RunID) error {
 	r.mu.Lock()
 	recorder := r.recorder
 	r.mu.Unlock()
 	if recorder == nil {
-		return false, nil
+		return nil
 	}
 	id := recorder.SessionID()
 	if r.services.Sessions.CurrentSessionID != nil {
 		var err error
 		id, err = r.recordingSessionID()
 		if err != nil {
-			return false, err
+			return protocol.MarkEvidenceIncomplete(err)
 		}
 	}
-	return id == "", recorder.BeginRun(runID, id)
+	return protocol.MarkEvidenceIncomplete(recorder.BeginRun(runID, id))
 }
 
 func (r *Runtime) recordingSessionID() (id string, err error) {
@@ -194,13 +196,27 @@ func (r *Runtime) recordingSessionID() (id string, err error) {
 }
 
 func (r *Runtime) bindRecordedRun(runID RunID) {
+	r.mu.Lock()
+	recorder := r.recorder
+	r.mu.Unlock()
+	if recorder == nil || r.services.Sessions.CurrentSessionID == nil {
+		return
+	}
 	id, err := r.recordingSessionID()
 	if err == nil && id != "" {
-		err = r.recorder.BindRunSession(runID, id)
+		err = recorder.BindRunSession(runID, id)
 	}
 	if err != nil {
+		recorder.RecordFailure(runID, err)
 		logger.Log("runtime: bind recorded run %s: %v", runID, err)
 	}
+}
+
+// Bind before terminal recording, including cancellation and shutdown. The
+// recording sink then settles file errors before any consumer sees the result.
+func (r *Runtime) publishRunTerminal(ev Event) {
+	r.bindRecordedRun(ev.RunID)
+	r.events.Publish(ev)
 }
 
 func (r *Runtime) releaseRecordedRun(runID RunID) {
@@ -286,7 +302,13 @@ func (r *Runtime) EnableEventRecording(baseDir string) error {
 	}
 	r.recorder = recorder
 	r.mu.Unlock()
-	r.events.AddOrderedObserver(recorder.Record)
+	r.events.SetRecordingSink(func(ev Event) error {
+		err := recorder.RecordRunEvent(ev)
+		if err != nil {
+			logger.Log("runtime: event recorder: %v", err)
+		}
+		return err
+	})
 
 	go r.pruneRecordedRuns(baseDir)
 	return nil

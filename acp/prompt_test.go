@@ -47,7 +47,7 @@ func (f *evidenceFailureBackend) StartRun(context.Context, controlruntime.Input)
 	return "run-1", nil
 }
 func TestPromptPreservesIncompleteEvidenceMetadata(t *testing.T) {
-	for _, kind := range []controlruntime.EventType{controlruntime.EventRunFailed, controlruntime.EventRunCancelled} {
+	for _, kind := range []controlruntime.EventType{controlruntime.EventRunFailed, controlruntime.EventRunCancelled, controlruntime.EventRunDone} {
 		t.Run(string(kind), func(t *testing.T) {
 			backend := &evidenceFailureBackend{fakeBackend: fakeBackend{current: "session-1", events: make(chan controlruntime.Event, 1)}, kind: kind, result: controlruntime.RunResult{Error: "save failed", EvidenceIncomplete: true}}
 			var output bytes.Buffer

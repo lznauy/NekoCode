@@ -26,6 +26,7 @@ type EventBus struct {
 	subscribers      map[int]*subscriber
 	observers        []func(core.Event)
 	orderedObservers []func(core.Event)
+	recordingSink    func(core.Event) error
 	observerWG       sync.WaitGroup
 	history          []core.Event
 	historySizes     []int
@@ -72,6 +73,14 @@ func (b *EventBus) AddOrderedObserver(fn func(core.Event)) {
 	b.mu.Lock()
 	b.orderedObservers = append(b.orderedObservers, fn)
 	b.mu.Unlock()
+}
+
+// SetRecordingSink installs the single persistence boundary. It runs before
+// history/projections/delivery and must not publish, subscribe, or close the bus.
+func (b *EventBus) SetRecordingSink(record func(core.Event) error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.recordingSink = record
 }
 
 func (b *EventBus) Subscribe(ctx context.Context, filter core.EventFilter) (<-chan core.Event, error) {
@@ -286,19 +295,31 @@ func (b *EventBus) Publish(ev core.Event) core.Event {
 		b.publishMu.Unlock()
 		return ev
 	}
-	// Compaction deltas are excluded from history: a long compaction streams
-	// hundreds of them, which would evict the run/approval boundary events
-	// late subscribers replay. The terminal event carries the full summary, so
-	// replay does not depend on deltas.
-	if !isCompactionDelta(ev) {
-		b.appendHistoryLocked(ev)
-	}
+	record := b.recordingSink
 	observers := append([]func(core.Event){}, b.observers...)
 	ordered := append([]func(core.Event){}, b.orderedObservers...)
 	b.observerWG.Add(len(observers) + len(ordered))
+	if record != nil {
+		b.observerWG.Add(1)
+	}
 	b.mu.Unlock()
 	func() {
 		defer b.publishMu.Unlock()
+		if record != nil {
+			defer b.observerWG.Done()
+			if err := record(cloneEvidence(ev)); err != nil && ev.IsRunTerminal() {
+				if result, ok := ev.Payload.(core.RunResult); ok {
+					result.EvidenceIncomplete = true
+					ev.Payload = result
+				}
+			}
+		}
+		b.mu.Lock()
+		// Deltas stay out of history; terminal summaries carry their full content.
+		if !isCompactionDelta(ev) {
+			b.appendHistoryLocked(ev)
+		}
+		b.mu.Unlock()
 		for _, observer := range ordered {
 			func() {
 				defer b.observerWG.Done()
