@@ -34,7 +34,8 @@ func Register(p *policy.Policy) {
 // or accept an edit anchor as equivalent evidence.
 func ReadBeforeWriteHook() policy.Hook {
 	return policy.Hook{Guard: true,
-		Name: "read_before_write", Point: policy.PreToolUse,
+		BehaviorVersion: "1",
+		Name:            "read_before_write", Point: policy.PreToolUse,
 		On: func(s policy.State) *policy.Result {
 			tool := s.Facts().Tool
 			name := tool.Name
@@ -60,7 +61,8 @@ func ReadBeforeWriteHook() policy.Hook {
 
 func GarbledCircuitBreaker() policy.Hook {
 	return policy.Hook{Guard: true,
-		Name: "garbled_circuit_breaker", Point: policy.Stop,
+		BehaviorVersion: "1",
+		Name:            "garbled_circuit_breaker", Point: policy.Stop,
 		On: func(s policy.State) *policy.Result {
 			if s.Facts().Response.GarbledCount >= 5 {
 				stop := policy.StopFormatError

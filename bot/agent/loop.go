@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
 	"nekocode/bot/agent/internal/kernel"
 	"nekocode/bot/contextmgr"
 	"nekocode/bot/policy"
@@ -60,6 +61,10 @@ func (r *loopRunner) runContext(ctx context.Context, input string, images []type
 	r.stepLimitHit = false
 	beforeRun := a.deps.ctxMgr.Snapshot()
 	r.startRun(input, images)
+	a.run.identity = protocol.ExecutionFromContext(ctx)
+	if a.run.identity.RunID == "" {
+		a.run.identity.RunID = uuid.NewString()
+	}
 	defer a.life.StopTiming()
 	// Reset in startRun replaces canceled lifecycle contexts. Install the
 	// watcher afterwards so startup can never erase this run's cancellation.

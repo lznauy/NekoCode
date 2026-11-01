@@ -63,6 +63,8 @@ func (r *modelRunner) callLLMForTool() (*llmstream.LLMCallResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	ctx = protocol.WithPolicyConfiguration(ctx, a.deps.gov.Configuration())
+	ctx = protocol.WithProfileConfiguration(ctx, "")
 	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{Tools: toolDefs, PolicyHints: policyHints, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient)})
 	if err != nil {
 		return nil, err
@@ -172,6 +174,8 @@ func (r *modelRunner) streamSynthesize(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	ctx = protocol.WithPolicyConfiguration(ctx, a.deps.gov.Configuration())
+	ctx = protocol.WithProfileConfiguration(ctx, "")
 	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{PolicyHints: policyHints, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient), ExtraMessages: []types.Message{{Role: "user", Content: synthesizePrompt}}})
 	if err != nil {
 		return "", err

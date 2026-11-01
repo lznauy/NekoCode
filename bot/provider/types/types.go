@@ -93,6 +93,11 @@ func LoadImage(image MessageImage) (data []byte, mediaType string, ok bool) {
 }
 
 const (
+	// MessageSourceSkillWorkflow marks explicit workflow delivery, not a user turn.
+	MessageSourceSkillWorkflow = "skill-workflow"
+	// MessageSourceContextData marks request-only memory/archive projections.
+	// It is internal provenance, never a provider wire field or a new user turn.
+	MessageSourceContextData = "context-data"
 	// MessageSourceVolatileTail is kept for replaying sessions written by the
 	// old layered context builder. New runtime context is appended as user
 	// messages instead of transient system messages.
@@ -109,6 +114,20 @@ const (
 	// hidden by interaction surfaces but remains part of conversation history.
 	MessageSourceRuntimeEvent = "runtime-event"
 )
+
+// IsConversationUser distinguishes real user turns from internal data/guidance.
+// The decision uses local provenance, never text or copied envelope markers.
+func (m Message) IsConversationUser() bool {
+	if m.Role != "user" {
+		return false
+	}
+	switch m.Source {
+	case "system", MessageSourceVolatileTail, MessageSourceRuntimeContext, MessageSourceHint, MessageSourceRuntimeEvent, MessageSourceContextData, MessageSourceSkillWorkflow:
+		return false
+	default:
+		return true
+	}
+}
 
 type ToolCall struct {
 	Index    int          `json:"index"`

@@ -8,10 +8,33 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"nekocode/bot/extension/agentprofile"
 	"nekocode/bot/provider/types"
+	"nekocode/protocol"
 	utilhttp "nekocode/util/http"
 )
+
+func TestCallRecordsCorrelateRetriesWithoutLeakingRequestData(t *testing.T) {
+	identity := protocol.ExecutionIdentity{RunID: "run", TaskID: "task", AttemptID: "attempt"}
+	ctx := protocol.WithExecutionIdentity(t.Context(), identity)
+	first := NewRecord(ctx, "subagent", "session", time.Now())
+	second := NewRecord(ctx, "compaction", "session", time.Now())
+	if first.Execution != identity || second.Execution != identity || first.CallID == "" || first.CallID == second.CallID {
+		t.Fatalf("physical calls lost execution scope: %+v / %+v", first, second)
+	}
+	meta := &types.RequestMeta{Model: "model", Protocol: "openai", BaseURL: "https://user:SECRET@example.com/v1/SECRET?key=SECRET", EffectiveEffort: "high"}
+	second.SetOutcome(types.StreamUsage{PromptTokens: 10, CompletionTokens: 2, SystemFingerprint: "SECRET"}, meta, errors.New("body: SECRET"))
+	data, err := json.Marshal(second)
+	if err != nil || strings.Contains(string(data), "SECRET") || second.BaseURL != "https://example.com" || second.TotalTokens != 12 || second.EffectiveEffort != "high" || second.SystemFingerprint == "" {
+		t.Fatalf("unsafe or incomplete call outcome: %s, %v", data, err)
+	}
+	unbound := NewRecord(context.Background(), "", "", time.Now())
+	if unbound.Execution != (protocol.ExecutionIdentity{}) || unbound.Source != "unknown" {
+		t.Fatalf("call logging invented an execution owner: %+v", unbound)
+	}
+}
 
 func TestRecordSetUsage(t *testing.T) {
 	var rec Record
@@ -139,5 +162,33 @@ func TestWriteOmitsSessionWithoutProvider(t *testing.T) {
 	}
 	if strings.Contains(string(data), `"session"`) {
 		t.Fatalf("record should omit session when no provider is registered: %s", data)
+	}
+}
+
+func TestNewRecordSnapshotsPolicyConfiguration(t *testing.T) {
+	configuration := protocol.PolicyConfiguration{Schema: 1, Hash: "policy-hash", Revision: 3, Incomplete: true}
+	ctx := protocol.WithPolicyConfiguration(t.Context(), configuration)
+	record := NewRecord(ctx, "main", "session", time.Now())
+	if record.Policy != configuration {
+		t.Fatal("policy configuration omitted from record")
+	}
+	if NewRecord(t.Context(), "main", "session", time.Now()).Policy != (protocol.PolicyConfiguration{}) {
+		t.Fatal("policy configuration leaked across requests")
+	}
+}
+
+func TestProfileDiagnosticUsesOwnerHashOnly(t *testing.T) {
+	profile := agentprofile.Profile{Name: "profile-secret-sentinel", Tools: []string{"read"}}
+	hash := profile.ConfigurationHash()
+	record := NewRecord(protocol.WithProfileConfiguration(t.Context(), hash), "subagent", "session", time.Now())
+	data, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.ProfileHash != hash || strings.Contains(string(data), "profile-secret-sentinel") {
+		t.Fatal("missing profile hash or leaked declaration")
+	}
+	if NewRecord(t.Context(), "main", "session", time.Now()).ProfileHash != "" {
+		t.Fatal("profile leaked into unrelated call")
 	}
 }

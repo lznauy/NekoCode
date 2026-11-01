@@ -50,6 +50,9 @@ const (
 // Hook is the extension contract exposed by policy. Facts are read-only;
 // Int/String store state private to this hook for deduplication and latches.
 type Hook struct {
+	// BehaviorVersion is an owner-declared diagnostic version, never authority.
+	// Leave empty when behavior cannot be described; diagnostics mark it incomplete.
+	BehaviorVersion string
 	// Guard failures reject the current action; observer failures only diagnose.
 	Guard           bool
 	Timeout         time.Duration

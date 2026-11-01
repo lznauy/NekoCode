@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"nekocode/bot/agent/internal/kernel"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/extension/agentprofile"
@@ -18,6 +19,7 @@ import (
 	"nekocode/bot/provider"
 	providertypes "nekocode/bot/provider/types"
 	"nekocode/logger"
+	"nekocode/protocol"
 )
 
 const (
@@ -92,10 +94,17 @@ func (s *runState) recordCalls(calls []core.ToolCallItem) {
 }
 
 func (e *Engine) Run(ctx context.Context, cfg RunConfig) (result *Result, runErr error) {
+	identity := protocol.ExecutionFromContext(ctx)
+	if identity.RunID == "" {
+		identity.RunID = uuid.NewString()
+	}
+	identity.TaskID, identity.AttemptID = cfg.SubagentID, cfg.AttemptID
+	ctx = protocol.WithExecutionIdentity(ctx, identity)
 	if cfg.Profile.MaxSteps < 0 || cfg.Profile.MaxSteps > agentprofile.MaxSteps {
 		return nil, fmt.Errorf("max_steps must be between 0 and %d", agentprofile.MaxSteps)
 	}
 	cfg.Profile = agentprofile.Clone(cfg.Profile)
+	ctx = protocol.WithProfileConfiguration(ctx, cfg.Profile.ConfigurationHash())
 	if e.toolRegistry.Has(submitResultToolName) {
 		return nil, fmt.Errorf("sub-agent tool registry contains reserved lifecycle tool name %q", submitResultToolName)
 	}

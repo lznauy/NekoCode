@@ -19,7 +19,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	providertypes "nekocode/bot/provider/types"
+	"nekocode/protocol"
 	"nekocode/util/fs"
 	utilhttp "nekocode/util/http"
 	"nekocode/util/text"
@@ -32,50 +34,84 @@ const (
 
 // PrefixDiag is the local view of the request's cache-relevant shape: which
 // parts changed since the previous call and the fingerprints of the stable
-// prefix. Hashes are 12 hex chars — enough to eyeball equality in a log.
+// prefix. Cache hashes use 12 hex chars; skill delivery uses versioned SHA-256.
 type PrefixDiag struct {
-	ChangedParts []string `json:"changed_parts,omitempty"`
-	SystemHash   string   `json:"system_hash,omitempty"`
-	ToolsHash    string   `json:"tools_hash,omitempty"`
-	HistoryCount int      `json:"history_count,omitempty"`
-	HistoryHash  string   `json:"history_hash,omitempty"`
+	SkillsHash    string   `json:"skills_hash,omitempty"`
+	SkillMessages int      `json:"skill_messages,omitempty"`
+	ChangedParts  []string `json:"changed_parts,omitempty"`
+	SystemHash    string   `json:"system_hash,omitempty"`
+	ToolsHash     string   `json:"tools_hash,omitempty"`
+	HistoryCount  int      `json:"history_count,omitempty"`
+	HistoryHash   string   `json:"history_hash,omitempty"`
 }
 
 // IsZero reports whether no diagnostic field was populated.
 func (d PrefixDiag) IsZero() bool {
-	return len(d.ChangedParts) == 0 && d.SystemHash == "" && d.ToolsHash == "" &&
+	return d.SkillsHash == "" && d.SkillMessages == 0 && len(d.ChangedParts) == 0 && d.SystemHash == "" && d.ToolsHash == "" &&
 		d.HistoryCount == 0 && d.HistoryHash == ""
 }
 
 // Record is one LLM call. CacheUsageReported distinguishes a provider's real
 // zero values from calls where cache details were unavailable.
 type Record struct {
-	TS                 time.Time `json:"ts"`
-	Seq                uint64    `json:"seq"`
-	Source             string    `json:"source"`
-	SessionID          string    `json:"session,omitempty"`
-	Model              string    `json:"model,omitempty"`
-	Protocol           string    `json:"protocol,omitempty"`
-	BaseURL            string    `json:"base_url,omitempty"`
-	RequestedEffort    string    `json:"requested_effort,omitempty"`
-	EffectiveEffort    string    `json:"effective_effort,omitempty"`
-	DurMs              int64     `json:"dur_ms"`
-	TTFTMs             int64     `json:"ttft_ms,omitempty"`
-	TotalTokens        int       `json:"total"`
-	InTokens           int       `json:"in"`
-	CachedTokens       int       `json:"cached"`
-	NewTokens          int       `json:"new"`
-	OutTokens          int       `json:"out"`
-	ReasoningTokens    int       `json:"reasoning,omitempty"`
-	CacheUsageReported bool      `json:"cache_usage_reported"`
-	CacheHitRatio      *float64  `json:"cache_hit_ratio,omitempty"`
-	Usage              string    `json:"usage,omitempty"`
+	ProfileHash        string                       `json:"profile_hash,omitempty"`
+	Policy             protocol.PolicyConfiguration `json:"policy,omitzero"`
+	Execution          protocol.ExecutionIdentity   `json:"execution,omitzero"`
+	CallID             string                       `json:"call_id,omitempty"`
+	TS                 time.Time                    `json:"ts"`
+	Seq                uint64                       `json:"seq"`
+	Source             string                       `json:"source"`
+	SessionID          string                       `json:"session,omitempty"`
+	Model              string                       `json:"model,omitempty"`
+	Protocol           string                       `json:"protocol,omitempty"`
+	BaseURL            string                       `json:"base_url,omitempty"`
+	RequestedEffort    string                       `json:"requested_effort,omitempty"`
+	EffectiveEffort    string                       `json:"effective_effort,omitempty"`
+	DurMs              int64                        `json:"dur_ms"`
+	TTFTMs             int64                        `json:"ttft_ms,omitempty"`
+	TotalTokens        int                          `json:"total"`
+	InTokens           int                          `json:"in"`
+	CachedTokens       int                          `json:"cached"`
+	NewTokens          int                          `json:"new"`
+	OutTokens          int                          `json:"out"`
+	ReasoningTokens    int                          `json:"reasoning,omitempty"`
+	CacheUsageReported bool                         `json:"cache_usage_reported"`
+	CacheHitRatio      *float64                     `json:"cache_hit_ratio,omitempty"`
+	Usage              string                       `json:"usage,omitempty"`
 	// SystemFingerprint is a short hash of the provider's serving-cluster id;
 	// hit/miss correlated with hash changes points at cache routing without
 	// persisting a provider-controlled string.
 	SystemFingerprint string      `json:"system_fingerprint,omitempty"`
 	PrefixDiag        *PrefixDiag `json:"prefix,omitempty"`
 	Err               string      `json:"err,omitempty"`
+}
+
+// NewRecord snapshots the execution scope for one physical model invocation.
+// Each retry creates a new record; no identity is retained on shared clients.
+func NewRecord(ctx context.Context, source, sessionID string, start time.Time) Record {
+	if source == "" {
+		source = "unknown"
+	}
+	return Record{
+		ProfileHash: protocol.ProfileConfigurationFromContext(ctx),
+		Policy:      protocol.PolicyConfigurationFromContext(ctx),
+		Execution:   protocol.ExecutionFromContext(ctx), CallID: uuid.NewString(),
+		TS: time.Now(), Source: source, SessionID: sessionID,
+		DurMs: time.Since(start).Milliseconds(),
+	}
+}
+
+// SetOutcome normalizes the shared, privacy-safe fields of all model calls.
+// Missing provider metadata stays missing rather than being guessed.
+func (r *Record) SetOutcome(usage providertypes.StreamUsage, meta *providertypes.RequestMeta, err error) {
+	r.SetUsage(usage)
+	r.SystemFingerprint = FingerprintID(usage.SystemFingerprint)
+	r.Err = ErrorSummary(err)
+	if meta != nil {
+		r.Model, r.Protocol = meta.Model, meta.Protocol
+		r.BaseURL = SafeBaseURL(meta.BaseURL)
+		r.RequestedEffort, r.EffectiveEffort = meta.RequestedEffort, meta.EffectiveEffort
+	}
 }
 
 // SetUsage normalizes provider usage and stores both machine-readable numbers

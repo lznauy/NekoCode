@@ -118,31 +118,10 @@ var writeRecord = calllog.Write
 
 // writeCallRecord assembles and appends one privacy-safe per-call usage record.
 func writeCallRecord(opts LLMCallOptions, stream *StreamResult, start time.Time, callErr error) {
-	rec := calllog.Record{
-		TS:     time.Now(),
-		Source: opts.Source,
-		DurMs:  time.Since(start).Milliseconds(),
-	}
-	rec.SessionID = opts.SessionID
-	rec.SetUsage(stream.Usage)
-	if fp := stream.Usage.SystemFingerprint; fp != "" {
-		rec.SystemFingerprint = calllog.FingerprintID(fp)
-	}
-	if rec.Source == "" {
-		rec.Source = "unknown"
-	}
+	rec := calllog.NewRecord(opts.Ctx, opts.Source, opts.SessionID, start)
+	rec.SetOutcome(stream.Usage, stream.Request, callErr)
 	if !stream.FirstTokenAt.IsZero() {
 		rec.TTFTMs = stream.FirstTokenAt.Sub(start).Milliseconds()
-	}
-	if callErr != nil {
-		rec.Err = calllog.ErrorSummary(callErr)
-	}
-	if meta := stream.Request; meta != nil {
-		rec.Model = meta.Model
-		rec.Protocol = meta.Protocol
-		rec.BaseURL = calllog.SafeBaseURL(meta.BaseURL)
-		rec.RequestedEffort = meta.RequestedEffort
-		rec.EffectiveEffort = meta.EffectiveEffort
 	}
 	if opts.Diagnostics != nil {
 		if diag := opts.Diagnostics(); !diag.IsZero() {

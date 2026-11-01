@@ -246,6 +246,7 @@ func buildSubagentRunConfig(
 	attemptSeq int,
 ) subagent.RunConfig {
 	cfg := subagent.RunConfig{
+		AttemptID:            attemptID,
 		Prompt:               spec.Prompt,
 		Profile:              profile,
 		SkillContents:        skillContents,

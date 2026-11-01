@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/google/uuid"
 	agentcore "nekocode/bot/agent"
 	"nekocode/bot/config"
 	"nekocode/bot/extension/plugin"
@@ -41,6 +42,9 @@ func (b *Bot) Run(ctx context.Context, input string, images []types.MessageImage
 }
 
 func (b *Bot) runAgent(ctx context.Context, input string, images []types.MessageImage, onStep func(ev protocol.StepEvent)) (string, error) {
+	if protocol.ExecutionFromContext(ctx).RunID == "" {
+		ctx = protocol.WithExecutionIdentity(ctx, protocol.ExecutionIdentity{RunID: uuid.NewString()})
+	}
 	sessionID := b.sess.CurrentID()
 	ag := b.getAgent()
 	defer func() {
@@ -60,7 +64,9 @@ func (b *Bot) runAgent(ctx context.Context, input string, images []types.Message
 	// The trailing compaction is housekeeping, not part of the run's outcome:
 	// after a caller-side cancellation it reports context.Canceled, which
 	// would surface as a run failure even though the turn itself was fine.
-	_, compactionErr := b.ctxMgr.AutoCompactIfNeeded(context.Background())
+	compactionCtx := protocol.WithPolicyConfiguration(context.WithoutCancel(ctx), b.policy.Configuration())
+	compactionCtx = protocol.WithProfileConfiguration(compactionCtx, "")
+	_, compactionErr := b.ctxMgr.AutoCompactIfNeeded(compactionCtx)
 	if compactionErr != nil && (errors.Is(compactionErr, context.Canceled) || errors.Is(compactionErr, context.DeadlineExceeded)) {
 		compactionErr = nil
 	}

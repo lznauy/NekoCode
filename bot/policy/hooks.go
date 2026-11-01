@@ -307,6 +307,7 @@ func (e *hookEngine) unregisterPrefix(prefix string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	filtered := e.hooks[:0]
+	removed := false
 	for _, hook := range e.hooks {
 		if !strings.HasPrefix(hook.Name, prefix) {
 			filtered = append(filtered, hook)
@@ -314,6 +315,10 @@ func (e *hookEngine) unregisterPrefix(prefix string) {
 		}
 		delete(e.state, hook.Name)
 		delete(e.versions, hook.Name)
+		removed = true
 	}
 	e.hooks = filtered
+	if removed {
+		e.nextVersion++
+	}
 }

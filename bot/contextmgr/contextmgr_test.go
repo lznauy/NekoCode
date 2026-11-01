@@ -6,6 +6,7 @@ import (
 
 	"nekocode/bot/calllog"
 	"nekocode/bot/provider/types"
+	"nekocode/protocol"
 )
 
 type usageTestClient struct {
@@ -69,7 +70,9 @@ func TestSummarizerRecordsStreamingUsage(t *testing.T) {
 	writeCompactionRecord = func(rec calllog.Record) { recordedCall = rec }
 	t.Cleanup(func() { writeCompactionRecord = originalWrite })
 
-	summary, err := m.makeSummarizer(context.Background(), client)(nil, "")
+	identity := protocol.ExecutionIdentity{RunID: "run", TaskID: "child", AttemptID: "attempt"}
+	ctx := protocol.WithExecutionIdentity(t.Context(), identity)
+	summary, err := m.streamingSummarizer(ctx, client, nil)(nil, "")
 	if err != nil || summary != "a complete summary" {
 		t.Fatalf("summary = %q, err = %v", summary, err)
 	}
@@ -82,6 +85,9 @@ func TestSummarizerRecordsStreamingUsage(t *testing.T) {
 	if recordedCall.BaseURL != "https://example.com" {
 		t.Fatalf("calllog base URL was not sanitized: %q", recordedCall.BaseURL)
 	}
+	if recordedCall.Execution != identity || recordedCall.CallID == "" {
+		t.Fatalf("compaction lost execution identity: %+v", recordedCall)
+	}
 }
 
 func TestSummarizerHandlesNilResponse(t *testing.T) {
@@ -90,7 +96,7 @@ func TestSummarizerHandlesNilResponse(t *testing.T) {
 	writeCompactionRecord = func(calllog.Record) {}
 	t.Cleanup(func() { writeCompactionRecord = originalWrite })
 
-	if _, err := m.makeSummarizer(context.Background(), &usageTestClient{})(nil, ""); err == nil {
+	if _, err := m.streamingSummarizer(context.Background(), &usageTestClient{}, nil)(nil, ""); err == nil {
 		t.Fatal("nil response should return an error")
 	}
 }

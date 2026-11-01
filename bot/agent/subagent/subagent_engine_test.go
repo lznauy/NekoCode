@@ -23,6 +23,7 @@ import (
 )
 
 type scriptedLLM struct {
+	contexts []context.Context
 	scripts  [][]types.StreamToken
 	errors   []error
 	calls    int
@@ -34,7 +35,8 @@ func (f *scriptedLLM) Chat(context.Context, []types.Message, []types.ToolDef) (*
 	panic("Chat should not be called by subagent")
 }
 
-func (f *scriptedLLM) ChatStream(_ context.Context, messages []types.Message, toolDefs []types.ToolDef) (<-chan types.StreamToken, <-chan error) {
+func (f *scriptedLLM) ChatStream(ctx context.Context, messages []types.Message, toolDefs []types.ToolDef) (<-chan types.StreamToken, <-chan error) {
+	f.contexts = append(f.contexts, ctx)
 	index := f.calls
 	f.calls++
 	f.messages = append(f.messages, append([]types.Message(nil), messages...))

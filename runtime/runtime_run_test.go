@@ -11,6 +11,24 @@ import (
 	"nekocode/runtime/internal/core"
 )
 
+func TestRuntimeBindsItsOwnExecutionIdentity(t *testing.T) {
+	var got protocol.ExecutionIdentity
+	rt := New(RunnerFunc(func(ctx context.Context, _ string, _ RunHost) (string, error) {
+		got = protocol.ExecutionFromContext(ctx)
+		return "done", nil
+	}), ServiceGroups{})
+	defer rt.Close()
+	caller := protocol.WithExecutionIdentity(t.Context(), protocol.ExecutionIdentity{RunID: "old-run", TaskID: "old-child", AttemptID: "old-attempt"})
+	id, err := rt.StartRun(caller, Input{Text: "question"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, rt, id)
+	if got != (protocol.ExecutionIdentity{RunID: string(id)}) {
+		t.Fatalf("runtime inherited stale execution scope: %+v", got)
+	}
+}
+
 func TestSubagentOutputCarriesAttemptAndTranscriptIdentity(t *testing.T) {
 	rt := newTestRuntime(&testBot{})
 	defer rt.Close()

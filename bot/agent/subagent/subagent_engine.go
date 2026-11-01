@@ -259,10 +259,11 @@ func profileAllowsCall(allowed map[string]struct{}, call core.ToolCallItem) bool
 }
 
 func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []string, workflow string, addTokens func(int, int), recordCall func(types.StreamUsage), sessionID string, phase func(string), output RunConfig) ([]core.ToolCallItem, string, error) {
+	ctx = protocol.WithPolicyConfiguration(ctx, output.guard.Configuration())
 	toolDefs := e.filteredToolDefs(allowed)
 	request := ctxmgr.ModelRequest{Tools: toolDefs, OutputTokens: provider.MaxOutputTokensFor(e.llmClient)}
 	if workflow != "" {
-		request.ExtraMessages = []types.Message{{Role: "user", Content: workflow}}
+		request.ExtraMessages = []types.Message{{Role: "user", Content: workflow, Source: types.MessageSourceSkillWorkflow}}
 	}
 	messages, err := mgr.PrepareRequest(ctx, request)
 	if err != nil {

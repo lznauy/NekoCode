@@ -55,7 +55,10 @@ type RunConfig struct {
 	ResumeContext     *ctxmgr.ManagerSnapshot
 	IsolatedWorkspace bool
 	SubagentID        string
-	SaveContext       func(ctxmgr.ManagerSnapshot, string, string, AttemptUsage) error
+	// AttemptID is assigned by the application that owns durable attempts.
+	// An empty value means no durable attempt, never an inherited parent attempt.
+	AttemptID   string
+	SaveContext func(ctxmgr.ManagerSnapshot, string, string, AttemptUsage) error
 
 	Prompt              string
 	Profile             Profile

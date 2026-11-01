@@ -200,28 +200,25 @@ func (m *Manager) summarizeStreamOnce(ctx context.Context, client provider.LLM, 
 	// failure is diagnosable from the message alone.
 	usage.Normalize()
 	m.recordLLMUsage(usage)
-	m.writeCompactionCall(client, usage, start, err)
+	m.writeCompactionCall(ctx, client, usage, start, err)
 	return summary.String(), err
 }
 
-func (m *Manager) writeCompactionCall(client provider.LLM, usage types.StreamUsage, start time.Time, callErr error) {
-	rec := calllog.Record{TS: time.Now(), Source: "compaction", DurMs: time.Since(start).Milliseconds()}
+func (m *Manager) writeCompactionCall(ctx context.Context, client provider.LLM, usage types.StreamUsage, start time.Time, callErr error) {
 	m.usageMu.RLock()
 	sessionIDProvider := m.sessionIDProvider
 	m.usageMu.RUnlock()
+	sessionID := ""
 	if sessionIDProvider != nil {
-		rec.SessionID = sessionIDProvider()
+		sessionID = sessionIDProvider()
 	}
-	rec.SetUsage(usage)
+	rec := calllog.NewRecord(ctx, "compaction", sessionID, start)
+	var meta *types.RequestMeta
 	if source, ok := client.(interface{ RequestMeta() types.RequestMeta }); ok {
-		meta := source.RequestMeta()
-		rec.Model = meta.Model
-		rec.Protocol = meta.Protocol
-		rec.BaseURL = calllog.SafeBaseURL(meta.BaseURL)
-		rec.RequestedEffort = meta.RequestedEffort
-		rec.EffectiveEffort = meta.EffectiveEffort
+		value := source.RequestMeta()
+		meta = &value
 	}
-	rec.Err = calllog.ErrorSummary(callErr)
+	rec.SetOutcome(usage, meta, callErr)
 	writeCompactionRecord(rec)
 }
 

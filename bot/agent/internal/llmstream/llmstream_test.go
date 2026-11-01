@@ -8,6 +8,7 @@ import (
 
 	"nekocode/bot/calllog"
 	"nekocode/bot/provider/types"
+	"nekocode/protocol"
 )
 
 type fakeStreamClient struct {
@@ -54,6 +55,7 @@ func TestWriteCallRecordAssemblesEvidence(t *testing.T) {
 		},
 	}
 	opts := LLMCallOptions{
+		Ctx:       protocol.WithExecutionIdentity(t.Context(), protocol.ExecutionIdentity{RunID: "run", AttemptID: "attempt"}),
 		Source:    "main",
 		SessionID: "session-a",
 		Diagnostics: func() calllog.PrefixDiag {
@@ -67,6 +69,9 @@ func TestWriteCallRecordAssemblesEvidence(t *testing.T) {
 
 	if got.Source != "main" || got.SessionID != "session-a" || got.Model != "m" || got.Protocol != "openai" {
 		t.Errorf("request evidence = %+v", got)
+	}
+	if got.Execution.RunID != "run" || got.Execution.AttemptID != "attempt" || got.CallID == "" {
+		t.Fatalf("physical model call lost execution identity: %+v", got)
 	}
 	if got.RequestedEffort != "high" || got.EffectiveEffort != "high" {
 		t.Errorf("reasoning evidence = %+v", got)

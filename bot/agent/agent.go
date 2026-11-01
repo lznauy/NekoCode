@@ -168,7 +168,7 @@ func (a *Agent) RunWithCallbacks(ctx context.Context, input string, images []typ
 }
 
 func (a *Agent) getCtx() context.Context {
-	return a.life.Context()
+	return protocol.WithExecutionIdentity(a.life.Context(), a.run.identity)
 }
 
 // Steer retains the original fire-and-forget API for downstream callers.

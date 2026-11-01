@@ -239,6 +239,7 @@ func (h runHost) Ask(request QuestionRequest) QuestionReply {
 }
 
 func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runLease, execution *runExecution, bindLazySession bool) {
+	ctx = protocol.WithExecutionIdentity(ctx, protocol.ExecutionIdentity{RunID: string(runID)})
 	stopMetricsUpdates := func() {}
 	withMetrics := false
 	defer func() {

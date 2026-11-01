@@ -1,0 +1,91 @@
+package subagent
+
+import (
+	"strings"
+	"testing"
+
+	"nekocode/bot/extension/tool"
+	"nekocode/bot/policy"
+	"nekocode/bot/provider/types"
+	"nekocode/protocol"
+)
+
+func TestExecutionIdentitySeparatesAttemptsAndPreservesParent(t *testing.T) {
+	model := &scriptedLLM{scripts: [][]types.StreamToken{completionScript(), completionScript(), completionScript()}}
+	engine := New(Config{LLM: model, Tools: tools.New()})
+	parent := protocol.ExecutionIdentity{RunID: "parent-run", TaskID: "parent-task", AttemptID: "parent-attempt"}
+	ctx := protocol.WithExecutionIdentity(t.Context(), parent)
+	cfg := RunConfig{SubagentID: "task", Prompt: "check", Profile: Profile{Name: "explore"}}
+	for _, id := range []string{"first-attempt", "second-attempt"} {
+		cfg.AttemptID = id
+		if _, err := engine.Run(ctx, cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := protocol.ExecutionFromContext(model.contexts[0])
+	second := protocol.ExecutionFromContext(model.contexts[1])
+	if first.RunID != parent.RunID || second.RunID != parent.RunID || first.TaskID != cfg.SubagentID || first.AttemptID == "" || second.AttemptID == "" || first.AttemptID == second.AttemptID {
+		t.Fatalf("child attempts reused or lost identity: %+v / %+v", first, second)
+	}
+	if protocol.ExecutionFromContext(ctx) != parent {
+		t.Fatal("child mutated its parent's execution scope")
+	}
+	cfg.AttemptID = ""
+	if _, err := engine.Run(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := protocol.ExecutionFromContext(model.contexts[2]); got != (protocol.ExecutionIdentity{RunID: parent.RunID, TaskID: cfg.SubagentID}) {
+		t.Fatalf("engine invented or inherited a durable attempt: %+v", got)
+	}
+}
+
+func TestSubagentPolicyDiagnosticUsesGuardNotParent(t *testing.T) {
+	model := &scriptedLLM{scripts: [][]types.StreamToken{completionScript()}}
+	engine := New(Config{LLM: model, Tools: tools.New()})
+	parent := policy.New()
+	parent.Register(policy.Hook{Name: "custom-parent", Point: policy.PreModel, On: func(policy.State) *policy.Result { return nil }})
+	ctx := protocol.WithPolicyConfiguration(t.Context(), parent.Configuration())
+	if _, err := engine.Run(ctx, RunConfig{Prompt: "check", Profile: Profile{Name: "explore"}, Policy: parent}); err != nil {
+		t.Fatal(err)
+	}
+	got := protocol.PolicyConfigurationFromContext(model.contexts[0])
+	expected := newRunGuard().Configuration()
+	if got != expected || got.Hash == parent.Configuration().Hash {
+		t.Fatalf("subagent diagnostic inherited parent policy: %+v", got)
+	}
+}
+
+func TestSubagentBindsActualProfileAndSkillRequest(t *testing.T) {
+	model := &scriptedLLM{scripts: [][]types.StreamToken{completionScript(), completionScript()}}
+	engine := New(Config{LLM: model, Tools: tools.New()})
+	cfg := RunConfig{Prompt: "check", Profile: Profile{Name: "explore", Skills: []string{"selected"}}, SkillContents: []string{"workflow-sentinel"}}
+	parent := protocol.WithProfileConfiguration(t.Context(), "parent-profile")
+	for _, limit := range []int{1, 2} {
+		cfg.Profile.MaxSteps = limit
+		if _, err := engine.Run(parent, cfg); err != nil {
+			t.Fatal(err)
+		}
+		ctx := model.contexts[len(model.contexts)-1]
+		if protocol.ProfileConfigurationFromContext(ctx) != cfg.Profile.ConfigurationHash() {
+			t.Fatal("subagent lost actual profile declaration")
+		}
+		present := false
+		for _, msg := range model.messages[len(model.messages)-1] {
+			if strings.Contains(msg.Content, "workflow-sentinel") {
+				present = true
+				if msg.Role != "user" || msg.Source != types.MessageSourceSkillWorkflow {
+					t.Fatal("workflow diagnostic provenance lost")
+				}
+			}
+		}
+		if !present {
+			t.Fatal("workflow missing from actual model request")
+		}
+	}
+	if protocol.ProfileConfigurationFromContext(model.contexts[0]) == protocol.ProfileConfigurationFromContext(model.contexts[1]) {
+		t.Fatal("profile limit change invisible")
+	}
+	if protocol.ProfileConfigurationFromContext(parent) != "parent-profile" {
+		t.Fatal("child mutated parent diagnostic")
+	}
+}

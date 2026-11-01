@@ -14,6 +14,7 @@ const defaultMaxRetries = 2
 
 // runState holds the mutable state of a single Run.
 type runState struct {
+	identity    protocol.ExecutionIdentity
 	hookStopped bool
 	// Progress and termination.
 	step       int               // current iteration, capped by maxAgentSteps
