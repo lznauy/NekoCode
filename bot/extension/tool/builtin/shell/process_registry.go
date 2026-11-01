@@ -14,8 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/sandbox"
-	"nekocode/bot/extension/tool/runtime/toolutil"
 )
 
 const (
@@ -60,13 +60,13 @@ type startRequest struct {
 // start launches a command and observes it for a short runtime-controlled
 // window. The caller context only governs this startup observation; after a
 // managed task handle is returned, the registry owns the process lifetime.
-func (r *taskRegistry) start(ctx context.Context, req startRequest) (*shellTask, string, error) {
+func (r *taskRegistry) start(ctx context.Context, req startRequest) (processResult, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, "", err
+		return processResult{}, err
 	}
 	name, err := r.reserveIdentity(req.owner, req.name)
 	if err != nil {
-		return nil, "", err
+		return processResult{}, err
 	}
 
 	procCtx, cancel := context.WithCancel(r.lifecycle)
@@ -79,7 +79,7 @@ func (r *taskRegistry) start(ctx context.Context, req startRequest) (*shellTask,
 	if err != nil {
 		cancel()
 		r.releaseReservation(req.owner, name)
-		return nil, "", err
+		return processResult{}, err
 	}
 
 	t := &shellTask{
@@ -109,18 +109,18 @@ func (r *taskRegistry) start(ctx context.Context, req startRequest) (*shellTask,
 			r.remove(t)
 		} else {
 			t.completeObservation(logsReturnBytes)
-			return nil, "", fmt.Errorf("%w; process %q could not be confirmed stopped", err, name)
+			return processResult{}, fmt.Errorf("%w; process %q could not be confirmed stopped", err, name)
 		}
-		return nil, "", err
+		return processResult{}, err
 	}
 	if !t.isRunning() {
 		waitTaskDrained(t, 500*time.Millisecond)
 	}
-	observed, managed := t.completeObservation(logsReturnBytes)
-	if !managed {
+	observed := t.completeObservation(logsReturnBytes)
+	if !observed.info.managed {
 		r.remove(t)
 	}
-	return t, toolutil.StripAnsi(string(observed)), nil
+	return observed, nil
 }
 
 func (r *taskRegistry) reserveIdentity(owner, requested string) (string, error) {
@@ -243,9 +243,12 @@ func taskStatusFromWait(err error) (taskStatus, int) {
 			}
 			return taskExited, ws.ExitStatus()
 		}
-		return taskExited, exitErr.ExitCode()
+		if code := exitErr.ExitCode(); code >= 0 {
+			return taskExited, code
+		}
+		return taskUnknown, -1
 	}
-	return taskExited, 1
+	return taskUnknown, -1
 }
 
 func (r *taskRegistry) wait(ctx context.Context, owner, ref string, max time.Duration) (processResult, error) {
@@ -265,7 +268,7 @@ func (r *taskRegistry) wait(ctx context.Context, owner, ref string, max time.Dur
 		waitTaskDrained(t, 500*time.Millisecond)
 	}
 	t.scheduleRemoval()
-	return newProcessResult(t, reason, t.snapshotAndAcknowledge(logsReturnBytes)), nil
+	return t.snapshotAndAcknowledge(logsReturnBytes, reason), nil
 }
 
 func (r *taskRegistry) watch(ctx context.Context, owner, ref, event string, max time.Duration) (processResult, error) {
@@ -288,20 +291,20 @@ func (r *taskRegistry) watch(ctx context.Context, owner, ref, event string, max 
 	defer timer.Stop()
 	for {
 		if output, ok := t.takeNewOutput(logsReturnBytes); ok {
-			return newProcessResult(t, "output", output), nil
+			return output, nil
 		}
 		if !t.isRunning() {
 			waitTaskDrained(t, 500*time.Millisecond)
 			if output, ok := t.takeNewOutput(logsReturnBytes); ok {
-				return newProcessResult(t, "output", output), nil
+				return output, nil
 			}
-			return newProcessResult(t, "exit", nil), nil
+			return t.result("exit"), nil
 		}
 		select {
 		case <-t.changed:
 		case <-t.done:
 		case <-timer.C:
-			return newProcessResult(t, "wait_timeout", nil), nil
+			return t.result("wait_timeout"), nil
 		case <-ctx.Done():
 			return processResult{}, ctx.Err()
 		}
@@ -318,14 +321,6 @@ func waitForEvent(ctx context.Context, done <-chan struct{}, max time.Duration) 
 		return "wait_timeout", nil
 	case <-ctx.Done():
 		return "", ctx.Err()
-	}
-}
-
-func newProcessResult(t *shellTask, reason string, output []byte) processResult {
-	return processResult{
-		info:   t.summary(),
-		output: toolutil.StripAnsi(string(output)),
-		reason: reason,
 	}
 }
 
@@ -380,12 +375,16 @@ func compactProcessText(value string, max int) string {
 	return string(runes[:max-3]) + "..."
 }
 
-func (r *taskRegistry) stop(owner, ref string) (string, error) {
+func (r *taskRegistry) stop(owner, ref string) (core.ToolOutput, error) {
 	t, err := r.task(owner, ref)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
-	return r.stopTask(t)
+	text, err := r.stopTask(t)
+	if err != nil {
+		return core.ToolOutput{}, err
+	}
+	return core.ToolOutput{Text: text, Process: t.result("stop").observation}, nil
 }
 
 func (r *taskRegistry) stopTask(t *shellTask) (string, error) {
@@ -535,6 +534,11 @@ func drainToRing(t *shellTask, reader io.Reader) {
 			t.appendLogs(buf[:n])
 		}
 		if err != nil {
+			if err != io.EOF {
+				t.mu.Lock()
+				t.readFailed = true
+				t.mu.Unlock()
+			}
 			if err != io.EOF && !isPipeClosedError(err) {
 				t.appendLogs([]byte(fmt.Sprintf("[read error: %v]\n", err)))
 			}

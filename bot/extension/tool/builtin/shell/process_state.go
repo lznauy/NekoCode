@@ -4,6 +4,9 @@ import (
 	"io"
 	"sync"
 	"time"
+
+	"nekocode/bot/extension/tool/runtime/core"
+	"nekocode/bot/extension/tool/runtime/toolutil"
 )
 
 type taskStatus int
@@ -13,6 +16,7 @@ const (
 	taskExited
 	taskKilled
 	taskTimeout
+	taskUnknown
 )
 
 func (s taskStatus) String() string {
@@ -45,6 +49,7 @@ type shellTask struct {
 	managed     bool
 	endedAt     time.Time
 	exitCode    int
+	readFailed  bool
 	logs        []byte
 	logStart    uint64
 	logEnd      uint64
@@ -116,15 +121,14 @@ func (t *shellTask) requestTimeout() bool {
 	return true
 }
 
-func (t *shellTask) completeObservation(max int) ([]byte, bool) {
+func (t *shellTask) completeObservation(max int) processResult {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.status != taskRunning {
-		return tailCopy(t.logs, max), false
+	if t.status == taskRunning {
+		t.managed = true
+		t.watchOffset = t.logEnd
 	}
-	t.managed = true
-	t.watchOffset = t.logEnd
-	return tailCopy(t.logs, max), true
+	return t.resultLocked("", tailCopy(t.logs, max), true)
 }
 
 func (t *shellTask) isRunning() bool {
@@ -179,31 +183,48 @@ func (t *shellTask) shouldRemove(now time.Time) bool {
 	return t.status != taskRunning && !t.removeAt.IsZero() && now.After(t.removeAt)
 }
 
-func (t *shellTask) snapshotAndAcknowledge(max int) []byte {
+func (t *shellTask) snapshotAndAcknowledge(max int, reason string) processResult {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.watchOffset = t.logEnd
-	return tailCopy(t.logs, max)
+	return t.resultLocked(reason, tailCopy(t.logs, max), true)
 }
 
-func (t *shellTask) takeNewOutput(max int) ([]byte, bool) {
+func (t *shellTask) takeNewOutput(max int) (processResult, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	start := t.watchOffset
+	if start >= t.logEnd {
+		return processResult{}, false
+	}
 	if start < t.logStart {
 		start = t.logStart
 	}
-	if start >= t.logEnd {
-		return nil, false
-	}
-	offset := int(start - t.logStart)
-	out := t.logs[offset:]
-	if max > 0 && len(out) > max {
-		out = out[len(out)-max:]
-	}
-	copyOut := append([]byte(nil), out...)
+	output := tailCopy(t.logs[int(start-t.logStart):], max)
+	full := t.watchOffset == 0
 	t.watchOffset = t.logEnd
-	return copyOut, true
+	return t.resultLocked("output", output, full), true
+}
+
+func (t *shellTask) result(reason string) processResult {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.resultLocked(reason, nil, true)
+}
+
+// Caller holds mu: output, state and completeness describe the same sample.
+func (t *shellTask) resultLocked(reason string, output []byte, fromStart bool) processResult {
+	complete := false
+	select {
+	case <-t.drained:
+		complete = t.status != taskRunning && !t.readFailed && fromStart && uint64(len(output)) == t.logEnd
+	default:
+	}
+	observation := core.ProcessObservation{State: t.status.String(), OutputComplete: complete}
+	if t.status == taskExited {
+		observation.ExitCode, observation.ExitCodeKnown = t.exitCode, true
+	}
+	return processResult{info: t.summaryLocked(), output: toolutil.StripAnsi(string(output)), reason: reason, observation: observation}
 }
 
 func tailCopy(data []byte, max int) []byte {
@@ -219,6 +240,10 @@ func tailCopy(data []byte, max int) []byte {
 func (t *shellTask) summary() processInfo {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.summaryLocked()
+}
+
+func (t *shellTask) summaryLocked() processInfo {
 	duration := time.Since(t.startedAt)
 	if t.status != taskRunning {
 		duration = t.endedAt.Sub(t.startedAt)
@@ -249,7 +274,8 @@ type processInfo struct {
 }
 
 type processResult struct {
-	info   processInfo
-	output string
-	reason string
+	observation core.ProcessObservation
+	info        processInfo
+	output      string
+	reason      string
 }

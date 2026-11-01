@@ -71,7 +71,7 @@ func (t *ProcessTool) Execute(ctx context.Context, args map[string]any) (core.To
 		if err != nil {
 			return core.ToolOutput{}, err
 		}
-		return core.ToolOutput{Text: formatProcessResult(result)}, nil
+		return processToolOutput(result), nil
 	case "watch":
 		event, err := toolutil.RequireStringArg(args, "event")
 		if err != nil {
@@ -81,10 +81,9 @@ func (t *ProcessTool) Execute(ctx context.Context, args map[string]any) (core.To
 		if err != nil {
 			return core.ToolOutput{}, err
 		}
-		return core.ToolOutput{Text: formatProcessResult(result)}, nil
+		return processToolOutput(result), nil
 	default: // stop; other values were rejected above.
-		toolText, toolErr := registry.stop(owner, ref)
-		return core.ToolOutput{Text: toolText}, toolErr
+		return registry.stop(owner, ref)
 	}
 }
 
@@ -122,4 +121,8 @@ func formatProcessList(tasks []processInfo) string {
 			task.name, task.status, task.duration, compactProcessText(task.command, 60))
 	}
 	return b.String()
+}
+
+func processToolOutput(result processResult) core.ToolOutput {
+	return core.ToolOutput{Text: formatProcessResult(result), Process: result.observation}
 }

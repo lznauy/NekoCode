@@ -108,7 +108,8 @@ func (s *OutputStore) PreserveOutput(content string) (string, error) {
 // Text never contains a framework-generated artifact header.
 type ToolOutput struct {
 	// ReadID is a local delivery receipt, never a provider or persisted field.
-	ReadID   string `json:"-"`
+	ReadID   string             `json:"-"`
+	Process  ProcessObservation `json:"process,omitzero"`
 	Text     string
 	Artifact protocol.ToolOutputArtifact
 }
@@ -143,6 +144,7 @@ func (s *OutputStore) BoundOutput(output ToolOutput, limit int) (ToolOutput, err
 		return ToolOutput{}, fmt.Errorf("output budget %d cannot hold a complete result reference", limit)
 	}
 	output.Text = LimitOutput(output.Text, limit-len(header))
+	output.Process.OutputComplete = false
 	return output, nil
 }
 

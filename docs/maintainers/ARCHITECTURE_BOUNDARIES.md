@@ -75,6 +75,14 @@ Memory/Archive 只保存原文，在 Context 的请求边界统一投影为带�
 
 委托任务的完成、部分完成和失败状态必须保留；失败和取消向上返回原始错误链，已有证据随错误交付。部分结果即使没有错误也明确标注尚未完成。
 
+## 结构化进程观察
+
+Shell 与 process 的 ToolOutput.Process 携带 ProcessObservation 值，executor 传入 ToolCallResult，并在 TextOutput 中保留。State 是既有进程状态 running/exited/killed/timeout/unknown；只有正常退出才设置 ExitCodeKnown，零值退出码本身不能证明成功。未知 Wait 错误不补造退出码 1。非零退出与工具层 error 独立，nil error 只表示工具调用返回，不表示命令成功。
+
+状态、展示信息与输出在原 shellTask 锁内一起采样。OutputComplete 仅在进程已结束、输出管道读完、没有读取异常且当前样本含从起点开始的全部捕获字节时为 true；运行中、环形日志覆盖、预览裁剪和 watch 增量不能宣称完整。该标记针对格式化前的捕获输出，不保证原始字节经 ANSI/换行处理后仍相同。executor 再裁剪或保存失败会清除完整标记，已观察的状态和退出码不改写。process list 不生成单个进程观察，未启动或未提供观察的工具保持空值。
+
+这批只提供工具到 executor 的运行期事实，不增加持久化字段、事件仓库或权限；模型展示仍沿用原文本。它尚不是执行凭证，也未进入 session、recording 或 evidence 查询。凭证应在实际执行边界使用这些事实，不能从展示文本或 nil error 推导执行成功。
+
 ## 协议载荷
 
 新增 Runtime 事件时，必须在 `runtime/internal/core/event_payload.go` 登记其单一载荷 codec，并在事件契约场景中覆盖其外部可观察语义。记录回放、headless 与 ACP 对已知事件使用相同的载荷类型校验；未知事件保留前向兼容。适配器不应复制 Runtime 状态转换逻辑。

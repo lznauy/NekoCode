@@ -93,36 +93,34 @@ func (t *ShellTool) Parameters() []core.Parameter {
 }
 
 func (t *ShellTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
-	toolText, toolErr := t.run(ctx, args, core.PermissionRequest{})
-	return core.ToolOutput{Text: toolText}, toolErr
+	return t.run(ctx, args, core.PermissionRequest{})
 }
 
 func (t *ShellTool) ExecuteWithPermission(ctx context.Context, args map[string]any, grant core.PermissionRequest) (core.ToolOutput, error) {
-	toolText, toolErr := t.run(ctx, args, grant)
-	return core.ToolOutput{Text: toolText}, toolErr
+	return t.run(ctx, args, grant)
 }
 
-func (t *ShellTool) run(ctx context.Context, args map[string]any, grant core.PermissionRequest) (string, error) {
+func (t *ShellTool) run(ctx context.Context, args map[string]any, grant core.PermissionRequest) (core.ToolOutput, error) {
 	command, err := toolutil.RequireStringArg(args, "command")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	command = strings.TrimSpace(command)
 	if command == "" {
-		return "", fmt.Errorf("command is required")
+		return core.ToolOutput{}, fmt.Errorf("command is required")
 	}
 
 	workspace, err := workspacectx.WorkingDirectory(ctx)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	reqProfile := t.effectiveSandboxRequest(args)
 	if reqProfile.domainErr != nil {
-		return "", reqProfile.domainErr
+		return core.ToolOutput{}, reqProfile.domainErr
 	}
 	requestedCaps := reqProfile.permissionCapabilities()
 	if hasCapability(requestedCaps, core.CapProcessHost) && !hasCapability(grant.Capabilities, core.CapProcessHost) {
-		return "", permissionRequired(
+		return core.ToolOutput{}, permissionRequired(
 			"shell command requests unsandboxed host execution",
 			// "project" (not "once"): host grants are rememberable — jev-safe
 			// can grant them automatically, so an explicit user "always allow"
@@ -131,24 +129,24 @@ func (t *ShellTool) run(ctx context.Context, args map[string]any, grant core.Per
 		)
 	}
 	if len(requestedCaps) > 0 && !containsAllCapabilities(grant.Capabilities, requestedCaps) {
-		return "", core.RequiredPermissionError{Request: *t.PermissionPlan(args, workspace)}
+		return core.ToolOutput{}, core.RequiredPermissionError{Request: *t.PermissionPlan(args, workspace)}
 	}
 
 	host := hasCapability(grant.Capabilities, core.CapProcessHost)
 	if reqProfile.OutboundDomains != nil && host {
-		return "", fmt.Errorf(`outbound_domains cannot be used with host execution: host mode cannot enforce domain restrictions; use sandbox_mode="workspace-write" or "read-only". If unrestricted host execution is intended, remove outbound_domains from both the tool arguments and matching permissions.sandbox rules (an empty array still requires isolation)`)
+		return core.ToolOutput{}, fmt.Errorf(`outbound_domains cannot be used with host execution: host mode cannot enforce domain restrictions; use sandbox_mode="workspace-write" or "read-only". If unrestricted host execution is intended, remove outbound_domains from both the tool arguments and matching permissions.sandbox rules (an empty array still requires isolation)`)
 	}
 	if len(reqProfile.OutboundDomains) > 0 {
 		have, domainErr := netpolicy.FromDetails(grant.Details)
 		if domainErr != nil || !netpolicy.Covers(have, reqProfile.OutboundDomains) {
-			return "", fmt.Errorf("network grant does not cover requested outbound domains")
+			return core.ToolOutput{}, fmt.Errorf("network grant does not cover requested outbound domains")
 		}
 	}
 	var profile sandbox.Profile
 	if !host {
 		profile, err = buildProfileFromRequest(workspace, reqProfile, grant.Capabilities)
 		if err != nil {
-			return "", err
+			return core.ToolOutput{}, err
 		}
 		if ruleProfile, ok := t.sandboxProfileFor(args); ok {
 			if reqProfile.OutboundDomains == nil && ruleProfile.Network && !reqProfile.Network && hasCapability(grant.Capabilities, core.CapNetOutbound) {
@@ -156,15 +154,15 @@ func (t *ShellTool) run(ctx context.Context, args map[string]any, grant core.Per
 			}
 		}
 		if err := applyWorkspaceRoots(ctx, &profile, workspace); err != nil {
-			return "", err
+			return core.ToolOutput{}, err
 		}
 	}
 	timeout, err := optionalDurationArg(args, "timeout_ms")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 
-	task, initial, err := t.registryOnce().start(ctx, startRequest{
+	initial, err := t.registryOnce().start(ctx, startRequest{
 		name:       optStringArg(args, "name"),
 		owner:      t.CurrentSessionID(),
 		command:    command,
@@ -177,18 +175,18 @@ func (t *ShellTool) run(ctx context.Context, args map[string]any, grant core.Per
 	if err != nil {
 		var unavailable sandbox.UnavailableError
 		if errors.As(err, &unavailable) {
-			return "", hostPermission(err.Error(), workspace, nil)
+			return core.ToolOutput{}, hostPermission(err.Error(), workspace, nil)
 		}
-		return "", fmt.Errorf("failed to start shell command: %w", err)
+		return core.ToolOutput{}, fmt.Errorf("failed to start shell command: %w", err)
 	}
-	info := task.summary()
+	info := initial.info
 	if info.managed {
-		return formatManagedShellRun(info.name, initial), nil
+		return core.ToolOutput{Text: formatManagedShellRun(info.name, initial.output), Process: initial.observation}, nil
 	}
 	if info.status == "done" {
-		return initial, nil
+		return core.ToolOutput{Text: initial.output, Process: initial.observation}, nil
 	}
-	return formatProcessResult(processResult{info: info, output: initial}), nil
+	return processToolOutput(initial), nil
 }
 
 func (t *ShellTool) initialWaitDuration() time.Duration {

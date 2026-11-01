@@ -145,6 +145,8 @@ defer toolbox.Close()
 
 短输出用 `core.ToolOutput{Text: ...}`。大结果应接入执行器的有界输出与文件引用机制，参考 [输出类型](../../bot/extension/tool/runtime/core/output_budget.go)，不要把无限量数据塞进模型上下文。授权依据来自结构化工具结果与执行上下文，不来自输出中一句“已读取”或“已授权”。
 
+工具有真实的进程状态时，可通过 `ToolOutput.Process` 返回 `core.ProcessObservation`；executor 在正常返回、错误与权限重试结果中保留它。`ExitCodeKnown` 只能来自真实正常退出；`OutputComplete` 只能表示当前样本包含全部已捕获输出，未知时保持 false。没有进程事实的工具保持零值，不能根据日志里的“成功”文字或 nil error 填充。这是运行期事实，目前不持久化，也不自动改变工具 error 或模型展示。
+
 ## 六、验证建议
 
 至少覆盖正常输入、缺失或错误类型、超限输入、已取消 context。访问文件或网络的工具还需覆盖越界路径、权限拒绝、超时以及副作用失败。

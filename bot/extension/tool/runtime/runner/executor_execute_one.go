@@ -26,10 +26,12 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 			result.Error = "cannot preserve tool result: " + err.Error()
 			result.Output = ""
 			result.Artifact = protocol.ToolOutputArtifact{}
+			result.Process.OutputComplete = false
 			return
 		}
 		bounded.Text = textutil.NormalizeTerminalOutput(bounded.Text)
 		result.Artifact = bounded.Artifact
+		result.Process = bounded.Process
 		if result.Error != "" {
 			result.Error, result.Output = bounded.Text, ""
 		} else {
@@ -129,7 +131,7 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 		escOut, escOk, escReason, escCause := e.tryPermissionEscalation(ctx, entry.Privileged, tc, execErr, confirmFn, preApproved, preApproval != nil, dec.jevSafe)
 		if escOk {
 			e.invalidateMutatedPaths(tc.Name, paths)
-			return core.ToolCallResult{ID: tc.ID, Name: resultName, Output: escOut.Text, Artifact: escOut.Artifact, ReadID: escOut.ReadID}
+			return core.ToolCallResult{ID: tc.ID, Name: resultName, Output: escOut.Text, Artifact: escOut.Artifact, ReadID: escOut.ReadID, Process: escOut.Process}
 		}
 		if escReason == failRetryError {
 			output = escOut
@@ -138,11 +140,11 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 		if output.Text != "" {
 			failure += "\nOutput:\n" + output.Text
 		}
-		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: failure, Artifact: output.Artifact}
+		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: failure, Artifact: output.Artifact, Process: output.Process}
 	}
 
 	e.invalidateMutatedPaths(tc.Name, paths)
-	return core.ToolCallResult{ID: tc.ID, Name: resultName, Output: output.Text, Artifact: output.Artifact, ReadID: output.ReadID}
+	return core.ToolCallResult{ID: tc.ID, Name: resultName, Output: output.Text, Artifact: output.Artifact, ReadID: output.ReadID, Process: output.Process}
 }
 
 func (e *Executor) captureMutationPaths(tc core.ToolCallItem) ([]string, error) {

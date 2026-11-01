@@ -66,6 +66,9 @@ func TestShellRunCompletesWithinObservation(t *testing.T) {
 	if strings.Contains(out.Render(), "task:") || strings.Contains(out.Render(), "status:") || strings.Contains(out.Render(), "exit_code:") {
 		t.Fatalf("completed run should not include process metadata:\n%s", out.Render())
 	}
+	if out.Process.State != "exited" || !out.Process.ExitCodeKnown || out.Process.ExitCode != 0 {
+		t.Fatalf("missing structured exit: %+v", out.Process)
+	}
 	if !strings.Contains(out.Render(), "shell-done") {
 		t.Fatalf("unexpected output:\n%s", out.Render())
 	}
@@ -86,6 +89,9 @@ func TestShellRunReturnsManagedTaskThenProcessWaits(t *testing.T) {
 		t.Fatalf("expected managed task, got:\n%s", out.Render())
 	}
 
+	if out.Process.State != "running" || out.Process.ExitCodeKnown || out.Process.OutputComplete {
+		t.Fatalf("running command claimed completion: %+v", out.Process)
+	}
 	wait, err := processTool.Execute(context.Background(), map[string]any{
 		"action": "wait",
 		"task":   "download",
@@ -95,6 +101,9 @@ func TestShellRunReturnsManagedTaskThenProcessWaits(t *testing.T) {
 	}
 	if !strings.Contains(wait.Render(), "status: done") || !strings.Contains(wait.Render(), "reason: exit") || !strings.Contains(wait.Render(), "shell-later") {
 		t.Fatalf("unexpected wait output:\n%s", wait.Render())
+	}
+	if wait.Process.State != "exited" || !wait.Process.ExitCodeKnown || wait.Process.ExitCode != 0 {
+		t.Fatalf("missing structured wait: %+v", wait.Process)
 	}
 	if strings.Contains(wait.Render(), "elapsed:") {
 		t.Fatalf("wait output should omit elapsed metadata:\n%s", wait.Render())
@@ -119,6 +128,9 @@ func TestShellHardTimeoutStopsTask(t *testing.T) {
 	wait, err := processTool.Execute(context.Background(), map[string]any{"action": "wait", "task": "bounded"})
 	if err != nil {
 		t.Fatalf("wait: %v", err)
+	}
+	if wait.Process.State != "timeout" || wait.Process.ExitCodeKnown {
+		t.Fatalf("timeout invented exit code: %+v", wait.Process)
 	}
 	if !strings.Contains(wait.Render(), "status: timeout") || !strings.Contains(wait.Render(), "command timed out") {
 		t.Fatalf("expected hard timeout status, got:\n%s", wait.Render())

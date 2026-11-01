@@ -113,3 +113,18 @@ func TestChildOutputStoresUseDistinctNamespaces(t *testing.T) {
 		t.Fatal("accepted path traversal")
 	}
 }
+
+func TestBoundOutputDoesNotClaimCompleteProcessPreview(t *testing.T) {
+	store := NewOutputStore(t.TempDir())
+	original := ToolOutput{Text: strings.Repeat("output", 1000), Process: ProcessObservation{State: "exited", ExitCodeKnown: true, OutputComplete: true}}
+	bounded, err := store.BoundOutput(original, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bounded.Process.OutputComplete || !bounded.Process.ExitCodeKnown || bounded.Process.State != "exited" {
+		t.Fatalf("wrong bounded facts: %+v", bounded.Process)
+	}
+	if original.Process.OutputComplete != true {
+		t.Fatal("mutated source observation")
+	}
+}

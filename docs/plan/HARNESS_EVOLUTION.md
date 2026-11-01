@@ -45,7 +45,7 @@
 
 ### PR 6：执行证据与子代理交接
 
-**已有基础：** ToolCallResult、有效工具身份 resolver、OutputStore、StepEvent、录制、子代理 submit_result 和 attempt transcript。
+**已有基础：** ToolCallResult、有效工具身份 resolver、OutputStore、StepEvent、录制、子代理 submit_result 和 attempt transcript。Shell/process 已提供[结构化进程观察](../maintainers/ARCHITECTURE_BOUNDARIES.md#结构化进程观察)，executor 保留真实退出码与保守输出完整性；目前仅为运行期事实，尚未形成或持久化 receipt。
 
 **改动方案：**
 
