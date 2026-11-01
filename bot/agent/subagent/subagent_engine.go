@@ -204,7 +204,7 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 		name, args := calls[i].Effective()
 		content := r.EffectiveOutput()
 		batch[i] = ctxmgr.ToolResultMsg{
-			Message:         types.Message{Content: r.TextOutput().Text, ToolOutput: r.Artifact, ToolCallID: r.ID, IsError: r.Error != ""},
+			Message:         types.Message{Content: r.TextOutput().Text, ToolOutput: r.Artifact, ToolCallID: r.ID, IsError: r.Error != "", ReadID: r.ReadID},
 			ToolName:        name,
 			AllowOutputFile: executor.AllowOutputFile,
 		}
@@ -269,6 +269,7 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 	if err != nil {
 		return nil, "", err
 	}
+	toolpolicy.ObserveReadContext(ctx, messages)
 
 	base, tail, _ := mgr.TranscriptTail()
 	messageSeq := base + len(tail) + 1

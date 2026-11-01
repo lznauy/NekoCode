@@ -15,5 +15,5 @@ Default behavior:
 Prefer copying enough unchanged context into oldString to make the match unique. Do not use line numbers, read windows, revision tags, or structured edit intents.
 
 Constraints:
-- Existing files must be inspected before editing. The policy blocks an edit when current content is not established by a prior read or a sufficiently specific oldString anchor.
+- Read the current file version before editing. An oldString anchor alone does not replace a read. Read again after any modification or context compaction; if output is truncated, read smaller ranges.
 - Writes are committed atomically: a failed edit leaves the original file unchanged. Use `/rewind` to undo a completed edit or conversation turn.

@@ -15,7 +15,7 @@ type ReadTool struct {
 
 func (t *ReadTool) Name() string { return "read" }
 func (t *ReadTool) Description() string {
-	return "Read file contents (text, images, PDF). Absolute path required. Use startLine/endLine for range, max 500 lines. Text output includes [path#TAG], a VIEW line with rev/window metadata for JSON edit intents, then clean lineNo:content lines."
+	return "Read file contents (text, images, PDF). Absolute path required. Use startLine/endLine for range, max 500 lines. Text output includes [path#TAG] followed by lineNo:content lines. If output is truncated, read a smaller range before editing."
 }
 
 func (t *ReadTool) Parameters() []core.Parameter {
@@ -45,7 +45,6 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) (core.ToolO
 		toolText, toolErr := t.readPDF(safePath)
 		return core.ToolOutput{Text: toolText}, toolErr
 	default:
-		toolText, toolErr := t.readTextCached(ctx, safePath, args)
-		return core.ToolOutput{Text: toolText}, toolErr
+		return t.readTextCached(ctx, safePath, args)
 	}
 }

@@ -187,3 +187,38 @@ func TestRepeatedCompactionEmitsOneStartedEventEach(t *testing.T) {
 		t.Fatalf("both Started events carry the same compaction id %q", startedIDs[0])
 	}
 }
+
+func TestCompactionInvalidatesReadReceiptsOnlyOnCommit(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint(fail), func(t *testing.T) {
+			m := New(Config{SystemPrompt: "system", Summarizer: func([]types.Message, string) (string, error) {
+				if fail {
+					return "", fmt.Errorf("summary unavailable")
+				}
+				return "<summary>Compacted context summary that replaces the hidden full conversation history.</summary>", nil
+			}})
+			for i := 0; i < 8; i++ {
+				m.Add("user", "old question")
+				m.Add("assistant", "old answer")
+			}
+			m.AddAssistant(types.Message{ToolCalls: []types.ToolCall{{ID: "read-call", Function: types.FunctionCall{Name: "read"}}}})
+			m.AddToolResultsBatch([]ToolResultMsg{{ToolName: "read", Message: types.Message{Content: "preview", ToolCallID: "read-call", ReadID: "receipt"}}})
+			applied, err := m.Summarize(context.Background())
+			if fail && (err == nil || applied) {
+				t.Fatalf("failed summary = %v, %v", applied, err)
+			}
+			if !fail && (err != nil || !applied) {
+				t.Fatalf("successful summary = %v, %v", applied, err)
+			}
+			found := false
+			for _, msg := range m.Snapshot().Messages {
+				if msg.ReadID != "" {
+					found = true
+				}
+			}
+			if found != fail {
+				t.Fatalf("receipt survived = %v, failed compaction = %v", found, fail)
+			}
+		})
+	}
+}

@@ -24,6 +24,9 @@ var SharedHTTPStreamClient = &nethttp.Client{
 }
 
 type Message struct {
+	// ReadID links a local read result to its executor's in-memory evidence.
+	// Restores/compaction invalidate it; providers and session JSON omit it.
+	ReadID             string     `json:"-"`
 	Role               string     `json:"role"`
 	Content            string     `json:"content,omitempty"`
 	ReasoningContent   string     `json:"reasoning_content,omitempty"`

@@ -165,7 +165,7 @@ func emitResultCallbacks(calls []core.ToolCallItem, blocked map[int]string, resu
 	for i, r := range results {
 		call := effectiveToolCall(calls[i])
 		content := r.EffectiveOutput()
-		msgs[i] = types.Message{Content: r.TextOutput().Text, ToolOutput: r.Artifact, ToolCallID: r.ID, IsError: r.Error != ""}
+		msgs[i] = types.Message{Content: r.TextOutput().Text, ToolOutput: r.Artifact, ToolCallID: r.ID, IsError: r.Error != "", ReadID: r.ReadID}
 		if callback != nil {
 			if _, isBlocked := blocked[i]; isBlocked {
 				continue

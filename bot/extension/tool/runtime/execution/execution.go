@@ -10,6 +10,7 @@ import (
 // ExecutionState carries mutable tool execution state that must be isolated
 // per agent/sub-agent run.
 type ExecutionState struct {
+	Reads         ReadEvidence
 	OutputStore   *core.OutputStore
 	FileCache     *FileStateCache
 	SnapshotStore *SnapshotStore

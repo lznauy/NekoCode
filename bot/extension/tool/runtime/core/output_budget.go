@@ -107,6 +107,8 @@ func (s *OutputStore) PreserveOutput(content string) (string, error) {
 // ToolOutput carries returned text and an independent artifact reference.
 // Text never contains a framework-generated artifact header.
 type ToolOutput struct {
+	// ReadID is a local delivery receipt, never a provider or persisted field.
+	ReadID   string `json:"-"`
 	Text     string
 	Artifact protocol.ToolOutputArtifact
 }

@@ -80,6 +80,9 @@ func (m *Manager) Restore(snap ManagerSnapshot) {
 	m.state.ctx.Hints = snap.Hints
 	m.state.runtimePolicy = ""
 	m.state.ctx.Messages = append([]types.Message(nil), snap.Messages...)
+	for i := range m.state.ctx.Messages {
+		m.state.ctx.Messages[i].ReadID = ""
+	}
 	m.state.transcriptBase = snap.TranscriptBase
 	m.state.transcriptLazy = snap.TranscriptLazy
 	if snap.Transcript != nil || snap.TranscriptLazy {

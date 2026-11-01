@@ -7,8 +7,10 @@ import (
 	"strings"
 
 	"nekocode/bot/agent/internal/llmstream"
+	"nekocode/bot/agent/internal/toolpolicy"
 	"nekocode/bot/contextmgr"
 	"nekocode/bot/extension/tool/runtime/core"
+	"nekocode/bot/extension/tool/runtime/execution"
 	"nekocode/bot/policy"
 	"nekocode/bot/provider"
 	"nekocode/bot/provider/types"
@@ -69,6 +71,7 @@ func (r *modelRunner) callLLMForTool() (*llmstream.LLMCallResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	toolpolicy.ObserveReadContext(execution.WithExecutionState(ctx, a.deps.toolExecutor.ExecutionState()), messages)
 
 	result, err := llmstream.CallLLMWithRetry(ctx, a.deps.llmClient, func() llmstream.LLMCallOptions {
 		return llmstream.LLMCallOptions{

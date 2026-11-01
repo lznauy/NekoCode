@@ -197,6 +197,9 @@ func (a *Agent) Reset() {
 	a.life.ResetContextIfCanceled()
 	a.run.reset()
 	a.gate.Reset()
+	if a.deps.toolExecutor != nil {
+		a.deps.toolExecutor.ExecutionState().Reads.Reset()
+	}
 
 	a.life.Start()
 	a.tokens.snapshot(a.contextTokens())

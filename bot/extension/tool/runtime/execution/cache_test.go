@@ -77,3 +77,21 @@ func TestMergeRanges(t *testing.T) {
 		t.Errorf("expected merged range [1-7], got %+v", r)
 	}
 }
+
+func TestFileCacheVersionReplacementKeepsOrderBounded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(path, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cache := NewFileStateCache()
+	for i := 0; i < 1000; i++ {
+		version := [32]byte{byte(i), byte(i >> 8)}
+		cache.Put(path, []string{"x"}, 1, 1, version)
+	}
+	if len(cache.order) != 1 {
+		t.Fatalf("replacement grew eviction queue: %d", len(cache.order))
+	}
+	if lines, ok := cache.Lines(path, [32]byte{}); ok || lines != nil {
+		t.Fatal("version miss returned stale lines")
+	}
+}

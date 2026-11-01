@@ -13,6 +13,7 @@ import (
 	"nekocode/bot/extension/agentprofile"
 	"nekocode/bot/extension/tool"
 	"nekocode/bot/extension/tool/runtime/core"
+	"nekocode/bot/extension/tool/runtime/execution"
 	"nekocode/bot/extension/tool/runtime/runner"
 	"nekocode/bot/policy"
 	"nekocode/bot/policy/builtin"
@@ -267,7 +268,11 @@ func (r *engineRun) stepOnce() bool {
 	if r.finalizing {
 		allowedTools = nil
 	}
-	calls, text, err := r.engine.reason(r.ctx, r.ctxMgr, allowedTools, buildSkillWorkflow(r.cfg), r.state.addTokens(r.cfg), r.cfg.RecordLLMUsage, r.cfg.SessionID, r.phase, r.cfg)
+	ctx := r.ctx
+	if r.executor != nil {
+		ctx = execution.WithExecutionState(ctx, r.executor.ExecutionState())
+	}
+	calls, text, err := r.engine.reason(ctx, r.ctxMgr, allowedTools, buildSkillWorkflow(r.cfg), r.state.addTokens(r.cfg), r.cfg.RecordLLMUsage, r.cfg.SessionID, r.phase, r.cfg)
 	r.ctxMgr.SetHints("")
 	if err != nil {
 		r.log("error: %v", err)

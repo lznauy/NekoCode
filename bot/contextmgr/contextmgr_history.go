@@ -111,6 +111,9 @@ func (m *Manager) AddToolResultsBatch(results []ToolResultMsg) {
 			}
 		}
 		message := types.Message{Role: role, ToolCallID: r.Message.ToolCallID, IsError: r.Message.IsError}
+		if role == "tool" && r.ToolName == "read" && !message.IsError {
+			message.ReadID = r.Message.ReadID
+		}
 		if r.ToolName == "skill" && !message.IsError {
 			message.SkillName = r.Message.SkillName
 		}
@@ -155,6 +158,7 @@ func (m *Manager) AddToolResultsBatch(results []ToolResultMsg) {
 		remaining = max(0, remaining-len(message.Content))
 		m.state.ctx.Messages = append(m.state.ctx.Messages, message)
 		transcriptMessage := message
+		transcriptMessage.ReadID = ""
 		transcriptMessage.Source = ""
 		transcriptMessage.DeferredContent = ""
 		// The transcript keeps the untruncated original, but bounded: one

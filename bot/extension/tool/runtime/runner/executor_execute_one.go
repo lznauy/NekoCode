@@ -129,7 +129,7 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 		escOut, escOk, escReason, escCause := e.tryPermissionEscalation(ctx, entry.Privileged, tc, execErr, confirmFn, preApproved, preApproval != nil, dec.jevSafe)
 		if escOk {
 			e.invalidateMutatedPaths(tc.Name, paths)
-			return core.ToolCallResult{ID: tc.ID, Name: resultName, Output: escOut.Text, Artifact: escOut.Artifact}
+			return core.ToolCallResult{ID: tc.ID, Name: resultName, Output: escOut.Text, Artifact: escOut.Artifact, ReadID: escOut.ReadID}
 		}
 		if escReason == failRetryError {
 			output = escOut
@@ -142,7 +142,7 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 	}
 
 	e.invalidateMutatedPaths(tc.Name, paths)
-	return core.ToolCallResult{ID: tc.ID, Name: resultName, Output: output.Text, Artifact: output.Artifact}
+	return core.ToolCallResult{ID: tc.ID, Name: resultName, Output: output.Text, Artifact: output.Artifact, ReadID: output.ReadID}
 }
 
 func (e *Executor) captureMutationPaths(tc core.ToolCallItem) ([]string, error) {

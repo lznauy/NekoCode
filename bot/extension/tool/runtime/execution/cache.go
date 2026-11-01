@@ -12,10 +12,11 @@ type lineRange struct{ Start, End int }
 
 // fileState holds the full file content and the set of line ranges already returned.
 type fileState struct {
-	Lines  []string
-	Mtime  int64
-	Size   int64
-	Ranges []lineRange
+	Version [32]byte // raw-byte version, when supplied by a managed text read
+	Lines   []string
+	Mtime   int64
+	Size    int64
+	Ranges  []lineRange
 }
 
 // FileStateCache caches file content and tracks which line ranges have been read.
@@ -30,7 +31,7 @@ func NewFileStateCache() *FileStateCache {
 }
 
 // Lines returns the cached full-file content if the file hasn't changed.
-func (c *FileStateCache) Lines(path string) ([]string, bool) {
+func (c *FileStateCache) Lines(path string, version ...[32]byte) ([]string, bool) {
 	key := normalizePath(path)
 
 	c.mu.RLock()
@@ -41,6 +42,14 @@ func (c *FileStateCache) Lines(path string) ([]string, bool) {
 	}
 	mtime, size := e.Mtime, e.Size
 	lines := e.Lines
+	if len(version) > 0 {
+		matches := e.Version == version[0]
+		c.mu.RUnlock()
+		if !matches {
+			return nil, false
+		}
+		return lines, true
+	}
 	c.mu.RUnlock()
 
 	info, err := os.Stat(path)
@@ -62,7 +71,7 @@ func (c *FileStateCache) Lines(path string) ([]string, bool) {
 }
 
 // Put stores the full file content and marks [startLine, endLine] as read.
-func (c *FileStateCache) Put(path string, lines []string, startLine, endLine int) {
+func (c *FileStateCache) Put(path string, lines []string, startLine, endLine int, version ...[32]byte) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return
@@ -75,14 +84,19 @@ func (c *FileStateCache) Put(path string, lines []string, startLine, endLine int
 
 	key := normalizePath(path)
 	e, ok := c.entries[key]
-	if !ok || e.Mtime != mtime || e.Size != size {
+	if !ok || e.Mtime != mtime || e.Size != size || (len(version) > 0 && e.Version != version[0]) {
 		e = &fileState{
 			Lines: lines,
 			Mtime: mtime,
 			Size:  size,
 		}
+		if len(version) > 0 {
+			e.Version = version[0]
+		}
 		c.entries[key] = e
-		c.order = append(c.order, key)
+		if !ok {
+			c.order = append(c.order, key)
+		}
 	}
 	e.Ranges = mergeRanges(e.Ranges, lineRange{startLine, endLine})
 	c.evictIfNeeded()

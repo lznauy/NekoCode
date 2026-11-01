@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"nekocode/bot/extension/tool/builtin/diff"
 	"nekocode/bot/extension/tool/runtime/execution"
@@ -21,6 +20,7 @@ type editRequest struct {
 }
 
 type editPlan struct {
+	RawBefore        []byte
 	SafePath         string
 	NormalizedBefore string
 	NormalizedAfter  string
@@ -52,8 +52,6 @@ type lineSpan struct {
 	Lines     []string
 }
 
-var fileLocks sync.Map
-
 func (t *EditTool) previewEdit(ctx context.Context, args map[string]any) string {
 	plan, err := buildEditPlan(ctx, args)
 	if err != nil {
@@ -76,19 +74,33 @@ func (t *EditTool) executeEdit(ctx context.Context, args map[string]any) (string
 	if err != nil {
 		return "", err
 	}
-	lock := lockForPath(safePath)
-	lock.Lock()
-	defer lock.Unlock()
+	unlock, err := execution.LockFile(ctx, safePath)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	checked, err := toolutil.ValidatePathWritableContext(ctx, req.Path)
+	if err != nil {
+		return "", err
+	}
+	if checked != safePath {
+		return "", fmt.Errorf("edit target changed while waiting; retry after reading it")
+	}
 
 	args["path"] = safePath
 	plan, err := buildEditPlan(ctx, args)
 	if err != nil {
 		return "", err
 	}
+	reads := execution.FileReadsFromContext(ctx)
+	if err := reads.Check(plan.SafePath, plan.RawBefore); err != nil {
+		return "", err
+	}
 	finalText := toolutil.RestoreLineEndings(plan.NormalizedAfter, plan.LineEnding)
 	if err := writeEditFile(plan.SafePath, []byte(finalText), plan.OrigMode); err != nil {
 		return "", fmt.Errorf("failed to write file: %w", err)
 	}
+	reads.Invalidate(plan.SafePath)
 	if cache := execution.FileCacheFromContext(ctx); cache != nil {
 		cache.Invalidate(plan.SafePath)
 	}
@@ -119,6 +131,8 @@ func buildEditPlan(ctx context.Context, args map[string]any) (editPlan, error) {
 	if err != nil {
 		return editPlan{}, fmt.Errorf("failed to read file: %w", err)
 	}
+	// Previews do not grant or consume evidence. Execution reuses this plan
+	// builder under the target lock and checks the raw bytes before mutation.
 	rawText := string(data)
 	lineEnding := toolutil.DetectLineEnding(rawText)
 	before := toolutil.NormalizeToLF(rawText)
@@ -131,6 +145,7 @@ func buildEditPlan(ctx context.Context, args map[string]any) (editPlan, error) {
 	}
 	after, hunks := applyMatches(before, newString, matches)
 	return editPlan{
+		RawBefore:        data,
 		SafePath:         safePath,
 		NormalizedBefore: before,
 		NormalizedAfter:  after,
@@ -362,9 +377,4 @@ func truncateMatchContext(text string, maxRunes int) string {
 		return text
 	}
 	return string(runes[:maxRunes]) + "..."
-}
-
-func lockForPath(path string) *sync.Mutex {
-	actual, _ := fileLocks.LoadOrStore(path, &sync.Mutex{})
-	return actual.(*sync.Mutex)
 }

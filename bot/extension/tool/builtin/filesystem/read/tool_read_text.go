@@ -2,6 +2,7 @@ package read
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,50 +10,59 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/execution"
 	"nekocode/bot/extension/tool/runtime/toolutil"
 )
 
-func (t *ReadTool) readTextCached(ctx context.Context, path string, args map[string]any) (string, error) {
+func (t *ReadTool) readTextCached(ctx context.Context, path string, args map[string]any) (core.ToolOutput, error) {
 	startLine, err := toolutil.RequireIntArg(args, "startLine")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	endLine, err := toolutil.RequireIntArg(args, "endLine")
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
-
-	cache := execution.FileCacheFromContext(ctx)
-	if cache != nil {
-		if lines, ok := cache.Lines(path); ok {
-			result := formatReadOutput(ctx, path, lines, startLine, endLine)
-			end := startLine + min(endLine-startLine+1, maxReadLines) - 1
-			if end > len(lines) {
-				end = len(lines)
-			}
-			cache.Put(path, lines, startLine, end)
-			return result, nil
-		}
-	}
-
-	fullLines, err := readFileLines(path)
+	unlock, err := execution.LockFile(ctx, path)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
-
+	defer unlock()
+	requested, _ := args["path"].(string)
+	checked, err := toolutil.ValidatePathReadableContext(ctx, requested)
+	if err != nil {
+		return core.ToolOutput{}, err
+	}
+	if checked != path {
+		return core.ToolOutput{}, fmt.Errorf("read target changed while waiting; retry the read")
+	}
+	data, err := readFileData(path)
+	if err != nil {
+		return core.ToolOutput{}, err
+	}
+	version := sha256.Sum256(data)
+	cache := execution.FileCacheFromContext(ctx)
+	var fullLines []string
+	if cache != nil {
+		fullLines, _ = cache.Lines(path, version)
+	}
+	if fullLines == nil {
+		fullLines = strings.Split(toolutil.NormalizeText(string(data)), "\n")
+	}
+	startLine = max(1, startLine)
+	if endLine < startLine || startLine > len(fullLines) {
+		return core.ToolOutput{}, fmt.Errorf("invalid read range %d..%d (total %d)", startLine, endLine, len(fullLines))
+	}
 	result := formatReadOutput(ctx, path, fullLines, startLine, endLine)
 	if cache != nil {
-		end := startLine + min(endLine-startLine+1, maxReadLines) - 1
-		if end > len(fullLines) {
-			end = len(fullLines)
-		}
-		cache.Put(path, fullLines, startLine, end)
+		end := min(startLine+min(endLine-startLine+1, maxReadLines)-1, len(fullLines))
+		cache.Put(path, fullLines, startLine, end, version)
 	}
-	return result, nil
+	return core.ToolOutput{Text: result, ReadID: execution.FileReadsFromContext(ctx).Record(path, data, result)}, nil
 }
 
-func readFileLines(path string) ([]string, error) {
+func readFileData(path string) ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -67,12 +77,7 @@ func readFileLines(path string) ([]string, error) {
 	if isBinary(data) {
 		return nil, fmt.Errorf("[%s#ERR] binary file", filepath.Base(path))
 	}
-	text := toolutil.NormalizeText(string(data))
-	lines := strings.Split(text, "\n")
-	if len(lines) == 1 && lines[0] == "" {
-		return []string{""}, nil
-	}
-	return lines, nil
+	return data, nil
 }
 
 func formatReadOutput(ctx context.Context, path string, lines []string, startLine, endLine int) string {

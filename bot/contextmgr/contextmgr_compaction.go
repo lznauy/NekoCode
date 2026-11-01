@@ -257,6 +257,9 @@ func (m *Manager) compact(ctx context.Context, force bool, outputTokens int) (ap
 	}
 	m.state.ctx.Archive = archive
 	m.state.ctx.Messages = recent
+	for i := range m.state.ctx.Messages {
+		m.state.ctx.Messages[i].ReadID = ""
+	}
 	m.restoreRuntimeContextLocked()
 	m.state.revision++
 	m.state.compactCount++

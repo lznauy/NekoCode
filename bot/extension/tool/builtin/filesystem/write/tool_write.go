@@ -20,7 +20,7 @@ func (t *WriteTool) Name() string { return "write" }
 
 func (t *WriteTool) Description() string {
 	return "Create or overwrite a file. Auto-creates parent dirs. " +
-		"For existing files, read first to confirm current content; policy blocks overwrite when no prior read is recorded. " +
+		"For existing files, read the current version first. Read again after any modification or context compaction; if output is truncated, read smaller ranges. " +
 		"For partial changes, prefer Edit with oldString/newString over Write — it produces minimal diffs; use /rewind to undo completed file changes. " +
 		"Content escaping: use \\n for newlines, \\\" for quotes, \\\\ for backslashes."
 }
@@ -67,14 +67,41 @@ func (t *WriteTool) Execute(ctx context.Context, args map[string]any) (core.Tool
 		return core.ToolOutput{}, err
 	}
 
-	existing := existingContent(safePath)
+	unlock, err := execution.LockFile(ctx, safePath)
+	if err != nil {
+		return core.ToolOutput{}, err
+	}
+	defer unlock()
+	checked, err := toolutil.ValidatePathWritableContext(ctx, path)
+	if err != nil {
+		return core.ToolOutput{}, err
+	}
+	if checked != safePath {
+		return core.ToolOutput{}, fmt.Errorf("write target changed while waiting; retry after reading it")
+	}
+	data, readErr := os.ReadFile(safePath)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return core.ToolOutput{}, fmt.Errorf("cannot inspect write target: %w", readErr)
+	}
+	reads := execution.FileReadsFromContext(ctx)
+	if readErr == nil {
+		if err := reads.Check(safePath, data); err != nil {
+			return core.ToolOutput{}, err
+		}
+	}
+	existing := string(data)
 
 	if err := os.MkdirAll(filepath.Dir(safePath), 0755); err != nil {
 		return core.ToolOutput{}, fmt.Errorf("failed to create directory: %w", err)
 	}
 	mode := toolutil.GetFileMode(safePath)
 	if err := os.WriteFile(safePath, []byte(content), mode); err != nil {
+		reads.Invalidate(safePath)
 		return core.ToolOutput{}, fmt.Errorf("failed to write file: %w", err)
+	}
+	reads.Invalidate(safePath)
+	if cache := execution.FileCacheFromContext(ctx); cache != nil {
+		cache.Invalidate(safePath)
 	}
 	// Record snapshot for read/edit continuity within the session.
 	tag := execution.RecordSnapshotInContext(ctx, safePath, content)

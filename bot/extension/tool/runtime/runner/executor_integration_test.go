@@ -112,6 +112,8 @@ func TestExecutorCheckpointsWriteBeforeMutation(t *testing.T) {
 	r.Register(&writebuiltin.WriteTool{})
 	e := runner.NewExecutor(r)
 	e.ExecutionState().Checkpoints = cp
+	readID := e.ExecutionState().Reads.Record(path, []byte("before"), "before")
+	e.ExecutionState().Reads.Observe(map[string]string{readID: "before"})
 	result := e.ExecuteBatch(context.Background(), []core.ToolCallItem{{
 		ID: "1", Name: "write", Args: map[string]any{"path": path, "content": "after"},
 	}})[0]

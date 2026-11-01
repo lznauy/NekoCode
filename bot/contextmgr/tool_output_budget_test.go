@@ -376,3 +376,30 @@ func TestOnlySuccessfulSkillResultsRecordDelivery(t *testing.T) {
 		t.Fatalf("delivered skills = %v", recorded)
 	}
 }
+
+func TestReadReceiptIsLocalAndRestoreInvalidates(t *testing.T) {
+	m := New(Config{ContextWindow: 10000})
+	m.AddToolResultsBatch([]ToolResultMsg{{ToolName: "read", Message: types.Message{Content: "read preview", ToolCallID: "read-call", ReadID: "local-receipt"}}})
+	snapshot := m.Snapshot()
+	if snapshot.Messages[0].ReadID != "local-receipt" {
+		t.Fatal("active result lost receipt")
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "local-receipt") {
+		t.Fatal("receipt persisted")
+	}
+	_, transcript, _ := m.TranscriptTail()
+	for _, msg := range transcript {
+		if msg.ReadID != "" {
+			t.Fatal("transcript retained receipt")
+		}
+	}
+	restored := New(Config{ContextWindow: 10000})
+	restored.Restore(snapshot)
+	if restored.Snapshot().Messages[0].ReadID != "" {
+		t.Fatal("restore revived receipt")
+	}
+}
