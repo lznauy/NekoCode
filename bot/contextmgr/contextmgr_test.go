@@ -48,7 +48,7 @@ func TestNewBuildsLayeredContext(t *testing.T) {
 	manager.Add("user", "hello")
 
 	messages := manager.Build()
-	if len(messages) != 2 || messages[0].Content != "system" || messages[1].Content != "hello" {
+	if len(messages) != 3 || messages[0].Content != "system" || messages[1].Content != historicalDataContract || messages[2].Content != "hello" {
 		t.Fatalf("Build() = %#v", messages)
 	}
 }

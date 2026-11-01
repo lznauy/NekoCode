@@ -64,7 +64,7 @@ func (m *Manager) PrepareRequest(ctx context.Context, request ModelRequest) ([]t
 		// Automatic threshold and final request admission share one attempt.
 		// The accepted request is always rebuilt after a history replacement.
 		if attempt == 0 && (autoCompact || budget.Total() > budget.Window) && budget.Tools+budget.Output+budget.Safety <= budget.Window {
-			applied, err := m.compact(ctx, !autoCompact)
+			applied, err := m.compact(ctx, !autoCompact, request.OutputTokens)
 			if err != nil {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					return nil, err

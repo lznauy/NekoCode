@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	ctxmgr "nekocode/bot/contextmgr"
+	"nekocode/bot/provider/types"
 	"nekocode/protocol"
 )
 
@@ -56,7 +57,7 @@ func (h *Handler) RegisterSkills(skills []SkillRegistration) {
 				return fmt.Sprintf("Skill %q not found.", sk.Name), true
 			}
 			h.skill.MsgStart = h.ctxMgr.Len()
-			h.ctxMgr.Add("user", content)
+			h.ctxMgr.Add("user", content, types.MessageSourceSkillWorkflow)
 			if sk.MarkLoaded != nil {
 				sk.MarkLoaded()
 			}
@@ -119,7 +120,7 @@ func (h *Handler) TakeContinuation() (continueAgent bool) {
 func (h *Handler) SelectSkill(ctxMgr *ctxmgr.Manager, context string) {
 	clearSkillContext(ctxMgr, h.skill)
 	h.skill.MsgStart = ctxMgr.Len()
-	ctxMgr.Add("user", context)
+	ctxMgr.Add("user", context, types.MessageSourceSkillWorkflow)
 	h.skill.MsgEnd = ctxMgr.Len()
 }
 

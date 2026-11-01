@@ -1,7 +1,6 @@
 package contextmgr
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -37,7 +36,11 @@ type ModelRequest struct {
 func (m *Manager) Build() []types.Message {
 	m.state.mu.RLock()
 	defer m.state.mu.RUnlock()
-	return m.buildLocked(false)
+	out, _ := m.buildLocked()
+	for i := range out {
+		out[i].Source = ""
+	}
+	return out
 }
 
 // BuildRequest assembles one model request and records its cache-relevant
@@ -56,32 +59,22 @@ func (m *Manager) projectRequest(request ModelRequest, observe bool) ([]types.Me
 	defer m.state.mu.Unlock()
 	m.appendRuntimeContextLocked(runtimePrompt)
 	m.appendHintsLocked(m.state.ctx.Hints, request.PolicyHints)
-	out := append(m.buildLocked(true), request.ExtraMessages...)
-	system := m.state.ctx.BuildLayer0()
-	system = append(system, m.state.ctx.BuildLayer1()...)
-	history := m.state.ctx.BuildLayer2()
-	history = append(history, m.visibleHistory()...)
-	history = append(history, request.ExtraMessages...)
+	out, systemEnd := m.buildLocked()
+	out = append(out, request.ExtraMessages...)
 	out = types.ProjectReasoning(out, m.state.reasoning)
-	history = types.ProjectReasoning(history, m.state.reasoning)
-	shape := buildPrefixShape(system, history, request.Tools)
+	shape := buildPrefixShape(out[:systemEnd], out[systemEnd:], request.Tools)
 	if observe {
 		m.state.prefix.Observe(shape)
 	}
 	return out, shape
 }
 
-func (m *Manager) buildLocked(preserveSource bool) []types.Message {
+func (m *Manager) buildLocked() ([]types.Message, int) {
 	out := m.state.ctx.BuildLayer0()
-	out = append(out, m.state.ctx.BuildLayer1()...)
-	out = append(out, m.state.ctx.BuildLayer2()...)
+	systemEnd := len(out)
+	out = append(out, m.state.ctx.BuildData()...)
 	out = append(out, m.visibleHistory()...)
-	if !preserveSource {
-		for i := range out {
-			out[i].Source = ""
-		}
-	}
-	return out
+	return out, systemEnd
 }
 
 // appendRuntimeContextLocked appends a complete dynamic-state snapshot only
@@ -277,11 +270,7 @@ func (m *Manager) ConfigureModel(cfg ModelContext) {
 	if m.state.compressor != nil {
 		m.state.compressor.autoCompactPercent = normalizeAutoCompactPercent(cfg.AutoCompactPercent)
 		m.state.compressor.modelWindow = cfg.CompactionWindow
-		var summarizer Summarizer
-		if cfg.CompactionModel != nil {
-			summarizer = m.makeSummarizer(context.Background(), cfg.CompactionModel)
-		}
-		m.state.compressor.summarizer = summarizer
+		m.state.compressor.summarizer = nil
 		m.state.compressor.model = cfg.CompactionModel
 	}
 }
@@ -381,10 +370,8 @@ func (m *Manager) RecordSubagent(tokens, hit, miss int) {
 }
 
 func (m *Manager) totalTokenEstimate() int {
-	return token.EstimateString(m.state.ctx.SystemPrompt) +
-		token.EstimateString(m.state.ctx.Skills) +
-		token.EstimateString(m.state.ctx.Memory) +
-		token.EstimateString(m.state.ctx.Archive) +
+	return token.EstimateTokens(m.state.ctx.BuildLayer0()) +
+		token.EstimateTokens(m.state.ctx.BuildData()) +
 		token.EstimateModelTokens(m.state.ctx.Messages, m.state.reasoning, m.state.vision)
 }
 

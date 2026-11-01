@@ -1,9 +1,6 @@
 package contextmgr
 
 import (
-	"fmt"
-	"strings"
-
 	"nekocode/bot/contextmgr/token"
 	"nekocode/bot/provider"
 	"nekocode/bot/provider/types"
@@ -38,14 +35,9 @@ func (s *replacementCompactor) shouldAutoCompact(budget, estimate int) bool {
 	return estimate >= s.compactionThreshold(budget)
 }
 
-// archiveUnavailable marks an archive whose older messages were dropped without
-// a usable summary. Reports must not present it as a normal archive.
+// archiveUnavailable recognizes legacy archives produced by the old lossy
+// fallback. New compactions reject unusable summaries without dropping history.
 const archiveUnavailable = "[Archive unavailable: summarizer output was malformed or too small; recent conversation was preserved.]"
-
-// minFallbackArchiveRunes is the floor for accepting a reply that ignored the
-// required <summary> format. Runes, not bytes: a byte floor is ~3x stricter for
-// CJK text than for ASCII, which silently discarded usable short summaries.
-const minFallbackArchiveRunes = 20
 
 // summarize runs one compaction. summarizer overrides the compactor's own for
 // this call only (compact passes a per-invocation wrapper that emits the
@@ -69,30 +61,9 @@ func (s *replacementCompactor) summarize(history []types.Message, prevArchive st
 	toSummarize := withoutInternalContext(history[:keepStart])
 	recent := append([]types.Message(nil), history[keepStart:]...)
 
-	if _, err := prepareSummaryRequest(toSummarize, prevArchive, s.modelWindow, s.model); err != nil {
-		return "", nil, 0, err
-	}
-
-	rawSummary, err := summarizer(toSummarize, prevArchive)
+	archive, err := s.summarizeBatches(toSummarize, prevArchive, summarizer)
 	if err != nil {
-		return "", nil, 0, fmt.Errorf("replacement compact: %w", err)
-	}
-
-	// A wrapped <summary> block is the contract, so its content is kept as-is
-	// however short it is: only a reply that ignored the format is judged by
-	// length, and then only to reject a refusal rather than a summary.
-	archive := formatCompactSummary(rawSummary)
-	if strings.TrimSpace(archive) == "" {
-		// No usable <summary> content. A reply that never used the tags may
-		// still be a summary; an empty wrapper is not one.
-		archive = ""
-		if !strings.Contains(rawSummary, "<summary>") {
-			archive = strings.TrimSpace(rawSummary)
-		}
-		if len([]rune(archive)) < minFallbackArchiveRunes {
-			archive = archiveUnavailable
-			logger.Log("replacement_compact: summarizer produced no usable <summary>; %d older msgs dropped without a summary", len(toSummarize))
-		}
+		return "", nil, 0, err
 	}
 
 	logger.Log("replacement_compact: summarized %d msgs, kept %d recent msgs, archive_tokens=%d",
@@ -126,7 +97,7 @@ func userTurnBoundary(msgs []types.Message, turns int) int {
 	}
 	count := 0
 	for i := len(msgs) - 1; i >= 0; i-- {
-		if isConversationUser(msgs[i]) {
+		if msgs[i].IsConversationUser() {
 			count++
 			if count >= turns {
 				return i
@@ -138,20 +109,15 @@ func userTurnBoundary(msgs []types.Message, turns int) int {
 
 func nextUserBoundary(msgs []types.Message, start int) int {
 	for i := start; i < len(msgs); i++ {
-		if isConversationUser(msgs[i]) {
+		if msgs[i].IsConversationUser() {
 			return i
 		}
 	}
 	return -1
 }
 
-func isConversationUser(msg types.Message) bool {
-	return msg.Role == "user" && msg.Source != types.MessageSourceRuntimeContext &&
-		msg.Source != types.MessageSourceHint && msg.Source != types.MessageSourceRuntimeEvent
-}
-
 func excludeFromSummary(msg types.Message) bool {
-	return msg.Source == types.MessageSourceRuntimeContext || msg.Source == types.MessageSourceHint
+	return msg.Source == types.MessageSourceRuntimeContext || msg.Source == types.MessageSourceHint || msg.Source == types.MessageSourceContextData
 }
 
 func withoutInternalContext(messages []types.Message) []types.Message {

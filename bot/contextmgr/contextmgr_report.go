@@ -45,10 +45,10 @@ func (m *Manager) Report() ContextReport {
 	defer m.state.mu.RUnlock()
 
 	r := ContextReport{}
-	r.SystemPrompt = token.EstimateString(m.state.ctx.SystemPrompt)
+	r.SystemPrompt = token.EstimateString(m.state.ctx.SystemPrompt) + token.EstimateString(historicalDataContract)
 	r.SkillList = token.EstimateString(m.state.ctx.Skills)
-	r.Memory = token.EstimateString(m.state.ctx.Memory)
-	r.Archive = token.EstimateString(m.state.ctx.Archive)
+	r.Memory = token.EstimateTokens([]types.Message{historicalDataMessage("memory", m.state.ctx.Memory)})
+	r.Archive = token.EstimateTokens([]types.Message{historicalDataMessage("archive", m.state.ctx.Archive)})
 
 	for _, msg := range m.state.ctx.Messages {
 		if msg.Content == clearedMarker {
@@ -56,11 +56,10 @@ func (m *Manager) Report() ContextReport {
 		}
 		switch msg.Role {
 		case "user":
-			if msg.Source == "system" || msg.Source == types.MessageSourceRuntimeContext ||
-				msg.Source == types.MessageSourceHint || msg.Source == types.MessageSourceRuntimeEvent {
-				r.SysInjections++
-			} else {
+			if msg.IsConversationUser() {
 				r.UserMessages++
+			} else {
+				r.SysInjections++
 			}
 		case "assistant":
 			r.AssistantMsgs++

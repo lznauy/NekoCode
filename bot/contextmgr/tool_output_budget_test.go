@@ -291,7 +291,9 @@ func TestDeferredRecoveryUsesNetBatchCost(t *testing.T) {
 			name = "calibrated"
 		}
 		t.Run(name, func(t *testing.T) {
-			m := New(Config{ContextWindow: 1000, SystemPrompt: strings.Repeat("x", 3000)})
+			m := New(Config{ContextWindow: 1000})
+			// Keep the same initial occupancy as framework-owned static rules grow.
+			m.SetSystemPrompt(strings.Repeat("x", 3000-4*m.Status().Tokens))
 			m.SetOutputStore(core.NewOutputStore(t.TempDir()))
 			if calibrated {
 				m.RecordModelUsage(types.StreamUsage{PromptTokens: m.Status().Tokens})

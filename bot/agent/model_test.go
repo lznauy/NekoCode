@@ -376,7 +376,7 @@ func TestRequestBudgetFailureStopsRunBeforeInference(t *testing.T) {
 
 func TestSynthesisPromptIsInsideRequestBudget(t *testing.T) {
 	a := newTestAgent()
-	a.deps.ctxMgr = contextmgr.New(contextmgr.Config{SystemPrompt: strings.Repeat("x", 3000), ContextWindow: 1000})
+	a.deps.ctxMgr = contextmgr.New(contextmgr.Config{SystemPrompt: strings.Repeat("x", 3000), ContextWindow: 1100})
 	llm := &outputLimitedLLM{maxOutput: 200}
 	a.deps.llmClient = llm
 	if _, err := a.deps.ctxMgr.PrepareRequest(context.Background(), contextmgr.ModelRequest{OutputTokens: 200}); err != nil {

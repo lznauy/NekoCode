@@ -61,7 +61,7 @@ type Snapshot struct {
 	CheckpointNext  int             `json:"checkpoint_next,omitempty"`
 	Ledger          ledger.Snapshot `json:"ledger"`
 
-	// Last request's cache-relevant head (Layer 0-1 and tools). Restoring it
+	// Last request's cache-relevant head (static instructions and tools). Restoring it
 	// lets the next process attribute its first cache miss to a real prefix
 	// change instead of reporting cold-start.
 	PrefixSystemHash string `json:"prefix_system_hash,omitempty"`

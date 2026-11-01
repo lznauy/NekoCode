@@ -220,7 +220,7 @@ func TestSummaryStreamMergesSplitUsage(t *testing.T) {
 	m := New(Config{})
 	var usage types.StreamUsage
 	m.SetLLMUsageRecorder(func(u types.StreamUsage) { usage = u })
-	if _, err := m.makeSummarizer(context.Background(), client)(nil, ""); err != nil {
+	if _, err := m.streamingSummarizer(context.Background(), client, nil)(nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	if usage.PromptTokens != 100 || usage.CompletionTokens != 20 || usage.CacheHitTokens != 80 || usage.TotalTokens != 120 {

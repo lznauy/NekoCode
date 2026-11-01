@@ -10,9 +10,12 @@ import (
 )
 
 type prefixShape struct {
-	system  [32]byte
-	tools   [32]byte
-	history [][32]byte
+	skills        [32]byte
+	skillMessages int
+	skillsKnown   bool
+	system        [32]byte
+	tools         [32]byte
+	history       [][32]byte
 }
 
 type PrefixMiss struct {
@@ -48,12 +51,12 @@ type prefixTracker struct {
 }
 
 // PrefixBaseline carries the last observed request's cache-relevant head
-// across a process boundary. Layer 2-3 (archive and history) are append-only
-// within an epoch, so only the stable head needs a baseline: a restored
-// tracker can then say whether the new process changed that head, or whether
-// the miss came from the provider's tail. Empty when no request was observed.
+// across a process boundary. Only the static system/tools head is retained;
+// historical data and messages remain in the session rather than being copied
+// into this diagnostic. A restored tracker can identify a changed head without
+// calling an unchanged resumed request a cold start.
 type PrefixBaseline struct {
-	System string // full hex digest of the Layer 0-1 messages
+	System string // full hex digest of static system instructions (Layer 0)
 	Tools  string // full hex digest of the tool definitions
 }
 
@@ -95,7 +98,9 @@ func decodePrefixDigest(value string) ([32]byte, bool) {
 }
 
 func buildPrefixShape(system, history []types.Message, tools []types.ToolDef) prefixShape {
+	skills, count := skillDeliveryDigest(history)
 	return prefixShape{
+		skills: skills, skillMessages: count, skillsKnown: true,
 		system:  digestJSON(canonicalMessages(system)),
 		tools:   digestJSON(nonNilTools(tools)),
 		history: digestMessages(history),
@@ -205,6 +210,10 @@ func (t *prefixTracker) Diagnostics() calllog.PrefixDiag {
 	}
 	diag.SystemHash = calllog.ShortDigest(t.previous.system)
 	diag.ToolsHash = calllog.ShortDigest(t.previous.tools)
+	if t.previous.skillsKnown {
+		diag.SkillsHash = "v1:" + hex.EncodeToString(t.previous.skills[:])
+		diag.SkillMessages = t.previous.skillMessages
+	}
 	diag.HistoryCount = len(t.previous.history)
 	var joined []byte
 	for _, h := range t.previous.history {
@@ -228,6 +237,9 @@ func (t *prefixTracker) Reset() {
 
 func changedPrefixParts(previous, current prefixShape) []string {
 	var parts []string
+	if previous.skillsKnown && current.skillsKnown && previous.skills != current.skills {
+		parts = append(parts, "skills")
+	}
 	if previous.system != current.system {
 		parts = append(parts, "system")
 	}

@@ -49,6 +49,7 @@ func TestRecentStartIgnoresInternalRuntimeUserMessages(t *testing.T) {
 		history = append(history,
 			types.Message{Role: "user", Content: fmt.Sprintf("question %d", i)},
 			types.Message{Role: "user", Content: "runtime", Source: types.MessageSourceRuntimeContext},
+			types.Message{Role: "user", Content: "data", Source: types.MessageSourceContextData},
 			types.Message{Role: "assistant", Content: fmt.Sprintf("answer %d", i)},
 		)
 	}
@@ -82,6 +83,7 @@ func TestCompactionDoesNotArchiveRuntimeSnapshots(t *testing.T) {
 	messages := []types.Message{
 		{Role: "user", Content: "old request"},
 		{Role: "user", Content: "old runtime", Source: types.MessageSourceRuntimeContext},
+		{Role: "user", Content: "old data", Source: types.MessageSourceContextData},
 		{Role: "assistant", Content: "old answer"},
 	}
 	filtered := withoutInternalContext(messages)

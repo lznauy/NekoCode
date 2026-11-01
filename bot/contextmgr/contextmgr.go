@@ -114,15 +114,21 @@ func (m *Manager) SetToolPruner(pruner decision.ToolPruner) {
 	m.usageMu.Unlock()
 }
 
-func (m *Manager) makeSummarizer(ctx context.Context, client provider.LLM) Summarizer {
-	return m.streamingSummarizer(ctx, client, nil)
-}
-
+// One closure belongs to one compaction and shares its physical-call budget
+// across batches and empty-response retries.
 func (m *Manager) streamingSummarizer(ctx context.Context, client provider.LLM, delta func(string)) Summarizer {
+	remaining := maxSummaryCalls
 	return func(msgs []types.Message, prevSummary string) (string, error) {
 		var summary string
 		var err error
 		for attempt := 0; attempt < 2; attempt++ {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+			if remaining <= 0 {
+				return "", fmt.Errorf("compaction exceeded %d model calls; history preserved", maxSummaryCalls)
+			}
+			remaining--
 			summary, err = m.summarizeStreamOnce(ctx, client, msgs, prevSummary, delta)
 			// Any non-empty result is final: its deltas were already streamed
 			// to the UI, so a retry would duplicate them. Only a fully empty
@@ -261,11 +267,7 @@ func New(cfg Config) *Manager {
 		contextWindow: cfg.ContextWindow,
 		reasoning:     cfg.Reasoning,
 	}, runtimePrompt: cfg.RuntimePrompt, toolPruner: cfg.ToolPruner}
-	summarizer := cfg.Summarizer
-	if summarizer == nil && cfg.CompactionModel != nil {
-		summarizer = m.makeSummarizer(context.Background(), cfg.CompactionModel)
-	}
-	m.initCompressor(summarizer, cfg.AutoCompactPercent)
+	m.initCompressor(cfg.Summarizer, cfg.AutoCompactPercent)
 	if cfg.Summarizer == nil {
 		m.state.compressor.model = cfg.CompactionModel
 	}

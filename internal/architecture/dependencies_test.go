@@ -48,6 +48,8 @@ func TestDependencyBoundaries(t *testing.T) {
 			}
 			dep = strings.TrimPrefix(dep, "nekocode/")
 			forbidden := pkg == "protocol" ||
+				(under(pkg, "bot/contextmgr") && (under(dep, "bot/session") || under(dep, "bot/policy") || under(dep, "bot/agent"))) ||
+				(under(pkg, "bot/extension/tool/builtin/filesystem") && under(dep, "bot/policy")) ||
 				(under(pkg, "bot") && (under(dep, "runtime") || under(dep, "interaction") || dep == "acp" || dep == "headless")) ||
 				(under(pkg, "bot") && !under(pkg, "bot/core") && under(dep, "bot/core")) ||
 				((pkg == "runtime" || under(pkg, "runtime/internal")) && (under(dep, "bot") || under(dep, "interaction") || dep == "acp" || dep == "headless")) ||

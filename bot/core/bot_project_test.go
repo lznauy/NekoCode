@@ -140,7 +140,9 @@ func TestWorkspaceStartupReloadAndSessionRestore(t *testing.T) {
 func TestProjectRulesSurviveCompaction(t *testing.T) {
 	builder := prompt.New(t.TempDir())
 	builder.SetProjectInstructions("NEKOCODE.md", "unique-project-rule")
-	m := ctxmgr.New(ctxmgr.Config{SystemPrompt: builder.BuildStatic(), Summarizer: func([]types.Message, string) (string, error) { return "summary of earlier work", nil }})
+	m := ctxmgr.New(ctxmgr.Config{SystemPrompt: builder.BuildStatic(), Summarizer: func([]types.Message, string) (string, error) {
+		return "<summary>summary of earlier work</summary>", nil
+	}})
 	for range 8 {
 		m.Add("user", "old question")
 		m.Add("assistant", "old answer")

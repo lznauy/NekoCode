@@ -108,3 +108,29 @@ func TestRegisterSkillsReplacesDynamicCommands(t *testing.T) {
 		t.Fatal("replaced skill command remained registered")
 	}
 }
+
+func TestSelectedAndCommandSkillsHaveExplicitWorkflowProvenance(t *testing.T) {
+	manager := ctxmgr.New(ctxmgr.Config{ContextWindow: 64000})
+	handler := New(Deps{CtxMgr: manager, ToolRegistry: tools.New(), GetConfigFn: func() config.ModelConfig { return config.ModelConfig{} }})
+	handler.SelectSkill(manager, "selected workflow")
+	if manager.Snapshot().Messages[0].IsConversationUser() {
+		t.Fatal("selected workflow counted as user request")
+	}
+	manager.BuildRequest(ctxmgr.ModelRequest{})
+	if manager.PrefixDiagnostics().SkillMessages != 1 {
+		t.Fatal("selected workflow absent from diagnostic")
+	}
+	handler.ClearSkill(manager)
+	handler.RegisterSkills([]SkillRegistration{{Name: "review", Load: func() (string, bool) { return "command workflow", true }}})
+	if _, handled := handler.Execute(t.Context(), "$review actual request", manager); handled {
+		t.Fatal("skill arguments did not start agent")
+	}
+	messages := manager.Snapshot().Messages
+	if len(messages) != 2 || messages[0].IsConversationUser() || !messages[1].IsConversationUser() {
+		t.Fatal("workflow and user argument provenance mixed")
+	}
+	manager.BuildRequest(ctxmgr.ModelRequest{})
+	if manager.PrefixDiagnostics().SkillMessages != 1 {
+		t.Fatal("command workflow absent from diagnostic")
+	}
+}

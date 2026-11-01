@@ -1,10 +1,33 @@
 package contextmgr
 
 import (
+	"reflect"
 	"testing"
 
 	"nekocode/bot/provider/types"
 )
+
+func TestHistoricalDataResumePreservesRequestAndCacheBaseline(t *testing.T) {
+	first := New(Config{SystemPrompt: "rules"})
+	first.Restore(ManagerSnapshot{SystemPrompt: "rules", Memory: "memory", Archive: "archive", Messages: []types.Message{{Role: "user", Content: "request"}}})
+	request := first.BuildRequest(ModelRequest{})
+	snapshot := first.Snapshot()
+	restored := New(Config{})
+	restored.Restore(snapshot)
+	if got := restored.BuildRequest(ModelRequest{}); !reflect.DeepEqual(got, request) {
+		t.Fatal("restoring plain stored fields changed historical data projection")
+	}
+	if parts := restored.state.prefix.pending; len(parts) != 0 {
+		t.Fatalf("unchanged restored data invalidated cache: %v", parts)
+	}
+	legacy := snapshot
+	legacy.PrefixBaseline = PrefixBaseline{System: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Tools: snapshot.PrefixBaseline.Tools}
+	restored.Restore(legacy)
+	restored.BuildRequest(ModelRequest{})
+	if !reflect.DeepEqual(restored.state.prefix.pending, []string{"system"}) {
+		t.Fatalf("old system baseline must report a one-time head change: %v", restored.state.prefix.pending)
+	}
+}
 
 // A resumed session must report why its first request missed instead of a bare
 // cold-start: the persisted baseline carries the previous request's head.

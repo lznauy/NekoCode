@@ -30,3 +30,19 @@ func TestBuildSummaryMessagesSeparatesRulesFromHistory(t *testing.T) {
 		}
 	}
 }
+
+func TestSummaryInputPreservesFullEvidence(t *testing.T) {
+	tail := "用户约束尾部不可丢失"
+	args := strings.Repeat("argument", 300) + "ARGUMENT_TAIL"
+	messages := []types.Message{
+		{Role: "user", Content: strings.Repeat("约束", 700) + tail},
+		{Role: "assistant", ToolCalls: []types.ToolCall{{ID: "call-1", Function: types.FunctionCall{Name: "shell", Arguments: args}}}},
+		{Role: "tool", ToolCallID: "call-1", IsError: true, Content: strings.Repeat("error", 500) + "ERROR_TAIL"},
+	}
+	input := buildSummaryMessages(messages, "archive")[1].Content
+	for _, want := range []string{tail, args, "ERROR_TAIL", "call-1", "shell", `"is_error":true`} {
+		if !strings.Contains(input, want) {
+			t.Errorf("summary input omitted %q", want)
+		}
+	}
+}

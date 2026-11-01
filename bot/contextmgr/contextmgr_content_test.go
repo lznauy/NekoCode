@@ -55,8 +55,8 @@ func TestBuildLayer0(t *testing.T) {
 	c := newContextContent("system")
 	c.Skills = "skill list"
 	msgs := c.BuildLayer0()
-	if len(msgs) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(msgs))
 	}
 	if msgs[0].Content != "system" {
 		t.Errorf("msg0 = %q", msgs[0].Content)
@@ -69,48 +69,40 @@ func TestBuildLayer0(t *testing.T) {
 func TestBuildLayer0_Empty(t *testing.T) {
 	c := newContextContent("")
 	msgs := c.BuildLayer0()
-	if len(msgs) != 0 {
-		t.Error("empty system/skills should produce no messages")
+	if len(msgs) != 1 || msgs[0].Role != "system" || msgs[0].Content != historicalDataContract {
+		t.Error("empty system/skills should retain the static historical data contract")
 	}
 }
 
-func TestBuildLayer1(t *testing.T) {
+func TestBuildMemoryData(t *testing.T) {
 	c := newContextContent("")
 	c.Memory = "memory content"
-	msgs := c.BuildLayer1()
+	msgs := c.BuildData()
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 msg, got %d", len(msgs))
 	}
-	if msgs[0].Role != "system" || msgs[0].Content != "memory content" {
+	if msgs[0].Role != "user" || msgs[0].Source != types.MessageSourceContextData || !strings.Contains(msgs[0].Content, "memory content") {
 		t.Error("memory message incorrect")
 	}
 }
 
-func TestBuildLayer1_Empty(t *testing.T) {
+func TestBuildDataEmpty(t *testing.T) {
 	c := newContextContent("")
-	msgs := c.BuildLayer1()
+	msgs := c.BuildData()
 	if len(msgs) != 0 {
 		t.Error("empty memory should produce no messages")
 	}
 }
 
-func TestBuildLayer2(t *testing.T) {
+func TestBuildArchiveData(t *testing.T) {
 	c := newContextContent("")
 	c.Archive = "archived summary"
-	msgs := c.BuildLayer2()
+	msgs := c.BuildData()
 	if len(msgs) != 1 {
 		t.Fatal("expected 1 message")
 	}
-	if !strings.Contains(msgs[0].Content, "[Archive]") {
+	if msgs[0].Role != "user" || !strings.Contains(msgs[0].Content, `"kind":"archive"`) {
 		t.Errorf("archive message: %s", msgs[0].Content)
-	}
-}
-
-func TestBuildLayer2_Empty(t *testing.T) {
-	c := newContextContent("")
-	msgs := c.BuildLayer2()
-	if len(msgs) != 0 {
-		t.Error("empty archive should produce no messages")
 	}
 }
 

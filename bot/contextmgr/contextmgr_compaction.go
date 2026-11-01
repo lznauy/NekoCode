@@ -34,13 +34,13 @@ const (
 // AutoCompactIfNeeded compacts only when the context has crossed the automatic
 // threshold. The model call runs without holding the context state lock.
 func (m *Manager) AutoCompactIfNeeded(ctx context.Context) (bool, error) {
-	return m.compact(ctx, false)
+	return m.compact(ctx, false, 0)
 }
 
 // Summarize compacts the current history regardless of its token occupancy.
 // It reports whether any messages were actually replaced.
 func (m *Manager) Summarize(ctx context.Context) (bool, error) {
-	applied, err := m.compact(ctx, true)
+	applied, err := m.compact(ctx, true, 0)
 	if err != nil {
 		return applied, err
 	}
@@ -98,7 +98,7 @@ func (m *Manager) restoreDeferredResults() (bool, error) {
 	return true, nil
 }
 
-func (m *Manager) compact(ctx context.Context, force bool) (applied bool, resultErr error) {
+func (m *Manager) compact(ctx context.Context, force bool, outputTokens int) (applied bool, resultErr error) {
 	m.compactionMu.Lock()
 	defer m.compactionMu.Unlock()
 	if ctx == nil {
@@ -201,12 +201,17 @@ func (m *Manager) compact(ctx context.Context, force bool) (applied bool, result
 		// replay its stale Started event.
 		inner := summarizer
 		summarizer = func(messages []types.Message, previous string) (string, error) {
-			if !started && lifecycle != nil {
-				lifecycle(ctx, "started")
+			if err := ctx.Err(); err != nil {
+				return "", err
 			}
-			started = true
-			ev.Status = protocol.CompactionStarted
-			emit()
+			if !started {
+				if lifecycle != nil {
+					lifecycle(ctx, "started")
+				}
+				started = true
+				ev.Status = protocol.CompactionStarted
+				emit()
+			}
 			return inner(messages, previous)
 		}
 	}
@@ -237,6 +242,19 @@ func (m *Manager) compact(ctx context.Context, force bool) (applied bool, result
 	if m.state.revision != snap.revision {
 		return false, fmt.Errorf("context changed while compacting; summary was not applied")
 	}
+	// Validate the candidate before the sole commit point. Request-specific
+	// tools/transients are still admitted by PrepareRequest after rebuilding.
+	candidate := m.state.ctx
+	candidate.Archive, candidate.Messages = archive, recent
+	projected := append(candidate.BuildLayer0(), candidate.BuildData()...)
+	projected = append(projected, recent...)
+	finalBudget, err := estimateRequestBudget(projected, nil, snap.budget, outputTokens, m.state.reasoning, m.state.vision, 0)
+	if err != nil {
+		return false, err
+	}
+	if finalBudget.Total() > finalBudget.Window {
+		return false, finalBudget
+	}
 	m.state.ctx.Archive = archive
 	m.state.ctx.Messages = recent
 	m.restoreRuntimeContextLocked()
@@ -247,9 +265,6 @@ func (m *Manager) compact(ctx context.Context, force bool) (applied bool, result
 
 	used := m.estimatedTokens()
 	ev.Summary, ev.AfterTokens, ev.AfterMessages = archive, used, len(m.state.ctx.Messages)
-	if !force && used >= compressor.effectiveBudget(snap.budget) {
-		return true, contextFullError(used, snap.budget)
-	}
 	return true, nil
 }
 
@@ -385,7 +400,7 @@ func (m *Manager) pruneStaleToolResults(ctx context.Context, history []types.Mes
 func goalFromHistory(history []types.Message) string {
 	var goal string
 	for i := len(history) - 1; i >= 0; i-- {
-		if isConversationUser(history[i]) && strings.TrimSpace(history[i].Content) != "" {
+		if history[i].IsConversationUser() && strings.TrimSpace(history[i].Content) != "" {
 			goal = truncateRunes(history[i].Content, 1000)
 			break
 		}

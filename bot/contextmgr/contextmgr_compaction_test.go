@@ -3,6 +3,7 @@ package contextmgr
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -28,7 +29,7 @@ func TestAutoCompactReportsActualOverflowWhenNothingCanBeTrimmed(t *testing.T) {
 	}
 }
 
-func TestAppliedCompactionRunsAfterHookWhenStillOverBudget(t *testing.T) {
+func TestCompactionRejectsOverBudgetCandidateBeforeCommit(t *testing.T) {
 	m := New(Config{
 		SystemPrompt:  strings.Repeat("system context ", 20),
 		ContextWindow: 1,
@@ -43,12 +44,17 @@ func TestAppliedCompactionRunsAfterHookWhenStillOverBudget(t *testing.T) {
 	afterCalls := 0
 	m.SetAfterCompaction(func() { afterCalls++ })
 
+	before := m.Snapshot()
 	applied, err := m.AutoCompactIfNeeded(context.Background())
-	if !applied || err == nil || !strings.Contains(err.Error(), "context full") {
-		t.Fatalf("AutoCompactIfNeeded() = %v, %v; want applied compaction with overflow warning", applied, err)
+	if applied || err == nil {
+		t.Fatalf("over-budget candidate committed: %v, %v", applied, err)
 	}
-	if afterCalls != 1 {
-		t.Fatalf("after-compaction hook calls = %d, want 1 after history replacement", afterCalls)
+	if afterCalls != 0 {
+		t.Fatalf("after hook ran without commit: %d", afterCalls)
+	}
+	after := m.Snapshot()
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("failed admission mutated context")
 	}
 }
 

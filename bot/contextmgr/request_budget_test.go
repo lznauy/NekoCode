@@ -193,11 +193,52 @@ func TestRequestBudgetDraftsDoNotCountAsRequests(t *testing.T) {
 
 func TestSummaryBudgetUsesFormattedRequest(t *testing.T) {
 	history := []types.Message{{Role: "tool", Content: strings.Repeat("x", 100000)}}
-	request, err := prepareSummaryRequest(history, "", 10000, &budgetSummaryClient{})
-	if err != nil {
-		t.Fatal("formatted summary should fit despite a large raw result", err)
+	_, err := prepareSummaryRequest(history, "", 10000, &budgetSummaryClient{})
+	if err == nil {
+		t.Fatal("full source input bypassed summary budget")
 	}
-	if len(request) != 2 || len(request[1].Content) >= len(history[0].Content) {
-		t.Fatal("summary request was not formatted")
+	requireRequestBudgetError(t, err)
+}
+
+func TestCompactionUsesActualRequestOutputReserve(t *testing.T) {
+	m := New(Config{ContextWindow: 4000, Summarizer: func([]types.Message, string) (string, error) { return "<summary>earlier work completed</summary>", nil }})
+	for range 8 {
+		m.Add("user", strings.Repeat("q", 800))
+		m.Add("assistant", strings.Repeat("a", 800))
+	}
+	m.Add("user", strings.Repeat("r", 12000))
+	messages, err := m.PrepareRequest(t.Context(), ModelRequest{OutputTokens: 100})
+	if err != nil {
+		t.Fatalf("request fitting its actual output reserve was rejected: %v", err)
+	}
+	if m.Report().CompactCount != 1 {
+		t.Fatal("old history was not compacted")
+	}
+	budget, err := estimateRequestBudget(messages, nil, 4000, 100, types.ReasoningSettings{}, false, 0)
+	if err != nil || budget.Total() > budget.Window {
+		t.Fatalf("actual request did not fit: %+v, %v", budget, err)
+	}
+}
+
+func TestCompactionRejectsActualOutputOverflowBeforeCommit(t *testing.T) {
+	m := New(Config{ContextWindow: 4000, Summarizer: func([]types.Message, string) (string, error) { return "<summary>earlier work completed</summary>", nil }})
+	for range 8 {
+		m.Add("user", strings.Repeat("q", 800))
+		m.Add("assistant", strings.Repeat("a", 800))
+	}
+	m.Add("user", strings.Repeat("r", 8000))
+	before := m.Snapshot()
+	_, err := m.PrepareRequest(t.Context(), ModelRequest{OutputTokens: 2000})
+	if err == nil {
+		t.Fatal("oversized actual output reserve was admitted")
+	}
+	after := m.Snapshot()
+	if after.Archive != before.Archive || len(after.Messages) != len(before.Messages) || m.Report().CompactCount != 0 {
+		t.Fatal("output overflow committed compressed state before rejection")
+	}
+	for i := range before.Messages {
+		if before.Messages[i].Content != after.Messages[i].Content {
+			t.Fatal("output overflow changed source history")
+		}
 	}
 }
