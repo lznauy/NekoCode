@@ -41,6 +41,8 @@ type Message struct {
 	// Like Source, it is persisted locally and omitted from provider wire types.
 	SkillName     string        `json:"skill_name,omitempty"`
 	SkillDelivery SkillDelivery `json:"skill_delivery,omitzero"`
+	// ToolEvidence is transcript-only local metadata, never provider instructions.
+	ToolEvidence protocol.ToolEvidence `json:"tool_evidence,omitzero"`
 
 	// DeferredContent is the bounded tool preview awaiting context capacity.
 	// It preserves error/status text independently of the raw output file.

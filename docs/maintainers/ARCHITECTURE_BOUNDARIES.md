@@ -81,7 +81,19 @@ Shell 与 process 的 ToolOutput.Process 携带 ProcessObservation 值，executo
 
 状态、展示信息与输出在原 shellTask 锁内一起采样。OutputComplete 仅在进程已结束、输出管道读完、没有读取异常且当前样本含从起点开始的全部捕获字节时为 true；运行中、环形日志覆盖、预览裁剪和 watch 增量不能宣称完整。该标记针对格式化前的捕获输出，不保证原始字节经 ANSI/换行处理后仍相同。executor 再裁剪或保存失败会清除完整标记，已观察的状态和退出码不改写。process list 不生成单个进程观察，未启动或未提供观察的工具保持空值。
 
-这批只提供工具到 executor 的运行期事实，不增加持久化字段、事件仓库或权限；模型展示仍沿用原文本。它尚不是执行凭证，也未进入 session、recording 或 evidence 查询。凭证应在实际执行边界使用这些事实，不能从展示文本或 nil error 推导执行成功。
+进程观察为 executor 的执行凭证提供事实，不能从展示文本或 nil error 推导命令成功。模型展示仍沿用原文本，观察不授予权限。执行凭证保存边界见下节。
+
+## 工具执行凭证
+
+executor 在每次实际进入工具函数前生成 UUID，记录 run/task/attempt/call 关联、有效工具名、公开参数 SHA-256、起止 Unix 纳秒、边界返回摘要、错误摘要、进程观察和原始 artifact 元数据。权限重试是第二次物理调用，使用独立 ID；工具进入后返回 PermissionError 记 blocked，仅表示权限请求返回，不证明此前没有副作用。调用前拒绝、治理阻止、未分派的队列取消和内部 submit_result 不补造物理执行凭证。
+
+状态为 success/error/blocked/cancelled/unknown。正常进程退出按真实退出码分类，运行中或未知观察保持 unknown，信号终止/硬超时为 cancelled，工具 panic 为 unknown。没有进程观察的自定义工具仅按实际 error/nil-error 表达工具返回状态，success 不证明业务完成或测试通过。raw_complete 只沿用显式进程输出完整性且拒绝 incomplete artifact；缺生产者事实时为 false。摘要不签名、不授予访问权限，也不读取 artifact 正文校验文件版本。参数序列化不可用时摘要缺省，不散列虚假的空参数；原始参数和错误不复制进凭证。
+
+ToolCallResult.Evidence 的 schema=1 聚合当前调用至多两次物理调用，并记录 executor 完成归一化、裁剪后的返回摘要及 normalized/bounded/preservation_failed。原始工具返回的摘要与 executor 返回摘要分开；文本先按原始字节散列，避免 JSON 将不同无效 UTF-8 字节归一成同一值，也避免为大正文分配 JSON 副本。归一化和保存失败不改写物理调用的真实结果，不自动重放工具。
+
+主、子代理沿既有工具结果接纳链路传入 Context。Context 克隆执行列表，只在该工具的权威 transcript 记录附加 ToolEvidence，并记录初次接纳时的可见正文摘要及 ready/budgeted/deferred；该摘要不是 provider 接收回执，也不随后续 deferred 恢复改写。活动消息和 session.json 不保存凭证正文，恢复时保留 transcript 元数据并从活动历史移除；provider wire 与 prefix 指纹也排除该字段。继续使用现有 transcript 水位和保存事务，没有独立事件仓库或凭证索引。旧记录缺字段不补造；旧版本重写可能丢失新附加字段。
+
+目前凭证只生成并随 transcript 保存；evidence 查询、模型有界引用、recording/外部协议适配和子代理 evidence IDs 交接尚未接入。历史保存失败仍由原有调用方返回错误，不把失败解释为工具未执行或自动重试的许可；证据不完整的统一对外表达仍在计划中。
 
 ## 协议载荷
 

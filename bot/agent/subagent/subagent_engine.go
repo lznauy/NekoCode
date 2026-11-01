@@ -205,7 +205,7 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 		name, args := calls[i].Effective()
 		content := r.EffectiveOutput()
 		batch[i] = ctxmgr.ToolResultMsg{
-			Message:         types.Message{Content: r.TextOutput().Text, ToolOutput: r.Artifact, ToolCallID: r.ID, IsError: r.Error != "", ReadID: r.ReadID},
+			Message:         types.Message{Content: r.TextOutput().Text, ToolOutput: r.Artifact, ToolCallID: r.ID, IsError: r.Error != "", ReadID: r.ReadID, ToolEvidence: r.Evidence},
 			ToolName:        name,
 			AllowOutputFile: executor.AllowOutputFile,
 		}

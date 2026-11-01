@@ -164,3 +164,33 @@ func TestDelegatedSkillAdmissionsAreRecordedOncePerPreparedAttempt(t *testing.T)
 		t.Fatal("mismatched resolved names accepted")
 	}
 }
+
+func TestSubagentSavesReceiptWithOwnAttemptIdentity(t *testing.T) {
+	registry := tools.New(testProxyTool{name: "inspect"})
+	model := &scriptedLLM{scripts: [][]types.StreamToken{
+		{{ToolCallDelta: &types.ToolCallDelta{Index: 0, ID: "same-call", Name: "inspect", Arguments: `{}`}}}, completionScript(),
+	}}
+	var evidence protocol.ToolEvidence
+	cfg := RunConfig{SessionID: "parent", SubagentID: "child", AttemptID: "child-attempt", Profile: Profile{Name: "custom", Tools: []string{"inspect"}}, SaveContext: func(snapshot ctxmgr.ManagerSnapshot, _, _ string, _ AttemptUsage) error {
+		for _, msg := range snapshot.Transcript {
+			if msg.ToolCallID == "same-call" {
+				evidence = msg.ToolEvidence
+			}
+		}
+		return nil
+	}}
+	result, err := New(Config{LLM: model, Tools: registry}).Run(protocol.WithExecutionIdentity(t.Context(), protocol.ExecutionIdentity{RunID: "parent-run", AttemptID: "parent-attempt"}), cfg)
+	if err != nil || result.Status != StatusCompleted {
+		t.Fatalf("%+v %v", result, err)
+	}
+	if len(evidence.Executions) != 1 || evidence.Executions[0].Execution != (protocol.ExecutionIdentity{RunID: "parent-run", TaskID: "child", AttemptID: "child-attempt"}) {
+		t.Fatalf("wrong child evidence: %+v", evidence)
+	}
+	for _, messages := range model.messages {
+		for _, msg := range messages {
+			if len(msg.ToolEvidence.Executions) > 0 {
+				t.Fatal("evidence body entered child model request")
+			}
+		}
+	}
+}

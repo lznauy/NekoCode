@@ -7,19 +7,20 @@ import (
 
 	"nekocode/bot/provider/types"
 	"nekocode/bot/reasoning"
+	"nekocode/protocol"
 )
 
 func TestBuildBodyOmitsInternalToolErrorFlag(t *testing.T) {
 	c := New("", "", "test-model")
 	body := c.buildBody([]types.Message{
-		{Role: "tool", Content: "command failed", ToolCallID: "tc1", IsError: true, SkillName: "local-skill", SkillDelivery: types.SkillDelivery{Schema: 1, Name: "admission-secret-sentinel", Source: "tool", State: types.SkillReady}},
+		{Role: "tool", Content: "command failed", ToolCallID: "tc1", IsError: true, SkillName: "local-skill", ToolEvidence: protocol.ToolEvidence{Schema: 1, Executions: []protocol.ExecutionReceipt{{ID: "receipt-secret-sentinel"}}}, SkillDelivery: types.SkillDelivery{Schema: 1, Name: "admission-secret-sentinel", Source: "tool", State: types.SkillReady}},
 	}, nil, false)
 	data, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(data)
-	if strings.Contains(s, "is_error") || strings.Contains(s, "skill_name") || strings.Contains(s, "skill_delivery") || strings.Contains(s, "admission-secret-sentinel") {
+	if strings.Contains(s, "receipt-secret-sentinel") || strings.Contains(s, "tool_evidence") || strings.Contains(s, "is_error") || strings.Contains(s, "skill_name") || strings.Contains(s, "skill_delivery") || strings.Contains(s, "admission-secret-sentinel") {
 		t.Fatalf("request body leaks internal tool metadata: %s", s)
 	}
 	if !strings.Contains(s, `"tool_call_id":"tc1"`) {

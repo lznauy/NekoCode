@@ -2,7 +2,6 @@ package runner
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	"slices"
 	"strings"
@@ -17,19 +16,36 @@ import (
 )
 
 func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result core.ToolCallResult) {
+	evidence := protocol.ToolEvidence{Schema: 1}
+	invoke := func(callCtx context.Context, run func() (core.ToolOutput, error)) (core.ToolOutput, error) {
+		output, err, receipt := observeExecution(callCtx, tc, run)
+		evidence.Executions = append(evidence.Executions, receipt)
+		return output, err
+	}
+	defer func() {
+		if len(evidence.Executions) > 0 {
+			evidence.ReturnedHash = core.OutputHash(result.TextOutput())
+			result.Evidence = evidence
+		}
+	}()
+
 	defer func() {
 		bounded, err := e.state.OutputStore.BoundOutput(result.TextOutput(), core.MaxOutputBytes)
 		if err == nil && bounded.Artifact.Path != "" {
 			err = e.AllowOutputFile(bounded.Artifact.Path)
 		}
 		if err != nil {
+			evidence.PreservationFailed = true
 			result.Error = "cannot preserve tool result: " + err.Error()
 			result.Output = ""
 			result.Artifact = protocol.ToolOutputArtifact{}
 			result.Process.OutputComplete = false
 			return
 		}
-		bounded.Text = textutil.NormalizeTerminalOutput(bounded.Text)
+		evidence.Bounded = bounded.Text != result.TextOutput().Text || bounded.Artifact != result.Artifact
+		normalized := textutil.NormalizeTerminalOutput(bounded.Text)
+		evidence.Normalized = normalized != bounded.Text
+		bounded.Text = normalized
 		result.Artifact = bounded.Artifact
 		result.Process = bounded.Process
 		if result.Error != "" {
@@ -121,14 +137,20 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 	defer e.finalizeMutationPaths(captured)
 
 	paths := toolPaths(tc)
-	output, execErr := e.callTool(ctx, tool, tc)
+	output, execErr := invoke(ctx, func() (core.ToolOutput, error) { return tool.Execute(e.toolContext(ctx), tc.Args) })
 	e.noteExecutedShell(tc)
 	if execErr != nil {
 		preApproved := escalationApproval{}
 		if preApproval != nil {
 			preApproved = *preApproval
 		}
-		escOut, escOk, escReason, escCause := e.tryPermissionEscalation(ctx, entry.Privileged, tc, execErr, confirmFn, preApproved, preApproval != nil, dec.jevSafe)
+		privileged := entry.Privileged
+		if original := privileged; original != nil {
+			privileged = func(callCtx context.Context, args map[string]any, req core.PermissionRequest) (core.ToolOutput, error) {
+				return invoke(callCtx, func() (core.ToolOutput, error) { return original(callCtx, args, req) })
+			}
+		}
+		escOut, escOk, escReason, escCause := e.tryPermissionEscalation(ctx, privileged, tc, execErr, confirmFn, preApproved, preApproval != nil, dec.jevSafe)
 		if escOk {
 			e.invalidateMutatedPaths(tc.Name, paths)
 			return core.ToolCallResult{ID: tc.ID, Name: resultName, Output: escOut.Text, Artifact: escOut.Artifact, ReadID: escOut.ReadID, Process: escOut.Process}
@@ -590,15 +612,6 @@ func (e *Executor) callbacks() (protocol.PhaseFunc, protocol.ConfirmFunc, bool) 
 	phase, plan := e.phaseFn, e.planMode
 	e.fnMu.RUnlock()
 	return phase, e.ConfirmFn(), plan
-}
-
-func (e *Executor) callTool(ctx context.Context, tool core.Tool, tc core.ToolCallItem) (output core.ToolOutput, execErr error) {
-	defer func() {
-		if r := recover(); r != nil {
-			execErr = fmt.Errorf("panic: %v", r)
-		}
-	}()
-	return tool.Execute(e.toolContext(ctx), tc.Args)
 }
 
 func (e *Executor) toolContext(ctx context.Context) context.Context {

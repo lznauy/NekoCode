@@ -340,3 +340,53 @@ func TestExecutorDoesNotOwnReadBeforeWriteGovernance(t *testing.T) {
 		t.Errorf("executor should not apply read-before-write policy: %s", results[0].Error)
 	}
 }
+
+func TestExecutionReceiptIsSavedOnceInTranscriptAndSurvivesReload(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sessions := session.New(t.TempDir())
+	executor := runner.NewExecutor(tools.New(&testTool{name: "plain"}))
+	identity := protocol.ExecutionIdentity{RunID: "original-run", TaskID: "child", AttemptID: "original-attempt"}
+	result := executor.ExecuteBatch(protocol.WithExecutionIdentity(t.Context(), identity), []core.ToolCallItem{{ID: "provider-call", Name: "plain"}})[0]
+	if len(result.Evidence.Executions) != 1 {
+		t.Fatalf("missing execution: %+v", result)
+	}
+	receipt := result.Evidence.Executions[0]
+	manager := contextmgr.New(contextmgr.Config{})
+	manager.AddToolResultsBatch([]contextmgr.ToolResultMsg{{ToolName: "plain", Message: types.Message{ToolCallID: result.ID, Content: result.Output, ToolEvidence: result.Evidence}}})
+	saved := sessions.Current()
+	first := manager.Snapshot()
+	saved.CaptureContext(first, 0, 0, nil)
+	if err := sessions.Save(saved); err != nil {
+		t.Fatal(err)
+	}
+	manager.AcknowledgeTranscript(first.TranscriptBase, first.TranscriptBase+len(first.Transcript))
+	manager.Add("user", "later ordinary history")
+	saved.CaptureContext(manager.Snapshot(), 0, 0, nil)
+	if err := sessions.Save(saved); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(os.Getenv("HOME"), ".nekocode", "sessions", saved.ID)
+	transcript, err := os.ReadFile(filepath.Join(dir, "transcript.jsonl"))
+	if err != nil || strings.Count(string(transcript), receipt.ID) != 1 {
+		t.Fatalf("duplicated/lost source: %s %v", transcript, err)
+	}
+	active, err := os.ReadFile(filepath.Join(dir, "session.json"))
+	if err != nil || strings.Contains(string(active), receipt.ID) {
+		t.Fatal("receipt duplicated in session state", err)
+	}
+	loaded, err := sessions.Load(saved.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := contextmgr.New(contextmgr.Config{})
+	restored.Restore(loaded.ContextSnapshot())
+	source := restored.Snapshot().Transcript[0].ToolEvidence
+	if len(source.Executions) != 1 || source.Executions[0] != receipt || source.VisibleHash != first.Transcript[0].ToolEvidence.VisibleHash {
+		t.Fatalf("restored receipt changed: %+v", source)
+	}
+	for _, msg := range restored.Snapshot().Messages {
+		if len(msg.ToolEvidence.Executions) > 0 {
+			t.Fatal("restored active history contains evidence body")
+		}
+	}
+}

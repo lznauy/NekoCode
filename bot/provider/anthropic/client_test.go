@@ -7,6 +7,7 @@ import (
 
 	"nekocode/bot/provider/types"
 	"nekocode/bot/reasoning"
+	"nekocode/protocol"
 )
 
 func TestToMessagesConsolidatesSystemContext(t *testing.T) {
@@ -180,12 +181,12 @@ func TestHeadersSupportAnthropicAndBearerAuth(t *testing.T) {
 
 func TestToolResultOmitsLocalSkillMetadata(t *testing.T) {
 	c := New("", "", "test")
-	messages, _ := c.toMessages([]types.Message{{Role: "tool", Content: "instructions", ToolCallID: "skill-call", SkillName: "local-skill", SkillDelivery: types.SkillDelivery{Schema: 1, Name: "admission-secret-sentinel", Source: "tool", State: types.SkillReady}}}, types.ReasoningSettings{})
+	messages, _ := c.toMessages([]types.Message{{Role: "tool", Content: "instructions", ToolCallID: "skill-call", SkillName: "local-skill", ToolEvidence: protocol.ToolEvidence{Schema: 1, Executions: []protocol.ExecutionReceipt{{ID: "receipt-secret-sentinel"}}}, SkillDelivery: types.SkillDelivery{Schema: 1, Name: "admission-secret-sentinel", Source: "tool", State: types.SkillReady}}}, types.ReasoningSettings{})
 	data, err := json.Marshal(messages)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "skill_name") || strings.Contains(string(data), "local-skill") || strings.Contains(string(data), "skill_delivery") || strings.Contains(string(data), "admission-secret-sentinel") {
+	if strings.Contains(string(data), "receipt-secret-sentinel") || strings.Contains(string(data), "tool_evidence") || strings.Contains(string(data), "skill_name") || strings.Contains(string(data), "local-skill") || strings.Contains(string(data), "skill_delivery") || strings.Contains(string(data), "admission-secret-sentinel") {
 		t.Fatalf("wire result leaked local skill metadata: %s", data)
 	}
 	if !strings.Contains(string(data), "instructions") {

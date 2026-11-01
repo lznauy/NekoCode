@@ -1,6 +1,7 @@
 package contextmgr
 
 import (
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -176,6 +177,17 @@ func (m *Manager) AddToolResultsBatch(results []ToolResultMsg) {
 		remaining = max(0, remaining-len(message.Content))
 		m.state.ctx.Messages = append(m.state.ctx.Messages, message)
 		transcriptMessage := message
+		transcriptMessage.ToolEvidence = r.Message.ToolEvidence
+		if transcriptMessage.ToolEvidence.Schema == 1 && len(transcriptMessage.ToolEvidence.Executions) > 0 {
+			transcriptMessage.ToolEvidence.Executions = slices.Clone(transcriptMessage.ToolEvidence.Executions)
+			transcriptMessage.ToolEvidence.VisibleHash = core.EvidenceHash([]byte(message.Content))
+			transcriptMessage.ToolEvidence.Admission = "ready"
+			if deferred {
+				transcriptMessage.ToolEvidence.Admission = "deferred"
+			} else if message.Content != (core.ToolOutput{Text: r.Message.Content, Artifact: r.Message.ToolOutput}).Render() {
+				transcriptMessage.ToolEvidence.Admission = "budgeted"
+			}
+		}
 		transcriptMessage.ReadID = ""
 		transcriptMessage.Source = ""
 		transcriptMessage.DeferredContent = ""

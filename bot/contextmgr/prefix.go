@@ -7,6 +7,7 @@ import (
 
 	"nekocode/bot/calllog"
 	"nekocode/bot/provider/types"
+	"nekocode/protocol"
 )
 
 type prefixShape struct {
@@ -277,6 +278,7 @@ func canonicalMessages(messages []types.Message) []types.Message {
 	for i := range out {
 		out[i].Source = ""
 		out[i].SkillDelivery = types.SkillDelivery{}
+		out[i].ToolEvidence = protocol.ToolEvidence{}
 	}
 	if out == nil {
 		out = []types.Message{}

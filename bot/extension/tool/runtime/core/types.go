@@ -36,8 +36,9 @@ func (c ToolCallItem) Effective() (string, map[string]any) {
 }
 
 type ToolCallResult struct {
-	ReadID   string             `json:"-"`
-	Process  ProcessObservation `json:"process,omitzero"`
+	ReadID   string                `json:"-"`
+	Process  ProcessObservation    `json:"process,omitzero"`
+	Evidence protocol.ToolEvidence `json:"evidence,omitzero"`
 	Artifact protocol.ToolOutputArtifact
 	ID       string
 	Name     string

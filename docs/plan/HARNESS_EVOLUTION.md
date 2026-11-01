@@ -45,20 +45,18 @@
 
 ### PR 6：执行证据与子代理交接
 
-**已有基础：** ToolCallResult、有效工具身份 resolver、OutputStore、StepEvent、录制、子代理 submit_result 和 attempt transcript。Shell/process 已提供[结构化进程观察](../maintainers/ARCHITECTURE_BOUNDARIES.md#结构化进程观察)，executor 保留真实退出码与保守输出完整性；目前仅为运行期事实，尚未形成或持久化 receipt。
+**已有基础：** ToolCallResult、有效工具身份 resolver、OutputStore、StepEvent、录制、子代理 submit_result 和 attempt transcript。[结构化进程观察](../maintainers/ARCHITECTURE_BOUNDARIES.md#结构化进程观察)及[工具执行凭证](../maintainers/ARCHITECTURE_BOUNDARIES.md#工具执行凭证)已实现：实际调用与权限重试各自生成 UUID，记录边界摘要及真实进程事实，只随 transcript 保存；模型请求不携带正文。
 
-**改动方案：**
+**剩余改动方案：**
 
-1. 在实际执行边界创建稳定 receipt ID，身份使用宿主生成 UUID 并携带 run/attempt/call 关联；不使用 `[r1]` 这种位置编号。每次物理执行单独关联，审批拒绝不伪装成执行成功。
-2. 状态区分 success、error、blocked、cancelled、unknown；未实现结构化状态的自定义工具只能表达其真实 error/nil-error 结果，不能推导命令 exit code 或业务成功。
-3. receipt 记录有效工具名、参数摘要、执行前后时间、已知结构化错误/exit code、artifact 引用、执行边界返回值摘要，以及最终可见结果摘要和变换类型。不得从 Shell 文本或最终回答中提取“执行过测试”。
-4. “执行边界返回值”只指工具交给 executor 的 ToolOutput；如果工具内部已裁剪或捕获达到上限，显式标 raw_complete=false，不能称完整原始进程输出。
-5. receipt 随工具结果接纳进入 session/recording，存储一份权威事件，通过稳定 ID 查询。Context 只保存引用并可投影最近 16 条，正文总额受连续性投影预算约束。新增只读 `evidence` list/inspect，查询限当前 session 与获授权的 child attempt，分页最多 20 条。
-6. 子代理 submit_result 增加可选 evidence IDs。首版不强制历史/自定义代理提交引用；父 agent 可收到 resolved/unknown/wrong-scope/error 结果。核对只证明引用与执行记录关联，不能称 verified 或 task satisfied。
-7. 工具执行后 receipt 写入失败：保留已产生的结果和存储错误，终态标证据不完整，不自动重试工具。恢复发现未知结果也不生成成功 receipt 或盲重放。该行为复用现有“已提交事实与收尾失败分离”的错误契约。
-8. 结束原因复用现有 RunSummary，统一主/子路径及 recording/headless 投影；预算原因归 RUN_BUDGET.md，不能额外引入一套 stop enum。仅有 receipt 不触发自动续跑或交付验收硬门禁。
+1. 明确调用前拒绝、未分派取消及治理阻止的决策记录表达，与已执行的物理调用凭证区分，不补造执行事实。保留未知结果，不由 Shell 文本推断“执行过测试”。
+2. 增加只读 evidence list/inspect，限定当前 session 与获授权的 child attempt，每页最多 20 条；复用 transcript，不另建事实仓库。Context 可投影最近 16 条引用，正文总额受现有连续性投影预算约束，不能把完整凭证塞回活动消息。
+3. 将凭证接入 recording、Runtime payload codec 和 headless/ACP 已知载荷投影；仅添加可选字段，核对旧客户端兼容，记录投影不反向覆盖 transcript。
+4. 子代理 submit_result 增加可选 evidence IDs；父 agent 可收到 resolved/unknown/wrong-scope/error 结果。首版不强制历史/自定义代理提交引用；核对只证明关联，不能称 verified 或 task satisfied。
+5. 历史或录制写入失败时，复用现有“已提交事实与收尾失败分离”的错误契约，明确对外表达证据不完整，不重试工具或补造成功凭证。恢复未知结果不自动重放。
+6. 结束原因复用现有 RunSummary，统一主/子路径及 recording/headless 投影；预算原因归 RUN_BUDGET.md，不另建 stop enum。仅有凭证不触发自动续跑或交付验收硬门禁。
 
-**主要落点：** protocol、tool runtime/core、runner 的执行与结果预算路径、shell 结构化结果、Agent 结果入上下文、subagent handoff、session、Runtime payload codec/recording、headless/ACP 的已知载荷投影和 evidence 工具。
+**主要落点：** 决策记录、evidence 工具和引用装配、subagent handoff、Runtime payload codec/recording、headless/ACP 的已知载荷投影。保留已有 runner/Context/session 凭证契约，避免重做保存路径。
 
 **验收：** 同名 provider call ID 跨 attempt 不混淆；capability 记录有效 MCP 目标；清理/截断后的可见摘要可核对；取消和存储失败不补造成功；压缩后 receipt ID 稳定；子代理引用不能越 scope；旧客户端可忽略新增可选字段。
 

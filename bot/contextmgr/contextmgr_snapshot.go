@@ -3,6 +3,7 @@ package contextmgr
 import (
 	"nekocode/bot/contextmgr/token"
 	"nekocode/bot/provider/types"
+	"nekocode/protocol"
 )
 
 type ManagerSnapshot struct {
@@ -90,6 +91,7 @@ func (m *Manager) Restore(snap ManagerSnapshot) {
 	}
 	for i := range m.state.ctx.Messages {
 		m.state.ctx.Messages[i].ReadID = ""
+		m.state.ctx.Messages[i].ToolEvidence = protocol.ToolEvidence{}
 	}
 	m.state.transcriptBase = snap.TranscriptBase
 	m.state.transcriptLazy = snap.TranscriptLazy
