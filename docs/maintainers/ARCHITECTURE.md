@@ -50,7 +50,7 @@ bot/
 - `mcp.Manager` 同时拥有 server 和对应工具的生命周期，外层不手工同步工具切片。
 - Skill 发现、上下文格式化和 loaded 状态归 `extension.Manager`；command 只接收动态命令注册数据。
 - 主代理的任务连续性引用复用 TaskLister；Context 只接收有界请求值，不维护任务状态。采样、失效及预算边界见 [任务连续性引用](ARCHITECTURE_BOUNDARIES.md#任务连续性引用)。
-- 工具物理调用凭证由 executor 生成，只随既有 transcript 保存，当前执行者通过只读 evidence 查询；活动请求不自动携带正文，见[工具执行凭证](ARCHITECTURE_BOUNDARIES.md#工具执行凭证)。
+- 工具物理调用凭证由 executor 生成，只随既有 transcript 保存，当前执行者及父代理指定的子 attempt 通过只读 evidence 查询；活动请求不自动携带正文，见[工具执行凭证](ARCHITECTURE_BOUNDARIES.md#工具执行凭证)。
 - 主、子代理的技能、产物引用及 `context_refs` 共用 refbridge 查询，复用历史索引和各自 OutputStore，位置解析重新检查当前权限，见 [产物引用与查询](ARCHITECTURE_BOUNDARIES.md#产物引用与查询)。
 - 技能接纳以消息上的可选版本元数据记录，deferred 恢复只追加轻量历史事实；不将 ready 视为 provider 回执，见 [技能接纳与引用](ARCHITECTURE_BOUNDARIES.md#技能接纳与引用)。
 - 无引用的 alias 包应删除；内部新代码应直接依赖真实实现包。

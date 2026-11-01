@@ -2,6 +2,7 @@ package session
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -229,6 +230,13 @@ func SubagentAttempts(parentID, id string, before, limit int) (SubagentAttemptPa
 // SubagentHistory reads only the committed prefix. It never repairs history
 // or writes an index while an executor may be appending to the transcript.
 func SubagentHistory(parentID, id string, before, limit int) (HistoryPage, error) {
+	return subagentHistory(context.Background(), parentID, id, before, limit)
+}
+
+func subagentHistory(ctx context.Context, parentID, id string, before, limit int) (HistoryPage, error) {
+	if err := ctx.Err(); err != nil {
+		return HistoryPage{}, err
+	}
 	if before < 0 || limit < 1 || limit > 1000 {
 		return HistoryPage{}, fmt.Errorf("invalid history cursor or limit")
 	}
@@ -288,6 +296,9 @@ func SubagentHistory(parentID, id string, before, limit int) (HistoryPage, error
 	bytes := 0
 	var sizes []int
 	for sequence < end && scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return HistoryPage{}, err
+		}
 		var record transcriptRecord
 		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil || record.Seq != sequence+1 {
 			return HistoryPage{}, fmt.Errorf("invalid confirmed subagent record %d", sequence+1)

@@ -93,17 +93,25 @@ ToolCallResult.Evidence 的 schema=1 聚合当前调用至多两次物理调用�
 
 主、子代理沿既有工具结果接纳链路传入 Context。Context 克隆执行列表，只在该工具的权威 transcript 记录附加 ToolEvidence，并记录初次接纳时的可见正文摘要及 ready/budgeted/deferred；该摘要不是 provider 接收回执，也不随后续 deferred 恢复改写。活动消息和 session.json 不保存凭证正文，恢复时保留 transcript 元数据并从活动历史移除；provider wire 与 prefix 指纹也排除该字段。继续使用现有 transcript 水位和保存事务，没有独立事件仓库或凭证索引。旧记录缺字段不补造；旧版本重写可能丢失新附加字段。
 
-凭证已生成、保存并开放当前执行者的 evidence 查询；模型自动有界引用、recording/外部协议适配和子代理 evidence IDs 交接尚未接入。历史保存失败仍由原有调用方返回错误，不把失败解释为工具未执行或自动重试的许可；证据不完整的统一对外表达仍在计划中。
+凭证已生成、保存并开放当前执行者的 evidence 查询；模型自动有界引用和 recording/外部协议适配尚未接入；父子 evidence IDs 交接见下节。历史保存失败仍由原有调用方返回错误，不把失败解释为工具未执行或自动重试的许可；证据不完整的统一对外表达仍在计划中。
 
 ## 执行凭证查询
 
-只读 evidence 复用 context_refs 的查询解析器、refbridge.Source 和执行者 reader 绑定，允许 Plan Mode。Kind 由工具实例固定，模型不能指定 session、task、attempt 或路径。主入口仅返回主会话的凭证；子入口核对当前 task/attempt/OutputStore，只返回自身任务的凭证（含自身历史 attempt），不查询父会话或兄弟任务。完整执行身份缺失的子运行不能查询；内置 coder/explore 包含 evidence，自定义 Profile 白名单分别控制 evidence 与 context_refs。仅开放 evidence 不会获得 context_refs 自动投影。
+只读 evidence 复用 context_refs 的查询解析器、refbridge.Source 和执行者 reader 绑定，允许 Plan Mode。Kind 由工具实例固定，模型不能指定其他 session 或路径。主入口默认返回主会话凭证，可同时提供 task_id/attempt_id 查询当前父会话下指定的已保存子执行；子入口核对当前 task/attempt/OutputStore，只返回自身任务的凭证（含自身历史 attempt），不查询父会话或兄弟任务。完整执行身份缺失的子运行不能查询；内置 coder/explore 包含 evidence，自定义 Profile 白名单分别控制 evidence 与 context_refs。仅开放 evidence 不会获得 context_refs 自动投影。
 
 list 的 limit 为 1–20 条原始历史记录，并最多返回 20 条凭证摘要；它复用现有索引的单记录定位，倒序合并已确认持久化水位和 pending tail，不增加凭证索引或改动技能/产物索引资格。64 KiB 为来源软预算，首条不可拆分，边界处可能先解码一条候选记录再延后返回；scanned 计入该候选，但 before 不跳过它。并非全历史搜索或常数冷恢复 IO。稀疏页可以没有 evidence 条目但 has_more=true，必须沿 before 原始排他游标继续。返回上限不拆开同一条来源中的两次物理调用，旧页不会跳过被延后的来源。
 
 返回 evidence 数组中的 ID 是 `evidence.<原始序号>.<scope及凭证元数据SHA-256>`，receipt_id 为宿主生成的物理 UUID。inspect 只定位该序号的一条记录并核对完整 ID，匹配时 status=recorded，否则 missing；recorded 仅表示记录关联，不表示 verified、测试通过或任务完成。list 不返回正文；inspect 的 detail 仅含目标物理调用和交付摘要，剔除 artifact 路径，has_artifact 只表示来源声称携带产物。查询不访问文件系统核实产物，不授予文件读取或工具重放许可；底层错误转为固定错误，取消保持原有错误语义。
 
-父代理查询获授权子 attempt、模型自动凭证引用及 evidence IDs 交接仍在后续范围。查询本身作为工具调用也会产生正常凭证，返回前的来源水位不包含该次查询尚未接纳的结果。
+父代理选择子任务时，从权威 session.json 验证 ID、parent、格式、attempt 起止序号及已提交水位；固定该区间，再核对每条 receipt 的 task 和精确 attempt。不读取未提交尾部，也不因子代理正在追加而修复历史或重建索引。复用只读历史定位，索引缺失或落后时流式扫描，可取消；不保证冷查询常数 IO。子入口拒绝所有 task_id/attempt_id 选择器。模型自动凭证引用仍在后续范围。查询本身作为工具调用也会产生正常凭证，返回前的来源水位不包含该次查询尚未接纳的结果。
+
+## 子代理凭证交接
+
+内部 submit_result 的 evidence_ids 为可选数组，最多 16 个唯一的规范 evidence 引用；缺省仍兼容旧子代理，不改变原有必填交接字段。该字段只保留引用，不复制凭证正文。已保存的提交调用及交接文本保留这些 IDs，不另建交接状态仓库。
+
+任务启动时固定 parent session，恢复、worktree、子执行身份和返回核对都沿用该值。Engine 完成最终 checkpoint 返回后，宿主用父执行者的既有 reader 对提交的 IDs 逐项查询指定 task/attempt，并向父工具结果追加带 task_id/attempt_id 的有界关联 JSON。resolved 只证明引用与记录匹配，并同时保留原 execution_status；执行 error 仍可被 resolved，绝不等于测试通过或任务完成。unknown 表示该范围找不到匹配记录，wrong_scope 表示引用序号或实际 receipt 不属于指定 attempt，error 表示当前权限、取消或存储不可用。格式合法但不匹配的摘要不补造记录。
+
+关联投影不反向修改子任务结果或执行凭证，不改变任务终态，也不因查询或保存失败重放工具。未提供 evidence_ids 时不额外查询；父会话切换后拒绝沿旧任务关联到新会话。产物路径仍不返回，原有权限和文件读取边界不变。
 
 ## 协议载荷
 

@@ -63,6 +63,9 @@ func TestReferenceReaderRejectsOtherActorAttemptAndStore(t *testing.T) {
 	if _, err := read(canceled, refbridge.Query{Limit: 20}); err == nil {
 		t.Fatal("cancellation ignored")
 	}
+	if _, err := read(ctx, refbridge.Query{Kind: refbridge.EvidenceKind, TaskID: "sibling", AttemptID: "foreign", Limit: 20}); err == nil {
+		t.Fatal("child selected another attempt scope")
+	}
 	cfg.Profile.Tools = nil
 	if referenceReader(cfg, mgr, store) != nil {
 		t.Fatal("profile without tool gained queries")

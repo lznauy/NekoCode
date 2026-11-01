@@ -379,6 +379,7 @@ func (e *Engine) filteredToolDefs(allowed []string) []types.ToolDef {
 				Properties: map[string]types.Property{
 					"summary":      {Type: "string", Description: "Complete conclusion or changes made."},
 					"evidence":     {Type: "array", Description: "Key evidence supporting the summary.", Items: &types.Property{Type: "string"}},
+					"evidence_ids": {Type: "array", Description: "Optional, at most 16 unique evidence reference IDs returned by evidence for this attempt. Associations do not prove task completion or tests passed. Omit when no receipts are available.", Items: &types.Property{Type: "string"}},
 					"files":        {Type: "array", Description: "Files involved in the work.", Items: &types.Property{Type: "string"}},
 					"verification": {Type: "string", Description: "Verification actually performed and its result; explicitly state when not run."},
 					"unfinished":   {Type: "array", Description: "Unfinished items, or an empty array.", Items: &types.Property{Type: "string"}},

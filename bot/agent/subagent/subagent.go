@@ -29,6 +29,8 @@ const (
 	submitResultToolName         = "nekocode_submit_result"
 	maxSubAgentSteps             = agentprofile.DefaultMaxSteps
 	maxCompletionProtocolRetries = 2
+	// MaxEvidenceIDs bounds optional parent handoff association work.
+	MaxEvidenceIDs = 16
 )
 
 type Engine struct {
@@ -357,6 +359,9 @@ func submittedResult(calls []core.ToolCallItem) (handoff Handoff, submitted bool
 		var parseErr error
 		handoff.Summary, parseErr = requiredResultString(call.Args, "summary")
 		if parseErr == nil {
+			handoff.EvidenceIDs, parseErr = optionalEvidenceIDs(call.Args)
+		}
+		if parseErr == nil {
 			handoff.Evidence, parseErr = requiredResultStrings(call.Args, "evidence")
 		}
 		if parseErr == nil {
@@ -471,6 +476,7 @@ type Result struct {
 type Handoff struct {
 	Summary      string
 	Evidence     []string
+	EvidenceIDs  []string
 	Files        []string
 	Verification string
 	Unfinished   []string
@@ -509,6 +515,7 @@ func buildHandoffResult(handoff Handoff, meta runMeta) *Result {
 	result := newResult(StatusCompleted, formatHandoff(handoff), meta)
 	copy := handoff
 	copy.Evidence = append([]string(nil), handoff.Evidence...)
+	copy.EvidenceIDs = append([]string(nil), handoff.EvidenceIDs...)
 	copy.Files = append([]string(nil), handoff.Files...)
 	copy.Unfinished = append([]string(nil), handoff.Unfinished...)
 	copy.Risks = append([]string(nil), handoff.Risks...)
@@ -520,6 +527,7 @@ func formatHandoff(handoff Handoff) string {
 	var out strings.Builder
 	out.WriteString(handoff.Summary)
 	writeHandoffList(&out, "Evidence", handoff.Evidence)
+	writeHandoffList(&out, "Execution evidence IDs", handoff.EvidenceIDs)
 	writeHandoffList(&out, "Files", handoff.Files)
 	out.WriteString("\n\nVerification:\n")
 	out.WriteString(handoff.Verification)

@@ -21,6 +21,9 @@ func referenceReader(cfg RunConfig, mgr *ctxmgr.Manager, store *core.OutputStore
 		return nil
 	}
 	return func(ctx context.Context, q refbridge.Query) (refbridge.Page, error) {
+		if q.TaskID != "" || q.AttemptID != "" {
+			return refbridge.Page{}, fmt.Errorf("child cannot select another evidence scope")
+		}
 		tool := "context_refs"
 		if q.Kind == refbridge.EvidenceKind {
 			tool = "evidence"

@@ -45,18 +45,17 @@
 
 ### PR 6：执行证据与子代理交接
 
-**已有基础：** ToolCallResult、有效工具身份 resolver、OutputStore、StepEvent、录制、子代理 submit_result 和 attempt transcript。[结构化进程观察](../maintainers/ARCHITECTURE_BOUNDARIES.md#结构化进程观察)及[工具执行凭证](../maintainers/ARCHITECTURE_BOUNDARIES.md#工具执行凭证)已实现：实际调用与权限重试各自生成 UUID，记录边界摘要及真实进程事实，只随 transcript 保存；模型请求不自动携带正文；当前执行者的只读[执行凭证查询](../maintainers/ARCHITECTURE_BOUNDARIES.md#执行凭证查询)已开放。
+**已有基础：** ToolCallResult、有效工具身份 resolver、OutputStore、StepEvent、录制、子代理 submit_result 和 attempt transcript。[结构化进程观察](../maintainers/ARCHITECTURE_BOUNDARIES.md#结构化进程观察)及[工具执行凭证](../maintainers/ARCHITECTURE_BOUNDARIES.md#工具执行凭证)已实现：实际调用与权限重试各自生成 UUID，记录边界摘要及真实进程事实，只随 transcript 保存；模型请求不自动携带正文；当前执行者及父会话指定子 attempt 的只读[执行凭证查询](../maintainers/ARCHITECTURE_BOUNDARIES.md#执行凭证查询)已开放；可选 evidence_ids 的[子代理凭证交接](../maintainers/ARCHITECTURE_BOUNDARIES.md#子代理凭证交接)已实现，只核对关联。
 
 **剩余改动方案：**
 
 1. 明确调用前拒绝、未分派取消及治理阻止的决策记录表达，与已执行的物理调用凭证区分，不补造执行事实。保留未知结果，不由 Shell 文本推断“执行过测试”。
-2. 在已有当前执行者 evidence 查询上接入父代理获授权 child attempt 查询；不能由模型任意指定其他会话或任务。Context 可投影最近 16 条引用，正文总额受现有连续性投影预算约束，不能把完整凭证塞回活动消息。
+2. 为 Context 增加最近 16 条凭证引用的自动投影，正文总额受现有连续性投影预算约束，不能把完整凭证塞回活动消息。
 3. 将凭证接入 recording、Runtime payload codec 和 headless/ACP 已知载荷投影；仅添加可选字段，核对旧客户端兼容，记录投影不反向覆盖 transcript。
-4. 子代理 submit_result 增加可选 evidence IDs；父 agent 可收到 resolved/unknown/wrong-scope/error 结果。首版不强制历史/自定义代理提交引用；核对只证明关联，不能称 verified 或 task satisfied。
-5. 历史或录制写入失败时，复用现有“已提交事实与收尾失败分离”的错误契约，明确对外表达证据不完整，不重试工具或补造成功凭证。恢复未知结果不自动重放。
-6. 结束原因复用现有 RunSummary，统一主/子路径及 recording/headless 投影；预算原因归 RUN_BUDGET.md，不另建 stop enum。仅有凭证不触发自动续跑或交付验收硬门禁。
+4. 历史或录制写入失败时，复用现有“已提交事实与收尾失败分离”的错误契约，明确对外表达证据不完整，不重试工具或补造成功凭证。恢复未知结果不自动重放。
+5. 结束原因复用现有 RunSummary，统一主/子路径及 recording/headless 投影；预算原因归 RUN_BUDGET.md，不另建 stop enum。仅有凭证不触发自动续跑或交付验收硬门禁。
 
-**主要落点：** 决策记录、evidence 工具和引用装配、subagent handoff、Runtime payload codec/recording、headless/ACP 的已知载荷投影。保留已有 runner/Context/session 凭证契约，避免重做保存路径。
+**主要落点：** 决策记录、evidence 工具和引用装配、Runtime payload codec/recording、headless/ACP 的已知载荷投影。保留已有 runner/Context/session 凭证契约，避免重做保存路径。
 
 **验收：** 同名 provider call ID 跨 attempt 不混淆；capability 记录有效 MCP 目标；清理/截断后的可见摘要可核对；取消和存储失败不补造成功；压缩后 receipt ID 稳定；子代理引用不能越 scope；旧客户端可忽略新增可选字段。
 

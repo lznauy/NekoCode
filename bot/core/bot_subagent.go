@@ -39,13 +39,14 @@ func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provi
 	autoCompactPercent := b.cfg.EffectiveAutoCompactPercent()
 
 	b.toolbox.WireTaskRunner(func(ctx context.Context, spec taskbridge.TaskSpec) (taskResult *taskbridge.TaskResult, runErr error) {
+		parentID := b.sess.CurrentID()
 		id := taskbridge.TaskIDFromCtx(ctx)
 		savedProfile := ""
 		savedIsolation := "shared"
 		if spec.ResumeID != "" {
 			id = spec.ResumeID
 			// Resolve inherited capabilities before opening can repair history.
-			metadata, err := session.ReadSubagentMetadata(b.sess.CurrentID(), id)
+			metadata, err := session.ReadSubagentMetadata(parentID, id)
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
 					return nil, fmt.Errorf("cannot resume subagent %q: no saved task with this ID in the current parent session; use task_list items[].id, not latest_attempt.id (an execution attempt ID): %w", id, err)
@@ -96,7 +97,7 @@ func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provi
 		}
 		// Establish identity before permissions, callbacks and output namespaces.
 		ctx = taskbridge.WithTaskID(ctx, id)
-		child, err := session.OpenSubagent(b.sess.CurrentID(), id, b.cwd, spec.ResumeID != "")
+		child, err := session.OpenSubagent(parentID, id, b.cwd, spec.ResumeID != "")
 		if err != nil {
 			return nil, fmt.Errorf("open subagent session: %w", err)
 		}
@@ -114,7 +115,7 @@ func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provi
 		var isolated *catalog.Toolbox
 		var workInfo worktree.Info
 		if mode == "worktree" {
-			lease, err := worktree.Acquire(b.sess.CurrentID(), id)
+			lease, err := worktree.Acquire(parentID, id)
 			if err != nil {
 				return nil, err
 			}
@@ -162,7 +163,7 @@ func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provi
 		if attempt == nil {
 			return nil, fmt.Errorf("subagent attempt was not initialized")
 		}
-		cfg := buildSubagentRunConfig(ctx, spec, profile, skillContents, effectiveModelWindow(selectedModel), autoCompactPercent, ag, b.sess.CurrentID(), b.environment, attempt.ID, attempt.Seq)
+		cfg := buildSubagentRunConfig(ctx, spec, profile, skillContents, effectiveModelWindow(selectedModel), autoCompactPercent, ag, parentID, b.environment, attempt.ID, attempt.Seq)
 		cfg.SkillNames = skillNames
 		if isolated != nil {
 			cfg.IsolatedWorkspace = true
@@ -231,6 +232,9 @@ func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provi
 		converted := subagentTaskResult(result)
 		if converted != nil {
 			converted.ID = id
+			if result.Handoff != nil && len(result.Handoff.EvidenceIDs) > 0 {
+				converted.Content += b.handoffEvidence(ctx, parentID, id, attempt.ID, result.Handoff.EvidenceIDs)
+			}
 			if isolated != nil {
 				converted.Content += fmt.Sprintf("\n[Worktree retained: %s]\nReview with /worktree diff %s; apply with /worktree apply %s", workInfo.Path, id, id)
 			}

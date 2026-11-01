@@ -205,7 +205,7 @@ func TestCheckpointIncludesContextUsage(t *testing.T) {
 	var usage AttemptUsage
 	llm := &scriptedLLM{scripts: [][]types.StreamToken{completionScript()}}
 	_, err := New(Config{LLM: llm, Tools: tools.New()}).Run(context.Background(), RunConfig{
-		Prompt: "inspect", Profile: Profile{Name: "explore"}, ContextWindow: 1000,
+		Prompt: "inspect", Profile: Profile{Name: "explore"}, ContextWindow: 2000,
 		SaveContext: func(_ ctxmgr.ManagerSnapshot, status, _ string, current AttemptUsage) error {
 			if status == "completed" {
 				usage = current
@@ -216,7 +216,7 @@ func TestCheckpointIncludesContextUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if usage.ContextWindow != 1000 || usage.ContextTokens <= 0 {
+	if usage.ContextWindow != 2000 || usage.ContextTokens <= 0 {
 		t.Fatalf("context usage missing: %+v", usage)
 	}
 }

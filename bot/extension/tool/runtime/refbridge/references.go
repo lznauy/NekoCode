@@ -36,10 +36,12 @@ type Page struct {
 
 type Query struct {
 	// Kind is host-selected, never a caller-supplied session or actor.
-	Kind   string
-	ID     string
-	Before int
-	Limit  int
+	Kind      string
+	ID        string
+	Before    int
+	Limit     int
+	TaskID    string
+	AttemptID string
 }
 type Reader func(context.Context, Query) (Page, error)
 

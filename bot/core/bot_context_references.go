@@ -34,6 +34,12 @@ func (b *Bot) contextReferences(ctx context.Context, sessionID string, q refbrid
 	if store := toolcore.OutputStoreFromContext(ctx); store != nil && store != b.sessionOutput.store {
 		return refbridge.Page{}, fmt.Errorf("reference actor unavailable")
 	}
+	if q.TaskID != "" || q.AttemptID != "" {
+		if q.Kind != refbridge.EvidenceKind || q.TaskID == "" || q.AttemptID == "" || toolcore.OutputStoreFromContext(ctx) == nil {
+			return refbridge.Page{}, fmt.Errorf("invalid attempt evidence query")
+		}
+		return b.readChildEvidence(ctx, sessionID, q)
+	}
 	base, tail, lazy := b.ctxMgr.TranscriptTail()
 	if !lazy {
 		base = 0

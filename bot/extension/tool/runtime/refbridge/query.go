@@ -10,6 +10,7 @@ import (
 	toolcore "nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/workspace"
 	"nekocode/bot/provider/types"
+	"nekocode/protocol"
 	textutil "nekocode/util/text"
 )
 
@@ -19,11 +20,14 @@ func (s Source) Read(ctx context.Context, sessionID string, q Query, base int, t
 	if err := ctx.Err(); err != nil {
 		return Page{}, err
 	}
+	if q.TaskID != "" || q.AttemptID != "" {
+		return Page{}, fmt.Errorf("explicit attempt requires parent binding")
+	}
 	if sessionID == "" || base < 0 || q.Before < 0 || q.Limit < 1 || q.Limit > MaxPageRecords {
 		return Page{}, fmt.Errorf("invalid reference page")
 	}
 	if q.Kind == EvidenceKind {
-		return s.readEvidence(ctx, sessionID, q, base, tail)
+		return s.readEvidence(ctx, sessionID, q, base, tail, 1, protocol.ExecutionFromContext(ctx), false)
 	}
 	if q.Kind != "" {
 		return Page{}, fmt.Errorf("invalid reference kind")
