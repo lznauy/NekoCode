@@ -155,7 +155,7 @@ func TestContextReferenceCursorExcludesNewerAppends(t *testing.T) {
 		t.Fatal("ignored cancellation")
 	}
 	for _, id := range []string{"/tmp/result.txt", "artifact.01." + strings.Repeat("a", 64), "artifact.-1." + strings.Repeat("a", 64)} {
-		if _, err := referenceSequence(id); err == nil {
+		if _, err := refbridge.Sequence(id); err == nil {
 			t.Fatal("accepted malformed ID")
 		}
 	}

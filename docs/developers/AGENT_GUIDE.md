@@ -120,7 +120,7 @@ TUI 中用 `/tasks` 或 `Ctrl+G` 查看当前父会话的子任务。达到步�
 - 写了 `tools: []`：禁用全部外部工具，即使声明了 `base`。
 - 两者都没写：没有外部工具，只能根据给定内容完成文本任务。
 
-`coder` 包含读写文件和 Shell 等工具，`explore` 不包含写入或 Shell。完整基线见 [Profile 定义](../../bot/extension/agentprofile/profile.go)。未知工具、超出基线的工具和未知 YAML 字段都会报错；`permissionMode` 尚不支持。
+`coder` 包含读写文件和 Shell 等工具，`explore` 不包含写入或 Shell。两者包含只读 `context_refs`，仅查询当前子任务的技能与工具产物引用；自定义工具白名单需显式列出该工具才会收到引用投影。完整基线见 [Profile 定义](../../bot/extension/agentprofile/profile.go)。未知工具、超出基线的工具和未知 YAML 字段都会报错；`permissionMode` 尚不支持。
 
 ### 为 Agent 指定模型
 

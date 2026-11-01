@@ -14,6 +14,7 @@ import (
 	"nekocode/bot/extension/tool"
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/execution"
+	"nekocode/bot/extension/tool/runtime/refbridge"
 	"nekocode/bot/extension/tool/runtime/runner"
 	"nekocode/bot/policy"
 	"nekocode/bot/policy/builtin"
@@ -143,6 +144,8 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (result *Result, runErr
 		ctxMgr.Restore(restored)
 		closeInterruptedTools(ctxMgr)
 	}
+	// Mask any inherited reader, including standalone children with no durable identity.
+	ctx = refbridge.WithReader(ctx, referenceReader(cfg, ctxMgr, executor.ExecutionState().OutputStore))
 	// The restored tracker is cumulative; the parent records only this run's usage.
 	initialUsage := ctxMgr.Status()
 	state.initialCacheHit, state.initialCacheMiss = initialUsage.CacheHit, initialUsage.CacheMiss
@@ -285,6 +288,7 @@ func (r *engineRun) stepOnce() bool {
 	ctx := r.ctx
 	if r.executor != nil {
 		ctx = execution.WithExecutionState(ctx, r.executor.ExecutionState())
+		ctx = core.WithOutputStore(ctx, r.executor.ExecutionState().OutputStore)
 		ctx = protocol.WithAccessObservation(ctx, r.executor.AccessObservation())
 	}
 	calls, text, err := r.engine.reason(ctx, r.ctxMgr, allowedTools, buildSkillWorkflow(r.cfg), r.state.addTokens(r.cfg), r.cfg.RecordLLMUsage, r.cfg.SessionID, r.phase, r.cfg)

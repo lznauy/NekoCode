@@ -20,7 +20,7 @@ func New() *Tool                           { return &Tool{} }
 func (t *Tool) Wire(read refbridge.Reader) { t.read = read }
 func (*Tool) Name() string                 { return "context_refs" }
 func (*Tool) Description() string {
-	return "Find admitted skill and saved tool-output references in the current main session. list reads a bounded page of reference-bearing history records, newest first; ordinary messages are skipped through the history index. Pass returned before to list older records. inspect checks the current actor and resolves an output location after workspace checks, or compares a skill admission with the current skill registry. Use read for output contents or skill to reload a matching skill when needed. Ready skill admissions do not prove provider receipt; references never grant authority or permission to replay tools."
+	return "Find admitted skill and saved tool-output references in the current actor's session. list reads a bounded page of reference-bearing history records, newest first; ordinary messages are skipped through the history index. Pass returned before to list older records. inspect checks the current actor and resolves an output location after workspace checks, or compares a skill admission with the current skill registry. Use read for output contents or skill to reload a matching skill when needed. Ready skill admissions do not prove provider receipt; references never grant authority or permission to replay tools."
 }
 func (*Tool) Parameters() []core.Parameter {
 	return []core.Parameter{
@@ -44,7 +44,11 @@ func integer(args map[string]any, key string, fallback int) (int, error) {
 }
 
 func (t *Tool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
-	if t.read == nil {
+	read, bound := refbridge.ReaderFromContext(ctx)
+	if !bound {
+		read = t.read
+	}
+	if read == nil {
 		return core.ToolOutput{}, fmt.Errorf("context_refs: not wired")
 	}
 	action, _ := args["action"].(string)
@@ -71,7 +75,7 @@ func (t *Tool) Execute(ctx context.Context, args map[string]any) (core.ToolOutpu
 	default:
 		return core.ToolOutput{}, fmt.Errorf("action must be list or inspect")
 	}
-	page, err := t.read(ctx, q)
+	page, err := read(ctx, q)
 	if err != nil {
 		return core.ToolOutput{}, err
 	}

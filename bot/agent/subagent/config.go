@@ -7,6 +7,7 @@ import (
 
 	"nekocode/bot/extension/agentprofile"
 	"nekocode/bot/extension/tool/runtime/execution"
+	"nekocode/bot/extension/tool/runtime/refbridge"
 	"nekocode/bot/extension/tool/runtime/runner"
 	"nekocode/bot/policy"
 	"nekocode/bot/prompt"
@@ -48,11 +49,14 @@ type OutputEvent struct {
 	MessageSeq      int
 }
 
-// RunConfig carries resolved dependencies; the engine does not discover files
-// or consult mutable extension registries during a run.
+// RunConfig carries owner-resolved dependencies; the engine does not discover
+// profiles or selected skills during a run. References may check the live skill
+// version on inspect, without changing the selected workflow or tool ceiling.
 type RunConfig struct {
 	// ResumeContext restores a task; persistence remains owned by the assembly layer.
-	ResumeContext     *ctxmgr.ManagerSnapshot
+	ResumeContext *ctxmgr.ManagerSnapshot
+	// References supplies only this task's durable source; Run owns the live tail and actor binding.
+	References        refbridge.Source
 	IsolatedWorkspace bool
 	SubagentID        string
 	// AttemptID is assigned by the application that owns durable attempts.

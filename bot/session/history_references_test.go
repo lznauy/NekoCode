@@ -212,3 +212,25 @@ func TestCanceledReferenceIndexRebuildResumesWithoutSourceRepair(t *testing.T) {
 		t.Fatalf("interrupted cache could not rebuild: %+v %v", rebuilt, err)
 	}
 }
+
+func TestReferenceRecordUsesRawSequenceAndAcknowledgedWatermark(t *testing.T) {
+	store := seedSparseReferences(t, 100)
+	msg, found, err := store.ReferenceRecord(t.Context(), 1, 50)
+	if err != nil || !found || msg.ToolOutput.Path == "" {
+		t.Fatalf("record=%+v found=%v err=%v", msg, found, err)
+	}
+	for _, sequence := range []int{51, 1000} {
+		_, found, err := store.ReferenceRecord(t.Context(), sequence, 50)
+		if err != nil || found {
+			t.Fatalf("unacknowledged sequence %d read: %v %v", sequence, found, err)
+		}
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, _, err := store.ReferenceRecord(canceled, 1, 50); !errors.Is(err, context.Canceled) {
+		t.Fatal("ignored cancellation", err)
+	}
+	if _, _, err := store.ReferenceRecord(t.Context(), 0, 50); err == nil {
+		t.Fatal("accepted invalid sequence")
+	}
+}

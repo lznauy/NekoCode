@@ -35,3 +35,16 @@ type Query struct {
 	Limit  int
 }
 type Reader func(context.Context, Query) (Page, error)
+
+type readerKey struct{}
+
+// WithReader binds a query to one execution without mutating shared tools.
+// A nil reader explicitly masks an inherited actor's reader.
+
+func WithReader(ctx context.Context, read Reader) context.Context {
+	return context.WithValue(ctx, readerKey{}, read)
+}
+func ReaderFromContext(ctx context.Context) (Reader, bool) {
+	read, ok := ctx.Value(readerKey{}).(Reader)
+	return read, ok
+}

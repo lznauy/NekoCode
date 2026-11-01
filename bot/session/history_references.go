@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"nekocode/bot/extension/tool/runtime/refbridge"
+	"nekocode/bot/provider/types"
 )
 
 // ReferencePage follows links in the existing disposable transcript index.
@@ -93,4 +94,57 @@ func (m *Manager) ReferencePage(ctx context.Context, before, limit, maxBytes, th
 		return refbridge.SourcePage{}, nil
 	}
 	return store.ReferencePage(ctx, before, limit, maxBytes, through)
+}
+
+// ReferenceRecord reads exactly one raw source record within an acknowledged
+// watermark. It never adds the display pager's assistant replay header.
+func (s *HistoryStore) ReferenceRecord(ctx context.Context, sequence, through int) (types.Message, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sequence < 1 || through < 0 {
+		return types.Message{}, false, errors.New("invalid reference sequence")
+	}
+	m, err := s.ensureContext(ctx, through, false)
+	if err != nil {
+		return types.Message{}, false, err
+	}
+	if sequence > through || int64(sequence) > m.count {
+		return types.Message{}, false, nil
+	}
+	idx, err := os.Open(filepath.Join(s.dir, "transcript.idx"))
+	if err != nil {
+		return types.Message{}, false, err
+	}
+	defer idx.Close()
+	entry, err := readHistoryEntry(idx, int64(sequence))
+	if err != nil {
+		return types.Message{}, false, err
+	}
+	source, err := os.Open(filepath.Join(s.dir, transcriptFileName))
+	if err != nil {
+		return types.Message{}, false, err
+	}
+	defer source.Close()
+	if err := ctx.Err(); err != nil {
+		return types.Message{}, false, err
+	}
+	msg, err := readHistoryRecord(source, entry, int64(sequence))
+	return msg, err == nil, err
+}
+
+func (m *Manager) ReferenceRecord(ctx context.Context, sequence, through int) (types.Message, bool, error) {
+	store := m.historyStore()
+	if store == nil {
+		return types.Message{}, false, nil
+	}
+	return store.ReferenceRecord(ctx, sequence, through)
+}
+
+// ReferenceSource captures only the task's existing HistoryStore. The engine
+// supplies its own pending tail and acknowledged watermark on each query.
+func (s *SubagentSession) ReferenceSource() refbridge.Source {
+	if s.snapshot.history == nil {
+		s.snapshot.history = newHistoryStore(filepath.Join(s.root, s.snapshot.ID))
+	}
+	return refbridge.Source{Page: s.snapshot.history.ReferencePage, Record: s.snapshot.history.ReferenceRecord}
 }

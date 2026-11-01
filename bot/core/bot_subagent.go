@@ -195,6 +195,8 @@ func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provi
 		cfg.CompactionWindow = compactionWindow
 		cfg.SubagentID = id
 		cfg.ResumeContext = restored
+		cfg.References = child.ReferenceSource()
+		cfg.References.Skill = b.referenceSkill
 		cfg.SaveContext = func(snapshot ctxmgr.ManagerSnapshot, status, output string, usage subagent.AttemptUsage) error {
 			return child.Checkpoint(snapshot, status, output, session.SubagentAttemptUsage{
 				TotalTokens: usage.TotalTokens, CacheHitTokens: usage.CacheHitTokens, CacheMissTokens: usage.CacheMissTokens,

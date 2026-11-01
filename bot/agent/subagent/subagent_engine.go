@@ -11,6 +11,7 @@ import (
 	"nekocode/bot/agent/internal/toolpolicy"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/extension/tool/runtime/core"
+	"nekocode/bot/extension/tool/runtime/refbridge"
 	"nekocode/bot/extension/tool/runtime/runner"
 	"nekocode/bot/policy"
 	"nekocode/bot/prompt"
@@ -262,6 +263,13 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 	ctx = protocol.WithPolicyConfiguration(ctx, output.guard.Configuration())
 	toolDefs := e.filteredToolDefs(allowed)
 	request := ctxmgr.ModelRequest{Tools: toolDefs, OutputTokens: provider.MaxOutputTokensFor(e.llmClient)}
+	if read, bound := refbridge.ReaderFromContext(ctx); bound && read != nil {
+		page, err := read(ctx, refbridge.Query{Limit: refbridge.MaxPageRecords})
+		if err != nil {
+			page = refbridge.Page{SessionID: referenceScope(output), Unavailable: true}
+		}
+		request.ContextReferences = page
+	}
 	if workflow != "" {
 		request.ExtraMessages = []types.Message{{Role: "user", Content: workflow, Source: types.MessageSourceSkillWorkflow}}
 	}
