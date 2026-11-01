@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"nekocode/bot/provider/types"
 	"strings"
 	"testing"
 
@@ -112,7 +113,11 @@ func TestRegisterSkillsReplacesDynamicCommands(t *testing.T) {
 func TestSelectedAndCommandSkillsHaveExplicitWorkflowProvenance(t *testing.T) {
 	manager := ctxmgr.New(ctxmgr.Config{ContextWindow: 64000})
 	handler := New(Deps{CtxMgr: manager, ToolRegistry: tools.New(), GetConfigFn: func() config.ModelConfig { return config.ModelConfig{} }})
-	handler.SelectSkill(manager, "selected workflow")
+	handler.SelectSkill(manager, "selected workflow", "selected-review")
+	selected := manager.Snapshot().Messages[0]
+	if selected.SkillName != "selected-review" || selected.SkillDelivery.Name != "selected-review" || selected.SkillDelivery.Source != "selected" || selected.SkillDelivery.State != types.SkillReady {
+		t.Fatalf("selection lost owner identity: %+v", selected)
+	}
 	if manager.Snapshot().Messages[0].IsConversationUser() {
 		t.Fatal("selected workflow counted as user request")
 	}
@@ -126,6 +131,9 @@ func TestSelectedAndCommandSkillsHaveExplicitWorkflowProvenance(t *testing.T) {
 		t.Fatal("skill arguments did not start agent")
 	}
 	messages := manager.Snapshot().Messages
+	if messages[0].SkillDelivery.Source != "command" || messages[0].SkillDelivery.Name != "review" || messages[0].SkillDelivery.ContentHash != types.SkillContentHash("command workflow") {
+		t.Fatal("command lost skill admission identity")
+	}
 	if len(messages) != 2 || messages[0].IsConversationUser() || !messages[1].IsConversationUser() {
 		t.Fatal("workflow and user argument provenance mixed")
 	}

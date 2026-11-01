@@ -122,7 +122,7 @@ Hook 所有者通过 `BehaviorVersion` 声明行为版本；内置 Hook 明确�
 
 子代理在 Run 的 Profile 校验、克隆后，从 Profile 所有者获取 `ConfigurationHash()`，以 context 值传入现有 calllog 的 `profile_hash`。摘要为 `v1:` 加完整 SHA-256，包含名称、声明模型、隔离模式、工具集合、按声明顺序排列的技能和实际默认步数。工具集合排序去重，nil 与空列表等价；读取摘要不修改 Profile。它描述 Profile 的声明，不宣称包含所有运行配置。实际模型、工具 schema 与系统提示仍分别由 provider 元数据和既有 prefix 诊断覆盖，不重复保存提示词或配置正文；子代理覆盖父上下文中的 Profile 摘要。主代理没有命名 Profile，主模型、最终合成及主会话尾部压缩显式清除继承的 Profile 摘要，避免将上游子代理配置误记为自身配置。
 
-Skill 诊断由 Context 在最终请求投影中派生，不读取 Skill 注册表或将 LoadedSkills 当作仍持有全文的证据。成功 skill 工具结果通过已有 SkillName 标记识别；手动选择、`$skill` 命令加载和子代理的请求级工作流使用内部 `skill-workflow` 来源。普通用户或工具正文中的 `<skill_content>` 标签不能生成这种来源。失败或 deferred 结果不计入，恢复完整交付后才参与摘要。工作流保持 user 角色、来源不进入 provider wire，命令后的真实用户参数仍单独计为用户回合。
+Skill 诊断由 Context 在最终请求投影中派生，不读取 Skill 注册表或将 LoadedSkills 当作仍持有全文的证据。成功 skill 工具结果通过已有 SkillName 标记识别；手动选择、`$skill` 命令加载和子代理的请求级工作流使用内部 `skill-workflow` 来源。普通用户或工具正文中的 `<skill_content>` 标签不能生成这种来源。失败或 deferred 结果不计入；新版本接纳记录为 incomplete 时也不计入，完整预览恢复后才参与摘要。工作流保持 user 角色、来源不进入 provider wire，命令后的真实用户参数仍单独计为用户回合。
 
 现有 prefix 诊断增加 versioned `skills_hash` 与 `skill_messages`，覆盖当前请求里有明确来源的、按顺序出现的实际技能内容；新增、移除或修改会标记 `changed_parts=skills`。数量表示消息数，不是去重后的技能数。摘要不进入提示词，不回写 transcript，也不维护第二份技能状态。旧会话和缺字段会话仍可恢复；首次恢复请求只重新派生当前摘要，不根据缺失的旧技能摘要虚报变化。旧版本未标来源的手工技能消息仍作为历史保留，但不能从其文本猜测成已识别技能。
 
@@ -146,11 +146,11 @@ bot/core 通过已有 TaskLister 取得当前父会话的任务元数据，Agent
 
 为避免每次推理扫描磁盘，现有 runState 仅复用本轮最多 16 条请求引用；新 Run 自动清空，实际 task/task_list 工具批结束后失效，下次请求重新采样，不可用结果不缓存。普通工具和最终合成复用本轮视图；同轮外部进程修改在显式 task_list 或下一轮刷新。不新增任务索引、全局缓存或持久化状态。
 
-引用只进入请求副本和相同请求的预算、prefix 计算，不写入活动消息、transcript 或 session.json，不送入历史摘要。每次 PrepareRequest 重建都带入同一份引用，因此连续压缩、恢复和模型切换后仍可重新注入。旧会话无需迁移；技能、产物引用及其按 ID 查询/恢复仍属于未完成范围。
+引用只进入请求副本和相同请求的预算、prefix 计算，不写入活动消息、transcript 或 session.json，不送入历史摘要。每次 PrepareRequest 重建都带入同一份引用，因此连续压缩、恢复和模型切换后仍可重新注入。旧会话无需迁移；技能和产物的近期引用与按 ID 查询见下文；长期窗口与子执行者查询仍属于未完成范围。
 
 ## 产物引用与查询
 
-主代理的 `ContextReferences` 回调由 bot/core 组装，复用当前会话的原始历史分页读取，Context 只接收 refbridge.Page 值。每次主模型与合成请求在 Archive、任务引用之后，活动 history 之前投影 user-role JSON `artifact_references`；不写回活动消息、transcript 或 session.json，不复制工具正文，不新增持久化索引。投影最多 16 条且完整 JSON 不超过 4 KiB，与任务引用合计最多 8 KiB。只投影近期来源窗口；它不是全会话产物目录，也不声称完整保留任意久远产物。
+主代理的 `ContextReferences` 回调由 bot/core 组装，复用当前会话的原始历史分页读取，Context 只接收 refbridge.Page 值。每次主模型与合成请求在 Archive、任务引用之后，活动 history 之前投影 user-role JSON `context_references`；不写回活动消息、transcript 或 session.json，不复制工具正文，不新增持久化索引。技能最多 8 条、产物最多 16 条，共享不超过 4 KiB 的完整 JSON 预算，与任务引用合计最多 8 KiB。只投影近期来源窗口；它不是全会话产物目录，也不声称完整保留任意久远产物。
 
 来源每次最多读取最近 20 条原始历史记录，使用现有 64 KiB 分页软预算；历史读取器保留“首条记录不能拆分”的规则，已有工具记录最高 4 MiB。缺失 transcript.idx 时仍可能触发现有历史索引重建，不能将该查询宣称为绝对恒定 IO。展示分页附带的 assistant header 不计入原始序号。自动投影不携带扫描计数、移动窗口边界或文件路径，较旧查询的游标锚定最早保留的引用；引用集合不变时，不因普通消息推进而改变缓存前缀。超限移除条目后游标不会跳过被省略项；没有近期引用时可从 list 的 0 游标开始查旧页。
 
@@ -158,4 +158,16 @@ bot/core 通过已有 TaskLister 取得当前父会话的任务元数据，Agent
 
 inspect 按 ID 定位一条原始记录，核对 ID 与来源元数据，再验证执行者的 OutputStore、当前 workspace 读权限和文件归属，只有全部通过才返回文件位置；正文仍用现有 read 工具重取，读取时再次检查权限，不从引用恢复写前读许可。工具入口必须绑定执行者；TaskID 和当前主 OutputStore 身份共同拒绝子执行者访问父引用，包括未命名的旧子执行器。无执行者 context 的内部模型投影只读取引用元数据。状态 missing 表示来源/已授权文件缺失，changed 表示来源元数据与 ID 不匹配，unavailable 表示当前权限、归属或存储不可用；存储错误不向模型透传原文，不修改已有历史。
 
-ID 的摘要不是保存文件内容的版本指纹；available 只说明采样时的位置可读取，不保证文件从未被外部修改，也不证明工具成功、任务完成或允许重放。当前只支持主会话保存的工具输出，不含子执行者目录查询、任意生成文件、技能引用或完整历史产物目录。
+ID 的摘要不是保存文件内容的版本指纹；available 只说明采样时的位置可读取，不保证文件从未被外部修改，也不证明工具成功、任务完成或允许重放。当前只支持主会话保存的工具输出，不含子执行者目录查询、任意生成文件或完整历史产物目录；技能引用使用同一工具，契约见下节。
+
+## 技能接纳与引用
+
+`Message.SkillDelivery` 是 schema=1 的可选本地值，记录技能名称、来源、接纳状态、正文 SHA-256 和原始 transcript 序号；不会进入 provider wire，也不参与 provider history 指纹。它表示宿主接纳事实，不是 provider 收到内容、模型理解内容或执行技能的凭据。ready 表示完整选定文本已就绪，deferred 表示等待空间，failed 表示未成功接纳，incomplete 表示空或带裁剪产物的预览不能证明完整性。历史无该字段时保持未知，不从 SkillName、LoadedSkills 或正文标签补造记录；旧字段仍可兼容既有可见内容诊断，但不生成新的历史技能引用。
+
+普通 skill 工具结果在 Context 接纳边界记录 tool 来源；失败同样保留请求的技能名称，但不登记已加载或生成引用。显式选择和 `$skill` 命令由所有者传入名称，来源为 selected/command；旧的无名称选择接口仍可用，不猜测其名称。委派由 bot/core 提供与正文同序的 resolved SkillNames，子代理克隆两组值并校验长度。首次 PrepareRequest 成功后，每 attempt 为每份选定工作流记录一次 delegated 元数据，超窗未准入时不记录；不依赖 Profile 名单或标签来猜选定技能。
+
+完整 deferred 预览恢复前，在原有全批预检中核对正文摘要；不匹配则不改变消息、记账或历史。恢复成功只将活动消息改为 ready，并在现有 transcript 追加一条引用原始序号的 metadata-only runtime-event；旧 deferred 记录不改写，不复制正文。裁剪预览恢复后仍是 incomplete，不能登记已加载或形成 ready 引用。事件不加入活动模型上下文；重启时即便它来自未提交历史尾部，Context 恢复也将其留在 transcript、从活动上下文剔除。没有额外事件仓库、manager 或技能状态索引。
+
+`context_refs list` 在同一分页边界中返回带 kind 的产物或技能引用；只有 schema 与所有者来源匹配的 ready 记录生成 `skill.<原始序号>.<scope及元数据SHA-256>`。近期自动投影使用统一 `context_references`，技能和产物共享现有 4 KiB 配额，不为技能额外扩容；达到类型上限或字节预算时保留连续的较新来源前缀与可查询的旧游标。压缩或保存不改变原始序号和引用 ID，较旧引用可继续分页或按已知 ID 查询。
+
+技能 inspect 检查原始记录、当前主执行者 scope 和当前 extension 注册版本的格式化正文摘要：缺技能为 missing，摘要不同为 changed，相同为 available，不能访问当前注册表或 actor 时为 unavailable。tool 来源按执行器相同的 ANSI/换行规范化后比较，selected/command/delegated 比较其原始选定文本。available 只说明当前注册内容匹配，不代表外部文件尚未修改、辅助文件相同、模型仍持有全文，或模型被允许重新加载；实际 skill/read 工具仍应用当前调用限制和权限。技能正文与辅助文件不复制进引用，子代理自己的查询入口及长期自动引用窗口仍待完善。

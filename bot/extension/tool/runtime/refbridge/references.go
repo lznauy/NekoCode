@@ -7,9 +7,13 @@ import "context"
 const MaxPageRecords = 20
 
 type Reference struct {
-	ID         string `json:"id"`
-	Sequence   int    `json:"sequence"`
-	Incomplete bool   `json:"incomplete,omitempty"`
+	Kind        string `json:"kind,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Source      string `json:"source,omitempty"`
+	ContentHash string `json:"content_hash,omitempty"`
+	ID          string `json:"id"`
+	Sequence    int    `json:"sequence"`
+	Incomplete  bool   `json:"incomplete,omitempty"`
 }
 
 type Page struct {

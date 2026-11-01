@@ -163,6 +163,7 @@ func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provi
 			return nil, fmt.Errorf("subagent attempt was not initialized")
 		}
 		cfg := buildSubagentRunConfig(ctx, spec, profile, skillContents, effectiveModelWindow(selectedModel), autoCompactPercent, ag, b.sess.CurrentID(), b.environment, attempt.ID, attempt.Seq)
+		cfg.SkillNames = skillNames
 		if isolated != nil {
 			cfg.IsolatedWorkspace = true
 			home, _ := os.UserHomeDir()

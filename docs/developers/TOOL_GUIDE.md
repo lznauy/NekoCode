@@ -153,8 +153,8 @@ defer toolbox.Close()
 
 完成后移走 `.tool-demo/`。需要通过事件控制工具调用时，继续阅读 [Hook 指南](HOOK_GUIDE.md)；需要让子 Agent 使用它时，阅读 [Agent 指南](AGENT_GUIDE.md)。
 
-## 已保存输出的引用查询
+## 技能与已保存输出的引用查询
 
 内置 `context_refs` 复用主会话历史中的 `ToolOutputArtifact`，不会把自定义工具的普通路径文本猜成产物。自定义工具需要沿现有 `ToolOutput.Artifact` 返回结构化引用，并由当前执行者的 OutputStore 持有文件。
 
-模型使用 `action=list` 查来源页，`before=0` 从最新记录开始，`limit` 为 1–20 条来源记录；空页仍应检查 has_more。`action=inspect` 接受 list 返回的 ID，成功时仅返回当前有权限读取的文件位置，正文用 read 重取。它不提供任意路径查找、不新增授权，也不能用 available 推断业务成功或文件内容未被修改。当前仅主会话执行者可用，完整边界见 [产物引用与查询](../maintainers/ARCHITECTURE_BOUNDARIES.md#产物引用与查询)。
+模型使用 `action=list` 查来源页，`before=0` 从最新记录开始，`limit` 为 1–20 条来源记录；空页仍应检查 has_more。`action=inspect` 接受 list 返回的 ID，产物通过检查后返回当前可读取的位置，正文用 read 重取；技能则核对已接纳版本与当前注册内容是否相同，正文仍需通过允许的 skill/read 入口重取。它不提供任意路径查找、不新增授权，也不能用 available 推断业务成功或文件内容未被修改。当前仅主会话执行者可用，ready 技能只表示宿主完整文本就绪，不是 provider 接收回执。完整边界见 [技能接纳与引用](../maintainers/ARCHITECTURE_BOUNDARIES.md#技能接纳与引用) 和 [产物引用与查询](../maintainers/ARCHITECTURE_BOUNDARIES.md#产物引用与查询)。

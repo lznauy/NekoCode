@@ -60,9 +60,12 @@ type RunConfig struct {
 	AttemptID   string
 	SaveContext func(ctxmgr.ManagerSnapshot, string, string, AttemptUsage) error
 
-	Prompt              string
-	Profile             Profile
-	SkillContents       []string
+	Prompt        string
+	Profile       Profile
+	SkillContents []string
+	// SkillNames are resolved by the owner in the same order as SkillContents.
+	SkillNames          []string
+	onRequestPrepared   func()
 	ProjectInstructions string
 	ContextWindow       int
 	CompactionWindow    int

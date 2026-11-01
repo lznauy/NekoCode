@@ -104,6 +104,11 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (result *Result, runErr
 	if cfg.Profile.MaxSteps < 0 || cfg.Profile.MaxSteps > agentprofile.MaxSteps {
 		return nil, fmt.Errorf("max_steps must be between 0 and %d", agentprofile.MaxSteps)
 	}
+	if len(cfg.SkillNames) != 0 && len(cfg.SkillNames) != len(cfg.SkillContents) {
+		return nil, fmt.Errorf("skill names and contents must have matching lengths")
+	}
+	cfg.SkillNames = append([]string(nil), cfg.SkillNames...)
+	cfg.SkillContents = append([]string(nil), cfg.SkillContents...)
 	cfg.Profile = agentprofile.Clone(cfg.Profile)
 	ctx = protocol.WithProfileConfiguration(ctx, cfg.Profile.ConfigurationHash())
 	if e.toolRegistry.Has(submitResultToolName) {
@@ -142,6 +147,15 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (result *Result, runErr
 	initialUsage := ctxMgr.Status()
 	state.initialCacheHit, state.initialCacheMiss = initialUsage.CacheHit, initialUsage.CacheMiss
 	ctxMgr.Add("user", buildTaskPrompt(cfg))
+	workflowsRecorded := false
+	cfg.onRequestPrepared = func() {
+		if workflowsRecorded {
+			return
+		}
+		ctxMgr.RecordSkillWorkflows(cfg.SkillNames, cfg.SkillContents)
+		workflowsRecorded = true
+	}
+
 	checkpoint := func(status, output string) error {
 		if cfg.SaveContext == nil {
 			return nil

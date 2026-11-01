@@ -180,12 +180,12 @@ func TestHeadersSupportAnthropicAndBearerAuth(t *testing.T) {
 
 func TestToolResultOmitsLocalSkillMetadata(t *testing.T) {
 	c := New("", "", "test")
-	messages, _ := c.toMessages([]types.Message{{Role: "tool", Content: "instructions", ToolCallID: "skill-call", SkillName: "local-skill"}}, types.ReasoningSettings{})
+	messages, _ := c.toMessages([]types.Message{{Role: "tool", Content: "instructions", ToolCallID: "skill-call", SkillName: "local-skill", SkillDelivery: types.SkillDelivery{Schema: 1, Name: "admission-secret-sentinel", Source: "tool", State: types.SkillReady}}}, types.ReasoningSettings{})
 	data, err := json.Marshal(messages)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "skill_name") || strings.Contains(string(data), "local-skill") {
+	if strings.Contains(string(data), "skill_name") || strings.Contains(string(data), "local-skill") || strings.Contains(string(data), "skill_delivery") || strings.Contains(string(data), "admission-secret-sentinel") {
 		t.Fatalf("wire result leaked local skill metadata: %s", data)
 	}
 	if !strings.Contains(string(data), "instructions") {

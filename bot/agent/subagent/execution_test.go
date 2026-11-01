@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/extension/tool"
 	"nekocode/bot/extension/tool/runtime/runner"
 	"nekocode/bot/policy"
@@ -105,5 +106,61 @@ func TestSubagentSamplesItsOwnAccess(t *testing.T) {
 	}
 	if protocol.AccessObservationFromContext(parent).Mode != "parent" {
 		t.Fatal("child mutated parent observation")
+	}
+}
+
+func TestDelegatedSkillAdmissionsAreRecordedOncePerPreparedAttempt(t *testing.T) {
+	model := &scriptedLLM{scripts: [][]types.StreamToken{{{Content: "progress"}}, completionScript(), {{Content: "progress"}}, completionScript()}}
+	engine := New(Config{LLM: model, Tools: tools.New()})
+	var latest ctxmgr.ManagerSnapshot
+	var admissions []types.SkillDelivery
+	cfg := RunConfig{SubagentID: "task", Prompt: "inspect", Profile: Profile{Name: "explore"}, SkillNames: []string{"resolved-review"}, SkillContents: []string{"workflow body"}, SaveContext: func(snap ctxmgr.ManagerSnapshot, _, _ string, _ AttemptUsage) error {
+		latest = snap
+		for _, m := range snap.Transcript {
+			if m.SkillDelivery.Schema != 0 {
+				admissions = append(admissions, m.SkillDelivery)
+				if m.Content != "" {
+					t.Fatal("workflow body duplicated in admission event")
+				}
+			}
+		}
+		return nil
+	}}
+	for _, attempt := range []string{"one", "two"} {
+		cfg.AttemptID = attempt
+		admissions = nil
+		if _, err := engine.Run(t.Context(), cfg); err != nil {
+			t.Fatal(err)
+		}
+		if len(admissions) != 1 {
+			t.Fatalf("duplicate/missing admission for %s: %d", attempt, len(admissions))
+		}
+		d := admissions[0]
+		if d.Name != "resolved-review" || d.Source != "delegated" || d.ContentHash != types.SkillContentHash("workflow body") {
+			t.Fatalf("invalid delegated admission: %+v", d)
+		}
+		for _, m := range latest.Messages {
+			if m.SkillDelivery.Schema != 0 {
+				t.Fatal("admission-only record entered model context")
+			}
+		}
+	}
+	model = &scriptedLLM{}
+	engine = New(Config{LLM: model, Tools: tools.New()})
+	admissions = nil
+	cfg.ContextWindow = 4000
+	cfg.SkillContents = []string{strings.Repeat("x", 50000)}
+	if _, err := engine.Run(t.Context(), cfg); err == nil {
+		t.Fatal("oversized workflow accepted")
+	}
+	if len(admissions) != 0 {
+		t.Fatal("failed request fabricated workflow admission")
+	}
+	if model.calls != 0 {
+		t.Fatal("oversized request reached provider")
+	}
+	cfg.SkillNames = []string{"one", "two"}
+	if _, err := engine.Run(t.Context(), cfg); err == nil {
+		t.Fatal("mismatched resolved names accepted")
 	}
 }

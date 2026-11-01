@@ -155,9 +155,9 @@ NekoCode 已有 session transcript、snapshot、JSONL run recording、内存 Run
 
 另一个具体损失点：`formatSummaryMessages()` 在交给 summarizer 前，将普通消息截到 500 rune、tool 消息截到 800 rune，且主要序列化 role/content。很长的用户约束尾部、结果尾部和工具参数细节可能在总结模型看到之前就丢失。增加 summarizer 智能无法恢复未送达的信息。
 
-**该输入损失点已修复：** 摘要保留完整文本与工具调用关联，超窗时有界分批，失败不删除旧消息；见 [摘要压缩事务](../maintainers/ARCHITECTURE_BOUNDARIES.md#摘要压缩事务)。上述行为保留为调研基线。任务引用现已通过既有 TaskLister 投影到主请求，见 [任务连续性引用](../maintainers/ARCHITECTURE_BOUNDARIES.md#任务连续性引用)；近期产物投影及主执行者分页查询也已实现，见 [产物引用与查询](../maintainers/ARCHITECTURE_BOUNDARIES.md#产物引用与查询)；技能交付和长期引用恢复仍属于后续范围。
+**该输入损失点已修复：** 摘要保留完整文本与工具调用关联，超窗时有界分批，失败不删除旧消息；见 [摘要压缩事务](../maintainers/ARCHITECTURE_BOUNDARIES.md#摘要压缩事务)。上述行为保留为调研基线。任务引用现已通过既有 TaskLister 投影到主请求，见 [任务连续性引用](../maintainers/ARCHITECTURE_BOUNDARIES.md#任务连续性引用)；近期产物投影及主执行者分页查询也已实现，见 [产物引用与查询](../maintainers/ARCHITECTURE_BOUNDARIES.md#产物引用与查询)；技能接纳记录及同一 context_refs 的技能查询也已实现，见 [技能接纳与引用](../maintainers/ARCHITECTURE_BOUNDARIES.md#技能接纳与引用)；长期窗口与子执行者查询仍属于后续范围。
 
-**剩余建议：** 在现有任务、近期产物请求投影和分页查询上补齐已交付技能及长期引用恢复，长正文按需读取。已有任务元数据和 todo 保持原来的事实来源，不维护目标、委派状态的第二份副本；摘要继续补充历史背景。
+**剩余建议：** 在现有任务、近期产物请求投影和分页查询上完善长期引用窗口与子执行者查询范围，长正文按需读取。已有任务元数据和 todo 保持原来的事实来源，不维护目标、委派状态的第二份副本；摘要继续补充历史背景。
 
 外部状态恢复要重新校验 scope、路径和内容摘要。旧摘要不能授权文件操作，已完成任务不能被迟到状态改回 running。模型写的 notes 单独标注，禁止直接作为 policy 事实。
 

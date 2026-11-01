@@ -37,9 +37,10 @@ type Message struct {
 	IsError            bool       `json:"is_error,omitempty"`
 	Source             string     `json:"source,omitempty"` // internal routing metadata; provider wire structs omit it
 
-	// SkillName identifies a successful skill result for local delivery tracking.
+	// SkillName identifies a selected skill, not proof of complete admission.
 	// Like Source, it is persisted locally and omitted from provider wire types.
-	SkillName string `json:"skill_name,omitempty"`
+	SkillName     string        `json:"skill_name,omitempty"`
+	SkillDelivery SkillDelivery `json:"skill_delivery,omitzero"`
 
 	// DeferredContent is the bounded tool preview awaiting context capacity.
 	// It preserves error/status text independently of the raw output file.

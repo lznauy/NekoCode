@@ -68,6 +68,9 @@ func (m *Manager) restoreDeferredResults() (bool, error) {
 		if msg.DeferredContent == "" || len(msg.DeferredContent) > core.MaxOutputBytes {
 			return false, fmt.Errorf("deferred tool result has no valid bounded preview; start a new session")
 		}
+		if msg.SkillDelivery.Schema == 1 && msg.SkillDelivery.State == types.SkillDeferred && msg.SkillDelivery.ContentHash != types.SkillContentHash(msg.DeferredContent) {
+			return false, fmt.Errorf("deferred skill content does not match its complete admission")
+		}
 		count++
 		delta += token.EstimateString(msg.DeferredContent) - token.EstimateString(msg.Content)
 	}
@@ -89,7 +92,12 @@ func (m *Manager) restoreDeferredResults() (bool, error) {
 			continue
 		}
 		msg.Content, msg.Source, msg.DeferredContent = msg.DeferredContent, "", ""
-		if msg.SkillName != "" && !msg.IsError {
+		if msg.SkillDelivery.Schema == 1 && msg.SkillDelivery.State == types.SkillDeferred {
+			msg.SkillDelivery.State = types.SkillReady
+			m.appendSkillAdmissionLocked(msg.SkillDelivery)
+		}
+
+		if msg.SkillName != "" && !msg.IsError && (msg.SkillDelivery.Schema == 0 || msg.SkillDelivery.State == types.SkillReady) {
 			loadedSkills = append(loadedSkills, msg.SkillName)
 		}
 	}

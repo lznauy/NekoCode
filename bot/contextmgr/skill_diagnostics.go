@@ -15,7 +15,7 @@ func skillDeliveryDigest(messages []types.Message) ([32]byte, int) {
 	}
 	deliveries := []delivery{}
 	for _, message := range messages {
-		if message.IsError || message.Source == core.DeferredOutputSource {
+		if message.IsError || message.Source == core.DeferredOutputSource || message.SkillDelivery.Schema != 0 && message.SkillDelivery.State != types.SkillReady {
 			continue
 		}
 		explicitWorkflow := message.Role == "user" && message.Source == types.MessageSourceSkillWorkflow

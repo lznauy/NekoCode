@@ -79,7 +79,15 @@ func (m *Manager) Restore(snap ManagerSnapshot) {
 	m.state.ctx.Memory = snap.Memory
 	m.state.ctx.Hints = snap.Hints
 	m.state.runtimePolicy = ""
-	m.state.ctx.Messages = append([]types.Message(nil), snap.Messages...)
+	m.state.ctx.Messages = make([]types.Message, 0, len(snap.Messages))
+	for _, msg := range snap.Messages {
+		// A recovered uncommitted transcript tail can contain admission-only
+		// events. Keep them in history, never turn them into empty model messages.
+		if msg.Role == "user" && msg.Source == types.MessageSourceRuntimeEvent && msg.Content == "" && msg.SkillDelivery.Schema != 0 {
+			continue
+		}
+		m.state.ctx.Messages = append(m.state.ctx.Messages, msg)
+	}
 	for i := range m.state.ctx.Messages {
 		m.state.ctx.Messages[i].ReadID = ""
 	}

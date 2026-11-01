@@ -89,7 +89,7 @@ func (b *Bot) SelectSkill(name string) error {
 	if !ok {
 		return fmt.Errorf("skill %q not found", name)
 	}
-	b.cmd.SelectSkill(b.ctxMgr, sk.Context)
+	b.cmd.SelectSkill(b.ctxMgr, sk.Context, sk.Name)
 	b.ext.MarkSkillLoaded(name)
 	return nil
 }

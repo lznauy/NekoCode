@@ -23,10 +23,13 @@ func (m *Manager) Add(role, content string, source ...string) {
 	}
 	m.state.mu.Lock()
 	defer m.state.mu.Unlock()
-	message := types.Message{Role: role, Content: content, Source: s}
+	m.addMessageLocked(types.Message{Role: role, Content: content, Source: s})
+}
+
+func (m *Manager) addMessageLocked(message types.Message) {
 	m.state.ctx.Messages = append(m.state.ctx.Messages, message)
 	m.state.transcript = append(m.state.transcript, message)
-	m.state.tracker.AddNew(len(role) + len(content))
+	m.state.tracker.AddNew(len(message.Role) + len(message.Content))
 	m.state.revision++
 }
 
@@ -111,11 +114,22 @@ func (m *Manager) AddToolResultsBatch(results []ToolResultMsg) {
 			}
 		}
 		message := types.Message{Role: role, ToolCallID: r.Message.ToolCallID, IsError: r.Message.IsError}
+		if r.ToolName == "skill" {
+			message.SkillName = r.Message.SkillName
+			message.SkillDelivery = skillAdmission(r.Message.SkillName, "tool", output.Render(), m.state.transcriptBase+len(m.state.transcript)+1)
+			switch {
+			case message.IsError:
+				message.SkillDelivery.State = types.SkillFailed
+				message.SkillDelivery.ContentHash = ""
+			case r.Message.ToolOutput.Path != "" || r.Message.ToolOutput.Incomplete || r.Message.Content == "":
+				message.SkillDelivery.State = types.SkillIncomplete
+			case deferred:
+				message.SkillDelivery.State = types.SkillDeferred
+			}
+		}
+
 		if role == "tool" && r.ToolName == "read" && !message.IsError {
 			message.ReadID = r.Message.ReadID
-		}
-		if r.ToolName == "skill" && !message.IsError {
-			message.SkillName = r.Message.SkillName
 		}
 		if deferred {
 			var err error
@@ -149,9 +163,13 @@ func (m *Manager) AddToolResultsBatch(results []ToolResultMsg) {
 				message.Content += "\nFull result could not be saved."
 			}
 			message.Source = core.DeferredOutputSource
+			if message.SkillDelivery.State == types.SkillDeferred && message.SkillDelivery.ContentHash != types.SkillContentHash(message.DeferredContent) {
+				message.SkillDelivery.State = types.SkillIncomplete
+			}
+
 		} else {
 			message.Content, message.ToolOutput = output.Render(), output.Artifact
-			if message.SkillName != "" {
+			if message.SkillName != "" && message.SkillDelivery.State == types.SkillReady {
 				loadedSkills = append(loadedSkills, message.SkillName)
 			}
 		}

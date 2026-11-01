@@ -17,6 +17,7 @@ import (
 	"nekocode/bot/provider/types"
 	"nekocode/bot/session"
 	"nekocode/protocol"
+	textutil "nekocode/util/text"
 )
 
 func artifactReference(sessionID string, sequence int, artifact protocol.ToolOutputArtifact) refbridge.Reference {
@@ -28,12 +29,12 @@ func artifactReference(sessionID string, sequence int, artifact protocol.ToolOut
 		Artifact protocol.ToolOutputArtifact
 	}{sessionID, sequence, artifact})
 	digest := sha256.Sum256(data)
-	return refbridge.Reference{ID: fmt.Sprintf("artifact.%d.%s", sequence, hex.EncodeToString(digest[:])), Sequence: sequence, Incomplete: artifact.Incomplete}
+	return refbridge.Reference{Kind: "artifact", ID: fmt.Sprintf("artifact.%d.%s", sequence, hex.EncodeToString(digest[:])), Sequence: sequence, Incomplete: artifact.Incomplete}
 }
 
 func referenceSequence(id string) (int, error) {
 	parts := strings.Split(id, ".")
-	if len(parts) != 3 || parts[0] != "artifact" || len(parts[2]) != 64 {
+	if len(parts) != 3 || (parts[0] != "artifact" && parts[0] != "skill") || len(parts[2]) != 64 {
 		return 0, fmt.Errorf("invalid reference ID")
 	}
 	if _, err := hex.DecodeString(parts[2]); err != nil {
@@ -115,6 +116,33 @@ func (b *Bot) contextReferences(ctx context.Context, sessionID string, q refbrid
 		if history.End != sequence || len(records) != 1 {
 			return out, nil
 		}
+		if strings.HasPrefix(q.ID, "skill.") {
+			ref, ok := skillReference(sessionID, sequence, records[0])
+			out.Status = "changed"
+			if !ok || ref.ID != q.ID {
+				return out, nil
+			}
+			out.Items = []refbridge.Reference{ref}
+			out.Status = "unavailable"
+			if b.ext == nil || toolcore.OutputStoreFromContext(ctx) == nil {
+				return out, nil
+			}
+			current, exists := b.ext.Skill(ref.Name)
+			if !exists {
+				out.Status = "missing"
+				return out, nil
+			}
+			currentText := current.Context
+			if ref.Source == "tool" {
+				currentText = textutil.NormalizeTerminalOutput(currentText)
+			}
+			if types.SkillContentHash(currentText) != ref.ContentHash {
+				out.Status = "changed"
+				return out, nil
+			}
+			out.Status = "available"
+			return out, nil
+		}
 		artifact := records[0].ToolOutput
 		if records[0].Role != "tool" || artifact.Path == "" {
 			out.Status = "changed"
@@ -151,6 +179,9 @@ func (b *Bot) contextReferences(ctx context.Context, sessionID string, q refbrid
 		msg := records[i]
 		if msg.Role == "tool" && msg.ToolOutput.Path != "" {
 			out.Items = append(out.Items, artifactReference(sessionID, history.Before+i, msg.ToolOutput))
+		}
+		if ref, ok := skillReference(sessionID, history.Before+i, msg); ok {
+			out.Items = append(out.Items, ref)
 		}
 	}
 	return out, nil

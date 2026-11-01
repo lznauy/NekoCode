@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	ctxmgr "nekocode/bot/contextmgr"
-	"nekocode/bot/provider/types"
 	"nekocode/protocol"
 )
 
@@ -57,7 +56,7 @@ func (h *Handler) RegisterSkills(skills []SkillRegistration) {
 				return fmt.Sprintf("Skill %q not found.", sk.Name), true
 			}
 			h.skill.MsgStart = h.ctxMgr.Len()
-			h.ctxMgr.Add("user", content, types.MessageSourceSkillWorkflow)
+			h.ctxMgr.AddSkillWorkflow(sk.Name, content, "command")
 			if sk.MarkLoaded != nil {
 				sk.MarkLoaded()
 			}
@@ -117,10 +116,14 @@ func (h *Handler) TakeContinuation() (continueAgent bool) {
 
 // SelectSkill loads a skill context into the conversation and records its
 // message range so it can be removed later.
-func (h *Handler) SelectSkill(ctxMgr *ctxmgr.Manager, context string) {
+func (h *Handler) SelectSkill(ctxMgr *ctxmgr.Manager, context string, names ...string) {
 	clearSkillContext(ctxMgr, h.skill)
 	h.skill.MsgStart = ctxMgr.Len()
-	ctxMgr.Add("user", context, types.MessageSourceSkillWorkflow)
+	name := ""
+	if len(names) > 0 {
+		name = names[0]
+	}
+	ctxMgr.AddSkillWorkflow(name, context, "selected")
 	h.skill.MsgEnd = ctxMgr.Len()
 }
 

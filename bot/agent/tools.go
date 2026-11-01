@@ -230,7 +230,7 @@ func (r *toolRunner) addToolResultsAndHints(calls []core.ToolCallItem, msgs []ty
 	toolResults := make([]ctxmgr.ToolResultMsg, len(msgs))
 	for i, m := range msgs {
 		name, args := calls[i].Effective()
-		if name == "skill" && !m.IsError {
+		if name == "skill" {
 			m.SkillName, _ = args["name"].(string)
 		}
 		toolResults[i] = ctxmgr.ToolResultMsg{Message: m, ToolName: name, AllowOutputFile: r.agent.deps.toolExecutor.AllowOutputFile}

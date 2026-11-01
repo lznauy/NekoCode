@@ -276,6 +276,7 @@ func canonicalMessages(messages []types.Message) []types.Message {
 	out := append([]types.Message(nil), messages...)
 	for i := range out {
 		out[i].Source = ""
+		out[i].SkillDelivery = types.SkillDelivery{}
 	}
 	if out == nil {
 		out = []types.Message{}

@@ -208,7 +208,7 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 			ToolName:        name,
 			AllowOutputFile: executor.AllowOutputFile,
 		}
-		if name == "skill" && r.Error == "" {
+		if name == "skill" {
 			batch[i].Message.SkillName, _ = args["name"].(string)
 		}
 		if cfg.OnToolCall != nil {
@@ -268,6 +268,9 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 	messages, err := mgr.PrepareRequest(ctx, request)
 	if err != nil {
 		return nil, "", err
+	}
+	if output.onRequestPrepared != nil {
+		output.onRequestPrepared()
 	}
 	toolpolicy.ObserveReadContext(ctx, messages)
 

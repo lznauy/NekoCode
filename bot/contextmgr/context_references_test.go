@@ -67,7 +67,7 @@ func TestArtifactReferencesSurviveTwoCompactionsAsRequestData(t *testing.T) {
 		}
 		found := false
 		for i, msg := range messages {
-			if strings.Contains(msg.Content, `"kind":"artifact_references"`) {
+			if strings.Contains(msg.Content, `"kind":"context_references"`) {
 				found = true
 				if i == 0 || !strings.Contains(messages[i-1].Content, `"kind":"archive"`) || !strings.Contains(msg.Content, "saved-artifact-id") {
 					t.Fatal("references missing after archive")
@@ -101,5 +101,49 @@ func TestArtifactReferencesParticipateInFinalRequestBudget(t *testing.T) {
 	refs := refbridge.Page{SessionID: "parent", Items: []refbridge.Reference{{ID: strings.Repeat("x ", 1500), Sequence: 2}}}
 	if _, err := m.PrepareRequest(t.Context(), ModelRequest{OutputTokens: 1, ContextReferences: refs}); err == nil {
 		t.Fatal("request omitted reference budget")
+	}
+}
+
+func TestSkillAndArtifactReferencesShareExistingRequestBudget(t *testing.T) {
+	page := refbridge.Page{SessionID: "parent", HasMore: true}
+	for i := 20; i > 0; i-- {
+		kind := "artifact"
+		name := ""
+		hash := ""
+		if i%2 == 0 {
+			kind = "skill"
+			name = strings.Repeat("skill-name", 8)
+			hash = types.SkillContentHash("workflow")
+		}
+		page.Items = append(page.Items, refbridge.Reference{Kind: kind, ID: fmt.Sprintf("%s.%d.%s", kind, i, strings.Repeat("a", 64)), Sequence: i, Name: name, ContentHash: hash})
+	}
+	msg := contextReferencesMessage(page)
+	var envelope struct {
+		ContextData struct {
+			Content refbridge.Page
+			Omitted int
+		} `json:"context_data"`
+	}
+	if err := json.Unmarshal([]byte(msg.Content), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	skills, artifacts := 0, 0
+	for _, ref := range envelope.ContextData.Content.Items {
+		if ref.Kind == "skill" {
+			skills++
+		} else {
+			artifacts++
+		}
+	}
+	if skills == 0 || skills > 8 || artifacts > 16 || len(msg.Content) > 4096 || envelope.ContextData.Omitted != 20-skills-artifacts {
+		t.Fatalf("unbounded shared projection: skills=%d artifacts=%d bytes=%d", skills, artifacts, len(msg.Content))
+	}
+	retained := envelope.ContextData.Content.Items
+	if envelope.ContextData.Content.Before != retained[len(retained)-1].Sequence || !envelope.ContextData.Content.HasMore {
+		t.Fatal("shared cap skipped omitted sources")
+	}
+	task := TaskReferences{SessionID: "parent", Total: 1, Items: []TaskReference{{ID: strings.Repeat("task", 500), Status: "running"}}}.message()
+	if len(task.Content)+len(msg.Content) > 8192 {
+		t.Fatal("combined reference budget grew")
 	}
 }
