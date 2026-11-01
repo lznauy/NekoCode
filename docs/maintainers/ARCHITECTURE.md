@@ -376,9 +376,9 @@ Agent 循环硬限制：
 
 ### Build 管线
 
-1. Layer 0: SystemPrompt + Skills（会话内静态前缀）
-2. Layer 1: Memory（项目记忆）
-3. Layer 2: Archive（压缩摘要）
+1. Layer 0: SystemPrompt + Skills + 固定历史数据解释规则（会话内静态 system 前缀）
+2. Layer 1: Memory（项目记忆），以 `role=user` 的 JSON `context_data` 数据消息投影
+3. Layer 2: Archive（压缩摘要），使用同一数据封装，放在活动历史之前
 4. Layer 3: Messages（当前缓存 epoch 内严格只追加）
 5. Runtime Context：Environment、Todo、Runtime Policy 按固定顺序组成
    `<runtime_context mode="replace">` 完整快照，内容变化时作为隐藏的 `role=user` 消息追加到
@@ -390,14 +390,21 @@ Agent 循环硬限制：
 7. Runtime Events：checkpoint rewind 等已经发生且需要纠正模型认知的事件，作为独立隐藏
    `role=user` 消息永久追加；事件进入 Session 和后续摘要，但不在聊天界面显示
 
-请求发出前，`contextmgr` 对稳定段生成 prefix shape：system（Layer 0-1）、
-tools 和 history（Layer 2-3）。动态变量不再以临时 system tail 重建：新快照进入历史后，
-下一次请求会原样重放。旧消息被改写、删除或压缩才归因为 history 变化；压缩、新建空白
+Memory/Archive 的正文按 JSON 字符串编码，保存的原文不被重写；其内容没有 system 权威，
+也不提供文件操作授权。内部 `Source=context-data` 由投影器生成，不进入 provider wire，
+不计作真实用户回合，也不写回 transcript。复制 JSON 标记的用户原文仍是用户消息，
+回合分类只依据本地来源。`Message.IsConversationUser` 统一供回合边界、裁剪目标和报告计数使用。
+
+请求发出前，`contextmgr` 从同一次完整投影中生成 prefix shape：system（Layer 0）、
+tools 和 history（Layer 1-3），避免独立拼接请求与缓存身份。固定规则和 JSON 封装都计入预算；
+memory/archive 变化归因为 history，固定 system 不随数据变更。旧版本升级首次恢复会产生可解释的
+system 前缀变化，随后相同内容保持稳定。动态变量不再以临时 system tail 重建：新快照进入历史后，
+下一次请求会原样重放。旧消息被改写、删除、压缩或历史数据变化归因为 history 变化；压缩、新建空白
 会话和模型切换视为新的缓存 epoch；`rewind` 不删除对话历史，而是在文件恢复成功后追加隐藏的
 `<workspace_event type="checkpoint_rewind">`，列出每个文件的回滚动作和受影响父目录，因此仍保持
 append-only。压缩时 runtime 快照不进入 Archive，活动历史只保留
 最新一份完整快照。**恢复会话不是缓存 epoch**：Layer 0-3 全部按会话文件重放，其中 Layer 0
-（system prompt + skills）必须是 registry 与 context window 的纯函数，不得携带"哪些 skill
+（system prompt + skills + 固定历史数据规则）必须独立于历史正文，不得携带"哪些 skill
 已加载"之类的会话状态，否则恢复会改写前缀开头、令供应商重读整段历史；已加载状态只用于
 skill 工具语义与会话持久化。恢复时同时写回上次请求的 head 摘要（system/tools），使重载后的
 首次 miss 归因为 `system`/`tools` 或 `tail/provider`，而不是 `cold-start`。累计缓存命中/
@@ -416,7 +423,11 @@ system/tools/history 变化会记录到 ContextReport、逐调用 calllog，并�
 session/model/source、脱敏 endpoint、延迟、system fingerprint 短哈希、prefix 诊断和
 `total tok · in · cached · new · out` usage；`total = in + out`。`session` 取调用发生时
 的当前会话 id，主模型、subagent 与 compaction 记录由各 Bot 实例显式携带，可据此归组同一次会话的
-全部调用。供应商上报
+全部调用。
+记录中的可选 `execution` 含 `run_id`、`task_id`、`attempt_id`，可关联 Runtime run 与持久子任务 attempt；
+`call_id` 区分每次模型调用及重试。独立子代理引擎没有持久化 attempt 时省略 `attempt_id`，
+不继承父 attempt 或生成替代值。身份只由执行边界传入，不进入模型正文或 provider 的共享状态。
+主模型、合成和压缩调用共用 calllog 的字段归一化，脱敏和 usage 处理只有一处实现。供应商上报
 reasoning token 明细且值大于 0 时，尾部追加 `reasoning`；它属于 out 的子集，不重复计入
 total。供应商未上报缓存明细时，cached/new 显示为 `?`，
 不会误记为零命中。Agent 同时按当前 run 汇总同口径 usage；Runtime 在 `RunDone` 前发布
@@ -442,6 +453,8 @@ context cache tracker、run meter 和 calllog 不直接消费 SSE 分片。TUI �
 推理不会进入后续请求；隐藏正文但保留 signature 的 thinking block 仍按原 wire 形状回放。
 ContextReport 与自动压缩门限使用同一 replay contract 估算实际输入，
 切换模型时清除旧 provider 的 prompt 校准基线并按新模型重新计算。
+
+压缩输入保留完整消息正文和工具调用关联，超窗时按源记录分批，旧 Archive 参与同一预算。最多 8 次实际摘要调用（含重试），全部成功且候选预算与 revision 检查通过后一次替换历史；失败保留旧状态。详见 [摘要压缩事务](ARCHITECTURE_BOUNDARIES.md#摘要压缩事务)。
 
 ### Runtime 关键方法
 

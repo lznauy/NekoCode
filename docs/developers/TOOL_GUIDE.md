@@ -135,6 +135,8 @@ defer toolbox.Close()
 
 工具参数键叫 `path`，不会自动获得所有内置文件工具的保护。需要写文件时，先阅读 [内置 edit 实现](../../bot/extension/tool/builtin/filesystem/edit/tool_edit.go) 及执行器流程，再决定复用哪些能力。
 
+内置文本 read/write/edit 通过 `execution.LockFile` 共用规范目标锁；修改已有文件时，还会检查当前执行者实际收到的读取预览所对应的原始版本。`ReadID` 仅用于当前模型请求的内存交付，不可从会话恢复或复制给子执行者。直接调用工具的嵌入方需提供独立 `ExecutionState` 才启用版本门禁；具体范围见 [文件版本与修改前提](../maintainers/ARCHITECTURE_BOUNDARIES.md#文件版本与修改前提)。
+
 ## 五、取消、错误与输出
 
 耗时操作必须主动响应 `ctx`；取消后停止子请求和后续副作用，不要留下后台 goroutine。内存计算也应限制输入规模，长循环中检查 context。

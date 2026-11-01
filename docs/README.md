@@ -57,6 +57,8 @@
 | [Headless 协议剩余差距](plan/STREAM_JSON_GAPS.md) | `nekocode-headless/2` 尚未暴露的能力与暂缓项 |
 | [子任务后续](plan/SUBAGENT_NEXT.md) | 全局列表、删除、输出搜索导出、多端接入 |
 | [通用运行预算](plan/RUN_BUDGET.md) | 主 Agent 与子任务的步数、累计 token 预算和耗尽后的收尾行为 |
+| [Harness 改进计划](plan/HARNESS_EVOLUTION.md) | 运行身份、历史数据通道、文件版本、连续性与执行证据的分批方案 |
+| [DeerFlow harness 调研](plan/DEERFLOW_RESEARCH.md) | 本地源码对照与 Harness 改进的设计依据 |
 
 当前行为以对应现状文档为准：Headless 见 [STREAM_JSON.md](developers/STREAM_JSON.md)，子任务见 [用户指南](users/USER_GUIDE.md#查看子任务) 和 [数据目录](users/DATA_DIRECTORY.md#subagents--子任务会话)。
 
