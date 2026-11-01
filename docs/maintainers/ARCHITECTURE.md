@@ -50,7 +50,7 @@ bot/
 - `mcp.Manager` 同时拥有 server 和对应工具的生命周期，外层不手工同步工具切片。
 - Skill 发现、上下文格式化和 loaded 状态归 `extension.Manager`；command 只接收动态命令注册数据。
 - 主代理的任务连续性引用复用 TaskLister；Context 只接收有界请求值，不维护任务状态。采样、失效及预算边界见 [任务连续性引用](ARCHITECTURE_BOUNDARIES.md#任务连续性引用)。
-- 工具物理调用凭证由 executor 生成，只随既有 transcript 保存；活动请求不携带正文，见[工具执行凭证](ARCHITECTURE_BOUNDARIES.md#工具执行凭证)。
+- 工具物理调用凭证由 executor 生成，只随既有 transcript 保存，当前执行者通过只读 evidence 查询；活动请求不自动携带正文，见[工具执行凭证](ARCHITECTURE_BOUNDARIES.md#工具执行凭证)。
 - 主、子代理的技能、产物引用及 `context_refs` 共用 refbridge 查询，复用历史索引和各自 OutputStore，位置解析重新检查当前权限，见 [产物引用与查询](ARCHITECTURE_BOUNDARIES.md#产物引用与查询)。
 - 技能接纳以消息上的可选版本元数据记录，deferred 恢复只追加轻量历史事实；不将 ready 视为 provider 回执，见 [技能接纳与引用](ARCHITECTURE_BOUNDARIES.md#技能接纳与引用)。
 - 无引用的 alias 包应删除；内部新代码应直接依赖真实实现包。
@@ -521,7 +521,7 @@ type Tool interface {
 
 ### 工具注册
 
-`bot/extension/tool/builtin/catalog/toolbox.go` 中的 `Toolbox` 注册内置工具（shell/process/read/write/list/tree/glob/edit/grep/web_search/web_fetch/web_extract/question/todo_write/task/task_list/context_refs/diff/index）。`image_gen` 与 `image_understand` 按各自模型配置条件注册；Extension manager 统一注册 `skill` 和 constant-schema `capability` 工具。`bot/core/bot.go` 只负责 Extension、Agent 和 command parser 的顶层组装。
+`bot/extension/tool/builtin/catalog/toolbox.go` 中的 `Toolbox` 注册内置工具（shell/process/read/write/list/tree/glob/edit/grep/web_search/web_fetch/web_extract/question/todo_write/task/task_list/context_refs/evidence/diff/index）。`image_gen` 与 `image_understand` 按各自模型配置条件注册；Extension manager 统一注册 `skill` 和 constant-schema `capability` 工具。`bot/core/bot.go` 只负责 Extension、Agent 和 command parser 的顶层组装。
 
 `Registry` 除了保存 `Tool`，还集中保存 preview 与 delegated-call target 等执行元数据。模型侧名称仍是固定的 `capability`，但解析后的 canonical identity 会随 `ToolCallItem` 贯穿权限、Pre/Post Hook、Ledger、audit、结果和 UI 回调。canonical identity 会转义 server/tool 名称中的 `%` 和 `__`，避免不同 server.tool 组合碰撞到同一条权限规则。Runner 和 Policy 都不通过 optional interface 或硬编码 MCP 参数来推断行为。
 
@@ -691,8 +691,8 @@ Skill 默认 inline 加载，`context` 只能省略或设为 `inline`；`agent`�
 
 | Profile | 权限边界 | 工具 |
 |---------|----------|------|
-| coder | 工作区读写与命令执行 | read/write/edit/shell/process/grep/glob/list/web_search/web_fetch/web_extract/context_refs |
-| explore | 严格只读，无任意命令执行 | read/grep/glob/list/web_search/web_fetch/web_extract/context_refs |
+| coder | 工作区读写与命令执行 | read/write/edit/shell/process/grep/glob/list/web_search/web_fetch/web_extract/context_refs/evidence |
+| explore | 严格只读，无任意命令执行 | read/grep/glob/list/web_search/web_fetch/web_extract/context_refs/evidence |
 
 验证、调研、诊断和设计不是 Agent 类型，由 `check`、`learn`、`hunt`、`think` 等 skill 与具体 task prompt 组合表达。插件 AgentMD 由 `extension/agentprofile` 解析；Profile 集合由每个 `extension.Manager` 的 activePlugin 持有，没有进程级可变注册表。
 

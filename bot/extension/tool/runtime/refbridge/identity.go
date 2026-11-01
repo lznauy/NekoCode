@@ -26,7 +26,7 @@ func ArtifactReference(sessionID string, sequence int, artifact protocol.ToolOut
 
 func Sequence(id string) (int, error) {
 	parts := strings.Split(id, ".")
-	if len(parts) != 3 || (parts[0] != "artifact" && parts[0] != "skill") || len(parts[2]) != 64 {
+	if len(parts) != 3 || (parts[0] != "artifact" && parts[0] != "skill" && parts[0] != EvidenceKind) || len(parts[2]) != 64 {
 		return 0, fmt.Errorf("invalid reference ID")
 	}
 	if _, err := hex.DecodeString(parts[2]); err != nil {

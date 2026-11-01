@@ -28,6 +28,7 @@ type Toolbox struct {
 	task       *task.TaskTool
 	taskList   *task.TaskListTool
 	references *contextrefs.Tool
+	evidence   *contextrefs.Tool
 	question   *question.Tool
 	todo       *todo.TodoWriteTool
 	workspace  *workspace.Manager
@@ -90,6 +91,9 @@ func (e *Toolbox) RebuildRegistryWithConfig(cfg ToolboxConfig) {
 	if e.references == nil {
 		e.references = contextrefs.New()
 	}
+	if e.evidence == nil {
+		e.evidence = contextrefs.NewEvidence()
+	}
 	if e.question == nil {
 		e.question = question.NewTool()
 	}
@@ -101,7 +105,7 @@ func (e *Toolbox) RebuildRegistryWithConfig(cfg ToolboxConfig) {
 	}
 	e.Registry = tools.New()
 	e.Registry.SetWorkspace(e.workspace)
-	registerAll(e.Registry, cfg.ImageGenModels, cfg.ImageUnderstandModels, e.shell, e.lsp, e.index, e.task, e.taskList, e.question, e.todo, e.references)
+	registerAll(e.Registry, cfg.ImageGenModels, cfg.ImageUnderstandModels, e.shell, e.lsp, e.index, e.task, e.taskList, e.question, e.todo, e.references, e.evidence)
 	for _, t := range cfg.ExtraTools {
 		e.Registry.Register(t)
 	}
@@ -208,4 +212,7 @@ func (e *Toolbox) WireInteraction(ask protocol.QuestionFunc, todos protocol.Todo
 	}
 }
 
-func (e *Toolbox) WireReferences(read refbridge.Reader) { e.references.Wire(read) }
+func (e *Toolbox) WireReferences(read refbridge.Reader) {
+	e.references.Wire(read)
+	e.evidence.Wire(read)
+}

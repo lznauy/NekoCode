@@ -160,3 +160,9 @@ defer toolbox.Close()
 内置 `context_refs` 复用当前执行者历史中的 `ToolOutputArtifact`，不会把自定义工具的普通路径文本猜成产物。自定义工具需要沿现有 `ToolOutput.Artifact` 返回结构化引用，并由当前执行者的 OutputStore 持有文件。
 
 模型使用 `action=list` 查来源页，`before=0` 从最新记录开始，`limit` 为 1–20 条含引用的来源记录，历史索引跳过普通消息；has_more 表示还有更早引用。`action=inspect` 接受 list 返回的 ID，产物通过检查后返回当前可读取的位置，正文用 read 重取；技能则核对已接纳版本与当前注册内容是否相同，正文仍需通过允许的 skill/read 入口重取。它不提供任意路径查找、不新增授权，也不能用 available 推断业务成功或文件内容未被修改。主执行者查询自身会话；子执行者查询自身任务，不能指定父任务、其他子任务或会话。内置 coder/explore 已开放，自定义 Profile 需将 context_refs 加入 tools；缺完整身份的嵌入执行不开放查询。ready 技能只表示宿主完整文本就绪，不是 provider 接收回执。完整边界见 [技能接纳与引用](../maintainers/ARCHITECTURE_BOUNDARIES.md#技能接纳与引用) 和 [产物引用与查询](../maintainers/ARCHITECTURE_BOUNDARIES.md#产物引用与查询)。
+
+## 执行凭证查询
+
+只读 `evidence(action="list", before=0, limit=20)` 查询当前执行者历史，凭证条目位于 evidence 数组（无条目时该字段可省略）。limit 限原始记录扫描数，同时最多返回 20 条凭证；无凭证条目的页仍需检查 has_more 并用 before 继续。`evidence(action="inspect", id="evidence.…")` 定位 list 给出的引用，detail 返回该次物理调用及交付摘要，status=recorded 只表示来源匹配。receipt_id 是原始执行 UUID；查询引用另绑定当前 scope 和原始序号。
+
+查询不返回产物路径或内容，不读取文件，也不授予权限。主代理不能借此查子任务，子代理只能查自己的任务（含历史 attempt）；父子交接查询后续单独接入。内置 coder/explore 已开放，自定义 Profile 需显式允许 evidence；该工具与 context_refs 分别授权，不自动投影完整凭证到模型请求。

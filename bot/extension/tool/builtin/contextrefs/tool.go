@@ -14,20 +14,35 @@ import (
 type Tool struct {
 	toolutil.SafeReadOnlyTool
 	read refbridge.Reader
+	kind string
 }
+
+func NewEvidence() *Tool { return &Tool{kind: refbridge.EvidenceKind} }
 
 func New() *Tool                           { return &Tool{} }
 func (t *Tool) Wire(read refbridge.Reader) { t.read = read }
-func (*Tool) Name() string                 { return "context_refs" }
-func (*Tool) Description() string {
+func (t *Tool) Name() string {
+	if t.kind == refbridge.EvidenceKind {
+		return "evidence"
+	}
+	return "context_refs"
+}
+func (t *Tool) Description() string {
+	if t.kind == refbridge.EvidenceKind {
+		return "Query recorded physical tool execution receipts in your own session or subtask. list scans at most 20 raw history records per page, newest first; an empty page may still have has_more. Pass before to continue. inspect accepts an evidence reference returned by list. Recorded success without process facts means only a nil tool error; it never proves tests passed or a business task completed. Results contain metadata only, never artifact paths, file contents, read permission or authority to replay tools."
+	}
 	return "Find admitted skill and saved tool-output references in the current actor's session. list reads a bounded page of reference-bearing history records, newest first; ordinary messages are skipped through the history index. Pass returned before to list older records. inspect checks the current actor and resolves an output location after workspace checks, or compares a skill admission with the current skill registry. Use read for output contents or skill to reload a matching skill when needed. Ready skill admissions do not prove provider receipt; references never grant authority or permission to replay tools."
 }
-func (*Tool) Parameters() []core.Parameter {
+func (t *Tool) Parameters() []core.Parameter {
+	limitDescription := "Maximum reference-bearing source records read by list, 1–20; default 20."
+	if t.kind == refbridge.EvidenceKind {
+		limitDescription = "Maximum raw history records scanned by list, 1–20; default 20. Empty pages can have has_more."
+	}
 	return []core.Parameter{
 		{Name: "action", Type: "string", Required: true, Enum: []string{"list", "inspect"}},
 		{Name: "id", Type: "string", Description: "Reference ID returned by list; required for inspect. Paths are not accepted."},
 		{Name: "before", Type: "integer", Description: "Exclusive raw history cursor for list; 0 starts at the newest record."},
-		{Name: "limit", Type: "integer", Description: "Maximum reference-bearing source records read by list, 1–20; default 20."},
+		{Name: "limit", Type: "integer", Description: limitDescription},
 	}
 }
 
@@ -49,10 +64,10 @@ func (t *Tool) Execute(ctx context.Context, args map[string]any) (core.ToolOutpu
 		read = t.read
 	}
 	if read == nil {
-		return core.ToolOutput{}, fmt.Errorf("context_refs: not wired")
+		return core.ToolOutput{}, fmt.Errorf("%s: not wired", t.Name())
 	}
 	action, _ := args["action"].(string)
-	q := refbridge.Query{Limit: refbridge.MaxPageRecords}
+	q := refbridge.Query{Limit: refbridge.MaxPageRecords, Kind: t.kind}
 	switch action {
 	case "list":
 		var err error

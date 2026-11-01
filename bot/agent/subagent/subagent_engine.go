@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/google/uuid"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"nekocode/bot/agent/internal/llmstream"
@@ -263,7 +264,7 @@ func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []stri
 	ctx = protocol.WithPolicyConfiguration(ctx, output.guard.Configuration())
 	toolDefs := e.filteredToolDefs(allowed)
 	request := ctxmgr.ModelRequest{Tools: toolDefs, OutputTokens: provider.MaxOutputTokensFor(e.llmClient)}
-	if read, bound := refbridge.ReaderFromContext(ctx); bound && read != nil {
+	if read, bound := refbridge.ReaderFromContext(ctx); bound && read != nil && slices.Contains(output.Profile.Tools, "context_refs") {
 		page, err := read(ctx, refbridge.Query{Limit: refbridge.MaxPageRecords})
 		if err != nil {
 			page = refbridge.Page{SessionID: referenceScope(output), Unavailable: true}

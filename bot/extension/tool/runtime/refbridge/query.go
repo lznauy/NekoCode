@@ -22,6 +22,12 @@ func (s Source) Read(ctx context.Context, sessionID string, q Query, base int, t
 	if sessionID == "" || base < 0 || q.Before < 0 || q.Limit < 1 || q.Limit > MaxPageRecords {
 		return Page{}, fmt.Errorf("invalid reference page")
 	}
+	if q.Kind == EvidenceKind {
+		return s.readEvidence(ctx, sessionID, q, base, tail)
+	}
+	if q.Kind != "" {
+		return Page{}, fmt.Errorf("invalid reference kind")
+	}
 	out := Page{SessionID: sessionID, Items: []Reference{}}
 	if q.ID == "" {
 		page, err := s.referencePage(ctx, base, tail, q.Before, q.Limit, 64*1024)

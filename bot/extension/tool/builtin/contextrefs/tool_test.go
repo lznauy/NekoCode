@@ -35,3 +35,22 @@ func TestToolValidatesQueryWithoutAcceptingCallerPathsOrScope(t *testing.T) {
 		t.Fatal("unwired reader succeeded")
 	}
 }
+
+func TestEvidenceToolUsesHostSelectedKindAndMasksParentBinding(t *testing.T) {
+	tool := NewEvidence()
+	if tool.Name() != "evidence" {
+		t.Fatal("wrong tool name")
+	}
+	tool.Wire(func(_ context.Context, q refbridge.Query) (refbridge.Page, error) {
+		if q.Kind != refbridge.EvidenceKind || q.Limit != 20 || q.ID != "" {
+			t.Fatalf("wrong query: %+v", q)
+		}
+		return refbridge.Page{SessionID: "bound-parent"}, nil
+	})
+	if _, err := tool.Execute(t.Context(), map[string]any{"action": "list", "session_id": "foreign", "kind": "context_refs"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tool.Execute(refbridge.WithReader(t.Context(), nil), map[string]any{"action": "list"}); err == nil {
+		t.Fatal("unbound child fell back to parent reader")
+	}
+}

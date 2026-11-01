@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -260,5 +261,56 @@ func TestChildReferenceInspectionDoesNotAuthorizeForeignOutputs(t *testing.T) {
 	page, err := referenceReader(cfg, mgr, own)(ctx, refbridge.Query{Limit: 1, ID: id})
 	if err != nil || page.Status != "unavailable" || page.Path != "" {
 		t.Fatalf("foreign output resolved: %+v %v", page, err)
+	}
+}
+
+func TestEvidenceOnlySubagentsUseOwnConcurrentReadersWithoutContextProjection(t *testing.T) {
+	registry := tools.New()
+	query := contextrefs.NewEvidence()
+	var parentCalls atomic.Int32
+	query.Wire(func(context.Context, refbridge.Query) (refbridge.Page, error) {
+		parentCalls.Add(1)
+		return refbridge.Page{}, fmt.Errorf("parent reader")
+	})
+	registry.Register(query)
+	var wg sync.WaitGroup
+	for _, name := range []string{"first", "second"} {
+		name := name
+		receipt := protocol.ExecutionReceipt{ID: uuid.NewString(), Tool: "read", Status: "success", Execution: protocol.ExecutionIdentity{TaskID: name, AttemptID: "old-" + name}}
+		msg := types.Message{Role: "tool", ToolEvidence: protocol.ToolEvidence{Schema: 1, Executions: []protocol.ExecutionReceipt{receipt}}}
+		cfg := RunConfig{SessionID: "parent", SubagentID: name, AttemptID: "current-" + name, Profile: Profile{Name: "custom", Tools: []string{"evidence"}}, ResumeContext: &ctxmgr.ManagerSnapshot{Transcript: []types.Message{msg}}}
+		model := &scriptedLLM{scripts: [][]types.StreamToken{
+			{{ToolCallDelta: &types.ToolCallDelta{Index: 0, ID: "list", Name: "evidence", Arguments: `{"action":"list"}`}}}, completionScript(),
+		}}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result, err := New(Config{LLM: model, Tools: registry}).Run(t.Context(), cfg)
+			if err != nil || result.Status != StatusCompleted {
+				t.Errorf("%+v %v", result, err)
+				return
+			}
+			if messagesContainText(model.messages[0], `"kind":"context_references"`) {
+				t.Error("evidence-only profile gained context_refs projection")
+			}
+			found := false
+			for _, m := range model.messages[1] {
+				if m.ToolCallID == "list" {
+					var page refbridge.Page
+					if err := json.Unmarshal([]byte(m.Content), &page); err != nil {
+						t.Error(err)
+						continue
+					}
+					found = len(page.Evidence) == 1 && page.Evidence[0].ReceiptID == receipt.ID && page.SessionID == referenceScope(cfg)
+				}
+			}
+			if !found {
+				t.Error("child queried another actor's evidence")
+			}
+		}()
+	}
+	wg.Wait()
+	if parentCalls.Load() != 0 {
+		t.Fatal("evidence child inherited parent binding")
 	}
 }

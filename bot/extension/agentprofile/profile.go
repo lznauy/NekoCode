@@ -24,8 +24,8 @@ type Profile struct {
 
 func Builtins() []Profile {
 	return []Profile{
-		{Name: "coder", Description: "Workspace implementation and command execution", Tools: []string{"read", "write", "edit", "shell", "process", "grep", "glob", "list", "web_search", "web_fetch", "web_extract", "context_refs"}},
-		{Name: "explore", Description: "Read-only exploration; no shell or workspace writes", Tools: []string{"read", "grep", "glob", "list", "web_search", "web_fetch", "web_extract", "context_refs"}},
+		{Name: "coder", Description: "Workspace implementation and command execution", Tools: []string{"read", "write", "edit", "shell", "process", "grep", "glob", "list", "web_search", "web_fetch", "web_extract", "context_refs", "evidence"}},
+		{Name: "explore", Description: "Read-only exploration; no shell or workspace writes", Tools: []string{"read", "grep", "glob", "list", "web_search", "web_fetch", "web_extract", "context_refs", "evidence"}},
 	}
 }
 
