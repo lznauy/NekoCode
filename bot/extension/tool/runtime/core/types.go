@@ -36,6 +36,9 @@ func (c ToolCallItem) Effective() (string, map[string]any) {
 }
 
 type ToolCallResult struct {
+	// Cause preserves physical invocation errors for host classification. Error
+	// remains the model-facing delivery text; later retries may have succeeded.
+	Cause    error                 `json:"-"`
 	ReadID   string                `json:"-"`
 	Process  ProcessObservation    `json:"process,omitzero"`
 	Evidence protocol.ToolEvidence `json:"evidence,omitzero"`

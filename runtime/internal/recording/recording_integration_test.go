@@ -234,3 +234,28 @@ func TestRecordingReplaysExecutorEvidenceWithoutInventingAdmission(t *testing.T)
 		t.Fatalf("replay altered evidence: %+v", got)
 	}
 }
+
+func TestIncompleteEvidenceSurvivesRecordingCodecAndRunProjection(t *testing.T) {
+	root := t.TempDir()
+	recorder, err := newTestRecorder(t, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.RecordError(core.Event{ID: "evt_1", RunID: "run", Type: core.EventRunFailed, Payload: core.RunResult{Output: "already produced", Error: "history save failed", EvidenceIncomplete: true}}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := LoadRecordedEvents(root)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("events=%+v err=%v", events, err)
+	}
+	result := events[0].Payload.(core.RunResult)
+	if !result.EvidenceIncomplete || result.Output != "already produced" {
+		t.Fatalf("replay=%+v", result)
+	}
+	store := runstore.NewRunStore(0)
+	store.Record(events[0])
+	snapshot, ok := store.Lookup("run")
+	if !ok || !snapshot.EvidenceIncomplete || snapshot.Status != core.RunFailed {
+		t.Fatalf("snapshot=%+v", snapshot)
+	}
+}

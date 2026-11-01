@@ -174,6 +174,8 @@ type SessionPayload struct {
 type RunResult struct {
 	Output string `json:"output"`
 	Error  string `json:"error,omitempty"`
+
+	EvidenceIncomplete bool `json:"evidence_incomplete,omitempty"`
 }
 
 // ConnectorRuntime is the narrow host contract supplied to IM connectors.

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"nekocode/bot/provider/types"
+	"nekocode/protocol"
 )
 
 func TestResumeKeepsOnlyActiveContextAndPendingHistory(t *testing.T) {
@@ -64,8 +65,8 @@ func TestFailedSessionCommitRetriesWithoutDuplicatingHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.ctxMgr.Add("user", "second")
-	if err := b.saveSession(); err == nil {
-		t.Fatal("commit unexpectedly succeeded")
+	if err := b.saveSession(); err == nil || !protocol.EvidenceIncomplete(err) {
+		t.Fatalf("failed commit lacks evidence marker: %v", err)
 	}
 	base, tail, _ := b.ctxMgr.TranscriptTail()
 	if base != 1 || len(tail) != 1 {

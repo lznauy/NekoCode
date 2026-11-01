@@ -105,7 +105,7 @@ func (r *loopRunner) runContext(ctx context.Context, input string, images []type
 	result := r.finishRun(callback)
 	// Flush any steering messages that arrived too late to be drained during
 	// the run, so they are still recorded in the context instead of being lost.
-	result.Error = errors.Join(result.Error, a.drainSteering())
+	result.Error = errors.Join(result.Error, a.drainSteering(), a.run.evidenceErr)
 	r.restoreInterruptedRun(beforeRun, result)
 	r.restoreUnansweredRun(beforeRun, result)
 	a.life.StopTiming()

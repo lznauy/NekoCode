@@ -25,6 +25,8 @@ type RunSnapshot struct {
 	Reasoning  string              `json:"reasoning,omitempty"`
 	Error      string              `json:"error,omitempty"`
 	EventCount int                 `json:"event_count"`
+
+	EvidenceIncomplete bool `json:"evidence_incomplete,omitempty"`
 }
 
 type ToolStatus string

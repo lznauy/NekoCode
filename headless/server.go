@@ -274,6 +274,9 @@ func (s *server) result(result rt.RunResult, subtype string) error {
 		"result":      result.Output,
 		"duration_ms": time.Since(s.active.started).Milliseconds(),
 	}
+	if result.EvidenceIncomplete {
+		fields["nekocode_evidence_incomplete"] = true
+	}
 	reason := "completed"
 	if subtype == "error_cancelled" {
 		reason = "cancelled"

@@ -256,6 +256,8 @@ for line in proc.stdout:                       # 每行一个 JSON 帧
   `result`（`subtype` 为 `error_cancelled`）。
 - ACK 只表示指令已受理，**必须继续读取直到 `result`** 才算该轮清理完成。
 
+历史保存失败时，最终 `result` 帧可带 `nekocode_evidence_incomplete:true`；取消结果也保留该标记。原有 `result` 输出和失败/取消 subtype 不变。它只表示历史可能不完整，不能据此自动重放工具；未携带此标记也不构成录制落盘回执。
+
 ## 错误与退出
 
 - 输入级错误：非 fatal 的 `system/error`（带 `rejected_uuid`），连接继续可用。

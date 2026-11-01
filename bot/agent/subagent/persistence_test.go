@@ -236,3 +236,30 @@ func TestCancelledRunPersistsInterruptedStatus(t *testing.T) {
 		t.Fatalf("err=%v status=%s", err, lastStatus)
 	}
 }
+
+func TestPostExecutionSaveFailureMarksIncompleteWithoutReplayingTool(t *testing.T) {
+	cause := errors.New("disk full after execution")
+	model := &scriptedLLM{scripts: [][]types.StreamToken{{{ToolCallDelta: &types.ToolCallDelta{Index: 0, ID: "executed", Name: "inspect", Arguments: `{}`}}}, completionScript()}}
+	completed := 0
+	var receiptID string
+	_, err := New(Config{LLM: model, Tools: tools.New(testProxyTool{name: "inspect"})}).Run(t.Context(), RunConfig{
+		SessionID: "parent", SubagentID: "child", AttemptID: "attempt", Profile: Profile{Name: "custom", Tools: []string{"inspect"}},
+		OnToolCall: func(event ToolCallEvent) {
+			if event.Action == protocol.StepActionExecuteTool {
+				completed++
+			}
+		},
+		SaveContext: func(snapshot ctxmgr.ManagerSnapshot, _, _ string, _ AttemptUsage) error {
+			for _, msg := range snapshot.Transcript {
+				if len(msg.ToolEvidence.Executions) > 0 {
+					receiptID = msg.ToolEvidence.Executions[0].ID
+					return cause
+				}
+			}
+			return nil
+		},
+	})
+	if !errors.Is(err, cause) || !protocol.EvidenceIncomplete(err) || completed != 1 || receiptID == "" || model.calls != 1 {
+		t.Fatalf("err=%v executions=%d receipt=%s model calls=%d", err, completed, receiptID, model.calls)
+	}
+}

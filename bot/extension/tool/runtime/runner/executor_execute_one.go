@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"slices"
 	"strings"
@@ -17,12 +18,15 @@ import (
 
 func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result core.ToolCallResult) {
 	evidence := protocol.ToolEvidence{Schema: 1}
+	var invocationErr error
 	invoke := func(callCtx context.Context, run func() (core.ToolOutput, error)) (core.ToolOutput, error) {
 		output, err, receipt := observeExecution(callCtx, tc, run)
 		evidence.Executions = append(evidence.Executions, receipt)
+		invocationErr = errors.Join(invocationErr, err)
 		return output, err
 	}
 	defer func() {
+		result.Cause = invocationErr
 		if len(evidence.Executions) > 0 {
 			evidence.ReturnedHash = core.OutputHash(result.TextOutput())
 			result.Evidence = evidence

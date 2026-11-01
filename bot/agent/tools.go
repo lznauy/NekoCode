@@ -189,6 +189,11 @@ func (r *toolRunner) executeAllowedTools(allowed []core.ToolCallItem, callback R
 		return nil
 	}
 	results := executor.ExecuteBatch(r.agent.getCtx(), allowed)
+	for _, result := range results {
+		if r.agent.run.evidenceErr == nil && protocol.EvidenceIncomplete(result.Cause) {
+			r.agent.run.evidenceErr = result.Cause
+		}
+	}
 	for _, call := range allowed {
 		name, _ := call.Effective()
 		if name == "task" || name == "task_list" {

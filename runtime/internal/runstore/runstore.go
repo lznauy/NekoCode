@@ -155,6 +155,7 @@ func (s *RunStore) Record(ev core.Event) {
 		}
 	case core.EventRunDone:
 		if p, ok := ev.Payload.(core.RunResult); ok {
+			rec.snapshot.EvidenceIncomplete = p.EvidenceIncomplete
 			if p.Output != "" {
 				rec.replaceOutput(p.Output)
 			}
@@ -162,6 +163,7 @@ func (s *RunStore) Record(ev core.Event) {
 		rec.finish(core.RunDone, ev.Time)
 	case core.EventRunFailed:
 		if p, ok := ev.Payload.(core.RunResult); ok {
+			rec.snapshot.EvidenceIncomplete = p.EvidenceIncomplete
 			if p.Output != "" {
 				rec.replaceOutput(p.Output)
 			}
@@ -170,6 +172,7 @@ func (s *RunStore) Record(ev core.Event) {
 		rec.finish(core.RunFailed, ev.Time)
 	case core.EventRunCancelled:
 		if p, ok := ev.Payload.(core.RunResult); ok {
+			rec.snapshot.EvidenceIncomplete = p.EvidenceIncomplete
 			rec.snapshot.Error = p.Error
 		}
 		rec.finish(core.RunCancelled, ev.Time)

@@ -135,12 +135,14 @@ func (s *server) prompt(ctx context.Context, params json.RawMessage) (any, *wire
 				if err := s.backend.WaitRun(ctx, runID); err != nil {
 					return nil, backendError("settle prompt", err)
 				}
-				return map[string]any{"stopReason": "end_turn"}, nil
+				result, _ := event.Payload.(controlruntime.RunResult)
+				return terminalPromptResult("end_turn", result), nil
 			case controlruntime.EventRunCancelled:
 				if err := s.backend.WaitRun(ctx, runID); err != nil {
 					return nil, backendError("settle prompt", err)
 				}
-				return map[string]any{"stopReason": "cancelled"}, nil
+				result, _ := event.Payload.(controlruntime.RunResult)
+				return terminalPromptResult("cancelled", result), nil
 			case controlruntime.EventRunFailed:
 				if err := s.backend.WaitRun(ctx, runID); err != nil {
 					return nil, backendError("settle prompt", err)
@@ -149,8 +151,20 @@ func (s *server) prompt(ctx context.Context, params json.RawMessage) (any, *wire
 				if result.Error == "" {
 					result.Error = "prompt failed"
 				}
-				return nil, rpcError(-32603, "%s", result.Error)
+				failure := rpcError(-32603, "%s", result.Error)
+				if result.EvidenceIncomplete {
+					failure.Data = map[string]any{"nekocode/evidence_incomplete": true}
+				}
+				return nil, failure
 			}
 		}
 	}
+}
+
+func terminalPromptResult(reason string, result controlruntime.RunResult) map[string]any {
+	response := map[string]any{"stopReason": reason}
+	if result.EvidenceIncomplete {
+		response["_meta"] = map[string]any{"nekocode/evidence_incomplete": true}
+	}
+	return response
 }

@@ -23,10 +23,11 @@ type runLease struct {
 // Cancellation must wait for both: the runner owns the final usage snapshot,
 // while the lease owns event callbacks that may still be in flight.
 type runExecution struct {
-	mu          sync.RWMutex
-	settled     chan struct{}
-	settleOnce  sync.Once
-	withMetrics bool
+	mu                 sync.RWMutex
+	settled            chan struct{}
+	settleOnce         sync.Once
+	withMetrics        bool
+	evidenceIncomplete bool
 }
 
 func newRunExecution() *runExecution {
@@ -373,7 +374,7 @@ func (r *Runtime) handleRuntimeCommand(ctx context.Context, runID RunID, input I
 }
 
 func (r *Runtime) finishRun(runID RunID, output string, err error, withMetrics bool) {
-	payload := RunResult{Output: output}
+	payload := RunResult{Output: output, EvidenceIncomplete: protocol.EvidenceIncomplete(err)}
 	eventType := EventRunDone
 	status := RunDone
 	if err != nil {
@@ -383,7 +384,16 @@ func (r *Runtime) finishRun(runID RunID, output string, err error, withMetrics b
 	}
 
 	r.mu.Lock()
-	if r.closed || r.currentRun != runID {
+	if r.currentRun != runID {
+		r.mu.Unlock()
+		return
+	}
+	if payload.EvidenceIncomplete && r.runExecution != nil {
+		r.runExecution.mu.Lock()
+		r.runExecution.evidenceIncomplete = true
+		r.runExecution.mu.Unlock()
+	}
+	if r.closed {
 		r.mu.Unlock()
 		return
 	}
@@ -532,4 +542,14 @@ func (r *Runtime) publishStep(runID RunID, step protocol.StepEvent) {
 	}
 	r.events.Publish(Event{RunID: runID, Type: eventType, Source: SourceRef{Kind: "bot"}, Payload: payload})
 	r.publishMetrics(runID)
+}
+
+// Cancellation waits for settlement before reading final persistence facts.
+func (e *runExecution) incompleteEvidence() bool {
+	if e == nil {
+		return false
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.evidenceIncomplete
 }

@@ -235,7 +235,7 @@ func (r *Runtime) publishCancellation(control cancelControl, message string) {
 		RunID:   control.runID,
 		Type:    EventRunCancelled,
 		Source:  SourceRef{Kind: "runtime"},
-		Payload: RunResult{Error: message},
+		Payload: RunResult{Error: message, EvidenceIncomplete: control.execution.incompleteEvidence()},
 	})
 	close(control.published)
 }
@@ -310,7 +310,7 @@ func (r *Runtime) Close() error {
 				RunID:   runID,
 				Type:    EventRunCancelled,
 				Source:  SourceRef{Kind: "runtime"},
-				Payload: RunResult{Error: "runtime closed"},
+				Payload: RunResult{Error: "runtime closed", EvidenceIncomplete: execution.incompleteEvidence()},
 			})
 			close(cancelDone)
 		} else if cancelDone != nil {

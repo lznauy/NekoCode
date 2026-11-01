@@ -125,7 +125,7 @@ func (b *Bot) saveSession() error {
 	snapshot.Ledger = b.ledgerSnapshot()
 	snapshot.TranscriptLazy = true
 	if err := b.sess.Save(snapshot); err != nil {
-		return err
+		return protocol.MarkEvidenceIncomplete(err)
 	}
 	b.ctxMgr.AcknowledgeTranscript(snapshot.TranscriptBase, snapshot.TranscriptSeq)
 	return nil

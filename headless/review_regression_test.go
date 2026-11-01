@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"nekocode/protocol"
@@ -415,4 +416,28 @@ func TestToolCompletionEvidenceIsOptionalAndKeepsResultShape(t *testing.T) {
 		t.Fatalf("results=%d", results)
 	}
 	h.finish(t)
+}
+
+func TestHistoryPersistenceFailurePreservesOutputAndIncompleteFlag(t *testing.T) {
+	for _, marked := range []bool{true, false} {
+		t.Run(fmt.Sprint(marked), func(t *testing.T) {
+			h := newHarness(t, func(context.Context, string, rt.RunHost) (string, error) {
+				cause := errors.New("history write failed")
+				if marked {
+					cause = protocol.MarkEvidenceIncomplete(cause)
+				}
+				return "already produced", cause
+			}, Options{})
+			h.send(t, user("one", "run"))
+			result := h.until(t, "result")
+			if result["result"] != "already produced" || result["is_error"] != true {
+				t.Fatalf("result=%+v", result)
+			}
+			flag, present := result["nekocode_evidence_incomplete"]
+			if present != marked || (marked && flag != true) {
+				t.Fatalf("incomplete evidence=%+v", result)
+			}
+			h.finish(t)
+		})
+	}
 }

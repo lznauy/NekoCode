@@ -170,7 +170,7 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (result *Result, runErr
 		contextStatus := ctxMgr.Status()
 		usage := AttemptUsage{TotalTokens: meta.totalTokens, CacheHitTokens: meta.cacheHitTokens, CacheMissTokens: meta.cacheMissTokens, ToolUseCount: meta.toolUseCount, DurationMs: meta.durationMs, ContextTokens: contextStatus.Tokens, ContextWindow: contextStatus.Budget}
 		if err := cfg.SaveContext(snap, status, output, usage); err != nil {
-			return err
+			return protocol.MarkEvidenceIncomplete(err)
 		}
 		ctxMgr.AcknowledgeTranscript(snap.TranscriptBase, snap.TranscriptBase+len(snap.Transcript))
 		return nil
