@@ -73,6 +73,7 @@ CI 包含五类独立检查。日常提交只运行受改动影响的类别；�
 | `website` | 官网的依赖安装、ESLint、Next.js 构建 |
 | `repository-quality` | Actionlint、ShellCheck、安装器校验测试 |
 | `documentation` | 离线文档链接和 fragment 检查 |
+| `文档内本机路径` | 不检查。指向本机绝对路径或仓库外 checkout 的引用只能写成纯文本，链接检查无法解析 |
 
 ### Go 与 CGO
 
@@ -117,6 +118,14 @@ push `v*` tag 会触发 Release workflow。`validate-tag` 在构建前检查：
 - 章节日期采用 `YYYY-MM-DD` 格式。
 
 tag 校验通过后，Release workflow 会通过 `workflow_call` 再次调用 Go、GUI、官网、仓库质量和文档五套检查。该调用不受路径过滤影响；master 曾经通过不代表可以跳过这一步，tag 对应的提交必须独立通过全部检查。
+
+## 重跑失败版本的 Release
+
+版本 tag 已经推送、但 Release 在 `validate-tag` 之后失败（例如 tag 提交上的文档检查不通过）时，不要移动或重新创建 tag：修复先进入 `master`，再在 Actions 里手动运行 `Release` workflow，`tag` 输入填原版本号（如 `v0.5.7`）。
+
+手动运行时，workflow 以该 tag 为 checkout 目标，`validate-tag` 仍按上面的规则校验 tag 对象、peeled commit、CHANGELOG 章节和日期，随后 `validation` 和构建矩阵也都基于 tag 指向的提交运行。因此入参不会放宽门禁；它只把「tag push 触发」换成「对已存在的 tag 显式触发」。修复提交本身不在 tag 内，所以重跑通过说明 tag 内容可以被发布，但 tag 之后的 `master` 提交仍需单独通过日常 CI。
+
+只有 tag push 触发时，`github.ref` 才等于 tag；手动触发时它指向触发所用分支。workflow 里的构建版本注入和 Release 查找都使用解析后的版本号，而不是 `github.ref`。
 
 ## 构建矩阵与版本注入
 

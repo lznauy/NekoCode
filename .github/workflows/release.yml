@@ -1,6 +1,12 @@
 name: Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Annotated release tag to publish (for example v0.5.7)
+        required: true
+        type: string
   push:
     tags:
       - "v*"
@@ -15,9 +21,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
       - name: Validate release tag and changelog
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           core='(0|[1-9][0-9]*)'
           prerelease_id='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
@@ -50,6 +57,8 @@ jobs:
             echo "Invalid changelog date for $RELEASE_TAG: $release_date" >&2
             exit 1
           }
+          printf 'tag=%s\n' "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+        id: validate
 
   validation:
     needs: validate-tag
@@ -70,6 +79,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
@@ -92,7 +103,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "1"
           CC: /tmp/zigcc
-          LD_FLAGS: -s -w -X 'nekocode/util/version.Version=${{ github.ref_name }}'
+          LD_FLAGS: -s -w -X 'nekocode/util/version.Version=${{ inputs.tag || github.ref_name }}'
         run: |
           go build -trimpath -ldflags="$LD_FLAGS" -o "dist/nekocode-tui-linux-${GOARCH}" ./cmd/tui
 
@@ -144,6 +155,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
@@ -154,7 +167,7 @@ jobs:
           GOOS: darwin
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "1"
-          LD_FLAGS: -s -w -X 'nekocode/util/version.Version=${{ github.ref_name }}'
+          LD_FLAGS: -s -w -X 'nekocode/util/version.Version=${{ inputs.tag || github.ref_name }}'
         run: |
           go build -trimpath -ldflags="$LD_FLAGS" -o "dist/nekocode-tui-darwin-${GOARCH}" ./cmd/tui
 
@@ -207,7 +220,7 @@ jobs:
       - name: Withdraw previous release for this tag
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           python3 - <<'PYTHON'
           import json
