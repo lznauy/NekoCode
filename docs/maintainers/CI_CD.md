@@ -125,7 +125,7 @@ tag 校验通过后，Release workflow 会通过 `workflow_call` 再次调用 Go
 
 手动运行时，workflow 以该 tag 为 checkout 目标，`validate-tag` 仍按上面的规则校验 tag 对象、peeled commit、CHANGELOG 章节和日期，随后 `validation` 和构建矩阵也都基于 tag 指向的提交运行。因此入参不会放宽门禁；它只把「tag push 触发」换成「对已存在的 tag 显式触发」。修复提交本身不在 tag 内，所以重跑通过说明 tag 内容可以被发布，但 tag 之后的 `master` 提交仍需单独通过日常 CI。
 
-只有 tag push 触发时，`github.ref` 才等于 tag；手动触发时它指向触发所用分支。workflow 里的构建版本注入和 Release 查找都使用解析后的版本号，而不是 `github.ref`。
+只有 tag push 触发时才等于 tag；手动触发时 `github.ref` 指向触发所用分支。workflow 里的 checkout、构建版本注入、Release 查找和 `softprops/action-gh-release` 的 `tag_name` 都使用输入的版本号，而不是 `github.ref`，否则创建 Release 的一步会因为没有 tag 而失败。
 
 ## 构建矩阵与版本注入
 
