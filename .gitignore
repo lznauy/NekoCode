@@ -5,6 +5,9 @@
 .nekocode/
 .understand-anything/
 
+# Local research notes (not published)
+/research/
+
 # GUI build artifacts
 /.build/
 /.flatpak-builder/
