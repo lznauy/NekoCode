@@ -38,9 +38,10 @@ type Config struct {
 	Checkpoints            *checkpoint.Manager
 	SessionID              func() string
 	// TaskReferences supplies request-only values scoped to the current parent session.
-	TaskReferences     func(context.Context, string) ctxmgr.TaskReferences
-	ContextReferences  func(context.Context, string) refbridge.Page
-	EvidenceReferences func(context.Context, string) refbridge.Page
+	TaskReferences func(context.Context, string) ctxmgr.TaskReferences
+	// ContextReferences receives a host-selected kind: empty for skills/artifacts,
+	// refbridge.EvidenceKind for receipts. It never selects another actor.
+	ContextReferences func(context.Context, string, string) refbridge.Page
 }
 
 // Output contains optional streaming callbacks.
@@ -63,17 +64,16 @@ type Interaction struct {
 }
 
 type agentDeps struct {
-	ctxMgr             *ctxmgr.Manager
-	llmClient          provider.LLM
-	toolRegistry       *tools.Registry
-	toolExecutor       *runner.Executor
-	checkpoints        *checkpoint.Manager
-	sessionID          func() string
-	taskReferences     func(context.Context, string) ctxmgr.TaskReferences
-	contextReferences  func(context.Context, string) refbridge.Page
-	evidenceReferences func(context.Context, string) refbridge.Page
-	subSlotMgr         *slotManager
-	gov                *aggov.Policy
+	ctxMgr            *ctxmgr.Manager
+	llmClient         provider.LLM
+	toolRegistry      *tools.Registry
+	toolExecutor      *runner.Executor
+	checkpoints       *checkpoint.Manager
+	sessionID         func() string
+	taskReferences    func(context.Context, string) ctxmgr.TaskReferences
+	contextReferences func(context.Context, string, string) refbridge.Page
+	subSlotMgr        *slotManager
+	gov               *aggov.Policy
 }
 
 type Agent struct {
@@ -110,16 +110,15 @@ func New(ctx context.Context, cfg Config) *Agent {
 	a := &Agent{
 		life: kernel.NewLifecycle(ctx, steeringChBuffer),
 		deps: agentDeps{
-			ctxMgr:             cfg.Context,
-			llmClient:          cfg.Model,
-			toolRegistry:       cfg.Tools,
-			toolExecutor:       runner.NewExecutor(cfg.Tools),
-			checkpoints:        cfg.Checkpoints,
-			sessionID:          cfg.SessionID,
-			taskReferences:     cfg.TaskReferences,
-			contextReferences:  cfg.ContextReferences,
-			evidenceReferences: cfg.EvidenceReferences,
-			subSlotMgr:         newSlotManager(cfg.MaxConcurrentSubagents),
+			ctxMgr:            cfg.Context,
+			llmClient:         cfg.Model,
+			toolRegistry:      cfg.Tools,
+			toolExecutor:      runner.NewExecutor(cfg.Tools),
+			checkpoints:       cfg.Checkpoints,
+			sessionID:         cfg.SessionID,
+			taskReferences:    cfg.TaskReferences,
+			contextReferences: cfg.ContextReferences,
+			subSlotMgr:        newSlotManager(cfg.MaxConcurrentSubagents),
 		},
 		gate: kernel.NewGate(defaultMaxRetries),
 	}

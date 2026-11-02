@@ -141,7 +141,7 @@ func TestModelEvidenceReferencesRestoreAndActorIsolation(t *testing.T) {
 	receipt := protocol.ExecutionReceipt{ID: uuid.NewString(), Tool: "shell", Status: "error"}
 	b.ctxMgr.AddToolResultsBatch([]contextmgr.ToolResultMsg{{ToolName: "shell", Message: types.Message{ToolCallID: "receipt-call", Content: "visible", ToolEvidence: protocol.ToolEvidence{Schema: 1, Executions: []protocol.ExecutionReceipt{receipt}}}}})
 	scope := b.CurrentSessionID()
-	page := b.modelEvidenceReferences(t.Context(), scope)
+	page := b.modelContextReferences(t.Context(), scope, refbridge.EvidenceKind)
 	if page.Unavailable || len(page.Evidence) != 1 {
 		t.Fatalf("pending metadata: %+v", page)
 	}
@@ -152,7 +152,7 @@ func TestModelEvidenceReferencesRestoreAndActorIsolation(t *testing.T) {
 	if err := b.ResumeSession(scope); err != nil {
 		t.Fatal(err)
 	}
-	page = b.modelEvidenceReferences(t.Context(), scope)
+	page = b.modelContextReferences(t.Context(), scope, refbridge.EvidenceKind)
 	if page.Unavailable || len(page.Evidence) != 1 || page.Evidence[0].ID != id {
 		t.Fatalf("restored metadata: %+v", page)
 	}
@@ -172,11 +172,11 @@ func TestModelEvidenceReferencesRestoreAndActorIsolation(t *testing.T) {
 	wrongStore := toolcore.WithOutputStore(t.Context(), toolcore.NewOutputStore(t.TempDir()))
 	child := protocol.WithExecutionIdentity(t.Context(), protocol.ExecutionIdentity{TaskID: "child", AttemptID: "attempt"})
 	for _, ctx := range []context.Context{wrongStore, child} {
-		if rejected := b.modelEvidenceReferences(ctx, scope); !rejected.Unavailable || len(rejected.Evidence) != 0 {
+		if rejected := b.modelContextReferences(ctx, scope, refbridge.EvidenceKind); !rejected.Unavailable || len(rejected.Evidence) != 0 {
 			t.Fatal("foreign actor received main evidence")
 		}
 	}
-	if rejected := b.modelEvidenceReferences(t.Context(), "other-session"); !rejected.Unavailable {
+	if rejected := b.modelContextReferences(t.Context(), "other-session", refbridge.EvidenceKind); !rejected.Unavailable {
 		t.Fatal("foreign session received evidence")
 	}
 }

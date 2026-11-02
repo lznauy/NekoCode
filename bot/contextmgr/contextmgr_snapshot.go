@@ -37,7 +37,7 @@ func (m *Manager) Snapshot() ManagerSnapshot {
 	defer m.state.mu.RUnlock()
 	msgs := make([]types.Message, len(m.state.ctx.Messages))
 	copy(msgs, m.state.ctx.Messages)
-	transcript := append([]types.Message(nil), m.state.transcript...)
+	transcript := cloneTranscript(m.state.transcript)
 	return ManagerSnapshot{
 		SystemPrompt:   m.state.ctx.SystemPrompt,
 		Skills:         m.state.ctx.Skills,
@@ -96,9 +96,9 @@ func (m *Manager) Restore(snap ManagerSnapshot) {
 	m.state.transcriptBase = snap.TranscriptBase
 	m.state.transcriptLazy = snap.TranscriptLazy
 	if snap.Transcript != nil || snap.TranscriptLazy {
-		m.state.transcript = append([]types.Message(nil), snap.Transcript...)
+		m.state.transcript = cloneTranscript(snap.Transcript)
 	} else {
-		m.state.transcript = append([]types.Message(nil), snap.Messages...)
+		m.state.transcript = cloneTranscript(snap.Messages)
 	}
 	m.restoreRuntimeContextLocked()
 	if m.state.tracker == nil {
@@ -151,5 +151,15 @@ func (m *Manager) AcknowledgeTranscript(base, end int) {
 func (m *Manager) TranscriptTail() (int, []types.Message, bool) {
 	m.state.mu.RLock()
 	defer m.state.mu.RUnlock()
-	return m.state.transcriptBase, append([]types.Message(nil), m.state.transcript...), m.state.transcriptLazy
+	return m.state.transcriptBase, cloneTranscript(m.state.transcript), m.state.transcriptLazy
+}
+
+// Transcript views cross ownership boundaries; receipt slices must not let a
+// snapshot consumer or restore caller rewrite the manager's execution facts.
+func cloneTranscript(messages []types.Message) []types.Message {
+	out := append([]types.Message(nil), messages...)
+	for i := range out {
+		out[i].ToolEvidence = out[i].ToolEvidence.Clone()
+	}
+	return out
 }

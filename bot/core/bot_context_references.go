@@ -56,21 +56,13 @@ func (b *Bot) referenceSkill(name string) (string, bool) {
 	return skill.Context, ok
 }
 
-func (b *Bot) modelContextReferences(ctx context.Context, sessionID string) refbridge.Page {
-	page, err := b.contextReferences(ctx, sessionID, refbridge.Query{Limit: refbridge.MaxPageRecords})
-	if err != nil {
-		return refbridge.Page{SessionID: sessionID, Unavailable: true}
-	}
-	return page
-}
-
-// The host samples its own metadata through the same actor/scope checks as the
-// query tool. An existing foreign store must never be replaced by this binding.
-func (b *Bot) modelEvidenceReferences(ctx context.Context, sessionID string) refbridge.Page {
-	if toolcore.OutputStoreFromContext(ctx) == nil {
+// Both model reference views use the same scope/actor boundary. Only evidence
+// needs a host store binding; an existing foreign binding is never replaced.
+func (b *Bot) modelContextReferences(ctx context.Context, sessionID, kind string) refbridge.Page {
+	if kind == refbridge.EvidenceKind && toolcore.OutputStoreFromContext(ctx) == nil {
 		ctx = toolcore.WithOutputStore(ctx, b.sessionOutput.store)
 	}
-	page, err := b.contextReferences(ctx, sessionID, refbridge.Query{Kind: refbridge.EvidenceKind, Limit: refbridge.MaxPageRecords})
+	page, err := b.contextReferences(ctx, sessionID, refbridge.Query{Kind: kind, Limit: refbridge.MaxPageRecords})
 	if err != nil {
 		return refbridge.Page{SessionID: sessionID, Unavailable: true}
 	}

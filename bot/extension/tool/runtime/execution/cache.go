@@ -7,19 +7,15 @@ import (
 
 const maxCacheEntries = 100
 
-// lineRange is a 1-based, inclusive interval of lines.
-type lineRange struct{ Start, End int }
-
-// fileState holds the full file content and the set of line ranges already returned.
+// fileState contains parsed text for one exact raw-byte version. Mtime is
+// advisory ordering for parent/child cache merges, never a validity check.
 type fileState struct {
-	Version [32]byte // raw-byte version, when supplied by a managed text read
+	Version [32]byte
 	Lines   []string
 	Mtime   int64
-	Size    int64
-	Ranges  []lineRange
 }
 
-// FileStateCache caches file content and tracks which line ranges have been read.
+// FileStateCache caches parsed file content; ReadEvidence owns read authority.
 type FileStateCache struct {
 	mu      sync.RWMutex
 	entries map[string]*fileState
@@ -30,75 +26,34 @@ func NewFileStateCache() *FileStateCache {
 	return &FileStateCache{entries: make(map[string]*fileState)}
 }
 
-// Lines returns the cached full-file content if the file hasn't changed.
-func (c *FileStateCache) Lines(path string, version ...[32]byte) ([]string, bool) {
+// Lines returns parsed text only for the caller's current raw-byte version.
+func (c *FileStateCache) Lines(path string, version [32]byte) ([]string, bool) {
 	key := normalizePath(path)
-
 	c.mu.RLock()
-	e, ok := c.entries[key]
-	if !ok || e.Lines == nil {
-		c.mu.RUnlock()
+	defer c.mu.RUnlock()
+	entry, ok := c.entries[key]
+	if !ok || entry.Lines == nil || entry.Version != version {
 		return nil, false
 	}
-	mtime, size := e.Mtime, e.Size
-	lines := e.Lines
-	if len(version) > 0 {
-		matches := e.Version == version[0]
-		c.mu.RUnlock()
-		if !matches {
-			return nil, false
-		}
-		return lines, true
-	}
-	c.mu.RUnlock()
-
-	info, err := os.Stat(path)
-	if err != nil || info.ModTime().UnixNano() != mtime || info.Size() != size {
-		c.mu.Lock()
-		if err == nil {
-			newMtime := info.ModTime().UnixNano()
-			newSize := info.Size()
-			if cur, exists := c.entries[key]; exists && (cur.Mtime != newMtime || cur.Size != newSize) {
-				c.remove(key)
-			}
-		} else {
-			c.remove(key)
-		}
-		c.mu.Unlock()
-		return nil, false
-	}
-	return lines, true
+	return entry.Lines, true
 }
 
-// Put stores the full file content and marks [startLine, endLine] as read.
-func (c *FileStateCache) Put(path string, lines []string, startLine, endLine int, version ...[32]byte) {
+// Put stores parsed text for the exact version read by the caller.
+func (c *FileStateCache) Put(path string, lines []string, version [32]byte) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return
 	}
-	mtime := info.ModTime().UnixNano()
-	size := info.Size()
-
+	key := normalizePath(path)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	key := normalizePath(path)
-	e, ok := c.entries[key]
-	if !ok || e.Mtime != mtime || e.Size != size || (len(version) > 0 && e.Version != version[0]) {
-		e = &fileState{
-			Lines: lines,
-			Mtime: mtime,
-			Size:  size,
-		}
-		if len(version) > 0 {
-			e.Version = version[0]
-		}
-		c.entries[key] = e
-		if !ok {
-			c.order = append(c.order, key)
-		}
+	entry, exists := c.entries[key]
+	if !exists {
+		entry = &fileState{}
+		c.entries[key] = entry
+		c.order = append(c.order, key)
 	}
-	e.Ranges = mergeRanges(e.Ranges, lineRange{startLine, endLine})
+	entry.Version, entry.Lines, entry.Mtime = version, lines, info.ModTime().UnixNano()
 	c.evictIfNeeded()
 }
 

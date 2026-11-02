@@ -64,7 +64,7 @@ func TestContextReferencesSurvivePendingDurableAndRestore(t *testing.T) {
 	for range 25 {
 		b.ctxMgr.Add("user", "later question")
 	}
-	recent := b.modelContextReferences(t.Context(), scope)
+	recent := b.modelContextReferences(t.Context(), scope, "")
 	if recent.HasMore || len(recent.Items) != 1 || recent.Items[0].ID != id {
 		t.Fatalf("unrelated history displaced old reference: %+v", recent)
 	}

@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"os"
 	"path/filepath"
@@ -657,19 +658,19 @@ func TestIsolatedWorkspaceDoesNotShareFileState(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	parent.FileCache.Put(parentPath, []string{"base"}, 1, 1)
+	parent.FileCache.Put(parentPath, []string{"base"}, sha256.Sum256([]byte("base")))
 	engine := &Engine{toolRegistry: tools.New()}
 	child, cleanup := engine.newExecutor(RunConfig{IsolatedWorkspace: true, SubagentID: "isolated", ToolState: parent})
 	state := child.ExecutionState()
-	if _, ok := state.FileCache.Lines(parentPath); ok {
+	if _, ok := state.FileCache.Lines(parentPath, sha256.Sum256([]byte("base"))); ok {
 		t.Fatal("inherited parent read state")
 	}
 	if state.SnapshotStore == parent.SnapshotStore || state.Checkpoints != nil {
 		t.Fatal("shared parent snapshots or rewind")
 	}
-	state.FileCache.Put(childPath, []string{"base"}, 1, 1)
+	state.FileCache.Put(childPath, []string{"base"}, sha256.Sum256([]byte("base")))
 	cleanup()
-	if _, ok := parent.FileCache.Lines(childPath); ok {
+	if _, ok := parent.FileCache.Lines(childPath, sha256.Sum256([]byte("base"))); ok {
 		t.Fatal("merged isolated read state into parent")
 	}
 }

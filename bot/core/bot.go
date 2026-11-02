@@ -321,7 +321,6 @@ func (b *Bot) initAgent() {
 		SessionID:              b.sess.CurrentID,
 		TaskReferences:         b.taskReferences,
 		ContextReferences:      b.modelContextReferences,
-		EvidenceReferences:     b.modelEvidenceReferences,
 		Output: agent.Output{
 			Text:      b.stream,
 			Reason:    b.reasoning,

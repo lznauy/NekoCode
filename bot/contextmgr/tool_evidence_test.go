@@ -60,3 +60,36 @@ func TestEvidenceDoesNotChangeProviderPrefixOrReturnAsActiveHistory(t *testing.T
 		t.Fatal("legacy/fallback restore lost source or exposed receipt to active context")
 	}
 }
+
+func TestToolEvidenceSnapshotAndRestoreDoNotShareReceiptSlices(t *testing.T) {
+	record := func() types.Message {
+		return types.Message{Role: "tool", ToolCallID: "call", Content: "result", ToolEvidence: protocol.ToolEvidence{Schema: 1, Executions: []protocol.ExecutionReceipt{{ID: "original", Status: "error"}}}}
+	}
+	for _, view := range []string{"snapshot", "tail", "restore", "legacy_restore"} {
+		t.Run(view, func(t *testing.T) {
+			manager := New(Config{})
+			source := record()
+			switch view {
+			case "snapshot", "tail":
+				manager.AddToolResultsBatch([]ToolResultMsg{{ToolName: "shell", Message: source}})
+				var exported []types.Message
+				if view == "snapshot" {
+					exported = manager.Snapshot().Transcript
+				} else {
+					_, exported, _ = manager.TranscriptTail()
+				}
+				exported[0].ToolEvidence.Executions[0].ID = "caller-changed"
+			case "restore":
+				manager.Restore(ManagerSnapshot{Transcript: []types.Message{source}})
+				source.ToolEvidence.Executions[0].ID = "caller-changed"
+			case "legacy_restore":
+				manager.Restore(ManagerSnapshot{Messages: []types.Message{source}})
+				source.ToolEvidence.Executions[0].ID = "caller-changed"
+			}
+			snapshot := manager.Snapshot()
+			if got := snapshot.Transcript[0].ToolEvidence.Executions[0].ID; got != "original" {
+				t.Fatalf("caller mutated authoritative receipt: %s", got)
+			}
+		})
+	}
+}

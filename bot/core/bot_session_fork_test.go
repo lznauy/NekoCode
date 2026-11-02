@@ -1,6 +1,7 @@
 package core
 
 import (
+	"crypto/sha256"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,7 +105,7 @@ func TestForkResetsFileStateAndDropsTemporaryRoots(t *testing.T) {
 	if e := os.WriteFile(path, []byte("old read"), 0600); e != nil {
 		t.Fatal(e)
 	}
-	b.ag.ToolExecutionState().FileCache.Put(path, []string{"old read"}, 1, 1)
+	b.ag.ToolExecutionState().FileCache.Put(path, []string{"old read"}, sha256.Sum256([]byte("old read")))
 	cm.Add("user", "continue from this point", "")
 	parent := m.CurrentID()
 	fork, e := b.ForkSession(t.Context())
@@ -114,7 +115,7 @@ func TestForkResetsFileStateAndDropsTemporaryRoots(t *testing.T) {
 	if _, _, allowed, e := toolbox.Workspace().CheckRead(filepath.Join(extra, "file.txt")); e != nil || allowed {
 		t.Fatalf("inherited temporary root: %v %v", allowed, e)
 	}
-	if _, ok := b.ag.ToolExecutionState().FileCache.Lines(path); ok {
+	if _, ok := b.ag.ToolExecutionState().FileCache.Lines(path, sha256.Sum256([]byte("old read"))); ok {
 		t.Fatal("inherited parent read authority")
 	}
 	parentImages, _ := attachment.ImageDir(parent)

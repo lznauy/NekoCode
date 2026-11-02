@@ -35,10 +35,6 @@ func (c *FileStateCache) transferFrom(src *FileStateCache, overwrite bool) {
 			cp.Lines = make([]string, len(e.Lines))
 			copy(cp.Lines, e.Lines)
 		}
-		if e.Ranges != nil {
-			cp.Ranges = make([]lineRange, len(e.Ranges))
-			copy(cp.Ranges, e.Ranges)
-		}
 		c.entries[p] = &cp
 		c.order = append(c.order, p)
 	}

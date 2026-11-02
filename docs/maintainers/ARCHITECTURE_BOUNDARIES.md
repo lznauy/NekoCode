@@ -91,7 +91,7 @@ executor 在每次实际进入工具函数前生成 UUID，记录 run/task/attem
 
 ToolCallResult.Evidence 的 schema=1 聚合当前调用至多两次物理调用，并记录 executor 完成归一化、裁剪后的返回摘要及 normalized/bounded/preservation_failed。原始工具返回的摘要与 executor 返回摘要分开；文本先按原始字节散列，避免 JSON 将不同无效 UTF-8 字节归一成同一值，也避免为大正文分配 JSON 副本。归一化和保存失败不改写物理调用的真实结果，不自动重放工具。
 
-主、子代理沿既有工具结果接纳链路传入 Context。Context 克隆执行列表，只在该工具的权威 transcript 记录附加 ToolEvidence，并记录初次接纳时的可见正文摘要及 ready/budgeted/deferred；该摘要不是 provider 接收回执，也不随后续 deferred 恢复改写。活动消息和 session.json 不保存凭证正文，恢复时保留 transcript 元数据并从活动历史移除；provider wire 与 prefix 指纹也排除该字段。继续使用现有 transcript 水位和保存事务，没有独立事件仓库或凭证索引。旧记录缺字段不补造；旧版本重写可能丢失新附加字段。
+主、子代理沿既有工具结果接纳链路传入 Context。Context 在结果接纳及 Snapshot/TranscriptTail 导出、Restore 输入边界克隆执行列表，防止调用方通过快照修改权威凭证；只在该工具的权威 transcript 记录附加 ToolEvidence，并记录初次接纳时的可见正文摘要及 ready/budgeted/deferred；该摘要不是 provider 接收回执，也不随后续 deferred 恢复改写。活动消息和 session.json 不保存凭证正文，恢复时保留 transcript 元数据并从活动历史移除；provider wire 与 prefix 指纹也排除该字段。继续使用现有 transcript 水位和保存事务，没有独立事件仓库或凭证索引。旧记录缺字段不补造；旧版本重写可能丢失新附加字段。
 
 凭证已生成、保存，并开放当前执行者及父会话指定子 attempt 的 evidence 查询；模型自动有界引用及父子 evidence IDs 交接见下节。主、子代理工具完成回调携带 executor 交付时的 ToolEvidence 快照，回调前克隆执行列表，Runtime 事件总线在历史保存、观察者/订阅者交付和回放出口统一分离凭证切片，防止观察者污染其他消费者；凭证字段计入原有事件历史字节预算；只有 tool_completed 的 ToolPayload 可带可选 evidence。复用既有 ToolPayload codec 与 recording 序列化/回放，不新增事件或凭证仓库。该快照早于 Context 接纳，不含后续 visible_hash/admission，不能证明 transcript 已落盘，也不由 Runtime 的终端输出归一化重算哈希。headless 的工具结果 user 帧可带 nekocode_evidence；ACP 的 tool_call_update 通过 _meta["nekocode/evidence"] 携带。无凭证时字段省略，旧事件和旧客户端保持原结果结构；工具阻止、预览、收尾补齐不补造凭证。事件是派生观察，不能反向覆盖 transcript 或作为恢复重放工具的依据。历史保存失败仍由原有调用方返回错误，不把失败解释为工具未执行或自动重试的许可；历史及录制失败的结构化表达见下节。
 
@@ -140,7 +140,7 @@ list 的 limit 为 1–20 条原始历史记录，并最多返回 20 条凭证�
 
 ## 文件版本与修改前提
 
-模型管理的 executor 为每个主/子执行者持有独立的 `ExecutionState.Reads`。专用文本 read 从同一次原始字节读取生成 SHA-256 和展示文本；FileStateCache 只有原始版本相同时才复用文本，mtime/size 与展示 TAG 不作为修改凭证。每份读取凭证只保存路径、版本和预览摘要，最多 128 条，超限淘汰最早记录；不复制到父子缓存或快照合并。
+模型管理的 executor 为每个主/子执行者持有独立的 `ExecutionState.Reads`。专用文本 read 从同一次原始字节读取生成 SHA-256 和展示文本；FileStateCache 仅缓存给定原始字节版本的解析文本，Lines(path, version)/Put(path, lines, version) 显式要求该版本，Go 嵌入方需同步签名；不再维护已读行范围或 mtime/size 命中回退。mtime 只用于父子缓存合并排序，展示 TAG 不作为修改凭证。每份读取凭证只保存路径、版本和预览摘要，最多 128 条，超限淘汰最早记录；不复制到父子缓存或快照合并。
 
 读取成功只生成待交付的本地 `ReadID`。Agent 在每次实际模型请求前，通过同一适配器核对最终 tool 消息及完整预览摘要，重新确定当前可用凭证。失败、截断或 deferred 占位不能授权；延迟预览完整交付后可生效。局部读取证明片段来自当前版本，不声称读过全文。媒体与 PDF 不生成文本修改凭证。
 
@@ -202,7 +202,7 @@ bot/core 通过已有 TaskLister 取得当前父会话的任务元数据，Agent
 
 ## 产物引用与查询
 
-主代理的 `ContextReferences` 回调由 bot/core 组装，复用当前会话历史索引的引用链接，Context 只接收 refbridge.Page 值。主模型、合成请求和开放 context_refs 的子模型请求在 Archive、任务引用之后，活动 history 之前投影 user-role JSON `context_references`；不写回活动消息、transcript 或 session.json，不复制工具正文，不新增独立引用存储。技能最多 8 条、产物最多 16 条，与凭证引用共享不超过 4 KiB 的完整 JSON 预算，与任务引用合计最多 8 KiB。只投影最新的有界引用页；更早引用按原始序号分页读取，不生成全会话产物目录。
+主代理的 `ContextReferences(ctx, sessionID, kind)` 单一回调由 bot/core 组装，宿主传入空 kind 查询技能/产物、evidence kind 查询凭证，不再分别配置 EvidenceReferences；Go 嵌入方需同步此回调签名。复用当前会话历史索引的引用链接，Context 只接收 refbridge.Page 值。主模型、合成请求和开放 context_refs 的子模型请求在 Archive、任务引用之后，活动 history 之前投影 user-role JSON `context_references`；不写回活动消息、transcript 或 session.json，不复制工具正文，不新增独立引用存储。技能最多 8 条、产物最多 16 条，与凭证引用共享不超过 4 KiB 的完整 JSON 预算，与任务引用合计最多 8 KiB。只投影最新的有界引用页；更早引用按原始序号分页读取，不生成全会话产物目录。
 
 来源每次最多读取 20 条含引用的历史记录，复用 transcript.idx 跳过无关记录，使用 64 KiB 软预算；首条不可拆分，已有工具记录最高 4 MiB，底层记录解析上限为 16 MiB。已有索引每项从 32 字节增至 40 字节，增加引用链接和索引项校验，64 字节头不变；权威 transcript 和 session 格式不变。索引缺失或旧版格式时流式重建一次，可取消；查询不修复或改写 transcript。有效索引按引用跳转，新增历史仍需解析新增记录，尚未保存的尾部仍向后扫描，不能宣称冷恢复绝对恒定 IO。索引可删除重建，不缓存正文或增加全局状态。
 

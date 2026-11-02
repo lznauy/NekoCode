@@ -56,8 +56,7 @@ func (t *ReadTool) readTextCached(ctx context.Context, path string, args map[str
 	}
 	result := formatReadOutput(ctx, path, fullLines, startLine, endLine)
 	if cache != nil {
-		end := min(startLine+min(endLine-startLine+1, maxReadLines)-1, len(fullLines))
-		cache.Put(path, fullLines, startLine, end, version)
+		cache.Put(path, fullLines, version)
 	}
 	return core.ToolOutput{Text: result, ReadID: execution.FileReadsFromContext(ctx).Record(path, data, result)}, nil
 }

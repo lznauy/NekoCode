@@ -200,9 +200,12 @@ func TestModelRefreshesRequestOnlyTaskReferences(t *testing.T) {
 func TestModelAndSynthesisReceiveFreshContextReferences(t *testing.T) {
 	model := &executionLLM{}
 	current := "first-reference"
-	a := New(t.Context(), Config{Context: contextmgr.New(contextmgr.Config{}), Model: model, Tools: tools.New(), SessionID: func() string { return "parent" }, ContextReferences: func(ctx context.Context, scope string) refbridge.Page {
+	a := New(t.Context(), Config{Context: contextmgr.New(contextmgr.Config{}), Model: model, Tools: tools.New(), SessionID: func() string { return "parent" }, ContextReferences: func(ctx context.Context, scope, kind string) refbridge.Page {
 		if scope != "parent" || ctx.Err() != nil {
 			t.Fatal("wrong reference scope")
+		}
+		if kind == refbridge.EvidenceKind {
+			return refbridge.Page{SessionID: scope, Evidence: []refbridge.EvidenceItem{{ID: "evidence-" + current, Sequence: 2, Tool: "read", Status: "success"}}}
 		}
 		return refbridge.Page{SessionID: scope, Items: []refbridge.Reference{{ID: current, Sequence: 2}}}
 	}})
@@ -225,6 +228,15 @@ func TestModelAndSynthesisReceiveFreshContextReferences(t *testing.T) {
 		}
 		if !found {
 			t.Fatalf("model request %d omitted current references", i)
+		}
+		evidenceFound := false
+		for _, msg := range model.messages[i] {
+			if strings.Contains(msg.Content, "evidence-"+id) {
+				evidenceFound = true
+			}
+		}
+		if !evidenceFound {
+			t.Fatalf("request %d omitted evidence view", i)
 		}
 	}
 }
