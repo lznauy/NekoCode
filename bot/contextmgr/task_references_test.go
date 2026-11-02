@@ -75,8 +75,8 @@ func TestTaskReferencesSurviveCompactionAndRestoreWithoutPersisting(t *testing.T
 				}
 			}
 		}
-		if index < 1 || !strings.Contains(messages[index-1].Content, `"kind":"archive"`) || index == len(messages)-1 {
-			t.Fatal("references not between archive and history")
+		if index != len(messages)-1 {
+			t.Fatal("request references must remain in the volatile tail")
 		}
 		after := m.Snapshot()
 		before.PrefixBaseline, before.PrefixTurn = after.PrefixBaseline, after.PrefixTurn

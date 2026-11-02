@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"nekocode/bot/extension/tool/runtime/refbridge"
 	"nekocode/bot/provider/types"
 	"nekocode/protocol"
 )
@@ -102,6 +103,47 @@ func TestToolLoopRequestKeepsPreviousRequestAsExactPrefix(t *testing.T) {
 			first[i].ToolCallID != second[i].ToolCallID {
 			t.Fatalf("request prefix changed at %d:\nfirst=%+v\nsecond=%+v", i, first[i], second[i])
 		}
+	}
+}
+
+func TestToolLoopReferencesChangeOnlyVolatileTail(t *testing.T) {
+	m := New(Config{SystemPrompt: "stable"})
+	m.Add("user", "inspect")
+	request := ModelRequest{
+		TaskReferences:     TaskReferences{SessionID: "session", Items: []TaskReference{{ID: "task-1"}}},
+		ContextReferences:  refbridge.Page{SessionID: "session", Items: []refbridge.Reference{{ID: "artifact-1", Sequence: 1}}},
+		EvidenceReferences: refbridge.Page{SessionID: "session", Evidence: []refbridge.EvidenceItem{{ID: "evidence-1", Sequence: 1, Tool: "read", Status: "success"}}},
+	}
+	first := m.BuildRequest(request)
+	firstReference := -1
+	for i, msg := range first {
+		if msg.Source == types.MessageSourceContextData {
+			firstReference = i
+			break
+		}
+	}
+	if firstReference < 0 {
+		t.Fatal("first request omitted references")
+	}
+
+	m.AddAssistant(types.Message{ToolCalls: []types.ToolCall{{
+		ID: "call-1", Type: "function", Function: types.FunctionCall{Name: "read", Arguments: `{}`},
+	}}})
+	m.AddToolResultsBatch([]ToolResultMsg{{
+		Message: types.Message{ToolCallID: "call-1", Content: "result"}, ToolName: "read",
+	}})
+	request.TaskReferences.Items[0].ID = "task-2"
+	request.ContextReferences.Items[0].ID = "artifact-2"
+	request.EvidenceReferences.Evidence[0].ID = "evidence-2"
+	second := m.BuildRequest(request)
+
+	for i := 0; i < firstReference; i++ {
+		if first[i].Role != second[i].Role || first[i].Content != second[i].Content || first[i].ToolCallID != second[i].ToolCallID {
+			t.Fatalf("persistent prefix changed at %d:\nfirst=%+v\nsecond=%+v", i, first[i], second[i])
+		}
+	}
+	if got := m.PrefixDiagnostics().ChangedParts; !reflect.DeepEqual(got, []string{"tail/provider"}) {
+		t.Fatalf("reference refresh classified as persistent history change: %v", got)
 	}
 }
 

@@ -69,8 +69,8 @@ func TestArtifactReferencesSurviveTwoCompactionsAsRequestData(t *testing.T) {
 		for i, msg := range messages {
 			if strings.Contains(msg.Content, `"kind":"context_references"`) {
 				found = true
-				if i == 0 || !strings.Contains(messages[i-1].Content, `"kind":"archive"`) || !strings.Contains(msg.Content, "saved-artifact-id") {
-					t.Fatal("references missing after archive")
+				if i != len(messages)-1 || !strings.Contains(msg.Content, "saved-artifact-id") {
+					t.Fatal("references missing from volatile tail")
 				}
 			}
 		}

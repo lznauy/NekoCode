@@ -40,7 +40,7 @@ type ModelRequest struct {
 func (m *Manager) Build() []types.Message {
 	m.state.mu.RLock()
 	defer m.state.mu.RUnlock()
-	out, _ := m.buildLocked(ModelRequest{})
+	out, _, _ := m.buildLocked(ModelRequest{})
 	for i := range out {
 		out[i].Source = ""
 	}
@@ -63,26 +63,32 @@ func (m *Manager) projectRequest(request ModelRequest, observe bool) ([]types.Me
 	defer m.state.mu.Unlock()
 	m.appendRuntimeContextLocked(runtimePrompt)
 	m.appendHintsLocked(m.state.ctx.Hints, request.PolicyHints)
-	out, systemEnd := m.buildLocked(request)
+	out, systemEnd, historyEnd := m.buildLocked(request)
 	out = append(out, request.ExtraMessages...)
 	out = types.ProjectReasoning(out, m.state.reasoning)
-	shape := buildPrefixShape(out[:systemEnd], out[systemEnd:], request.Tools)
+	shape := buildPrefixShape(out[:systemEnd], out[systemEnd:historyEnd], request.Tools)
+	// Skill diagnostics cover volatile workflow and reference messages too,
+	// even though those messages do not participate in append-only history.
+	shape.skills, shape.skillMessages = skillDeliveryDigest(out[systemEnd:])
 	if observe {
 		m.state.prefix.Observe(shape)
 	}
 	return out, shape
 }
 
-func (m *Manager) buildLocked(request ModelRequest) ([]types.Message, int) {
+func (m *Manager) buildLocked(request ModelRequest) ([]types.Message, int, int) {
 	out := m.state.ctx.BuildLayer0()
 	systemEnd := len(out)
 	out = append(out, m.state.ctx.BuildData()...)
+	out = append(out, m.visibleHistory()...)
+	historyEnd := len(out)
+	// Request-only references are volatile tail data. Keeping them after the
+	// persistent history prevents refreshed references from invalidating it.
 	if msg := request.TaskReferences.message(); msg.Content != "" {
 		out = append(out, msg)
 	}
 	out = append(out, referenceMessages(request.ContextReferences, request.EvidenceReferences)...)
-	out = append(out, m.visibleHistory()...)
-	return out, systemEnd
+	return out, systemEnd, historyEnd
 }
 
 // appendRuntimeContextLocked appends a complete dynamic-state snapshot only

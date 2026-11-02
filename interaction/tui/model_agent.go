@@ -166,7 +166,7 @@ func (m *Model) loadSessionWindow(before, pageIndex int) tea.Cmd {
 	}
 	m.setPhase(phaseSessionLoading)
 	m.Messages.SetProcessingStatus(phaseSessionLoading)
-	rt, width, height := m.Runtime, m.Messages.Width(), m.Messages.Height()
+	rt, width, height, telemetry := m.Runtime, m.Messages.Width(), m.Messages.Height(), m.refreshTelemetry
 	return func() (result tea.Msg) {
 		defer func() {
 			if failure := recover(); failure != nil {
@@ -197,7 +197,7 @@ func (m *Model) loadSessionWindow(before, pageIndex int) tea.Cmd {
 					}
 					cursor = page.Before
 				}
-				history := restoredChatMessages(page.Messages)
+				history := withTurnTelemetry(restoredChatMessages(page.Messages), telemetry)
 				prepared = components.NewMessages(width, height, &sty)
 				prepared.ReplaceHistoryWindow(history, page.Before, page.End, page.Total, page.HasMore, pageIndex > 0)
 				if prepared.HistoryWindowBytes(history) <= 8<<20 || limit == 1 {
@@ -207,7 +207,7 @@ func (m *Model) loadSessionWindow(before, pageIndex int) tea.Cmd {
 				limit = max(1, limit/2)
 			}
 		} else {
-			history := restoredChatMessages(rt.SessionMessages())
+			history := withTurnTelemetry(restoredChatMessages(rt.SessionMessages()), telemetry)
 			prepared = components.NewMessages(width, height, &sty)
 			prepared.ReplaceMessages(history)
 		}
@@ -227,6 +227,7 @@ func (m *Model) applySessionLoaded(msg sessionLoadedMsg) tea.Cmd {
 	m.sessionLoading = false
 	if msg.err != nil {
 		m.sessionPendingChat = nil
+		m.refreshTelemetry = nil
 		m.Messages.AddMessage(message.ChatMessage{Role: "error", Content: msg.err.Error()})
 	} else {
 		movingNewer := msg.pageIndex < m.sessionHistoryPage
@@ -234,6 +235,7 @@ func (m *Model) applySessionLoaded(msg sessionLoadedMsg) tea.Cmd {
 			msg.messages.MoveProcessingFrom(m.Messages)
 		}
 		m.Messages = msg.messages
+		m.refreshTelemetry = nil
 		for _, notice := range m.sessionLoadNotices {
 			m.Messages.AddMessage(notice)
 		}
@@ -307,6 +309,19 @@ func (m *Model) requestHistoryPage(older bool) tea.Cmd {
 	}
 	load := m.loadSessionWindow(m.sessionHistoryCursors[target], target)
 	return tea.Batch(spinnerTick(), load)
+}
+
+func withTurnTelemetry(history []message.ChatMessage, telemetry *controlruntime.MetricsSnapshot) []message.ChatMessage {
+	if telemetry == nil {
+		return history
+	}
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role == "assistant" {
+			history[i].Telemetry = telemetry
+			return history
+		}
+	}
+	return append(history, message.ChatMessage{Role: "telemetry", Telemetry: telemetry})
 }
 
 func restoredChatMessages(history []controlruntime.DisplayMessage) []message.ChatMessage {

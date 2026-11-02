@@ -72,6 +72,7 @@ type Model struct {
 	sessionHistoryBefore  int
 	sessionHistoryPaging  bool
 	sessionHistoryDirty   bool
+	refreshTelemetry      *controlruntime.MetricsSnapshot
 	sessionPendingChat    *pendingSessionChat
 	tasks                 *taskOverlay
 	taskStates            map[string]string // current parent run only

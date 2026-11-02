@@ -81,7 +81,7 @@ func (m *Model) handleDone(msg doneMsg) tea.Cmd {
 				m.Messages.AddMessage(message.ChatMessage{Role: "telemetry", Telemetry: telemetry})
 			}
 			m.refreshRuntimeStatus()
-			return m.refreshCompletedHistory()
+			return m.refreshCompletedHistory(telemetry)
 		}
 		footer := ""
 		if telemetry == nil && msg.metrics.Duration != "" {
@@ -105,13 +105,14 @@ func (m *Model) handleDone(msg doneMsg) tea.Cmd {
 		// Keep the live error visible; it may not exist in conversation history.
 		return m.continuePendingChat(loadWorkspaceChanges(m.Runtime))
 	}
-	return m.refreshCompletedHistory()
+	return m.refreshCompletedHistory(telemetry)
 }
 
-func (m *Model) refreshCompletedHistory() tea.Cmd {
+func (m *Model) refreshCompletedHistory(telemetry *controlruntime.MetricsSnapshot) tea.Cmd {
 	refresh := m.sessionHistoryPaging && m.sessionHistoryDirty
 	m.sessionHistoryDirty = false
 	if refresh {
+		m.refreshTelemetry = telemetry
 		return tea.Batch(loadWorkspaceChanges(m.Runtime), m.loadSessionWindow(0, 0))
 	}
 	return m.continuePendingChat(loadWorkspaceChanges(m.Runtime))

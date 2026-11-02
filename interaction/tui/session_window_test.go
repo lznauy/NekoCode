@@ -4,8 +4,12 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"fmt"
+	"nekocode/interaction/tui/components/message"
 	controlruntime "nekocode/runtime"
+	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestHistoryPageSchedulesSpinnerFromReady(t *testing.T) {
@@ -103,6 +107,44 @@ func TestSessionWindowPagesWithoutRetainingHistory(t *testing.T) {
 	cmd = m.handleDone(doneMsg{})
 	if cmd == nil || !m.sessionLoading {
 		t.Fatal("completed run must refresh bounded latest window")
+	}
+}
+
+type telemetryWindowRuntime struct{ tickFakeBot }
+
+func (b *telemetryWindowRuntime) SessionMessages() []controlruntime.DisplayMessage {
+	panic("full history must not be read")
+}
+
+func (b *telemetryWindowRuntime) SessionHistoryWindow(before, limit int) (controlruntime.SessionHistoryWindow, error) {
+	return controlruntime.SessionHistoryWindow{
+		Messages: []controlruntime.DisplayMessage{{Role: "user", Content: "question"}, {Role: "assistant", Content: "answer"}},
+		Before:   1, End: 2, Total: 2,
+	}, nil
+}
+
+func TestCompletedHistoryRefreshKeepsTurnTelemetry(t *testing.T) {
+	m, err := NewModel(&telemetryWindowRuntime{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.applySessionLoaded(sessionLoadResult(t, m.loadSessionMessages()))
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunStarted})
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventInputAccepted, Payload: controlruntime.MessagePayload{Content: "question"}})
+	cmd := m.handleDone(doneMsg{content: "answer", metrics: controlruntime.MetricsSnapshot{
+		TurnTotal: 1050, TurnInput: 1000, TurnCached: 900, TurnNew: 100, TurnOutput: 50, TurnCacheReported: true,
+	}})
+	m.applySessionLoaded(sessionLoadResult(t, cmd))
+
+	items := m.Messages.Items()
+	if _, ok := items[len(items)-1].(*message.AssistantMessageItem); !ok {
+		t.Fatalf("last item = %T, want assistant", items[len(items)-1])
+	}
+	rendered := ansi.Strip(m.Messages.Render())
+	for _, want := range []string{"缓存 900", "未缓存 100", "本次命中 90.00%"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("refreshed assistant telemetry missing %q: %s", want, rendered)
+		}
 	}
 }
 
