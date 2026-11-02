@@ -178,6 +178,7 @@ func (m *Manager) AddToolResultsBatch(results []ToolResultMsg) {
 		m.state.ctx.Messages = append(m.state.ctx.Messages, message)
 		transcriptMessage := message
 		transcriptMessage.ToolEvidence = r.Message.ToolEvidence
+		transcriptMessage.NonExecution = r.Message.NonExecution
 		if transcriptMessage.ToolEvidence.Schema == 1 && len(transcriptMessage.ToolEvidence.Executions) > 0 {
 			transcriptMessage.ToolEvidence.Executions = slices.Clone(transcriptMessage.ToolEvidence.Executions)
 			transcriptMessage.ToolEvidence.VisibleHash = core.EvidenceHash([]byte(message.Content))

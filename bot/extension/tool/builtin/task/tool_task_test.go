@@ -80,6 +80,27 @@ func TestTaskToolPublishesActualTerminalStatus(t *testing.T) {
 	}
 }
 
+func TestTaskToolPublishesSummaryWithActualTerminalError(t *testing.T) {
+	for _, cause := range []error{nil, errors.New("save failed"), context.Canceled} {
+		tool := NewTaskTool()
+		tool.Wire(func(context.Context, taskbridge.TaskSpec) (*taskbridge.TaskResult, error) {
+			return &taskbridge.TaskResult{Summary: protocol.RunSummary{StepCount: 3, StopReason: "step_limit"}, Status: taskbridge.TaskStatusPartial}, cause
+		})
+		var terminal protocol.StepEvent
+		_, _ = tool.Execute(t.Context(), map[string]any{"profile": "explore", "prompt": "inspect", "_sub_callback": taskbridge.TaskCallback{Callback: func(ev protocol.StepEvent) { terminal = ev }}})
+		want := "step_limit"
+		if cause != nil {
+			want = "execution_error"
+		}
+		if errors.Is(cause, context.Canceled) {
+			want = "cancelled"
+		}
+		if terminal.Summary == nil || terminal.Summary.StopReason != want || terminal.Summary.StepCount != 3 {
+			t.Fatalf("terminal=%+v", terminal)
+		}
+	}
+}
+
 func TestTaskToolResultAndErrorContract(t *testing.T) {
 	cause := errors.New("request budget exceeded")
 	for _, tc := range []struct {

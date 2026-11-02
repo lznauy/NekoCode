@@ -41,6 +41,8 @@ type runState struct {
 	// Hints staged across phases (UserSubmit/PostToolBatch), merged into the next
 	// turn's transient hints.
 	pendingHints []policy.Hint
+	// Actual tool batches since the last todo update or progress reminder.
+	todoBatches int
 }
 
 func (s *runState) reset() {

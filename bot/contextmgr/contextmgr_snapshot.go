@@ -92,6 +92,7 @@ func (m *Manager) Restore(snap ManagerSnapshot) {
 	for i := range m.state.ctx.Messages {
 		m.state.ctx.Messages[i].ReadID = ""
 		m.state.ctx.Messages[i].ToolEvidence = protocol.ToolEvidence{}
+		m.state.ctx.Messages[i].NonExecution = protocol.ToolNonExecution{}
 	}
 	m.state.transcriptBase = snap.TranscriptBase
 	m.state.transcriptLazy = snap.TranscriptLazy

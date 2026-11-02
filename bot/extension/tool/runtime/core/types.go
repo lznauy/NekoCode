@@ -36,6 +36,7 @@ func (c ToolCallItem) Effective() (string, map[string]any) {
 }
 
 type ToolCallResult struct {
+	NonExecution protocol.ToolNonExecution `json:"non_execution,omitzero"`
 	// Cause preserves physical invocation errors for host classification. Error
 	// remains the model-facing delivery text; later retries may have succeeded.
 	Cause    error                 `json:"-"`

@@ -200,7 +200,7 @@ func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provi
 		cfg.References.Skill = b.referenceSkill
 		cfg.SaveContext = func(snapshot ctxmgr.ManagerSnapshot, status, output string, usage subagent.AttemptUsage) error {
 			return child.Checkpoint(snapshot, status, output, session.SubagentAttemptUsage{
-				TotalTokens: usage.TotalTokens, CacheHitTokens: usage.CacheHitTokens, CacheMissTokens: usage.CacheMissTokens,
+				Summary: usage.Summary, TotalTokens: usage.TotalTokens, CacheHitTokens: usage.CacheHitTokens, CacheMissTokens: usage.CacheMissTokens,
 				ToolUseCount: usage.ToolUseCount, DurationMs: usage.DurationMs, ContextTokens: usage.ContextTokens, ContextWindow: usage.ContextWindow,
 			})
 		}
@@ -217,10 +217,13 @@ func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provi
 		if started {
 			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 			status := "completed"
-			if err != nil {
+			if result != nil && result.Status == subagent.StatusPartial {
+				status = "partial"
+			}
+			if err != nil || result == nil || result.Status == subagent.StatusFailed {
 				status = "failed"
 			}
-			if ctx.Err() != nil {
+			if ctx.Err() != nil || result != nil && result.Summary.StopReason == "cancelled" {
 				status = "interrupted"
 			}
 			ag.Governance().Observe(cleanup, policy.SubagentStop, policy.Facts{ActorID: id, Tool: policy.ToolFacts{Args: map[string]any{"profile": profile.Name, "attempt_id": attempt.ID, "status": status}}})
@@ -294,7 +297,7 @@ func buildSubagentRunConfig(
 				Action:   ev.Action,
 				CallID:   ev.CallID,
 				ToolName: ev.ToolName,
-				ToolArgs: ev.ToolArgs, ToolInput: ev.ToolInput, Evidence: ev.Evidence,
+				ToolArgs: ev.ToolArgs, ToolInput: ev.ToolInput, Evidence: ev.Evidence, NonExecution: ev.NonExecution,
 				Output:   ev.Output,
 				Decision: ev.Decision,
 				IsError:  ev.IsError,
@@ -341,6 +344,7 @@ func subagentTaskResult(result *subagent.Result) *taskbridge.TaskResult {
 		status = taskbridge.TaskStatusPartial
 	}
 	return &taskbridge.TaskResult{
+		Summary: result.Summary,
 		Status:  status,
 		Content: subagent.FormatResult(result),
 	}

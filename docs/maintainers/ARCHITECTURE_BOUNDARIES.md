@@ -95,6 +95,16 @@ ToolCallResult.Evidence 的 schema=1 聚合当前调用至多两次物理调用�
 
 凭证已生成、保存，并开放当前执行者及父会话指定子 attempt 的 evidence 查询；模型自动有界引用及父子 evidence IDs 交接见下节。主、子代理工具完成回调携带 executor 交付时的 ToolEvidence 快照，回调前克隆执行列表，Runtime 事件总线在历史保存、观察者/订阅者交付和回放出口统一分离凭证切片，防止观察者污染其他消费者；凭证字段计入原有事件历史字节预算；只有 tool_completed 的 ToolPayload 可带可选 evidence。复用既有 ToolPayload codec 与 recording 序列化/回放，不新增事件或凭证仓库。该快照早于 Context 接纳，不含后续 visible_hash/admission，不能证明 transcript 已落盘，也不由 Runtime 的终端输出归一化重算哈希。headless 的工具结果 user 帧可带 nekocode_evidence；ACP 的 tool_call_update 通过 _meta["nekocode/evidence"] 携带。无凭证时字段省略，旧事件和旧客户端保持原结果结构；工具阻止、预览、收尾补齐不补造凭证。事件是派生观察，不能反向覆盖 transcript 或作为恢复重放工具的依据。历史保存失败仍由原有调用方返回错误，不把失败解释为工具未执行或自动重试的许可；历史及录制失败的结构化表达见下节。
 
+## 未执行调用的决策记录
+
+protocol.ToolNonExecution 与 ExecutionReceipt 分开：仅由宿主在确认尚未进入 Tool.Execute 的分支生成，包含 schema、独立 UUID、run/task/attempt/call 身份、有效工具名、阻止阶段、blocked/cancelled 结果、原因 SHA-256 和记录时间。原有工具错误正文负责展示原因，不在结构化记录里重复保存参数或错误正文。工具进入后返回权限错误、失败或 panic 仍保留物理凭证，不能据此断言没有副作用。
+
+runner 覆盖工具查找、计划模式、权限与工作区拒绝、检查点准备失败及分派前取消；串行和并行分派均在调用前检查取消。主、子代理补齐治理阻止、任务接纳拒绝、Profile 禁用及内部完成协议拒绝；同一决策在事件和 transcript 中保留相同 ID，provider call ID 复用也不会混淆记录。已有调用不因记录失败自动重放。
+
+ToolCallResult、StepEvent、ToolPayload 及权威工具 transcript 使用可选 non_execution 值字段，无共享列表或第二套仓库。活动消息、恢复后的模型上下文、provider wire 和缓存指纹排除该字段；旧记录缺失时保持未知，不补造记录。该元数据计入既有事件字节预算，经现有 blocked/completed 事件 codec 录制回放；headless 工具结果可带 nekocode_non_execution，ACP tool_call_update 可带 _meta["nekocode/non_execution"]，缺失时保持旧结构。
+
+未执行决策不参与文件权限、读取门禁、任务验收或 evidence 凭证查询。evidence 仍只返回实际物理调用记录；新增字段用于历史及事件审查，不能当作执行成功或安全重试的许可。
+
 ## 执行历史保存失败
 
 主会话 saveSession 和子代理 SaveContext 在保存失败时通过 protocol.MarkEvidenceIncomplete 包装原始错误；errors.Is/As 仍可读取原因，取消错误可以与保存失败并存。标记只表示历史可能不完整，不推断工具是否执行或事务是否完全未提交，也不允许自动重放工具。主会话保留原输出及 pending transcript，不推进保存确认水位；子代理停止正常循环，最终检查点可以重试保存既有事实，不重复执行工具。已有的未知结果恢复继续显式提示 unknown outcome。
@@ -108,6 +118,14 @@ Runtime 从 runner 的结构化错误派生终态 RunResult.evidence_incomplete�
 EventBus 的单一 recording sink 替换原录制观察者：分配原有事件身份后，先尝试录制和终态关闭，再把补充 evidence_incomplete 的同一个事件交给 history、RunStore、观察者及订阅者。sink 不重入 Publish、订阅或 Close；现有观察者等待机制覆盖这段 IO。取消和关闭也先绑定该 run，再通过同一终态入口发布。不增加事件、重传队列或长期错误索引；已有 run_done、输出和工具事实保留，录制失败由独立标记表达，不自动重放工具。
 
 最后一帧写入或其后关闭失败时，实时终态仍带标记；磁盘旧事件可能不包含该次失败，重启后无法保证恢复出丢失的标记。没有标记不等于可靠落盘或 fsync 回执。磁盘已写入的事实不会因录制失败反向覆盖 transcript。
+
+## 执行结束摘要
+
+主、子代理复用 protocol.RunSummary 的 step_count 和 stop_reason，不新增状态仓库或停止原因枚举。子代理在收尾时生成摘要，经 Result、TaskResult 和现有 subagent_ended 事件传递；该事件的可选 summary 随原 codec 录制回放，不作为主运行的 run_summary 发布，避免覆盖父任务汇总。子代理的 step_count 计入本次循环的模型准备/推理轮次，包括最终提交和失败轮次，不包含底层 provider 重试次数。
+
+子代理原因包括 completed、cancelled、execution_error、step_limit 和 incomplete（未完成结构化提交）。步数上限后的最后一次提交仍保留 step_limit；既有 status 表达交接结果，不能单靠 status=completed 推断正常收尾或任务验收通过。取消优先于执行错误，最终保存失败保留原错误并将返回摘要标为 execution_error，保存返回后再次核对取消及错误链；保存期间取消时，返回摘要仍以 cancelled 为先。已提交摘要反映提交时的事实，不为随后到达的取消逆写历史；未能保存的摘要不伪装成已提交历史。
+
+最终检查点将摘要作为可选值保存到对应 SubagentAttempt；恢复创建新 attempt 时不继承上次摘要。任务列表、执行尝试查询及 Runtime live 视图沿用同一字段，已提交来源仍优先于迟到事件。旧记录或未启动调用没有摘要时保持缺失，不从状态猜测结束原因。headless 继续通过原 system/nekocode_event 的 subagent_ended payload 输出可选 summary，不改变主 result 的结束原因；ACP 当前不单独投影执行摘要。
 
 ## 执行凭证查询
 

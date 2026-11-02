@@ -169,6 +169,9 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (result *Result, runErr
 		meta := state.meta(ctxMgr)
 		contextStatus := ctxMgr.Status()
 		usage := AttemptUsage{TotalTokens: meta.totalTokens, CacheHitTokens: meta.cacheHitTokens, CacheMissTokens: meta.cacheMissTokens, ToolUseCount: meta.toolUseCount, DurationMs: meta.durationMs, ContextTokens: contextStatus.Tokens, ContextWindow: contextStatus.Budget}
+		if result != nil {
+			usage.Summary = result.Summary
+		}
 		if err := cfg.SaveContext(snap, status, output, usage); err != nil {
 			return protocol.MarkEvidenceIncomplete(err)
 		}
@@ -195,11 +198,23 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (result *Result, runErr
 		if runErr != nil {
 			status = "failed"
 		}
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
 			status = "interrupted"
+			if result != nil {
+				result.Summary.StopReason = "cancelled"
+			}
 		}
 		if err := checkpoint(status, output); err != nil {
 			runErr = errors.Join(runErr, fmt.Errorf("save subagent: %w", err))
+		}
+		// Saving may itself return cancellation or race with a late cancel.
+		// Reconcile the returned summary after this final I/O boundary.
+		if result != nil {
+			if ctx.Err() != nil || errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
+				result.Summary.StopReason = "cancelled"
+			} else if runErr != nil {
+				result.Summary.StopReason = "execution_error"
+			}
 		}
 	}()
 	phase := phaseReporter(cfg)
@@ -293,6 +308,7 @@ func (r *engineRun) stepOnce() bool {
 		ctx = core.WithOutputStore(ctx, r.executor.ExecutionState().OutputStore)
 		ctx = protocol.WithAccessObservation(ctx, r.executor.AccessObservation())
 	}
+	r.step++
 	calls, text, err := r.engine.reason(ctx, r.ctxMgr, allowedTools, buildSkillWorkflow(r.cfg), r.state.addTokens(r.cfg), r.cfg.RecordLLMUsage, r.cfg.SessionID, r.phase, r.cfg)
 	r.ctxMgr.SetHints("")
 	if err != nil {
@@ -344,7 +360,6 @@ func (r *engineRun) stepOnce() bool {
 		return true
 	}
 	r.phase("Waiting")
-	r.step++
 	return false
 }
 
@@ -413,11 +428,17 @@ func requiredResultStrings(args map[string]any, name string) ([]string, error) {
 func (r *engineRun) rejectToolBatch(calls []core.ToolCallItem, reason string) {
 	results := make([]ctxmgr.ToolResultMsg, len(calls))
 	for i, call := range calls {
+		call = r.engine.toolRegistry.EnrichCall(call)
+		name, _ := call.Effective()
+		decision := core.NotExecuted(r.ctx, call, "completion_protocol", reason).NonExecution
+		if r.cfg.OnToolCall != nil {
+			r.cfg.OnToolCall(ToolCallEvent{Action: protocol.StepActionToolBlocked, CallID: call.ID, ToolName: name, Output: reason, IsError: true, NonExecution: decision})
+		}
 		results[i] = ctxmgr.ToolResultMsg{
 			Message: providertypes.Message{
-				Content: reason, ToolCallID: call.ID, IsError: true,
+				Content: reason, ToolCallID: call.ID, IsError: true, NonExecution: decision,
 			},
-			ToolName: call.Name,
+			ToolName: name,
 		}
 	}
 	r.ctxMgr.AddToolResultsBatch(results)
@@ -435,7 +456,6 @@ func (r *engineRun) retryCompletionProtocol(reason string) bool {
 		providertypes.MessageSourceRuntimeEvent,
 	)
 	r.phase("Waiting")
-	r.step++
 	return false
 }
 
@@ -451,6 +471,20 @@ func (r *engineRun) finish() (*Result, error) {
 	if r.result == nil {
 		r.result = buildPartialResult(r.state.lastText, r.state.meta(r.ctxMgr))
 	}
+	reason := "completed"
+	if r.result.Status != StatusCompleted {
+		reason = "incomplete"
+	}
+	if r.finalizing {
+		reason = "step_limit"
+	}
+	if r.err != nil {
+		reason = "execution_error"
+	}
+	if r.ctx.Err() != nil || errors.Is(r.err, context.Canceled) || errors.Is(r.err, context.DeadlineExceeded) {
+		reason = "cancelled"
+	}
+	r.result.Summary = protocol.RunSummary{StepCount: r.step, StopReason: reason}
 	return r.result, r.err
 }
 
@@ -463,6 +497,7 @@ const (
 )
 
 type Result struct {
+	Summary         protocol.RunSummary
 	Status          Status
 	Content         string
 	TotalTokens     int

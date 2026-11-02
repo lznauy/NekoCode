@@ -103,6 +103,8 @@ v1 隐含"事件流发生在一个用户发起的 turn 内"：`session/prompt` �
 
 NekoCode 在实际工具完成的 `tool_call_update` 中通过可选 `_meta["nekocode/evidence"]` 携带执行器交付凭证（schema=1）。原有 status、content 和 rawOutput 保持不变；旧客户端可忽略该元数据，无凭证时不添加 `_meta`。该快照早于 Context 接纳，不含后续 visible_hash/admission，不证明历史保存成功或业务完成；预览、阻止和终止补齐不补造凭证。
 
+被治理、权限或工作区阻止，以及分派前取消的工具，可在原有 `tool_call_update` 中附带 `_meta["nekocode/non_execution"]`。该可选记录包含执行身份、阻止阶段、结果和原因摘要，表示宿主未调用工具函数，不是实际执行凭证；原 status、content 和 rawOutput 不变，旧事件缺字段时不推断原因。
+
 执行历史保存或录制失败时，prompt 错误响应的 `error.data["nekocode/evidence_incomplete"]` 为 true；取消或正常响应通过 `_meta["nekocode/evidence_incomplete"]` 表达。原有错误码和 stopReason 不变，缺省不增加字段。录制失败保留原 stopReason，成功响应也可携带该标记。最后一帧自身写入/关闭失败可能只在实时响应中可见；该标记不是重放工具的许可，也不保证录制已经落盘。
 
 ## 版本现状

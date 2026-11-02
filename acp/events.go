@@ -150,6 +150,9 @@ func toolUpdate(event controlruntime.Event, payload controlruntime.ToolPayload, 
 	if event.Type == controlruntime.EventToolCompleted && payload.Evidence.Schema != 0 {
 		update["_meta"] = map[string]any{"nekocode/evidence": payload.Evidence}
 	}
+	if payload.NonExecution.Schema != 0 {
+		update["_meta"] = map[string]any{"nekocode/non_execution": payload.NonExecution}
+	}
 	return update
 }
 

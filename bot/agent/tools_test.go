@@ -60,6 +60,25 @@ func TestFilterToolCallsAppliesPreToolPolicyBlock(t *testing.T) {
 	}
 }
 
+func TestGovernanceDecisionMatchesBlockedEventAndTranscript(t *testing.T) {
+	a := newTestAgent()
+	a.run.identity = protocol.ExecutionIdentity{RunID: "run"}
+	a.deps.toolRegistry.Register(&todoReminderTool{})
+	a.deps.gov.Register(policy.Hook{Name: "deny", Point: policy.PreToolUse, On: func(policy.State) *policy.Result {
+		return &policy.Result{BlockTool: &policy.BlockTool{Reason: "blocked"}}
+	}})
+	var event protocol.StepEvent
+	a.toolRunner.executeAndFeedback([]core.ToolCallItem{{ID: "call", Name: "inspect"}}, "", func(ev protocol.StepEvent) {
+		if ev.Action == protocol.StepActionToolBlocked {
+			event = ev
+		}
+	})
+	snap := a.deps.ctxMgr.Snapshot()
+	if event.NonExecution.Schema != 1 || event.NonExecution.Stage != "governance" || event.NonExecution.Execution != a.run.identity || event.NonExecution != snap.Transcript[len(snap.Transcript)-1].NonExecution || snap.Transcript[len(snap.Transcript)-1].ToolEvidence.Schema != 0 {
+		t.Fatal("governance decision lost or became physical execution")
+	}
+}
+
 func TestFilterToolCallsUsesEffectiveDelegatedIdentity(t *testing.T) {
 	a := newTestAgent()
 	a.deps.gov.Register(policy.Hook{
@@ -309,7 +328,7 @@ func TestEmitStartCallbacksMarksBlockedCalls(t *testing.T) {
 	emitStartCallbacks([]core.ToolCallItem{
 		{Name: "read", Args: map[string]any{"path": "x.go"}},
 		{Name: "write", Args: map[string]any{"path": "x.go", "_preview": "preview should not show"}},
-	}, map[int]string{1: "blocked"}, func(ev protocol.StepEvent) {
+	}, map[int]string{1: "blocked"}, nil, func(ev protocol.StepEvent) {
 		events = append(events, string(ev.Action)+":"+ev.ToolName)
 		if ev.Action == protocol.StepActionToolBlocked {
 			blockedOutput = ev.Output
@@ -332,7 +351,7 @@ func TestEmitStartCallbacksUsesEffectiveDelegatedIdentity(t *testing.T) {
 		Args:          map[string]any{"action": "call"},
 		EffectiveName: "mcp__github__create_issue",
 		EffectiveArgs: map[string]any{"repo": "demo"},
-	}}, nil, func(ev protocol.StepEvent) { got = ev })
+	}}, nil, nil, func(ev protocol.StepEvent) { got = ev })
 	if got.ToolName != "mcp__github__create_issue" || !strings.Contains(got.ToolArgs, "demo") {
 		t.Fatalf("start callback identity = %+v", got)
 	}

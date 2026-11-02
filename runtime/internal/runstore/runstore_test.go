@@ -8,6 +8,24 @@ import (
 	"nekocode/runtime/internal/core"
 )
 
+func TestSubagentSummariesDoNotCrossAttempts(t *testing.T) {
+	store := NewRunStore(0)
+	first := protocol.RunSummary{StepCount: 2, StopReason: "step_limit"}
+	for _, event := range []core.Event{
+		{Type: core.EventSubAgentStarted, Payload: core.SubAgentPayload{ID: "child", AttemptID: "first", AttemptSeq: 1}},
+		{Type: core.EventSubAgentEnded, Payload: core.SubAgentPayload{ID: "child", AttemptID: "first", AttemptSeq: 1, Summary: first}},
+		{Type: core.EventSubAgentStarted, Payload: core.SubAgentPayload{ID: "child", AttemptID: "second", AttemptSeq: 2}},
+		{Type: core.EventSubAgentUpdated, Payload: core.SubAgentPayload{ID: "child", AttemptID: "first", AttemptSeq: 1, Status: "running"}},
+	} {
+		event.RunID, event.Time = "run", time.Now()
+		store.Record(event)
+	}
+	view, _ := store.Lookup("run")
+	if len(view.SubAgents) != 2 || view.SubAgents[0].Summary != first || view.SubAgents[0].Active || view.SubAgents[1].Summary != (protocol.RunSummary{}) || !view.SubAgents[1].Active {
+		t.Fatalf("views=%+v", view.SubAgents)
+	}
+}
+
 func TestRunStoreBuildsRunView(t *testing.T) {
 	store := NewRunStore(0)
 	runID := core.RunID("run_1")

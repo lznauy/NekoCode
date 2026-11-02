@@ -279,6 +279,7 @@ func canonicalMessages(messages []types.Message) []types.Message {
 		out[i].Source = ""
 		out[i].SkillDelivery = types.SkillDelivery{}
 		out[i].ToolEvidence = protocol.ToolEvidence{}
+		out[i].NonExecution = protocol.ToolNonExecution{}
 	}
 	if out == nil {
 		out = []types.Message{}

@@ -9,16 +9,18 @@ import (
 
 	"github.com/google/uuid"
 	ctxmgr "nekocode/bot/contextmgr"
+	"nekocode/protocol"
 )
 
 type SubagentAttemptUsage struct {
-	TotalTokens     int   `json:"total_tokens,omitempty"`
-	CacheHitTokens  int   `json:"cache_hit_tokens,omitempty"`
-	CacheMissTokens int   `json:"cache_miss_tokens,omitempty"`
-	ToolUseCount    int   `json:"tool_use_count,omitempty"`
-	DurationMs      int64 `json:"duration_ms,omitempty"`
-	ContextTokens   int   `json:"context_tokens,omitempty"`
-	ContextWindow   int   `json:"context_window,omitempty"`
+	Summary         protocol.RunSummary `json:"summary,omitzero"`
+	TotalTokens     int                 `json:"total_tokens,omitempty"`
+	CacheHitTokens  int                 `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens int                 `json:"cache_miss_tokens,omitempty"`
+	ToolUseCount    int                 `json:"tool_use_count,omitempty"`
+	DurationMs      int64               `json:"duration_ms,omitempty"`
+	ContextTokens   int                 `json:"context_tokens,omitempty"`
+	ContextWindow   int                 `json:"context_window,omitempty"`
 }
 
 // SubagentAttempt is one admitted execution of a durable task. TranscriptStart

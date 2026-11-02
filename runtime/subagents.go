@@ -31,22 +31,23 @@ type SubagentSummary struct {
 }
 
 type SubagentAttemptSummary struct {
-	ID              string    `json:"id"`
-	Seq             int       `json:"seq"`
-	Prompt          string    `json:"prompt"`
-	Status          string    `json:"status"`
-	Result          string    `json:"result,omitempty"`
-	StartedAt       time.Time `json:"started_at"`
-	EndedAt         time.Time `json:"ended_at,omitempty"`
-	TranscriptStart int       `json:"transcript_start"`
-	TranscriptEnd   int       `json:"transcript_end"`
-	TotalTokens     int       `json:"total_tokens,omitempty"`
-	CacheHitTokens  int       `json:"cache_hit_tokens,omitempty"`
-	CacheMissTokens int       `json:"cache_miss_tokens,omitempty"`
-	ToolUseCount    int       `json:"tool_use_count,omitempty"`
-	DurationMs      int64     `json:"duration_ms,omitempty"`
-	ContextTokens   int       `json:"context_tokens,omitempty"`
-	ContextWindow   int       `json:"context_window,omitempty"`
+	Summary         protocol.RunSummary `json:"summary,omitzero"`
+	ID              string              `json:"id"`
+	Seq             int                 `json:"seq"`
+	Prompt          string              `json:"prompt"`
+	Status          string              `json:"status"`
+	Result          string              `json:"result,omitempty"`
+	StartedAt       time.Time           `json:"started_at"`
+	EndedAt         time.Time           `json:"ended_at,omitempty"`
+	TranscriptStart int                 `json:"transcript_start"`
+	TranscriptEnd   int                 `json:"transcript_end"`
+	TotalTokens     int                 `json:"total_tokens,omitempty"`
+	CacheHitTokens  int                 `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens int                 `json:"cache_miss_tokens,omitempty"`
+	ToolUseCount    int                 `json:"tool_use_count,omitempty"`
+	DurationMs      int64               `json:"duration_ms,omitempty"`
+	ContextTokens   int                 `json:"context_tokens,omitempty"`
+	ContextWindow   int                 `json:"context_window,omitempty"`
 }
 
 type SubagentAttemptPage struct {
@@ -120,7 +121,7 @@ func liveAttemptSummary(live SubAgentView) *SubagentAttemptSummary {
 	if live.FinishedAt != nil {
 		ended = *live.FinishedAt
 	}
-	return &SubagentAttemptSummary{ID: live.AttemptID, Seq: live.AttemptSeq, Prompt: live.Prompt, Status: live.Status, StartedAt: live.StartedAt, EndedAt: ended}
+	return &SubagentAttemptSummary{Summary: live.Summary, ID: live.AttemptID, Seq: live.AttemptSeq, Prompt: live.Prompt, Status: live.Status, StartedAt: live.StartedAt, EndedAt: ended}
 }
 
 func committedSubagentStatus(status string) bool {
@@ -205,6 +206,7 @@ func (r *Runtime) Subagents(filter SubagentFilter) (SubagentPage, error) {
 				}
 				item.Status, item.Phase, item.UpdatedAt = live.Status, live.Phase, live.UpdatedAt
 				latest.Status = live.Status
+				latest.Summary = live.Summary
 				continue
 			}
 		} else if item.Recorded && live.AttemptSeq < item.RunCount {

@@ -151,6 +151,20 @@ func TestFormatTodoItems_Mixed(t *testing.T) {
 	}
 }
 
+func TestFormatTodoItemsPreservesProgressState(t *testing.T) {
+	c := newContextContent("")
+	c.LoadTodos([]protocol.TodoItem{
+		{Content: "inspect", Status: "completed"},
+		{Content: "implement", Status: "in_progress"},
+		{Content: "verify", Status: "pending"},
+	})
+	for _, want := range []string{"[x] completed: inspect", "[>] in_progress: implement", "[ ] pending: verify"} {
+		if !strings.Contains(c.TodoText(), want) {
+			t.Errorf("todo context lost state %q: %s", want, c.TodoText())
+		}
+	}
+}
+
 func TestAddMessage(t *testing.T) {
 	c := newContextContent("")
 	c.Messages = append(c.Messages, types.Message{Role: "user", Content: "hi"})

@@ -139,26 +139,28 @@ type PhasePayload struct {
 }
 
 type ToolPayload struct {
-	Evidence      protocol.ToolEvidence `json:"evidence,omitzero"`
-	ToolName      string                `json:"tool_name"`
-	CallID        string                `json:"call_id,omitempty"`
-	Args          string                `json:"args,omitempty"`
-	Input         json.RawMessage       `json:"input,omitempty"`
-	Output        string                `json:"output,omitempty"`
-	Preview       string                `json:"preview,omitempty"`
-	Decision      protocol.ToolDecision `json:"decision,omitempty"`
-	IsError       bool                  `json:"is_error,omitempty"`
-	SubAgentID    string                `json:"subagent_id,omitempty"`
-	SubAgentColor int                   `json:"subagent_color,omitempty"`
-	AttemptID     string                `json:"attempt_id,omitempty"`
-	AttemptSeq    int                   `json:"attempt_seq,omitempty"`
+	Evidence      protocol.ToolEvidence     `json:"evidence,omitzero"`
+	NonExecution  protocol.ToolNonExecution `json:"non_execution,omitzero"`
+	ToolName      string                    `json:"tool_name"`
+	CallID        string                    `json:"call_id,omitempty"`
+	Args          string                    `json:"args,omitempty"`
+	Input         json.RawMessage           `json:"input,omitempty"`
+	Output        string                    `json:"output,omitempty"`
+	Preview       string                    `json:"preview,omitempty"`
+	Decision      protocol.ToolDecision     `json:"decision,omitempty"`
+	IsError       bool                      `json:"is_error,omitempty"`
+	SubAgentID    string                    `json:"subagent_id,omitempty"`
+	SubAgentColor int                       `json:"subagent_color,omitempty"`
+	AttemptID     string                    `json:"attempt_id,omitempty"`
+	AttemptSeq    int                       `json:"attempt_seq,omitempty"`
 }
 
 type SubAgentPayload struct {
-	SessionID string `json:"session_id,omitempty"`
-	Status    string `json:"status,omitempty"`
-	Phase     string `json:"phase,omitempty"`
-	Prompt    string `json:"prompt,omitempty"`
+	Summary   protocol.RunSummary `json:"summary,omitzero"`
+	SessionID string              `json:"session_id,omitempty"`
+	Status    string              `json:"status,omitempty"`
+	Phase     string              `json:"phase,omitempty"`
+	Prompt    string              `json:"prompt,omitempty"`
 
 	ID         string   `json:"id"`
 	Type       string   `json:"type,omitempty"` // compatibility alias for Profile

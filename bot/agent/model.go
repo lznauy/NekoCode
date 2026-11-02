@@ -69,7 +69,8 @@ func (r *modelRunner) callLLMForTool() (*llmstream.LLMCallResult, error) {
 	ctx = protocol.WithPolicyConfiguration(ctx, a.deps.gov.Configuration())
 	ctx = protocol.WithProfileConfiguration(ctx, "")
 	ctx = protocol.WithAccessObservation(ctx, a.deps.toolExecutor.AccessObservation())
-	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{TaskReferences: r.taskReferences(ctx), ContextReferences: r.contextReferences(ctx, ""), EvidenceReferences: r.contextReferences(ctx, refbridge.EvidenceKind), Tools: toolDefs, PolicyHints: policyHints, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient)})
+	reminder := a.todoProgressReminder()
+	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{TaskReferences: r.taskReferences(ctx), ContextReferences: r.contextReferences(ctx, ""), EvidenceReferences: r.contextReferences(ctx, refbridge.EvidenceKind), Tools: toolDefs, PolicyHints: policyHints, ExtraMessages: reminder, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient)})
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +90,10 @@ func (r *modelRunner) callLLMForTool() (*llmstream.LLMCallResult, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	if len(reminder) > 0 {
+		a.run.todoBatches = 0
 	}
 
 	if len(result.ToolCalls) > 0 {

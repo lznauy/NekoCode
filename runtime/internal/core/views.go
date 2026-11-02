@@ -52,11 +52,12 @@ type ToolView struct {
 }
 
 type SubAgentView struct {
-	SessionID string    `json:"session_id,omitempty"`
-	Status    string    `json:"status,omitempty"`
-	Phase     string    `json:"phase,omitempty"`
-	Prompt    string    `json:"prompt,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Summary   protocol.RunSummary `json:"summary,omitzero"`
+	SessionID string              `json:"session_id,omitempty"`
+	Status    string              `json:"status,omitempty"`
+	Phase     string              `json:"phase,omitempty"`
+	Prompt    string              `json:"prompt,omitempty"`
+	UpdatedAt time.Time           `json:"updated_at"`
 
 	ID         string     `json:"id"`
 	Type       string     `json:"type,omitempty"` // compatibility alias for Profile

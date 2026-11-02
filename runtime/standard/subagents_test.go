@@ -6,7 +6,16 @@ import (
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/provider/types"
 	"nekocode/bot/session"
+	"nekocode/protocol"
 )
+
+func TestConvertSubagentAttemptPreservesSummary(t *testing.T) {
+	want := protocol.RunSummary{StepCount: 3, StopReason: "step_limit"}
+	got := convertSubagentAttempt(session.SubagentAttempt{ID: "attempt", Seq: 2, SubagentAttemptUsage: session.SubagentAttemptUsage{Summary: want}})
+	if got.ID != "attempt" || got.Seq != 2 || got.Summary != want {
+		t.Fatalf("attempt=%+v", got)
+	}
+}
 
 func TestSubagentHistoryKeepsReadToolAndMarksContextHeader(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())

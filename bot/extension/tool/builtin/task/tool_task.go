@@ -53,6 +53,7 @@ func (t *TaskTool) Execute(ctx context.Context, args map[string]any) (output cor
 		callback = cb
 	}
 	status := "failed"
+	var summary protocol.RunSummary
 	defer func() {
 		if callback == nil {
 			return
@@ -63,7 +64,18 @@ func (t *TaskTool) Execute(ctx context.Context, args map[string]any) (output cor
 		if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) || ctx.Err() != nil {
 			status = "interrupted"
 		}
+		if summary.StopReason != "" {
+			if runErr != nil {
+				summary.StopReason = "execution_error"
+			}
+			if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) || ctx.Err() != nil {
+				summary.StopReason = "cancelled"
+			}
+		}
 		ev := protocol.StepEvent{Action: protocol.StepActionSubAgentEnd, SubAgentStatus: status}
+		if summary.StopReason != "" {
+			ev.Summary = &summary
+		}
 		if runErr != nil {
 			ev.IsError = true
 		}
@@ -129,6 +141,9 @@ func (t *TaskTool) Execute(ctx context.Context, args map[string]any) (output cor
 	result, err := t.run(subCtx, taskbridge.TaskSpec{
 		Isolation: isolation, Title: title, Prompt: prompt, Profile: profile, Skills: skills, ResumeID: resumeID,
 	})
+	if result != nil {
+		summary = result.Summary
+	}
 	if err != nil && result == nil {
 		return core.ToolOutput{}, err
 	}

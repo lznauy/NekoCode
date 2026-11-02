@@ -8,6 +8,18 @@ import (
 	controlruntime "nekocode/runtime"
 )
 
+func TestBlockedUpdateCarriesNonExecutionWithoutInventingReceipt(t *testing.T) {
+	decision := protocol.ToolNonExecution{Schema: 1, ID: "decision", Stage: "governance", Outcome: "blocked"}
+	updates, ok := eventUpdate(controlruntime.Event{Type: controlruntime.EventToolBlocked, Payload: controlruntime.ToolPayload{CallID: "call", ToolName: "write", NonExecution: decision}})
+	if !ok || len(updates) != 2 {
+		t.Fatal("blocked event lost")
+	}
+	meta := updates[1]["_meta"].(map[string]any)
+	if meta["nekocode/non_execution"] != decision || meta["nekocode/evidence"] != nil {
+		t.Fatal("decision missing or presented as receipt")
+	}
+}
+
 func TestEventUpdate(t *testing.T) {
 	tests := []struct {
 		name  string

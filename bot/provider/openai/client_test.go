@@ -13,7 +13,7 @@ import (
 func TestBuildBodyOmitsInternalToolErrorFlag(t *testing.T) {
 	c := New("", "", "test-model")
 	body := c.buildBody([]types.Message{
-		{Role: "tool", Content: "command failed", ToolCallID: "tc1", IsError: true, SkillName: "local-skill", ToolEvidence: protocol.ToolEvidence{Schema: 1, Executions: []protocol.ExecutionReceipt{{ID: "receipt-secret-sentinel"}}}, SkillDelivery: types.SkillDelivery{Schema: 1, Name: "admission-secret-sentinel", Source: "tool", State: types.SkillReady}},
+		{Role: "tool", Content: "command failed", ToolCallID: "tc1", IsError: true, SkillName: "local-skill", NonExecution: protocol.ToolNonExecution{Schema: 1, ID: "receipt-secret-sentinel"}, ToolEvidence: protocol.ToolEvidence{Schema: 1, Executions: []protocol.ExecutionReceipt{{ID: "receipt-secret-sentinel"}}}, SkillDelivery: types.SkillDelivery{Schema: 1, Name: "admission-secret-sentinel", Source: "tool", State: types.SkillReady}},
 	}, nil, false)
 	data, err := json.Marshal(body)
 	if err != nil {

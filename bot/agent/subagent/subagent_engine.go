@@ -135,7 +135,7 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 		allowedNames[name] = struct{}{}
 	}
 
-	blocked := make(map[int]string)
+	blocked := make(map[int]core.ToolCallResult)
 	allowed := make([]core.ToolCallItem, 0, len(calls))
 	var preToolHints []policy.Hint
 	var toolNames []string
@@ -146,7 +146,7 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 		name, _ := c.Effective()
 		toolNames = append(toolNames, name)
 		if !profileAllowsCall(allowedNames, c) {
-			blocked[i] = fmt.Sprintf("tool %q is disabled by sub-agent profile %q", name, profile.Name)
+			blocked[i] = core.NotExecuted(ctx, c, "profile", fmt.Sprintf("tool %q is disabled by sub-agent profile %q", name, profile.Name))
 			continue
 		}
 		guardDecision := toolpolicy.Check(cfg.guard, c, ctx)
@@ -154,13 +154,14 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 		if guardDecision.Terminated {
 			terminal = fmt.Errorf("subagent stopped by hook: %s", guardDecision.BlockReason)
 			for j := range calls {
-				blocked[j] = terminal.Error()
+				calls[j] = e.toolRegistry.EnrichCall(calls[j])
+				blocked[j] = core.NotExecuted(ctx, calls[j], "governance", terminal.Error())
 			}
 			allowed = nil
 			break
 		}
 		if guardDecision.BlockReason != "" {
-			blocked[i] = guardDecision.BlockReason
+			blocked[i] = core.NotExecuted(ctx, c, "governance", guardDecision.BlockReason)
 			continue
 		}
 		allowed = append(allowed, c)
@@ -175,12 +176,12 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 		if cfg.OnToolCall != nil {
 			action := protocol.StepActionToolStart
 			output := ""
-			if reason, ok := blocked[i]; ok {
+			if result, ok := blocked[i]; ok {
 				action = protocol.StepActionToolBlocked
-				output = reason
+				output = result.Error
 			}
 			cfg.OnToolCall(ToolCallEvent{
-				Action:   action,
+				Action: action, NonExecution: blocked[i].NonExecution,
 				CallID:   c.ID,
 				ToolName: name,
 				ToolArgs: core.FormatArgs(args), ToolInput: core.JSONArgs(args),
@@ -193,9 +194,9 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 	executed := executor.ExecuteBatch(ctx, allowed)
 	results := make([]core.ToolCallResult, len(calls))
 	executedIndex := 0
-	for i, c := range calls {
-		if reason, ok := blocked[i]; ok {
-			results[i] = core.ToolCallResult{ID: c.ID, Name: c.Name, Error: reason}
+	for i := range calls {
+		if result, ok := blocked[i]; ok {
+			results[i] = result
 			continue
 		}
 		results[i] = executed[executedIndex]
@@ -206,7 +207,7 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 		name, args := calls[i].Effective()
 		content := r.EffectiveOutput()
 		batch[i] = ctxmgr.ToolResultMsg{
-			Message:         types.Message{Content: r.TextOutput().Text, ToolOutput: r.Artifact, ToolCallID: r.ID, IsError: r.Error != "", ReadID: r.ReadID, ToolEvidence: r.Evidence},
+			Message:         types.Message{Content: r.TextOutput().Text, ToolOutput: r.Artifact, ToolCallID: r.ID, IsError: r.Error != "", ReadID: r.ReadID, ToolEvidence: r.Evidence, NonExecution: r.NonExecution},
 			ToolName:        name,
 			AllowOutputFile: executor.AllowOutputFile,
 		}
@@ -219,7 +220,7 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 			}
 			cfg.OnToolCall(ToolCallEvent{
 				Action: protocol.StepActionExecuteTool, CallID: r.ID, ToolName: name,
-				ToolArgs: core.FormatArgs(args), ToolInput: core.JSONArgs(args), Output: content, IsError: r.Error != "", Evidence: r.Evidence.Clone(),
+				ToolArgs: core.FormatArgs(args), ToolInput: core.JSONArgs(args), Output: content, IsError: r.Error != "", Evidence: r.Evidence.Clone(), NonExecution: r.NonExecution,
 			})
 		}
 	}
@@ -229,7 +230,7 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 		result := policy.ToolResult{Name: name, Args: args, Output: r.Output, Error: r.Error}
 		if reason, wasBlocked := blocked[i]; wasBlocked {
 			result.Blocked = true
-			result.BlockReason = reason
+			result.BlockReason = reason.Error
 		}
 		if cfg.guard != nil {
 			cfg.guard.RecordTool(result)

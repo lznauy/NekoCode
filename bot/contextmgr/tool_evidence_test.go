@@ -61,6 +61,30 @@ func TestEvidenceDoesNotChangeProviderPrefixOrReturnAsActiveHistory(t *testing.T
 	}
 }
 
+func TestNonExecutionIsTranscriptOnlyAndSurvivesRestore(t *testing.T) {
+	decision := core.NotExecuted(t.Context(), core.ToolCallItem{ID: "call", Name: "write"}, "governance", "blocked").NonExecution
+	m := New(Config{})
+	m.AddToolResultsBatch([]ToolResultMsg{{ToolName: "write", Message: types.Message{ToolCallID: "call", Content: "blocked", IsError: true, NonExecution: decision}}})
+	snap := m.Snapshot()
+	if snap.Messages[0].NonExecution.Schema != 0 || snap.Transcript[0].NonExecution != decision || snap.Transcript[0].ToolEvidence.Schema != 0 {
+		t.Fatal("non-execution not separated from model/execution facts")
+	}
+	m.Restore(snap)
+	if m.Snapshot().Transcript[0].NonExecution != decision {
+		t.Fatal("restore lost decision")
+	}
+	plain := types.Message{Role: "tool", Content: "blocked", ToolCallID: "call"}
+	withDecision := plain
+	withDecision.NonExecution = decision
+	if digestJSON(canonicalMessages([]types.Message{plain})) != digestJSON(canonicalMessages([]types.Message{withDecision})) {
+		t.Fatal("decision changed model prefix")
+	}
+	m.Restore(ManagerSnapshot{Messages: []types.Message{withDecision}})
+	if m.Snapshot().Messages[0].NonExecution.Schema != 0 || m.Snapshot().Transcript[0].NonExecution != decision {
+		t.Fatal("legacy restore exposed or dropped local metadata")
+	}
+}
+
 func TestToolEvidenceSnapshotAndRestoreDoNotShareReceiptSlices(t *testing.T) {
 	record := func() types.Message {
 		return types.Message{Role: "tool", ToolCallID: "call", Content: "result", ToolEvidence: protocol.ToolEvidence{Schema: 1, Executions: []protocol.ExecutionReceipt{{ID: "original", Status: "error"}}}}

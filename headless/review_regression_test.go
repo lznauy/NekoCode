@@ -11,6 +11,68 @@ import (
 	rt "nekocode/runtime"
 )
 
+func TestSubagentSummaryKeepsExistingTerminalFrame(t *testing.T) {
+	for _, withSummary := range []bool{false, true} {
+		t.Run(fmt.Sprint(withSummary), func(t *testing.T) {
+			h := newHarness(t, func(_ context.Context, _ string, host rt.RunHost) (string, error) {
+				host.Step(protocol.StepEvent{Action: protocol.StepActionRunSummary, Summary: &protocol.RunSummary{StepCount: 1, StopReason: "completed"}})
+				event := protocol.StepEvent{Action: protocol.StepActionSubAgentEnd, SubAgentID: "child", SubAgentAttemptID: "attempt", SubAgentAttemptSeq: 2, SubAgentStatus: "partial"}
+				if withSummary {
+					event.Summary = &protocol.RunSummary{StepCount: 3, StopReason: "step_limit"}
+				}
+				host.Step(event)
+				return "parent done", nil
+			}, Options{})
+			h.send(t, user("one", "run"))
+			found := false
+			for {
+				frame := h.next(t)
+				if frame["type"] == "system" && frame["event_type"] == string(rt.EventSubAgentEnded) {
+					found = true
+					payload := frame["payload"].(map[string]any)
+					if payload["id"] != "child" || payload["attempt_id"] != "attempt" {
+						t.Fatal(frame)
+					}
+					if withSummary && payload["summary"].(map[string]any)["stop_reason"] != "step_limit" {
+						t.Fatal(frame)
+					}
+					if !withSummary && payload["summary"] != nil {
+						t.Fatal("legacy event acquired invented summary")
+					}
+				}
+				if frame["type"] == "result" {
+					if frame["stop_reason"] != "completed" {
+						t.Fatal(frame)
+					}
+					break
+				}
+			}
+			if !found {
+				t.Fatal("existing terminal frame lost")
+			}
+			h.finish(t)
+		})
+	}
+}
+
+func TestToolResultCarriesNonExecutionForBlockedAndCompletedEvents(t *testing.T) {
+	for _, action := range []protocol.StepAction{protocol.StepActionToolBlocked, protocol.StepActionExecuteTool} {
+		t.Run(string(action), func(t *testing.T) {
+			h := newHarness(t, func(_ context.Context, _ string, host rt.RunHost) (string, error) {
+				host.Step(protocol.StepEvent{Action: action, CallID: "call", ToolName: "write", Output: "blocked", IsError: true, NonExecution: protocol.ToolNonExecution{Schema: 1, ID: "decision", Stage: "permission", Outcome: "blocked"}})
+				return "done", nil
+			}, Options{})
+			h.send(t, user("one", "run"))
+			frame := h.until(t, "user")
+			if frame["nekocode_non_execution"].(map[string]any)["id"] != "decision" || frame["nekocode_evidence"] != nil {
+				t.Fatal(frame)
+			}
+			h.until(t, "result")
+			h.finish(t)
+		})
+	}
+}
+
 func TestReviewToolInputPreservesLargeInteger(t *testing.T) {
 	h := newHarness(t, func(_ context.Context, _ string, host rt.RunHost) (string, error) {
 		host.Step(protocol.StepEvent{Action: protocol.StepActionToolStart, CallID: "large", ToolName: "read", ToolInput: json.RawMessage(`{"id":9007199254740993}`)})

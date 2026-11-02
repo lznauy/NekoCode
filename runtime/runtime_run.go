@@ -467,7 +467,7 @@ func (r *Runtime) publishStep(runID RunID, step protocol.StepEvent) {
 	}
 	var eventType EventType
 	payload := ToolPayload{
-		ToolName: step.ToolName, CallID: step.CallID, Args: step.ToolArgs,
+		NonExecution: step.NonExecution, ToolName: step.ToolName, CallID: step.CallID, Args: step.ToolArgs,
 		Input:    append([]byte(nil), step.ToolInput...),
 		Decision: step.Decision,
 		IsError:  step.IsError, SubAgentID: step.SubAgentID, SubAgentColor: step.SubAgentColor,
@@ -528,9 +528,13 @@ func (r *Runtime) publishStep(runID RunID, step protocol.StepEvent) {
 		r.events.Publish(Event{RunID: runID, Type: EventSubAgentUpdated, Source: SourceRef{Kind: "bot"}, Payload: SubAgentPayload{ID: step.SubAgentID, Status: step.SubAgentStatus, Phase: step.SubAgentPhase, AttemptID: step.SubAgentAttemptID, AttemptSeq: step.SubAgentAttemptSeq}})
 		return
 	case protocol.StepActionSubAgentEnd:
+		var summary protocol.RunSummary
+		if step.Summary != nil {
+			summary = *step.Summary
+		}
 		r.events.Publish(Event{
 			RunID: runID, Type: EventSubAgentEnded, Source: SourceRef{Kind: "bot"},
-			Payload: SubAgentPayload{ID: step.SubAgentID, Status: step.SubAgentStatus, AttemptID: step.SubAgentAttemptID, AttemptSeq: step.SubAgentAttemptSeq},
+			Payload: SubAgentPayload{ID: step.SubAgentID, Status: step.SubAgentStatus, AttemptID: step.SubAgentAttemptID, AttemptSeq: step.SubAgentAttemptSeq, Summary: summary},
 		})
 		r.publishMetrics(runID)
 		return

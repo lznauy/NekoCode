@@ -18,6 +18,7 @@ import (
 
 func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result core.ToolCallResult) {
 	evidence := protocol.ToolEvidence{Schema: 1}
+	stage := "lookup"
 	var invocationErr error
 	invoke := func(callCtx context.Context, run func() (core.ToolOutput, error)) (core.ToolOutput, error) {
 		output, err, receipt := observeExecution(callCtx, tc, run)
@@ -30,6 +31,8 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 		if len(evidence.Executions) > 0 {
 			evidence.ReturnedHash = core.OutputHash(result.TextOutput())
 			result.Evidence = evidence
+		} else {
+			result.NonExecution = core.NotExecuted(ctx, tc, stage, result.Error).NonExecution
 		}
 	}()
 
@@ -58,6 +61,10 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 			result.Output = bounded.Text
 		}
 	}()
+	if err := ctx.Err(); err != nil {
+		stage = "dispatch"
+		return core.ToolCallResult{ID: tc.ID, Name: tc.Name, Error: err.Error()}
+	}
 	entry, err := e.registry.Lookup(tc.Name)
 	if err != nil {
 		return core.ToolCallResult{ID: tc.ID, Name: tc.Name, Error: err.Error()}
@@ -77,6 +84,7 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 	if phaseFn != nil {
 		phaseFn(protocol.PhaseRunning + " " + resultName)
 	}
+	stage = "plan"
 	if planMode && !e.planAllows(tc.Name, entry.PlanAllowed) {
 		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: "plan mode: blocked"}
 	}
@@ -84,6 +92,7 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 	var errMsg string
 	var ok bool
 	workspaceChecked := false
+	stage = "workspace"
 	if tc.Name == "image_understand" {
 		// Its permission planner hashes the file for approval binding, so first
 		// enforce a strictly lexical workspace check. Other file tools stay below
@@ -99,6 +108,7 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 	// sandbox arguments. This lets the command approval dialog offer a single
 	// unified decision without exposing legacy capability args.
 	// If a grant already matches, skip the engine's default "ask" prompt.
+	stage = "permission"
 	predictedReq := e.permissionRequestFromEntry(entry, tc.Args)
 	var preApproval *escalationApproval
 	dec := e.evaluatePermission(ctx, tc, predictedReq)
@@ -127,12 +137,14 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 		}
 	}
 
+	stage = "workspace"
 	if !workspaceChecked {
 		if tc, errMsg, ok = e.ensureWorkspaceAccess(tc, confirmFn); !ok {
 			return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: errMsg}
 		}
 	}
 
+	stage = "checkpoint"
 	captured, captureErr := e.captureMutationPaths(tc)
 	if captureErr != nil {
 		e.finalizeMutationPaths(captured)
@@ -140,6 +152,10 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 	}
 	defer e.finalizeMutationPaths(captured)
 
+	stage = "dispatch"
+	if err := ctx.Err(); err != nil {
+		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: err.Error()}
+	}
 	paths := toolPaths(tc)
 	output, execErr := invoke(ctx, func() (core.ToolOutput, error) { return tool.Execute(e.toolContext(ctx), tc.Args) })
 	e.noteExecutedShell(tc)

@@ -424,6 +424,7 @@ func (r *runRecord) applySubAgent(p core.SubAgentPayload, kind core.EventType, a
 		}
 		if kind == core.EventSubAgentStarted {
 			view.FinishedAt = nil
+			view.Summary = protocol.RunSummary{}
 			if p.SessionID != "" {
 				view.SessionID = p.SessionID
 			}
@@ -446,11 +447,14 @@ func (r *runRecord) applySubAgent(p core.SubAgentPayload, kind core.EventType, a
 		view.Active = started
 		if !started {
 			view.FinishedAt = &at
+			if p.Summary.StopReason != "" {
+				view.Summary = p.Summary
+			}
 		}
 		return
 	}
 	view := core.SubAgentView{
-		ID: p.ID, Type: profile, Profile: profile, Skills: append([]string(nil), p.Skills...), SessionID: p.SessionID,
+		Summary: p.Summary, ID: p.ID, Type: profile, Profile: profile, Skills: append([]string(nil), p.Skills...), SessionID: p.SessionID,
 		Color: p.Color, Active: started, StartedAt: at,
 		Status: p.Status, Phase: p.Phase, Prompt: p.Prompt, UpdatedAt: at,
 		AttemptID: p.AttemptID, AttemptSeq: p.AttemptSeq,

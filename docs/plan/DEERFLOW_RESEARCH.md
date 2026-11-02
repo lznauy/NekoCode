@@ -1,6 +1,6 @@
 # DeerFlow harness 架构调研与 NekoCode 对照
 
-本文包含候选设计，按仓库文档约定归入规划目录。具体推进范围与实施顺序见 [Harness 改进计划](HARNESS_EVOLUTION.md)；两者有差异时，以实施计划的收敛范围为准。
+本文保留源码调研与候选设计依据，按仓库文档约定归入规划目录，不作为未完成任务清单。已落实的 harness 契约见[架构边界](../maintainers/ARCHITECTURE_BOUNDARIES.md)；预算与子任务后续范围分别以各自实施计划为准。
 
 调研日期：2026-11-01。DeerFlow 本地版本：`35656d6`；NekoCode 本地版本：`b40909b`。
 

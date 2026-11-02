@@ -26,7 +26,7 @@ func (a *adapter) wireTaskLister(rt *controlruntime.Runtime) {
 		for _, item := range page.Items {
 			summary := taskbridge.TaskSummary{Isolation: item.Isolation, Recorded: item.Recorded, ID: item.ID, Title: item.Title, Profile: item.Profile, Status: item.Status, Prompt: item.Prompt, Result: item.Result, RunCount: item.RunCount}
 			if attempt := item.LatestAttempt; attempt != nil {
-				summary.LatestAttempt = &taskbridge.TaskAttemptSummary{ID: attempt.ID, Seq: attempt.Seq, Status: attempt.Status, Prompt: attempt.Prompt, Result: attempt.Result, TranscriptStart: attempt.TranscriptStart, TranscriptEnd: attempt.TranscriptEnd, TotalTokens: attempt.TotalTokens, CacheHitTokens: attempt.CacheHitTokens, CacheMissTokens: attempt.CacheMissTokens, ToolUseCount: attempt.ToolUseCount, ContextTokens: attempt.ContextTokens, ContextWindow: attempt.ContextWindow}
+				summary.LatestAttempt = &taskbridge.TaskAttemptSummary{Summary: attempt.Summary, ID: attempt.ID, Seq: attempt.Seq, Status: attempt.Status, Prompt: attempt.Prompt, Result: attempt.Result, TranscriptStart: attempt.TranscriptStart, TranscriptEnd: attempt.TranscriptEnd, TotalTokens: attempt.TotalTokens, CacheHitTokens: attempt.CacheHitTokens, CacheMissTokens: attempt.CacheMissTokens, ToolUseCount: attempt.ToolUseCount, ContextTokens: attempt.ContextTokens, ContextWindow: attempt.ContextWindow}
 			}
 			out.Items = append(out.Items, summary)
 		}
@@ -63,7 +63,7 @@ func convertSubagentAttempt(attempt session.SubagentAttempt) controlruntime.Suba
 		ended = time.Unix(attempt.EndedAt, 0)
 	}
 	return controlruntime.SubagentAttemptSummary{
-		ID: attempt.ID, Seq: attempt.Seq, Prompt: attempt.Prompt, Status: attempt.Status, Result: attempt.Result,
+		Summary: attempt.Summary, ID: attempt.ID, Seq: attempt.Seq, Prompt: attempt.Prompt, Status: attempt.Status, Result: attempt.Result,
 		StartedAt: time.Unix(attempt.StartedAt, 0), EndedAt: ended, TranscriptStart: attempt.TranscriptStart, TranscriptEnd: attempt.TranscriptEnd,
 		TotalTokens: attempt.TotalTokens, CacheHitTokens: attempt.CacheHitTokens, CacheMissTokens: attempt.CacheMissTokens,
 		ToolUseCount: attempt.ToolUseCount, DurationMs: attempt.DurationMs, ContextTokens: attempt.ContextTokens, ContextWindow: attempt.ContextWindow,

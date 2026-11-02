@@ -21,18 +21,20 @@ var builtinPrompt string
 type Profile = agentprofile.Profile
 
 type ToolCallEvent struct {
-	Evidence  protocol.ToolEvidence
-	Action    protocol.StepAction
-	CallID    string
-	ToolName  string
-	ToolArgs  string
-	ToolInput json.RawMessage
-	Output    string
-	Decision  protocol.ToolDecision
-	IsError   bool
+	NonExecution protocol.ToolNonExecution
+	Evidence     protocol.ToolEvidence
+	Action       protocol.StepAction
+	CallID       string
+	ToolName     string
+	ToolArgs     string
+	ToolInput    json.RawMessage
+	Output       string
+	Decision     protocol.ToolDecision
+	IsError      bool
 }
 
 type AttemptUsage struct {
+	Summary         protocol.RunSummary
 	TotalTokens     int
 	CacheHitTokens  int
 	CacheMissTokens int

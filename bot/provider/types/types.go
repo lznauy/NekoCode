@@ -42,7 +42,8 @@ type Message struct {
 	SkillName     string        `json:"skill_name,omitempty"`
 	SkillDelivery SkillDelivery `json:"skill_delivery,omitzero"`
 	// ToolEvidence is transcript-only local metadata, never provider instructions.
-	ToolEvidence protocol.ToolEvidence `json:"tool_evidence,omitzero"`
+	ToolEvidence protocol.ToolEvidence     `json:"tool_evidence,omitzero"`
+	NonExecution protocol.ToolNonExecution `json:"non_execution,omitzero"`
 
 	// DeferredContent is the bounded tool preview awaiting context capacity.
 	// It preserves error/status text independently of the raw output file.

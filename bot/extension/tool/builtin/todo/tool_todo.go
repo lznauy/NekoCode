@@ -16,7 +16,6 @@ type TodoWriteTool struct {
 	toolutil.SequentialSafeTool
 	mu       sync.Mutex
 	onUpdate protocol.TodoFunc
-	items    []protocol.TodoItem
 }
 
 func (t *TodoWriteTool) SetUpdateFn(fn protocol.TodoFunc) {
@@ -27,7 +26,7 @@ func (t *TodoWriteTool) SetUpdateFn(fn protocol.TodoFunc) {
 
 func (t *TodoWriteTool) Name() string { return "todo_write" }
 func (t *TodoWriteTool) Description() string {
-	return "Replace the task-tracking list. Track only requested deliverables and necessary verification, not every observation; skip for simple work. Each call supplies the complete list with at most one in_progress item. Format: [{\"content\":\"...\",\"status\":\"pending|in_progress|completed\"}]"
+	return "Replace the complete task list, tracking requested deliverables and necessary verification; skip for simple work. Keep at most one in_progress item. Mark a step in_progress before starting; promptly complete it and activate the next step when finished, rather than batching updates at the end. Revise the list when blocked or plans change, and reconcile it before the final answer. Update at deliverable boundaries, not every tool call; tool success alone does not prove completion. Never mark unfinished work completed."
 }
 
 func (t *TodoWriteTool) Parameters() []core.Parameter {
@@ -65,7 +64,6 @@ func (t *TodoWriteTool) Execute(ctx context.Context, args map[string]any) (core.
 	}
 
 	t.mu.Lock()
-	t.items = items
 	fn := t.onUpdate
 	t.mu.Unlock()
 

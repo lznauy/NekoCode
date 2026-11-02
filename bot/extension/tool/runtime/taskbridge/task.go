@@ -20,6 +20,7 @@ const (
 
 // TaskResult is returned by a delegated task runner.
 type TaskResult struct {
+	Summary protocol.RunSummary
 	ID      string
 	Status  TaskStatus
 	Content string
@@ -53,19 +54,20 @@ type TaskListFilter struct {
 }
 
 type TaskAttemptSummary struct {
-	ID              string `json:"id"`
-	Seq             int    `json:"seq"`
-	Status          string `json:"status"`
-	Prompt          string `json:"prompt"`
-	Result          string `json:"result,omitempty"`
-	TranscriptStart int    `json:"transcript_start"`
-	TranscriptEnd   int    `json:"transcript_end"`
-	TotalTokens     int    `json:"total_tokens,omitempty"`
-	CacheHitTokens  int    `json:"cache_hit_tokens,omitempty"`
-	CacheMissTokens int    `json:"cache_miss_tokens,omitempty"`
-	ToolUseCount    int    `json:"tool_use_count,omitempty"`
-	ContextTokens   int    `json:"context_tokens,omitempty"`
-	ContextWindow   int    `json:"context_window,omitempty"`
+	Summary         protocol.RunSummary `json:"summary,omitzero"`
+	ID              string              `json:"id"`
+	Seq             int                 `json:"seq"`
+	Status          string              `json:"status"`
+	Prompt          string              `json:"prompt"`
+	Result          string              `json:"result,omitempty"`
+	TranscriptStart int                 `json:"transcript_start"`
+	TranscriptEnd   int                 `json:"transcript_end"`
+	TotalTokens     int                 `json:"total_tokens,omitempty"`
+	CacheHitTokens  int                 `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens int                 `json:"cache_miss_tokens,omitempty"`
+	ToolUseCount    int                 `json:"tool_use_count,omitempty"`
+	ContextTokens   int                 `json:"context_tokens,omitempty"`
+	ContextWindow   int                 `json:"context_window,omitempty"`
 }
 
 type TaskSummary struct {

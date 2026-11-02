@@ -72,7 +72,7 @@ func (e *Executor) executeWorkers(ctx context.Context, calls []indexedCall, resu
 			defer wg.Done()
 			for ic := range jobs {
 				if err := ctx.Err(); err != nil {
-					results[ic.idx] = core.ToolCallResult{ID: ic.call.ID, Name: ic.call.Name, Error: err.Error()}
+					results[ic.idx] = core.NotExecuted(ctx, ic.call, "dispatch", err.Error())
 					finishQueuedTask(ic.call, "interrupted")
 					continue
 				}

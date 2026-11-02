@@ -97,10 +97,13 @@ func formatTodoItems(items []protocol.TodoItem) string {
 	fmt.Fprintf(&sb, "%d tasks, %d done:", len(items), done)
 	for _, it := range items {
 		mark := "[ ]"
-		if it.Status == "completed" {
+		switch it.Status {
+		case "completed":
 			mark = "[x]"
+		case "in_progress":
+			mark = "[>]"
 		}
-		fmt.Fprintf(&sb, "\n  %s %s", mark, it.Content)
+		fmt.Fprintf(&sb, "\n  %s %s: %s", mark, it.Status, it.Content)
 	}
 	return sb.String()
 }

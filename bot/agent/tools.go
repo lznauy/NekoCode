@@ -44,14 +44,26 @@ func (r *toolRunner) executeAndFeedback(calls []core.ToolCallItem, textContent s
 	defer cleanupSubagents()
 
 	r.agent.deps.toolExecutor.PreparePreviewsContext(r.agent.getCtx(), filtered.Allowed)
-	emitStartCallbacks(calls, filtered.Blocked, callback)
+	nonExecution := make(map[int]protocol.ToolNonExecution, len(filtered.Blocked))
+	for i, reason := range filtered.Blocked {
+		stage := "governance"
+		if _, denied := deniedSubagents[i]; denied {
+			stage = "task_admission"
+		}
+		nonExecution[i] = core.NotExecuted(r.agent.getCtx(), calls[i], stage, reason).NonExecution
+	}
+	emitStartCallbacks(calls, filtered.Blocked, nonExecution, callback)
 
 	execResults := r.executeAllowedTools(filtered.Allowed, callback)
 	results := mergeResults(calls, filtered.Blocked, execResults)
+	for i, record := range nonExecution {
+		results[i].NonExecution = record
+	}
 	policyResults := r.recordToolResults(calls, filtered.Blocked, results)
 
 	msgs := emitResultCallbacks(calls, filtered.Blocked, results, callback)
 	r.addToolResultsAndHints(calls, msgs, filtered.PreToolHints)
+	r.agent.observeTodoProgress(execResults)
 
 	if filtered.Terminated {
 		return true
@@ -61,6 +73,37 @@ func (r *toolRunner) executeAndFeedback(calls []core.ToolCallItem, textContent s
 	}
 	r.agent.run.step++
 	return false
+}
+
+const todoReminderBatches = 6
+
+// Remind only at batch boundaries, using the existing request-only message path.
+// Receipts establish tool activity, never completion of a deliverable.
+func (a *Agent) observeTodoProgress(results []core.ToolCallResult) {
+	status := a.deps.ctxMgr.Status()
+	if !status.HasTasks || status.TasksDone {
+		a.run.todoBatches = 0
+		return
+	}
+	executed := false
+	for _, result := range results {
+		if result.Name == "todo_write" && result.Error == "" {
+			a.run.todoBatches = 0
+			return
+		}
+		executed = executed || len(result.Evidence.Executions) > 0
+	}
+	if !executed {
+		return
+	}
+	a.run.todoBatches++
+}
+
+func (a *Agent) todoProgressReminder() []types.Message {
+	if a.run.todoBatches < todoReminderBatches {
+		return nil
+	}
+	return []types.Message{{Role: "user", Source: types.MessageSourceHint, Content: "[todo_progress] 已有未完成待办，连续多轮工具执行后尚未更新。请核对当前步骤：若已完成或计划变化，先用 todo_write 更新再继续；仍在同一步则继续工作，无需重复提交相同列表。工具成功不等于交付完成，不要为清空列表虚报完成。"}}
 }
 
 func (r *toolRunner) applyPolicyResults(results []policy.Result) bool {
@@ -129,7 +172,7 @@ func effectiveToolCall(call core.ToolCallItem) core.ToolCallItem {
 	return call
 }
 
-func emitStartCallbacks(calls []core.ToolCallItem, blocked map[int]string, callback RunCallback) {
+func emitStartCallbacks(calls []core.ToolCallItem, blocked map[int]string, records map[int]protocol.ToolNonExecution, callback RunCallback) {
 	if callback == nil {
 		return
 	}
@@ -141,7 +184,7 @@ func emitStartCallbacks(calls []core.ToolCallItem, blocked map[int]string, callb
 			action = protocol.StepActionToolBlocked
 			preview = reason
 		}
-		callback(protocol.StepEvent{Action: action, CallID: c.ID, ToolName: c.Name, ToolArgs: core.FormatArgs(c.Args), ToolInput: core.JSONArgs(c.Args), Output: preview})
+		callback(protocol.StepEvent{Action: action, NonExecution: records[i], CallID: c.ID, ToolName: c.Name, ToolArgs: core.FormatArgs(c.Args), ToolInput: core.JSONArgs(c.Args), Output: preview})
 	}
 }
 
@@ -165,12 +208,12 @@ func emitResultCallbacks(calls []core.ToolCallItem, blocked map[int]string, resu
 	for i, r := range results {
 		call := effectiveToolCall(calls[i])
 		content := r.EffectiveOutput()
-		msgs[i] = types.Message{Content: r.TextOutput().Text, ToolOutput: r.Artifact, ToolCallID: r.ID, IsError: r.Error != "", ReadID: r.ReadID, ToolEvidence: r.Evidence}
+		msgs[i] = types.Message{Content: r.TextOutput().Text, ToolOutput: r.Artifact, ToolCallID: r.ID, IsError: r.Error != "", ReadID: r.ReadID, ToolEvidence: r.Evidence, NonExecution: r.NonExecution}
 		if callback != nil {
 			if _, isBlocked := blocked[i]; isBlocked {
 				continue
 			}
-			callback(protocol.StepEvent{Action: protocol.StepActionExecuteTool, CallID: r.ID, ToolName: r.Name, ToolArgs: core.FormatArgs(call.Args), ToolInput: core.JSONArgs(call.Args), Output: content, IsError: r.Error != "", Evidence: r.Evidence.Clone()})
+			callback(protocol.StepEvent{Action: protocol.StepActionExecuteTool, CallID: r.ID, ToolName: r.Name, ToolArgs: core.FormatArgs(call.Args), ToolInput: core.JSONArgs(call.Args), Output: content, IsError: r.Error != "", Evidence: r.Evidence.Clone(), NonExecution: r.NonExecution})
 		}
 	}
 	return msgs

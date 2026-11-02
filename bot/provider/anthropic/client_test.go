@@ -181,7 +181,7 @@ func TestHeadersSupportAnthropicAndBearerAuth(t *testing.T) {
 
 func TestToolResultOmitsLocalSkillMetadata(t *testing.T) {
 	c := New("", "", "test")
-	messages, _ := c.toMessages([]types.Message{{Role: "tool", Content: "instructions", ToolCallID: "skill-call", SkillName: "local-skill", ToolEvidence: protocol.ToolEvidence{Schema: 1, Executions: []protocol.ExecutionReceipt{{ID: "receipt-secret-sentinel"}}}, SkillDelivery: types.SkillDelivery{Schema: 1, Name: "admission-secret-sentinel", Source: "tool", State: types.SkillReady}}}, types.ReasoningSettings{})
+	messages, _ := c.toMessages([]types.Message{{Role: "tool", Content: "instructions", ToolCallID: "skill-call", SkillName: "local-skill", NonExecution: protocol.ToolNonExecution{Schema: 1, ID: "receipt-secret-sentinel"}, ToolEvidence: protocol.ToolEvidence{Schema: 1, Executions: []protocol.ExecutionReceipt{{ID: "receipt-secret-sentinel"}}}, SkillDelivery: types.SkillDelivery{Schema: 1, Name: "admission-secret-sentinel", Source: "tool", State: types.SkillReady}}}, types.ReasoningSettings{})
 	data, err := json.Marshal(messages)
 	if err != nil {
 		t.Fatal(err)
