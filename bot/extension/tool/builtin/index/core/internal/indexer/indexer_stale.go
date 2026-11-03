@@ -11,10 +11,21 @@ import (
 	graphpkg "nekocode/bot/extension/tool/builtin/index/core/internal/graph"
 )
 
+// Bump whenever parser queries or graph construction semantics change so
+// unchanged source files cannot keep results produced by an older parser.
+const indexFormatVersion = "1"
+
 // LoadOrBuild loads the graph from database or builds it fresh.
 func (i *Indexer) LoadOrBuild(cwd string) (*graphpkg.Graph, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	version, err := i.db.IndexVersion()
+	if err != nil {
+		return nil, err
+	}
+	if version != indexFormatVersion {
+		return i.indexAllLocked(cwd)
+	}
 	g, err := i.db.LoadGraph()
 	if err != nil {
 		return nil, err

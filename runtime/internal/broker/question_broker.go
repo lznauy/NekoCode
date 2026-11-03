@@ -22,9 +22,10 @@ type QuestionBroker struct {
 }
 
 type questionRecord struct {
-	view  core.QuestionView
-	reply chan protocol.QuestionReply
-	runID core.RunID
+	view               core.QuestionView
+	reply              chan protocol.QuestionReply
+	runID              core.RunID
+	requestedPublished bool
 }
 
 func NewQuestionBroker(eventBus *eventbus.EventBus, source core.SourceRef, runID func() core.RunID) *QuestionBroker {
@@ -66,27 +67,25 @@ func (b *QuestionBroker) Register(req protocol.QuestionRequest) func() protocol.
 		return nil
 	}
 	b.pending[id] = rec
-	viewCopy := rec.view
+	viewCopy := cloneQuestionView(rec.view)
 	b.mu.Unlock()
 
 	b.publish(rec.runID, core.EventQuestionRequested, viewCopy)
-	return func() protocol.QuestionReply {
-		reply := <-rec.reply
+	// A resolver may commit while this notification invokes synchronous
+	// observers. Defer its terminal event until every requested observer returns.
+	b.mu.Lock()
+	rec.requestedPublished = true
+	resolved := rec.view.Status != core.QuestionPending
+	if resolved {
+		viewCopy = cloneQuestionView(rec.view)
+	}
+	b.mu.Unlock()
+	if resolved {
+		b.publish(rec.runID, core.EventQuestionResolved, viewCopy)
+	}
 
-		b.mu.Lock()
-		if current, ok := b.pending[id]; ok && current.view.Status == core.QuestionPending {
-			resolvedAt := time.Now()
-			current.view.ResolvedAt = &resolvedAt
-			if reply.Rejected {
-				current.view.Status = core.QuestionRejected
-			} else {
-				current.view.Status = core.QuestionAnswered
-			}
-			delete(b.pending, id)
-			b.publish(current.runID, core.EventQuestionResolved, current.view)
-		}
-		b.mu.Unlock()
-		return reply
+	return func() protocol.QuestionReply {
+		return <-rec.reply
 	}
 }
 
@@ -109,11 +108,15 @@ func (b *QuestionBroker) Answer(id string, reply protocol.QuestionReply) error {
 		rec.view.Status = core.QuestionAnswered
 	}
 	delete(b.pending, id)
-	viewCopy := rec.view
-	b.publish(rec.runID, core.EventQuestionResolved, viewCopy)
+	viewCopy := cloneQuestionView(rec.view)
+	publishResolved := rec.requestedPublished
 	b.mu.Unlock()
 
-	rec.reply <- reply
+	// Replies are available before synchronous observers can reenter or wait.
+	rec.reply <- cloneQuestionReply(reply)
+	if publishResolved {
+		b.publish(rec.runID, core.EventQuestionResolved, viewCopy)
+	}
 	return nil
 }
 
@@ -122,7 +125,7 @@ func (b *QuestionBroker) Pending() []core.QuestionView {
 	defer b.mu.Unlock()
 	out := make([]core.QuestionView, 0, len(b.pending))
 	for _, rec := range b.pending {
-		out = append(out, rec.view)
+		out = append(out, cloneQuestionView(rec.view))
 	}
 	return out
 }
@@ -141,18 +144,24 @@ func (b *QuestionBroker) rejectAll(closeBroker bool) {
 		b.closed = true
 	}
 	records := make([]*questionRecord, 0, len(b.pending))
+	var publishedRecords []*questionRecord
 	for id, rec := range b.pending {
 		resolvedAt := time.Now()
 		rec.view.ResolvedAt = &resolvedAt
 		rec.view.Status = core.QuestionRejected
 		records = append(records, rec)
+		if rec.requestedPublished {
+			publishedRecords = append(publishedRecords, rec)
+		}
 		delete(b.pending, id)
 	}
 	b.mu.Unlock()
 
 	for _, rec := range records {
 		rec.reply <- protocol.QuestionReply{Rejected: true}
-		b.publish(rec.runID, core.EventQuestionResolved, rec.view)
+	}
+	for _, rec := range publishedRecords {
+		b.publish(rec.runID, core.EventQuestionResolved, cloneQuestionView(rec.view))
 	}
 }
 
@@ -173,4 +182,17 @@ func (b *QuestionBroker) currentRunID() core.RunID {
 		return ""
 	}
 	return b.runID()
+}
+
+func cloneQuestionView(view core.QuestionView) core.QuestionView {
+	view.Questions = cloneQuestions(view.Questions)
+	return view
+}
+
+func cloneQuestionReply(reply protocol.QuestionReply) protocol.QuestionReply {
+	reply.Answers = append([][]string(nil), reply.Answers...)
+	for i := range reply.Answers {
+		reply.Answers[i] = append([]string(nil), reply.Answers[i]...)
+	}
+	return reply
 }

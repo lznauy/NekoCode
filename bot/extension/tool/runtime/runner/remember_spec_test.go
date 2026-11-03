@@ -3,18 +3,25 @@ package runner
 import (
 	"reflect"
 	"testing"
+
+	"nekocode/bot/extension/tool/runtime/permission"
 )
 
-func TestBashRememberRulesKeepsDynamicCommandLiteral(t *testing.T) {
+func TestBashRememberRulesKeepsDynamicStatementLiteral(t *testing.T) {
 	cmd := `echo "喵~ bash 命令测试成功！当前工作目录: $(pwd)" && date`
-	got := bashRememberRules("shell", cmd)
-	if len(got) != 1 || got[0].Literal != cmd || got[0].Specifier != "" {
-		t.Fatalf("bashRememberRules() = %#v, want one exact literal", got)
+	got := permission.ShellRulesToRemember("shell", cmd)
+	want := []permission.Rule{
+		{Tool: "shell", Literal: `echo "喵~ bash 命令测试成功！当前工作目录: $(pwd)"`, Effect: permission.EffectAllow, Lifetime: permission.LifetimeSession},
+		{Tool: "shell", Specifier: "date", Effect: permission.EffectAllow},
+	}
+	if !reflect.DeepEqual(got, want) {
+		// A dynamic statement is one exact unit: no reusable "echo *" prefix.
+		t.Fatalf("ShellRulesToRemember() = %#v, want %#v", got, want)
 	}
 }
 
 func TestBashRememberRulesBroadensOnlyStaticCommands(t *testing.T) {
-	got := bashRememberRules("shell", `echo hello && date`)
+	got := permission.ShellRulesToRemember("shell", `echo hello && date`)
 	wantSpecs := []string{"echo *", "date"}
 	var gotSpecs []string
 	for _, rule := range got {

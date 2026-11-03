@@ -249,7 +249,28 @@ describe('ConfirmDialog', () => {
       />,
     )
 
-    expect(screen.getByText('始终允许的范围')).toBeInTheDocument()
+    expect(screen.getByText('记住授权的范围')).toBeInTheDocument()
     expect(screen.queryByText(/列出的.*能力/)).toBeNull()
   })
+})
+
+it('uses backend session choices and preserves the remember reply', async () => {
+ replyConfirm.mockReset(); replyConfirm.mockResolvedValueOnce(undefined)
+ render(<ConfirmDialog entry={{ id:'session-option', toolName:'shell', args:{}, kind:'permission', approval:{ options:[
+  {id:'once',label:'仅本次允许',allowed:true,remember:false,scope:'once'},
+  {id:'remember',label:'本次会话允许',allowed:true,remember:true,scope:'session'},
+  {id:'reject',label:'拒绝',allowed:false,remember:false,scope:'once'},
+ ],remember_rules:[{tool:'shell',literal:'echo $x',lifetime:'session'}] } }} onDone={vi.fn()} />)
+ expect(screen.queryByRole('button',{name:'始终允许'})).not.toBeInTheDocument()
+ expect(screen.queryByText('保存到用户授权存储')).not.toBeInTheDocument()
+ fireEvent.click(screen.getByRole('button',{name:'本次会话允许'}))
+ await waitFor(()=>expect(replyConfirm).toHaveBeenCalledWith('session-option',true,true))
+})
+
+it('describes persistent grants as user authority storage', () => {
+ render(<ConfirmDialog entry={{ id:'persistent-storage', toolName:'shell', args:{}, kind:'permission', approval:{
+  scope:'project', remember_workspace:'/repo', remember_rules:[{tool:'shell',specifier:'go *'}]
+ } }} onDone={vi.fn()} />)
+ expect(screen.getByText('保存到用户授权存储')).toBeInTheDocument()
+ expect(screen.getByText('生效项目：/repo')).toBeInTheDocument()
 })

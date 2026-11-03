@@ -35,6 +35,9 @@ func (m *Model) View() tea.View {
 	if m.Messages.Len() == 0 {
 		parts = append(parts, m.Splash.View())
 	} else {
+		// Streaming and history replacement can change overflow without a
+		// window-size event. Reserve the scrollbar row before composing a frame.
+		m.resizeMessages()
 		// Horizontal scrollbar sits on top of the header when content overflows.
 		totalHeight, viewportHeight, percent := m.Messages.ScrollbarMetrics()
 		m.Scrollbar.Update(totalHeight, viewportHeight, percent)

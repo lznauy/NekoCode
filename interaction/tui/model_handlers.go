@@ -61,11 +61,14 @@ func (m *Model) handleDone(msg doneMsg) tea.Cmd {
 	}
 
 	if msg.err != nil {
-		// Preserve tool blocks even on error — show what was attempted.
-		if len(finalBlocks) > 0 {
+		// Preserve partial output as well as tools when a run fails or is
+		// cancelled; leaving processing mode has removed the live stream.
+		if accumulated != "" || len(finalBlocks) > 0 {
 			m.Messages.AddMessage(message.ChatMessage{
-				Role:   "assistant",
-				Blocks: finalBlocks,
+				Role:            "assistant",
+				Content:         msg.content,
+				RenderedContent: accumulated,
+				Blocks:          finalBlocks,
 			})
 		}
 		m.Messages.AddMessage(message.ChatMessage{
@@ -87,14 +90,16 @@ func (m *Model) handleDone(msg doneMsg) tea.Cmd {
 		if telemetry == nil && msg.metrics.Duration != "" {
 			footer = "Duration: " + msg.metrics.Duration
 		}
-		m.Messages.AddMessage(message.ChatMessage{
+		assistant := message.ChatMessage{
 			Role:            "assistant",
 			Content:         msg.content,
 			RenderedContent: accumulated,
 			Footer:          footer,
 			Telemetry:       telemetry,
 			Blocks:          finalBlocks,
-		})
+		}
+		m.Messages.AddMessage(assistant)
+		m.retainCompletedTurn(assistant)
 	}
 
 	m.refreshRuntimeStatus()
@@ -141,8 +146,7 @@ func (m *Model) handleConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
-	m.state = m.preConfirmState
-	m.resizeMessages()
+	m.finishPromptInput()
 	if m.state == stateProcessing {
 		return m, spinnerTick()
 	}
@@ -194,8 +198,7 @@ func (m *Model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
-	m.state = m.preConfirmState
-	m.resizeMessages()
+	m.finishPromptInput()
 	if m.state == stateProcessing {
 		return m, spinnerTick()
 	}
@@ -697,6 +700,7 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) (cmd tea.Cmd) {
 	case controlruntime.EventInputAccepted:
 		m.sessionHistoryDirty = true
 		if p, ok := ev.Payload.(controlruntime.MessagePayload); ok {
+			m.turnInput = p.Content
 			if p.Source.Kind == "tui" {
 				if len(p.Images) > 0 || len(m.Input.ImageAttachments()) == 0 {
 					m.Input.Reset()
@@ -758,10 +762,24 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) (cmd tea.Cmd) {
 			m.sessionLoadWaitForRun = true
 		}
 		if m.state != stateProcessing {
+			modal := m.state
 			m.transitionTo(stateProcessing)
+			if modal == stateConfirming || modal == stateQuestioning {
+				// A remote run can start while the user is answering a prompt.
+				// Start its background state without replacing that prompt.
+				m.preConfirmState = stateProcessing
+				m.state = modal
+				m.resizeMessages()
+			}
 		}
 		m.Messages.UpdateProcessing(func(item *processing.ProcessingItem) { item.SetSubagentSummary("") })
 		m.metrics = controlruntime.MetricsSnapshot{}
+		// A retained footer belongs to the previous run. In-flight history can
+		// already contain the new assistant, even if this run later fails.
+		m.refreshTelemetry = nil
+		m.refreshTurn = nil
+		m.turnInput = ""
+		m.turnHistoryAfter = m.sessionHistoryTotal
 		if reloadHistory {
 			return tea.Batch(spinnerTick(), m.loadSessionWindow(0, 0))
 		}
@@ -819,38 +837,19 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) (cmd tea.Cmd) {
 		}
 	case controlruntime.EventApprovalRequested:
 		if p, ok := ev.Payload.(controlruntime.ApprovalView); ok {
-			req := p.ToConfirmRequest()
-			m.ConfirmBar.SetRequest(&req, func(ok, remember bool) {
-				_ = m.Runtime.DecideApproval(context.Background(), p.ID, controlruntime.ApprovalDecision{
-					Allowed:  ok,
-					Remember: ok && remember,
-				})
-			})
-			m.preConfirmState = m.state
-			m.state = stateConfirming
-			m.resizeMessages()
+			m.enqueueRuntimePrompt(runtimePrompt{approval: &p})
 		}
 	case controlruntime.EventApprovalResolved:
-		if m.state == stateConfirming {
-			m.state = m.preConfirmState
-			m.ConfirmBar.Clear()
-			m.resizeMessages()
+		if p, ok := ev.Payload.(controlruntime.ApprovalView); ok {
+			m.resolveRuntimePrompt(p.ID, true)
 		}
 	case controlruntime.EventQuestionRequested:
 		if p, ok := ev.Payload.(controlruntime.QuestionView); ok {
-			req := p.ToQuestionRequest()
-			m.QuestionBar.SetRequest(&req, func(reply controlruntime.QuestionReply) {
-				_ = m.Runtime.AnswerQuestion(context.Background(), p.ID, reply)
-			})
-			m.preConfirmState = m.state
-			m.state = stateQuestioning
-			m.resizeMessages()
+			m.enqueueRuntimePrompt(runtimePrompt{question: &p})
 		}
 	case controlruntime.EventQuestionResolved:
-		if m.state == stateQuestioning {
-			m.state = m.preConfirmState
-			m.QuestionBar.Clear()
-			m.resizeMessages()
+		if p, ok := ev.Payload.(controlruntime.QuestionView); ok {
+			m.resolveRuntimePrompt(p.ID, false)
 		}
 	case controlruntime.EventRunDone:
 		payload, _ := ev.Payload.(controlruntime.RunResult)
@@ -872,6 +871,11 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) (cmd tea.Cmd) {
 	case controlruntime.EventRunCancelled:
 		return m.handleDone(doneMsg{metrics: m.metrics, err: errors.New("cancelled")})
 	case controlruntime.EventSessionChanged:
+		if p, ok := ev.Payload.(controlruntime.SessionPayload); ok && p.Reason == "delete" && p.ChangedID != "" && !p.CurrentChanged {
+			// Modern deletion events identify the deleted session explicitly. Legacy
+			// ID-only notifications still require a reload of the current session.
+			return nil
+		}
 		m.taskStates = nil
 		m.taskSummarySyncedAt = time.Time{}
 		if m.tasks != nil {

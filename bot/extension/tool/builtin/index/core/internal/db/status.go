@@ -12,6 +12,28 @@ type Status struct {
 	LastSync  string
 }
 
+// IndexVersion records the semantics used to produce the persisted graph.
+// A missing or empty value denotes an old or incomplete build.
+func (d *DB) IndexVersion() (string, error) {
+	conn, err := d.pool.Take(context.Background())
+	if err != nil {
+		return "", err
+	}
+	defer d.pool.Put(conn)
+	var version string
+	err = sqlitex.Execute(conn, `SELECT value FROM index_metadata WHERE key='index_version'`, &sqlitex.ExecOptions{ResultFunc: func(stmt *sqlite.Stmt) error { version = stmt.ColumnText(0); return nil }})
+	return version, err
+}
+
+func (d *DB) SetIndexVersion(version string) error {
+	conn, err := d.pool.Take(context.Background())
+	if err != nil {
+		return err
+	}
+	defer d.pool.Put(conn)
+	return sqlitex.Execute(conn, `INSERT INTO index_metadata(key,value) VALUES ('index_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, &sqlitex.ExecOptions{Args: []any{version}})
+}
+
 func (d *DB) RecordSync() error {
 	conn, err := d.pool.Take(context.Background())
 	if err != nil {

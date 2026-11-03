@@ -5,6 +5,7 @@ package protocol
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 )
 
 type PhaseFunc func(string)
@@ -217,9 +218,11 @@ const (
 // these facts separate from tool Args gives policy enforcement and every UI a
 // single typed contract; Args remains the original tool invocation only.
 type ApprovalContext struct {
+	Options           []ApprovalOption       `json:"options,omitempty"`
 	Source            string                 `json:"source,omitempty"`
 	Rule              string                 `json:"rule,omitempty"`
 	RememberRules     []ApprovalRememberRule `json:"remember_rules,omitempty"`
+	ApprovedRules     []ApprovalRememberRule `json:"approved_rules,omitempty"`
 	RememberWorkspace string                 `json:"remember_workspace,omitempty"`
 	Risk              string                 `json:"risk,omitempty"`
 	Reason            string                 `json:"reason,omitempty"`
@@ -234,10 +237,68 @@ type ApprovalContext struct {
 }
 
 // ApprovalRememberRule previews the same rule that the executor will persist.
+// Lifetime mirrors permission.Rule: empty/persistent grants are written to the
+// trusted user authority storage; session grants (exact statements of dynamic shell
+// units) are kept in memory for the current session only.
 type ApprovalRememberRule struct {
 	Tool      string `json:"tool"`
 	Specifier string `json:"specifier,omitempty"`
 	Literal   string `json:"literal,omitempty"`
+	Lifetime  string `json:"lifetime,omitempty"`
+}
+
+// Session reports whether approving this rule only lasts for the session.
+func (r ApprovalRememberRule) Session() bool { return r.Lifetime == "session" }
+
+// ApprovalOption is a backend-derived decision, shared by every interaction surface.
+// Scope describes the resulting authority; Remember preserves the legacy reply contract.
+type ApprovalOption struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Allowed  bool   `json:"allowed"`
+	Remember bool   `json:"remember"`
+	Scope    string `json:"scope"`
+}
+
+// DecisionOptions supports legacy manually constructed contexts too. Requests
+// created by NewApprovalRequest carry a snapshot of these choices on the wire.
+func (c *ApprovalContext) DecisionOptions(toolName string) []ApprovalOption {
+	if c != nil && len(c.Options) > 0 {
+		return append([]ApprovalOption(nil), c.Options...)
+	}
+	once := ApprovalOption{ID: "once", Label: "仅本次允许", Allowed: true, Scope: "once"}
+	if toolName == "workspace" {
+		once.Label = "本次会话允许"
+		once.Scope = "session"
+	}
+	options := []ApprovalOption{once}
+	if c != nil && c.CanRemember() {
+		persistent, session := len(c.Capabilities) > 0 || toolName == "workspace", false
+		var reusable []ApprovalRememberRule
+		for _, rule := range c.RememberRules {
+			if rule.Session() {
+				session = true
+			} else {
+				persistent = true
+				reusable = append(reusable, rule)
+			}
+		}
+		scope, label := "project", "始终允许"
+		if len(reusable) > 0 {
+			summary := fmt.Sprintf("%d 条规则", len(reusable))
+			if len(reusable) == 1 {
+				summary = reusable[0].Tool + "(" + reusable[0].Specifier + ")"
+			}
+			label += "（记住 " + summary + "）"
+		}
+		if session && persistent {
+			scope, label = "mixed", label+"，并在本会话允许精确脚本"
+		} else if session {
+			scope, label = "session", "本次会话允许"
+		}
+		options = append(options, ApprovalOption{ID: "remember", Label: label, Allowed: true, Remember: true, Scope: scope})
+	}
+	return append(options, ApprovalOption{ID: "reject", Label: "拒绝", Scope: "once"})
 }
 
 func (c *ApprovalContext) CanRemember() bool {
@@ -249,7 +310,9 @@ func (c *ApprovalContext) Clone() *ApprovalContext {
 		return nil
 	}
 	clone := *c
+	clone.Options = append([]ApprovalOption(nil), c.Options...)
 	clone.RememberRules = append([]ApprovalRememberRule(nil), c.RememberRules...)
+	clone.ApprovedRules = append([]ApprovalRememberRule(nil), c.ApprovedRules...)
 	clone.Structures = append([]string(nil), c.Structures...)
 	clone.Capabilities = append([]string(nil), c.Capabilities...)
 	clone.WritePaths = append([]string(nil), c.WritePaths...)
@@ -298,6 +361,10 @@ func NewConfirmRequest(toolName string, args map[string]any, kind ConfirmKind) C
 func NewApprovalRequest(toolName string, args map[string]any, kind ConfirmKind, approval *ApprovalContext) ConfirmRequest {
 	request := NewConfirmRequest(toolName, args, kind)
 	request.Approval = approval.Clone()
+	if request.Approval != nil {
+		request.Approval.Options = nil
+		request.Approval.Options = request.Approval.DecisionOptions(toolName)
+	}
 	return request
 }
 

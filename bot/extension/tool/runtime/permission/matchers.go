@@ -26,18 +26,7 @@ type BashMatcher struct{}
 
 func (BashMatcher) Assess(info map[string]any) CallAssessment {
 	command, _ := info["command"].(string)
-	report := ClassifyShellStructure(command)
-	if !report.Dynamic() {
-		return CallAssessment{}
-	}
-	structures := make([]string, len(report.Structures))
-	for i, structure := range report.Structures {
-		structures[i] = string(structure)
-	}
-	return CallAssessment{
-		Reason:  "dynamic shell execution",
-		Signals: structures,
-	}
+	return assessShellUnits(command, nil)
 }
 
 func (BashMatcher) MatchLiteral(literal string, info map[string]any) bool {
@@ -62,44 +51,6 @@ func (BashMatcher) MatchForEffect(spec string, info map[string]any, effect Effec
 	return BashRuleMatches(spec, info, mode), nil
 }
 
-// CompoundAllowCoverage implements AllowCoverer: the command is split into
-// subcommands and coverage holds when EVERY subcommand is matched by at
-// least one allow specifier. deciding is the index (into specs) of the first
-// specifier that covers a subcommand. hasBareAllow short-circuits coverage:
-// a match-all allow covers every subcommand (deciding = -1, the engine maps
-// it back to the bare rule). Non-compound commands (a single subcommand)
-// report covered = false so the engine falls back to per-rule Match.
-func (BashMatcher) CompoundAllowCoverage(hasBareAllow bool, specs []string, callInfo map[string]any) (deciding int, covered bool) {
-	cmd, _ := callInfo["command"].(string)
-	subcmds := shellCommands(cmd)
-	if len(subcmds) <= 1 {
-		return -1, false
-	}
-	if hasBareAllow {
-		return -1, true
-	}
-	if len(specs) == 0 {
-		return -1, false
-	}
-	deciding = -1
-	for _, sub := range subcmds {
-		subCovered := false
-		for i, spec := range specs {
-			if matchBashPattern(normalizeBashSpec(spec), sub) {
-				subCovered = true
-				if deciding < 0 {
-					deciding = i
-				}
-				break
-			}
-		}
-		if !subCovered {
-			return -1, false
-		}
-	}
-	return deciding, true
-}
-
 type BashMatchMode int
 
 const (
@@ -117,7 +68,7 @@ func BashRuleMatches(spec string, info map[string]any, mode BashMatchMode) bool 
 	}
 	pattern := normalizeBashSpec(spec)
 	trimmedCmd := strings.TrimSpace(cmd)
-	if mode == MatchAllSubcommands && !hasBashWildcard(pattern) && strings.TrimSpace(pattern) == trimmedCmd {
+	if !hasBashWildcard(pattern) && strings.TrimSpace(pattern) == trimmedCmd {
 		return true
 	}
 	subcmds := shellCommands(cmd)
@@ -156,8 +107,32 @@ func normalizeBashSpec(spec string) string {
 // A trailing " *" enforces a word boundary (space or end); a trailing "*"
 // without space matches any suffix.
 func matchBashPattern(pattern, cmd string) bool {
-	cmd = strings.TrimSpace(stripWrappers(cmd))
 	pattern = strings.TrimSpace(pattern)
+	// Keep an exact statement match before projecting away wrappers or
+	// assignments, including for deny/ask rules inside compound commands.
+	if pattern == strings.TrimSpace(cmd) {
+		return true
+	}
+	// Canonicalize literal words on both sides without treating the rule's
+	// trailing prefix wildcard as a shell expansion.
+	suffix := ""
+	if strings.HasSuffix(pattern, " *") {
+		pattern = strings.TrimSuffix(pattern, " *")
+		suffix = " *"
+	} else if strings.HasSuffix(pattern, "*") {
+		pattern = strings.TrimSuffix(pattern, "*")
+		suffix = "*"
+	}
+	pattern = normalizeShellCommand(pattern, false) + suffix
+	// Preserve assignment constraints symmetrically before considering the
+	// command-only projection used by ordinary rules such as "echo *".
+	if shellAssignmentPattern.MatchString(pattern) && matchNormalizedBashPattern(pattern, normalizeShellCommand(cmd, false)) {
+		return true
+	}
+	return matchNormalizedBashPattern(pattern, strings.TrimSpace(stripWrappers(cmd)))
+}
+
+func matchNormalizedBashPattern(pattern, cmd string) bool {
 	if pattern == cmd {
 		return true
 	}
@@ -175,32 +150,83 @@ func matchBashPattern(pattern, cmd string) bool {
 // classification, so matching and approval cannot disagree about the command
 // hidden behind a wrapper.
 func stripWrappers(cmd string) string {
+	return normalizeShellCommand(cmd, true)
+}
+
+func normalizeShellCommand(cmd string, unwrap bool) string {
+	key := shellNormalizationKey{command: cmd, unwrap: unwrap}
+	if cached, ok := shellNormalizationCache.Load(key); ok {
+		return cached.(string)
+	}
+	value := normalizeShellCommandUncached(cmd, unwrap)
+	if shellNormalizationCount.Add(1) > shellParseCacheMax {
+		shellNormalizationCache.Clear()
+		shellNormalizationCount.Store(1)
+	}
+	shellNormalizationCache.Store(key, value)
+	return value
+}
+
+func normalizeShellCommandUncached(cmd string, unwrap bool) string {
 	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
 	file, err := parser.Parse(strings.NewReader(cmd), "")
-	if err != nil || len(file.Stmts) != 1 {
+	if err != nil || len(file.Stmts) != 1 || len(file.Stmts[0].Redirs) != 0 {
 		return cmd
 	}
 	call, ok := file.Stmts[0].Cmd.(*syntax.CallExpr)
 	if !ok || len(call.Args) == 0 {
 		return cmd
 	}
+	// Retain assignment constraints in the full-command projection, while
+	// canonicalizing static values just like ordinary arguments. Complex or
+	// dynamic assignments retain their syntax and are never evaluated.
+	var assignments []string
+	if !unwrap {
+		for _, assign := range call.Assigns {
+			text := renderShellNode(assign)
+			if assign.Name != nil && !assign.Append && !assign.Naked && assign.Index == nil && assign.Array == nil {
+				value, static := "", true
+				if assign.Value != nil {
+					value, static = staticShellWord(assign.Value)
+				}
+				if static {
+					quoted, err := syntax.Quote(value, syntax.LangBash)
+					if err != nil {
+						return cmd
+					}
+					text = assign.Name.Value + "=" + quoted
+				}
+			}
+			assignments = append(assignments, text)
+		}
+	}
 	tokens := make([]shellInvocationToken, len(call.Args))
 	for i, word := range call.Args {
 		value, static := staticShellWord(word)
-		if !static {
+		tokens[i] = shellInvocationToken{value: value, static: static}
+	}
+	unwrapped := tokens
+	if unwrap {
+		var dynamic bool
+		unwrapped, dynamic = unwrapShellInvocation(tokens, nil)
+		if dynamic || len(unwrapped) == 0 {
 			return cmd
 		}
-		tokens[i] = shellInvocationToken{value: value, static: true}
-	}
-	unwrapped, dynamic := unwrapShellInvocation(tokens)
-	if dynamic || len(unwrapped) == 0 || len(unwrapped) == len(tokens) {
-		return cmd
 	}
 	words := make([]string, len(unwrapped))
+	offset := len(tokens) - len(unwrapped)
 	for i, token := range unwrapped {
-		words[i] = token.value
+		if token.static {
+			quoted, err := syntax.Quote(token.value, syntax.LangBash)
+			if err != nil {
+				return cmd
+			}
+			words[i] = quoted
+		} else {
+			words[i] = renderShellNode(call.Args[offset+i])
+		}
 	}
-	return strings.Join(words, " ")
+	return strings.Join(append(assignments, words...), " ")
 }
 
 // shellParseCacheMax bounds the memoization of shell parses; once full, the
@@ -209,9 +235,17 @@ func stripWrappers(cmd string) string {
 // the occasional re-parse.
 const shellParseCacheMax = 256
 
+type shellNormalizationKey struct {
+	command string
+	unwrap  bool
+}
+
 var (
-	shellParseCache sync.Map // command string → []string subcommands
-	shellParseCount atomic.Int64
+	shellAssignmentPattern  = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*=`)
+	shellParseCache         sync.Map // command string → []string subcommands
+	shellParseCount         atomic.Int64
+	shellNormalizationCache sync.Map // shellNormalizationKey -> immutable string
+	shellNormalizationCount atomic.Int64
 )
 
 // shellCommands splits a command line into its rendered subcommands via a
@@ -246,7 +280,24 @@ func parseShellCommands(cmd string) []string {
 		switch n := node.(type) {
 		case *syntax.CmdSubst, *syntax.ProcSubst:
 			return true
+		case *syntax.Stmt:
+			// Redirections belong to the statement, not its CallExpr. Keep
+			// them in the rule input, including redirections on compound blocks.
+			if len(n.Redirs) == 0 {
+				return true
+			}
+			if s := renderShellNode(n); s != "" {
+				out = append(out, s)
+			}
+			return true
 		case *syntax.CallExpr:
+			// Also retain the command projection so narrow deny/ask rules
+			// still match when an attacker appends a redirection.
+			if s := renderShellNode(n); s != "" {
+				out = append(out, s)
+			}
+			return true
+		case *syntax.DeclClause:
 			if s := renderShellNode(n); s != "" {
 				out = append(out, s)
 			}
@@ -273,18 +324,38 @@ func renderShellNode(node syntax.Node) string {
 //	"//abs/path/**"  filesystem-absolute
 //	"*.env" / "**/.env"  relative to cwd, matches at any depth
 //
-// info must contain "path" (the call's target path, absolute) and optionally
+// info contains "path" or "paths" (absolute targets) and optionally
 // "workspace" and "home" for anchor resolution.
 type FilePathMatcher struct{}
 
-func (FilePathMatcher) Match(spec string, info map[string]any) (bool, error) {
-	target, _ := info["path"].(string)
-	if target == "" || spec == "" {
+func (m FilePathMatcher) Match(spec string, info map[string]any) (bool, error) {
+	return m.MatchForEffect(spec, info, EffectAllow)
+}
+
+// A deny or ask on any input protects a batch; an allow must cover every input.
+func (FilePathMatcher) MatchForEffect(spec string, info map[string]any, effect Effect) (bool, error) {
+	paths, ok := info["paths"].([]string)
+	if !ok {
+		path, _ := info["path"].(string)
+		if path != "" {
+			paths = []string{path}
+		}
+	}
+	if len(paths) == 0 || spec == "" {
 		return false, nil
 	}
 	workspace, _ := info["workspace"].(string)
 	home, _ := info["home"].(string)
-	return matchPathPattern(spec, target, workspace, home), nil
+	for _, path := range paths {
+		matched := path != "" && matchPathPattern(spec, path, workspace, home)
+		if effect == EffectAllow && !matched {
+			return false, nil
+		}
+		if effect != EffectAllow && matched {
+			return true, nil
+		}
+	}
+	return effect == EffectAllow, nil
 }
 
 // matchPathPattern evaluates a gitignore-style path rule against an absolute
@@ -427,18 +498,21 @@ func (MCPMatcher) Match(spec string, info map[string]any) (bool, error) {
 // DefaultMatchers returns the standard matcher set keyed by tool name.
 func DefaultMatchers() map[string]SpecifierMatcher {
 	return map[string]SpecifierMatcher{
-		"bash":        BashMatcher{},
-		"shell":       BashMatcher{},
-		"write":       FilePathMatcher{},
-		"edit":        FilePathMatcher{},
-		"read":        FilePathMatcher{},
-		"list":        FilePathMatcher{},
-		"tree":        FilePathMatcher{},
-		"glob":        FilePathMatcher{},
-		"grep":        FilePathMatcher{},
-		"web_fetch":   DomainMatcher{},
-		"webfetch":    DomainMatcher{},
-		"web_extract": DomainMatcher{},
-		"mcp":         MCPMatcher{},
+		"bash":             BashMatcher{},
+		"shell":            BashMatcher{},
+		"write":            FilePathMatcher{},
+		"edit":             FilePathMatcher{},
+		"read":             FilePathMatcher{},
+		"list":             FilePathMatcher{},
+		"tree":             FilePathMatcher{},
+		"glob":             FilePathMatcher{},
+		"grep":             FilePathMatcher{},
+		"diff":             FilePathMatcher{},
+		"image_gen":        FilePathMatcher{},
+		"image_understand": FilePathMatcher{},
+		"web_fetch":        DomainMatcher{},
+		"webfetch":         DomainMatcher{},
+		"web_extract":      DomainMatcher{},
+		"mcp":              MCPMatcher{},
 	}
 }

@@ -89,6 +89,7 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: "plan mode: blocked"}
 	}
 
+	tc = e.normalizeFilePolicyPath(tc)
 	var errMsg string
 	var ok bool
 	workspaceChecked := false
@@ -115,36 +116,71 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 	if dec.block {
 		e.observePermissionDenial(ctx, tc, dec.reason, predictedReq)
 		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: dec.reason}
-	} else if dec.prompt {
-		reply, ok := e.promptConfirm(tc, confirmFn, predictedReq, dec)
+	}
+
+	// Resolve authority only after the lexical rule check, then evaluate the
+	// actual target before displaying or saving a command approval.
+	stage = "workspace"
+	policyCall := tc
+	var boundFileTarget []boundFileTarget
+	if !workspaceChecked {
+		previousPath := fileToolPath(tc)
+		if tc, errMsg, ok = e.ensureWorkspaceAccess(tc, confirmFn); !ok {
+			return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: errMsg}
+		}
+		var targetErr error
+		policyCall, boundFileTarget, targetErr = bindFilePolicyCall(tc)
+		if targetErr != nil {
+			return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: targetErr.Error()}
+		}
+		if fileToolPath(policyCall) != previousPath {
+			lexical := dec
+			dec = e.evaluatePermission(ctx, policyCall, predictedReq)
+			if dec.block {
+				e.observePermissionDenial(ctx, tc, dec.reason, predictedReq)
+				return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: dec.reason}
+			}
+			// Explicit asks on the lexical alias remain mandatory, even when
+			// the resolved target has an allow rule. Show the executed path.
+			if lexical.prompt && lexical.mandatoryAsk {
+				lexical.promptArgs = policyCall.Args
+				lexical.policy = dec.policy
+				dec = lexical
+			}
+		}
+	}
+	stage = "permission"
+	if dec.prompt {
+		reply, ok := e.promptConfirm(policyCall, confirmFn, predictedReq, dec)
 		if !ok {
+			if reply.err != nil {
+				return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: reply.err.Error()}
+			}
 			// The user explicitly declined. A bare "cancelled" reads like a
 			// transient hiccup and invites the model to retry the very same
 			// call — popping the dialog again. Name the decision instead.
 			return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: "permission denied by user; do not retry the same request — change your approach or ask the user how to proceed"}
 		}
+		if err := validateFileTargetBinding(boundFileTarget); err != nil {
+			return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: err.Error()}
+		}
 		if reply.Remember {
-			toolName := tc.Name
-			args := tc.Args
-			if dec.rememberTool != "" {
-				toolName = dec.rememberTool
-				args = dec.rememberArgs
+			if err := e.rememberApprovedRules(reply.policy, reply.rules); err != nil {
+				return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: "cannot save permanent approval; command was not executed: " + err.Error() + ". Fix the permissions file or choose allow once; do not retry automatically."}
 			}
-			e.rememberAllowRule(toolName, args, dec.matchedRule)
 		}
 		if predictedReq != nil {
-			preApproval = &escalationApproval{remember: reply.Remember, predicted: predictedReq}
-		}
-	}
-
-	stage = "workspace"
-	if !workspaceChecked {
-		if tc, errMsg, ok = e.ensureWorkspaceAccess(tc, confirmFn); !ok {
-			return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: errMsg}
+			preApproval = &escalationApproval{remember: reply.Remember, predicted: predictedReq, policy: &reply.policy}
 		}
 	}
 
 	stage = "checkpoint"
+	if dec.policy != nil && !dec.policy.current(e) {
+		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: errApprovalContextChanged.Error()}
+	}
+	if err := validateFileTargetBinding(boundFileTarget); err != nil {
+		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: err.Error()}
+	}
 	captured, captureErr := e.captureMutationPaths(tc)
 	if captureErr != nil {
 		e.finalizeMutationPaths(captured)
@@ -156,17 +192,30 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 	if err := ctx.Err(); err != nil {
 		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: err.Error()}
 	}
+	if err := validateFileTargetBinding(boundFileTarget); err != nil {
+		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: err.Error()}
+	}
 	paths := toolPaths(tc)
+	if dec.policy != nil && !dec.policy.current(e) {
+		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: errApprovalContextChanged.Error()}
+	}
 	output, execErr := invoke(ctx, func() (core.ToolOutput, error) { return tool.Execute(e.toolContext(ctx), tc.Args) })
 	e.noteExecutedShell(tc)
 	if execErr != nil {
-		preApproved := escalationApproval{}
+		preApproved := escalationApproval{policy: dec.policy}
 		if preApproval != nil {
 			preApproved = *preApproval
 		}
+		preApproved.fileTargets = boundFileTarget
 		privileged := entry.Privileged
 		if original := privileged; original != nil {
 			privileged = func(callCtx context.Context, args map[string]any, req core.PermissionRequest) (core.ToolOutput, error) {
+				if err := validateFileTargetBinding(boundFileTarget); err != nil {
+					return core.ToolOutput{}, err
+				}
+				if dec.policy != nil && !dec.policy.current(e) {
+					return core.ToolOutput{}, errApprovalContextChanged
+				}
 				return invoke(callCtx, func() (core.ToolOutput, error) { return original(callCtx, args, req) })
 			}
 		}
@@ -217,15 +266,14 @@ func (e *Executor) finalizeMutationPaths(paths []string) {
 
 // permissionDecision is the outcome of evaluating the engine for one call.
 type permissionDecision struct {
+	mandatoryAsk bool
 	block        bool
 	reason       string
 	prompt       bool
 	promptTool   string
 	promptArgs   map[string]any
-	matchedRule  permission.Rule
-	rememberTool string
-	rememberArgs map[string]any
 	approval     *protocol.ApprovalContext
+	policy       *permissionSnapshot
 	// jevSafe records that the auto-mode risk judge vetted this call's
 	// content and no rule prompted — the same verdict that silently passes
 	// the pre-execution check. The privileged escalation consults it so a
@@ -240,8 +288,10 @@ type permissionDecision struct {
 // the basic prompt. Explicit ask rules (rm *, git push *, ...) always win:
 // they are command-level safety prompts the user opted into, orthogonal to
 // capability grants, so a net.outbound grant MUST NOT silence an "ask rm *".
-func (e *Executor) evaluatePermission(ctx context.Context, tc core.ToolCallItem, predictedReq *core.PermissionRequest) permissionDecision {
-	engine, ws, home := e.permissionEngine()
+func (e *Executor) evaluatePermission(ctx context.Context, tc core.ToolCallItem, predictedReq *core.PermissionRequest) (decision permissionDecision) {
+	policy := e.permissionSnapshot()
+	defer func() { decision.policy = &policy }()
+	engine, ws, home := policy.engine, policy.workspace, policy.home
 	if cmd, ok := shellCommandForPolicy(tc); ok {
 		if decision, hit := e.evaluateAs(ctx, engine, ws, home, "shell", map[string]any{"command": cmd}, tc, predictedReq, permission.EffectAsk); hit {
 			return decision
@@ -258,29 +308,29 @@ func (e *Executor) evaluatePermission(ctx context.Context, tc core.ToolCallItem,
 
 	callInfo := permission.BuildCallInfo(tc.Name, tc.Args, ws, home)
 	dec := engine.EvaluateContext(ctx, tc.Name, callInfo, defaultPermissionEffect(tc.Name))
-	decision := e.applyAutoWebGate(ctx, e.permissionDecisionForRule(dec, tc, predictedReq), tc)
-	e.annotateJevVerdict(ctx, tc, dec.Assessment.Reason, decision)
-	decision.jevSafe = jevSafeVerdict(dec.Assessment.Reason, decision)
+	decision = e.applyAutoWebGate(ctx, e.permissionDecisionForRule(dec, tc, predictedReq), tc)
+	e.annotateJevVerdict(ctx, tc, dec.Assessment.Verdict, decision)
+	decision.jevSafe = jevSafeVerdict(dec.Assessment.Verdict, decision)
 	return decision
 }
 
 // jevSafeVerdict reports whether the auto-mode risk judge explicitly passed
 // this call and no rule prompt/block overrode it — the condition the
 // privileged escalation consults to skip a redundant capability dialog.
-func jevSafeVerdict(reason string, decision permissionDecision) bool {
-	return reason == "jev: judged safe" && !decision.prompt && !decision.block
+func jevSafeVerdict(verdict permission.JudgeVerdict, decision permissionDecision) bool {
+	return verdict == permission.JudgeSafe && !decision.prompt && !decision.block
 }
 
 // annotateJevVerdict surfaces the judge result independently of tool output.
-func (e *Executor) annotateJevVerdict(ctx context.Context, tc core.ToolCallItem, reason string, decision permissionDecision) {
+func (e *Executor) annotateJevVerdict(ctx context.Context, tc core.ToolCallItem, verdict permission.JudgeVerdict, decision permissionDecision) {
 	if decision.block {
 		return
 	}
-	if reason == "jev: judged safe" && !decision.prompt {
+	if verdict == permission.JudgeSafe && !decision.prompt {
 		e.emitJevNote(ctx, tc, protocol.ToolDecisionJevSafe)
-	} else if reason == "jev: judged dangerous" && decision.prompt {
+	} else if verdict == permission.JudgeDangerous && decision.prompt {
 		e.emitJevNote(ctx, tc, protocol.ToolDecisionJevDangerous)
-	} else if reason == "jev: judgment failed" {
+	} else if verdict == permission.JudgeFailed {
 		e.emitJevNote(ctx, tc, protocol.ToolDecisionJevFailed)
 	}
 }
@@ -294,13 +344,11 @@ func (e *Executor) emitJevNote(ctx context.Context, tc core.ToolCallItem, decisi
 	if pfn == nil {
 		return
 	}
-	if tc.Args == nil {
-		tc.Args = map[string]any{}
+	preview, allowed := e.authorizedPreview(ctx, tc)
+	if !allowed {
+		return
 	}
-	preview, _ := tc.Args["_preview"].(string)
-	if preview == "" && e.registry != nil {
-		preview, _ = e.registry.Preview(e.toolContext(ctx), tc.Name, tc.Args)
-	}
+
 	// Keep trusted decision metadata out of both the tool-controlled preview
 	// text and the shared execution arguments.
 	pfn(tc.ID, tc.Name, tc.Args, preview, decision)
@@ -385,17 +433,15 @@ func (e *Executor) evaluateAs(ctx context.Context, engine *permission.Engine, ws
 		// "capability" even though mcp__server__tool was explicitly allowed.
 		if dec.Effect == permission.EffectAllow {
 			decision = e.applyAutoWebGate(ctx, decision, tc)
-			e.annotateJevVerdict(ctx, tc, dec.Assessment.Reason, decision)
-			decision.jevSafe = jevSafeVerdict(dec.Assessment.Reason, decision)
+			e.annotateJevVerdict(ctx, tc, dec.Assessment.Verdict, decision)
+			decision.jevSafe = jevSafeVerdict(dec.Assessment.Verdict, decision)
 			return decision, true
 		}
 		return permissionDecision{}, false
 	}
-	e.annotateJevVerdict(ctx, tc, dec.Assessment.Reason, decision)
+	e.annotateJevVerdict(ctx, tc, dec.Assessment.Verdict, decision)
 	decision.promptTool = name
 	decision.promptArgs = args
-	decision.rememberTool = name
-	decision.rememberArgs = args
 	return decision, true
 }
 
@@ -420,7 +466,7 @@ func (e *Executor) permissionDecisionForRule(dec permission.Decision, tc core.To
 		// predicted capability request is already covered by a grant.
 		// Otherwise the user's explicit command-level ask must be honored.
 		if predictedReq != nil && dec.Rule.Tool == "" && !dec.Assessment.RequiresApproval() &&
-			dec.Assessment.Reason == "" && e.permissionAllowed(tc.Name, *predictedReq) {
+			dec.Assessment.Verdict == permission.JudgeNotRun && dec.Assessment.Reason == "" && e.permissionAllowed(tc.Name, *predictedReq) {
 			return permissionDecision{}
 		}
 		approval := approvalContextFromAssessment(dec.Assessment)
@@ -434,7 +480,11 @@ func (e *Executor) permissionDecisionForRule(dec permission.Decision, tc core.To
 				approval.Source = "builtin_rule"
 			}
 			approval.Rule = dec.Rule.Tool + "(" + dec.Rule.Specifier + ")"
-		case strings.HasPrefix(dec.Assessment.Reason, "jev:"):
+			if dec.Rule.Effect == permission.EffectAsk && dec.Rule.Source != "builtin" {
+				approval.Scope = protocol.ApprovalScopeOnce
+				approval.Reason = "explicit ask rule requires approval on every call"
+			}
+		case dec.Assessment.Verdict != permission.JudgeNotRun:
 			approval.Source = "jev"
 		case dec.Assessment.RequiresApproval():
 			approval.Source = "shell_structure"
@@ -442,11 +492,11 @@ func (e *Executor) permissionDecisionForRule(dec permission.Decision, tc core.To
 			approval.Source = "default_policy"
 		}
 		return permissionDecision{
-			prompt:      true,
-			promptTool:  tc.Name,
-			promptArgs:  tc.Args,
-			matchedRule: dec.Rule,
-			approval:    approval,
+			mandatoryAsk: dec.Rule.Tool != "" && dec.Rule.Effect == permission.EffectAsk && dec.Rule.Source != "builtin",
+			prompt:       true,
+			promptTool:   tc.Name,
+			promptArgs:   tc.Args,
+			approval:     approval,
 		}
 	default:
 		return permissionDecision{}
@@ -484,9 +534,8 @@ func shellCommandForPolicy(tc core.ToolCallItem) (string, bool) {
 // permissionEngine returns the configured engine plus workspace/home. The
 // default engine is created by NewExecutor and contains builtin rules.
 func (e *Executor) permissionEngine() (*permission.Engine, string, string) {
-	e.fnMu.RLock()
-	defer e.fnMu.RUnlock()
-	return e.permEngine, e.permWorkspace, e.permHome
+	policy := e.permissionSnapshot()
+	return policy.engine, policy.workspace, policy.home
 }
 
 // defaultPermissionEffect is the fallback effect when no rule matches. The
@@ -508,9 +557,16 @@ func defaultPermissionEffect(toolName string) permission.Effect {
 //
 // Predicted capabilities are merged into this request so one decision covers
 // the command and the exact capability scope shown to the user.
-func (e *Executor) promptConfirm(tc core.ToolCallItem, confirmFn protocol.ConfirmFunc, predictedReq *core.PermissionRequest, dec permissionDecision) (protocol.ConfirmReply, bool) {
+func (e *Executor) promptConfirm(tc core.ToolCallItem, confirmFn protocol.ConfirmFunc, predictedReq *core.PermissionRequest, dec permissionDecision) (commandApprovalReply, bool) {
 	if confirmFn == nil {
-		return protocol.ConfirmReply{}, false
+		return commandApprovalReply{}, false
+	}
+	policy := e.permissionSnapshot()
+	if dec.policy != nil {
+		policy = *dec.policy
+	}
+	if !policy.current(e) {
+		return commandApprovalReply{err: errApprovalContextChanged}, false
 	}
 	toolName := dec.promptTool
 	if toolName == "" {
@@ -526,9 +582,13 @@ func (e *Executor) promptConfirm(tc core.ToolCallItem, confirmFn protocol.Confir
 		if approval == nil {
 			approval = predicted
 		} else {
-			approval.Reason = predicted.Reason
+			if approval.Reason == "" {
+				approval.Reason = predicted.Reason
+			}
 			approval.Capabilities = predicted.Capabilities
-			approval.Scope = predicted.Scope
+			if approval.Scope != protocol.ApprovalScopeOnce {
+				approval.Scope = predicted.Scope
+			}
 			approval.Workspace = predicted.Workspace
 			approval.Sandbox = predicted.Sandbox
 			approval.WritePaths = predicted.WritePaths
@@ -539,67 +599,76 @@ func (e *Executor) promptConfirm(tc core.ToolCallItem, confirmFn protocol.Confir
 	if approval == nil {
 		approval = &protocol.ApprovalContext{Scope: protocol.ApprovalScopeProject}
 	}
-	if approval.CanRemember() {
-		e.fnMu.RLock()
-		ws, home := e.permWorkspace, e.permHome
-		e.fnMu.RUnlock()
+	canRemember := approval.CanRemember()
+	var rememberRules []permission.Rule
+	if canRemember {
+		ws, home, engine := policy.workspace, policy.home, policy.engine
 		approval.RememberWorkspace = ws
-		for _, rule := range rulesToRemember(toolName, args, dec.matchedRule, ws, home) {
-			approval.RememberRules = append(approval.RememberRules, protocol.ApprovalRememberRule{Tool: rule.Tool, Specifier: rule.Specifier, Literal: rule.Literal})
+		if engine != nil && toolName == "shell" {
+			command, _ := args["command"].(string)
+			approval.ApprovedRules = nil
+			for _, rule := range engine.ApprovedShellRules(toolName, command) {
+				approval.ApprovedRules = append(approval.ApprovedRules, protocol.ApprovalRememberRule{Tool: rule.Tool, Specifier: rule.Specifier, Literal: rule.Literal})
+			}
 		}
+		rememberRules = pendingRulesToRemember(engine, toolName, args, ws, home)
+		approval.RememberRules = nil
+		for _, rule := range rememberRules {
+			approval.RememberRules = append(approval.RememberRules, protocol.ApprovalRememberRule{Tool: rule.Tool, Specifier: rule.Specifier, Literal: rule.Literal, Lifetime: string(rule.Lifetime)})
+		}
+	}
+	if len(rememberRules) == 0 && len(approval.Capabilities) == 0 {
+		approval.Scope = protocol.ApprovalScopeOnce
+		canRemember = false
 	}
 	req := protocol.NewApprovalRequest(toolName, protocol.ApprovalArgs(args), protocol.ConfirmKindPermission, approval)
 	req.CallID = tc.ID
 	reply := confirmFn(req)
+	if !canRemember {
+		reply.Remember = false
+	}
+	approved := commandApprovalReply{ConfirmReply: reply, policy: policy, rules: rememberRules}
 	if !reply.Allowed {
-		return reply, false
+		return approved, false
 	}
-	return reply, true
+	if !policy.current(e) {
+		approved.err = errApprovalContextChanged
+		return approved, false
+	}
+	return approved, true
 }
 
-// rememberAllowRule persists an allow rule when the user approves an "ask"
-// prompt with "remember". It derives the rule specifier from the tool call so
-// future matching calls auto-approve, then rebuilds the engine immediately.
-func (e *Executor) rememberAllowRule(toolName string, args map[string]any, matched permission.Rule) {
-	e.fnMu.RLock()
-	store := e.permStore
-	ws := e.permWorkspace
-	home := e.permHome
-	engine := e.permEngine
-	decl := e.permDecl
-	e.fnMu.RUnlock()
-	if store == nil || ws == "" || engine == nil {
-		return
-	}
-	rules := rulesToRemember(toolName, args, matched, ws, home)
-	for _, rule := range rules {
-		_ = store.RememberRule(ws, rule)
-	}
-	e.rebuildEngine(decl, store, ws)
-}
-
-func rulesToRemember(toolName string, args map[string]any, matched permission.Rule, ws, home string) []permission.Rule {
-	var rules []permission.Rule
-	// Build a specifier from the call: shell uses the command prefix, file
-	// tools use the path anchor, web tools use the URL's host. Fall back to
-	// the matched rule's specifier (so a broad ask rule remembered becomes a
-	// broad allow).
-	spec := matched.Specifier
-	if toolName == "shell" {
-		if cmd, _ := args["command"].(string); cmd != "" {
-			rules = append(rules, bashRememberRules(toolName, cmd)...)
+func pendingRulesToRemember(engine *permission.Engine, toolName string, args map[string]any, ws, home string) []permission.Rule {
+	if engine != nil && toolName == "shell" {
+		if command, _ := args["command"].(string); command != "" {
+			return engine.PendingShellRules(toolName, command)
 		}
-	} else if p, _ := args["path"].(string); p != "" {
-		spec = pathRememberSpec(p, ws, home)
-	} else if isWebFetchTool(toolName) {
+	}
+	return rulesToRemember(toolName, args, ws, home)
+}
+
+func rulesToRemember(toolName string, args map[string]any, ws, home string) []permission.Rule {
+	var spec string
+	switch {
+	case strings.HasPrefix(toolName, "mcp__"):
+		// MCPMatcher matches the full target identity, never its arbitrary args.
+		spec = toolName
+	case isWebFetchTool(toolName):
 		if u, _ := args["url"].(string); u != "" {
 			spec = "domain:" + urlHostForRemember(u)
 		}
+	default:
+		switch toolName {
+		case "read", "write", "edit", "list", "tree", "grep", "glob":
+			if p, _ := args["path"].(string); p != "" {
+				spec = pathRememberSpec(p, ws, home)
+			}
+		}
 	}
-	if len(rules) == 0 {
-		rules = append(rules, permission.Rule{Tool: toolName, Specifier: spec, Effect: permission.EffectAllow})
+	if spec == "" {
+		return nil
 	}
-	return rules
+	return []permission.Rule{{Tool: toolName, Specifier: spec, Effect: permission.EffectAllow}}
 }
 
 // isWebFetchTool reports whether the tool is a URL-fetching builtin covered

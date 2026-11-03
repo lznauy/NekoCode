@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	tools "nekocode/bot/extension/tool"
 	"nekocode/bot/extension/tool/runtime/core"
@@ -26,11 +27,10 @@ type Executor struct {
 	permissionObserver func(context.Context, PermissionEvent)
 	phaseFn            protocol.PhaseFunc
 	planMode           bool
-	// fullAccess is the "全接管" (full-takeover) permission mode: every tool
-	// call runs without approval prompts. Explicit deny rules still block —
-	// a deny is a hard user-configured rule, not an approval.
-	mode       permission.Mode
-	modeSource func() permission.Mode
+	// Mode state is published atomically for delegated executors. Explicit
+	// deny rules apply in every mode.
+	modeState  atomic.Pointer[permissionModeState]
+	modeSource func() permissionModeState
 	// bashAuto is the "auto" permission mode: shell calls that match no rule
 	// are judged by the optional risk judge — confidently safe commands run
 	// without a prompt, everything else asks. Needs bashAutoJudge set.
@@ -49,11 +49,17 @@ type Executor struct {
 	// Permission rule engine (claude-code style allow/ask/deny). The engine's
 	// deny→ask→allow decision is the single authority for whether a tool call
 	// runs, prompts, or is blocked.
-	permEngine         *permission.Engine
-	permDecl           permission.PermissionsDecl
-	permWorkspace      string
-	permHome           string
-	maxConcurrentTasks int
+	permEngine *permission.Engine
+	permDecl   permission.PermissionsDecl
+	// permSession holds session-scoped grants (dynamic shell statements and
+	// other one-off approvals). They never reach the permissions file and are
+	// dropped with the executor.
+	permSession         []permission.Rule
+	permSessionRevision uint64
+	permWorkspace       string
+	permHome            string
+	permRevision        uint64
+	maxConcurrentTasks  int
 }
 
 // SetMaxConcurrentTasks configures delegated execution; nonpositive uses default.
@@ -78,7 +84,7 @@ func NewExecutor(r *tools.Registry) *Executor {
 		permStore:     permission.NewStore(root),
 		permWorkspace: root,
 	}
-	e.rebuildEngine(permission.PermissionsDecl{}, e.permStore, root)
+	e.rebuildEngine()
 	return e
 }
 
@@ -105,7 +111,7 @@ func (e *Executor) autoJudgeDecide(ctx context.Context, command string) (allow b
 // Bot.SetBashAuto only.
 func (e *Executor) SetBashAuto(on bool) {
 	e.fnMu.RLock()
-	mode := e.mode
+	mode := e.localPermissionModeState().mode
 	e.fnMu.RUnlock()
 	if on {
 		e.SetPermissionMode(permission.ModeAuto)
@@ -145,9 +151,15 @@ func (e *Executor) ConfigureChildPermissions(child *Executor) {
 	e.fnMu.RLock()
 	shell, web, hook := e.bashAutoJudge, e.webAutoJudge, e.shellExecutedHook
 	decl, store, root, home := e.permDecl, e.permStore, e.permWorkspace, e.permHome
+	// Flatten inheritance to an atomic source: snapshots holding a child lock
+	// must never acquire a parent executor lock.
+	source := e.modeSource
+	if source == nil {
+		source = e.localPermissionModeState
+	}
 	e.fnMu.RUnlock()
 	child.fnMu.Lock()
-	child.modeSource = e.permissionMode
+	child.modeSource = source
 	child.fnMu.Unlock()
 	child.SetBashAutoJudge(shell)
 	child.SetWebAutoJudge(web)
@@ -202,12 +214,13 @@ func (e *Executor) SetPlanMode(on bool) {
 // and the call runs immediately; explicit deny rules still block.
 func (e *Executor) SetFullAccess(on bool) {
 	e.fnMu.Lock()
+	defer e.fnMu.Unlock()
+	state := e.localPermissionModeState()
 	if on {
-		e.mode = permission.ModeFull
-	} else if e.mode == permission.ModeFull {
-		e.mode = permission.ModeManual
+		e.setPermissionModeLocked(permission.ModeFull)
+	} else if state.mode == permission.ModeFull {
+		e.setPermissionModeLocked(permission.ModeManual)
 	}
-	e.fnMu.Unlock()
 }
 
 // FullAccess reports whether the full-takeover permission mode is active.
@@ -215,20 +228,48 @@ func (e *Executor) FullAccess() bool {
 	return e.permissionMode() == permission.ModeFull
 }
 
+// Each immutable state publishes mode and epoch together. A mode change away
+// and back invalidates approvals in every delegated generation.
+type permissionModeState struct {
+	mode  permission.Mode
+	epoch uint64
+}
+
+func (e *Executor) localPermissionModeState() permissionModeState {
+	if state := e.modeState.Load(); state != nil {
+		return *state
+	}
+	return permissionModeState{}
+}
+
+// permissionModeStateLocked only reads atomic state after choosing the source.
+// ConfigureChildPermissions flattens the source, so this cannot acquire parent locks.
+func (e *Executor) permissionModeStateLocked() permissionModeState {
+	if e.modeSource != nil {
+		return e.modeSource()
+	}
+	return e.localPermissionModeState()
+}
+
 func (e *Executor) permissionMode() permission.Mode {
 	e.fnMu.RLock()
-	mode, source := e.mode, e.modeSource
-	e.fnMu.RUnlock()
-	if source != nil {
-		return source()
+	defer e.fnMu.RUnlock()
+	return e.permissionModeStateLocked().mode
+}
+
+func (e *Executor) setPermissionModeLocked(mode permission.Mode) {
+	state := e.localPermissionModeState()
+	if state.mode == mode {
+		return
 	}
-	return mode
+	e.permRevision++
+	e.modeState.Store(&permissionModeState{mode: mode, epoch: state.epoch + 1})
 }
 
 func (e *Executor) SetPermissionMode(mode permission.Mode) {
 	e.fnMu.Lock()
-	e.mode = mode
-	e.fnMu.Unlock()
+	defer e.fnMu.Unlock()
+	e.setPermissionModeLocked(mode)
 }
 
 // SetPlanTools replaces the tools allowed while plan mode is active. Registry
@@ -278,35 +319,24 @@ func (e *Executor) SetPreviewDecisionFn(fn func(callID, toolName string, args ma
 
 func (e *Executor) SetPermissionStore(store *permission.Store) {
 	e.fnMu.Lock()
+	defer e.fnMu.Unlock()
 	e.permStore = store
-	e.fnMu.Unlock()
+	e.permRevision++
+	e.rebuildEngineLocked()
 }
 
-// SetProjectStore binds the executor to a per-project permissions file at
-// <project>/.nekocode/permissions.json. After this, the engine is rebuilt
+// SetProjectStore binds the executor to a per-trusted permission store at
+// the trusted user permission directory. After this, the engine is rebuilt
 // against that project's grants/rules. Subsequent Allow/Remember calls
 // target that project file (no more cross-project leakage).
 func (e *Executor) SetProjectStore(projectRoot string) {
 	projectRoot = filepath.Clean(projectRoot)
 	e.fnMu.Lock()
+	defer e.fnMu.Unlock()
 	e.permStore = permission.NewStore(projectRoot)
 	e.permWorkspace = projectRoot
-	decl := e.permDecl
-	store := e.permStore
-	e.fnMu.Unlock()
-	eng, err := permission.NewEngineForWorkspace(decl, store, projectRoot)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "permission: %v — blocking tool calls until config is fixed\n", err)
-		eng = permission.NewEngine(permission.DefaultMatchers())
-		eng.SetRules([]permission.Rule{{Tool: "*", Effect: permission.EffectDeny, Source: "config-error"}})
-		e.fnMu.Lock()
-		e.permEngine = eng
-		e.fnMu.Unlock()
-		return
-	}
-	e.fnMu.Lock()
-	e.permEngine = eng
-	e.fnMu.Unlock()
+	e.permRevision++
+	e.rebuildEngineLocked()
 }
 
 // SetPermissionPolicy configures the declarative permission rule engine.
@@ -314,66 +344,110 @@ func (e *Executor) SetProjectStore(projectRoot string) {
 // workspace/home are used to resolve path anchors in file-tool rules.
 func (e *Executor) SetPermissionPolicy(decl permission.PermissionsDecl, workspace, home string) {
 	e.fnMu.Lock()
+	defer e.fnMu.Unlock()
 	e.permDecl = decl
 	e.permWorkspace = workspace
 	e.permHome = home
-	store := e.permStore
-	e.fnMu.Unlock()
-	e.rebuildEngine(decl, store, workspace)
+	e.permRevision++
+	e.rebuildEngineLocked()
 }
 
 // SetWorkspace updates the workspace used for path-anchor resolution and
 // rebuilds the engine (e.g. after /cd). Safe to call when no policy is set.
 func (e *Executor) SetWorkspace(workspace, home string) {
 	e.fnMu.Lock()
-	decl := e.permDecl
-	e.fnMu.Unlock()
-	if !hasPermissionDecl(decl) {
-		e.fnMu.Lock()
-		e.permWorkspace = workspace
-		e.permHome = home
-		e.fnMu.Unlock()
-		return
-	}
-	e.SetPermissionPolicy(decl, workspace, home)
-}
-
-func hasPermissionDecl(decl permission.PermissionsDecl) bool {
-	return len(decl.Allow)+len(decl.Ask)+len(decl.Deny)+len(decl.Sandbox) > 0
+	defer e.fnMu.Unlock()
+	e.permWorkspace = workspace
+	e.permHome = home
+	e.permRevision++
+	e.rebuildEngineLocked()
 }
 
 // rebuildEngine reconstructs the permission engine from decl + store +
 // workspace. Malformed declared rules fail closed so a bad config cannot
 // silently disable the permission engine.
-func (e *Executor) rebuildEngine(decl permission.PermissionsDecl, store *permission.Store, workspace string) {
-	eng, err := permission.NewEngineForWorkspace(decl, store, workspace)
+func (e *Executor) rebuildEngine() {
+	e.fnMu.Lock()
+	defer e.fnMu.Unlock()
+	e.rebuildEngineLocked()
+}
+
+// Serialize policy reads, engine construction and publication. A late rebuild
+// must never overwrite a newer policy or a concurrently remembered grant.
+func (e *Executor) rebuildEngineLocked() {
+	if revision := e.workspace.SessionRevision(); revision != e.permSessionRevision {
+		e.permSession = nil
+		e.permSessionRevision = revision
+	}
+	eng, err := permission.NewEngineForWorkspace(e.permDecl, e.permStore, e.permWorkspace)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "permission: %v — blocking tool calls until config is fixed\n", err)
 		eng = permission.NewEngine(permission.DefaultMatchers())
 		eng.SetRules([]permission.Rule{{Tool: "*", Effect: permission.EffectDeny, Source: "config-error"}})
-		e.fnMu.Lock()
 		e.permEngine = eng
-		e.fnMu.Unlock()
 		return
+	}
+	// Session grants are re-applied on every rebuild so a policy reload does
+	// not silently drop what the user approved for this session. They are
+	// scoped to the project they were granted in: switching projects (or
+	// binding a different store) must not carry them across.
+	if len(e.permSession) > 0 {
+		scoped := e.permSession[:0:0]
+		for _, rule := range e.permSession {
+			if rule.Workspace == "" || rule.Workspace == e.permWorkspace {
+				scoped = append(scoped, rule)
+			}
+		}
+		if len(scoped) > 0 {
+			rules := eng.Rules()
+			rules = append(rules, scoped...)
+			eng.SetRules(rules)
+		}
 	}
 	// Re-wire on every rebuild so the auto-mode judge survives rule reloads.
 	eng.SetAutoJudge(e.autoJudgeDecide)
 	eng.SetAutoJudgeEnabled(func() bool { return e.permissionMode() == permission.ModeAuto })
-	e.fnMu.Lock()
 	e.permEngine = eng
-	e.fnMu.Unlock()
+}
+
+// applySessionRulesLocked records session-scoped grants in memory. They are
+// never written to the trusted permission store: exact statements of dynamic
+// shell units rarely match a second call, so persisting them would only grow
+// the rule list without ever reusing it. Grants are stamped with the current
+// workspace and deduplicated, so repeated approvals do not pile up.
+func (e *Executor) applySessionRulesLocked(rules []permission.Rule) {
+	for _, rule := range rules {
+		if rule.Persistent() {
+			continue
+		}
+		rule.Source = "session"
+		rule.Workspace = e.permWorkspace
+		duplicate := false
+		for _, existing := range e.permSession {
+			if existing.Tool == rule.Tool && existing.Specifier == rule.Specifier &&
+				existing.Literal == rule.Literal && existing.Effect == rule.Effect &&
+				existing.Workspace == rule.Workspace {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		e.permSession = append(e.permSession, rule)
+	}
 }
 
 // SandboxEngine returns the current permission engine (or nil if not ready).
 // Tools use it to look up sandbox rules (e.g. pnpm dev → network).
 func (e *Executor) SandboxEngine() *permission.Engine {
-	e.fnMu.Lock()
-	defer e.fnMu.Unlock()
-	return e.permEngine
+	return e.permissionSnapshot().engine
 }
 
 type escalationApproval struct {
-	remember bool
+	fileTargets []boundFileTarget
+	remember    bool
+	policy      *permissionSnapshot
 	// predicted is the capability request included in the unified dialog.
 	// The pre-approval only covers escalation requests within this scope —
 	// see requestCoveredBy.

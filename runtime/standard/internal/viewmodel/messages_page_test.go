@@ -101,3 +101,19 @@ func BenchmarkSessionHistoryPage(b *testing.B) {
 		})
 	}
 }
+
+func TestWindowProjectionTracksRawGroupEnds(t *testing.T) {
+	header := types.Message{Role: "assistant", ToolCalls: []types.ToolCall{{ID: "shell", Function: types.FunctionCall{Name: "shell"}}}}
+	raw := []types.Message{header, {Role: "tool", ToolCallID: "shell", Content: "ok"}, {Role: "assistant", Content: "answer"}, {Role: "user", Content: "next question"}, {Role: "system", Source: types.MessageSourceRuntimeEvent, Content: "hidden"}}
+	projected := DisplayMessagesWindow(raw, 104)
+	if len(projected) != 2 || projected[0].Sequence != 102 || projected[1].Sequence != 103 {
+		t.Fatalf("wrong group endpoints: %+v", projected)
+	}
+	// The first header can be synthetic; the following raw records still end
+	// at their original sequences rather than at a display-message offset.
+	for _, msg := range DisplayMessages(raw) {
+		if msg.Sequence != 0 {
+			t.Fatal("legacy projections unexpectedly gained raw coordinates")
+		}
+	}
+}

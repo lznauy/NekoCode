@@ -24,40 +24,55 @@ func NewTelemetryMessageItem(sty *styles.Styles, telemetry protocol.Metrics) *Te
 }
 
 func (m *TelemetryMessageItem) Render(width int) string {
-	available := max(fullMessageWidth(width)-2, 1)
-	return "  " + renderTelemetryLine(m.telemetry, available, m.sty)
+	return renderTelemetryFooter(m.telemetry, fullMessageWidth(width), m.sty)
 }
 
-func (m *TelemetryMessageItem) Height(int) int { return 1 }
+func (m *TelemetryMessageItem) Height(width int) int {
+	return lipgloss.Height(m.Render(width))
+}
+
+// Reduce indentation before reducing content width on very small terminals.
+func renderTelemetryFooter(telemetry protocol.Metrics, width int, sty *styles.Styles) string {
+	width = max(width, 1)
+	padding := min(2, max(width-2, 0))
+	return indentLines(renderTelemetryLine(telemetry, width-padding, sty), strings.Repeat(" ", padding))
+}
 
 func renderTelemetryLine(telemetry protocol.Metrics, width int, sty *styles.Styles) string {
-	variants := []string{
-		renderFullTelemetry(telemetry, sty),
-		renderCompactTelemetry(telemetry, sty),
-		renderTinyTelemetry(telemetry, sty),
+	width = max(width, 1)
+	full := renderFullTelemetry(telemetry, sty)
+	// A Chinese glyph occupies two cells; one cell can only show a hint.
+	if width == 1 {
+		return sty.Subtle.Render("…")
 	}
-	for _, variant := range variants {
-		if lipgloss.Width(variant) <= width {
-			return variant
+	if lipgloss.Width(full) <= width {
+		return full
+	}
+	// Keep each metric together where possible, and wrap rather than discard
+	// token counts when the terminal is narrow.
+	separator := sty.Subtle.Render(" · ")
+	parts := strings.Split(strings.TrimPrefix(full, sty.Subtle.Render("↳ ")), separator)
+	lines := []string{}
+	line := sty.Subtle.Render("↳ ")
+	for _, part := range parts {
+		candidate := line + part
+		if lipgloss.Width(candidate) > width && lipgloss.Width(line) > 2 {
+			lines = append(lines, strings.TrimSuffix(line, separator))
+			line = ""
+		}
+		if lipgloss.Width(line+part) > width {
+			wrapped := strings.Split(ansi.Hardwrap(line+part, width, true), "\n")
+			lines = append(lines, wrapped[:len(wrapped)-1]...)
+			line = wrapped[len(wrapped)-1] + separator
+		} else {
+			line += part + separator
 		}
 	}
-	return ansi.Truncate(variants[len(variants)-1], max(width, 1), "")
+	lines = append(lines, strings.TrimSuffix(line, separator))
+	return strings.Join(lines, "\n")
 }
 
 func renderFullTelemetry(t protocol.Metrics, sty *styles.Styles) string {
-	return renderDetailedTelemetry(t, sty, telemetryDetail{totalSuffix: " tok", showUnknownNew: true})
-}
-
-func renderCompactTelemetry(t protocol.Metrics, sty *styles.Styles) string {
-	return renderDetailedTelemetry(t, sty, telemetryDetail{})
-}
-
-type telemetryDetail struct {
-	totalSuffix    string
-	showUnknownNew bool
-}
-
-func renderDetailedTelemetry(t protocol.Metrics, sty *styles.Styles, detail telemetryDetail) string {
 	total := t.TurnTotal
 	if total <= 0 {
 		total = max(0, t.TurnInput) + max(0, t.TurnOutput)
@@ -67,7 +82,7 @@ func renderDetailedTelemetry(t protocol.Metrics, sty *styles.Styles, detail tele
 		parts = append(parts, sty.Subtle.Render(t.Duration))
 	}
 	parts = append(parts,
-		telemetryMetric("总计", text.FormatTokens(total)+detail.totalSuffix, sty.Muted, sty),
+		telemetryMetric("总计", text.FormatTokens(total)+" tok", sty.Muted, sty),
 		telemetryMetric("输入", text.FormatTokens(t.TurnInput), sty.Muted, sty),
 	)
 	if t.TurnCacheReported {
@@ -77,9 +92,7 @@ func renderDetailedTelemetry(t protocol.Metrics, sty *styles.Styles, detail tele
 		)
 	} else {
 		parts = append(parts, telemetryMetric("缓存", "—", sty.Subtle, sty))
-		if detail.showUnknownNew {
-			parts = append(parts, telemetryMetric("未缓存", "—", sty.Subtle, sty))
-		}
+		parts = append(parts, telemetryMetric("未缓存", "—", sty.Subtle, sty))
 	}
 	parts = append(parts, telemetryMetric("输出", text.FormatTokens(t.TurnOutput), sty.Blue, sty))
 	if t.TurnReasoning > 0 {
@@ -87,21 +100,6 @@ func renderDetailedTelemetry(t protocol.Metrics, sty *styles.Styles, detail tele
 	}
 	parts = append(parts, telemetryMetric("本次命中", turnHitRatio(t), sty.Teal, sty))
 	return sty.Subtle.Render("↳ ") + strings.Join(parts, sty.Subtle.Render(" · "))
-}
-
-func renderTinyTelemetry(t protocol.Metrics, sty *styles.Styles) string {
-	parts := []string{sty.Subtle.Render("↳")}
-	if t.TurnCacheReported {
-		parts = append(parts,
-			telemetryMetric("缓", text.FormatTokens(t.TurnCached), sty.Teal, sty),
-			telemetryMetric("新", text.FormatTokens(t.TurnNew), sty.Yellow, sty),
-		)
-	} else {
-		parts = append(parts, telemetryMetric("输入", text.FormatTokens(t.TurnInput), sty.Muted, sty), sty.Subtle.Render("缓存—"))
-	}
-	parts = append(parts, telemetryMetric("出", text.FormatTokens(t.TurnOutput), sty.Blue, sty))
-	parts = append(parts, telemetryMetric("命中", turnHitRatio(t), sty.Teal, sty))
-	return strings.Join(parts, " ")
 }
 
 func turnHitRatio(t protocol.Metrics) string {

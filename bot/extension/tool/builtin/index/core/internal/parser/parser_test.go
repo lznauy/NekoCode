@@ -4,6 +4,121 @@ import (
 	"testing"
 )
 
+func TestTSXCallsInsideJSX(t *testing.T) {
+	p := NewParser()
+	defer p.Close()
+	nodes, edges := p.ParseFile("app.tsx", []byte(`function App(){ return <Button value={load()} />; } function after(){ done(); }`))
+	want := map[string]string{"load": "App", "done": "after"}
+	for _, e := range edges {
+		if e.Kind != EdgeCalls {
+			continue
+		}
+		idx := int(-e.FromID - 1)
+		if e.FromID >= 0 || idx >= len(nodes) || nodes[idx].Name != want[e.CalleeName] {
+			t.Fatalf("bad TSX caller: %+v", e)
+		}
+		delete(want, e.CalleeName)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing TSX calls: %v", want)
+	}
+}
+
+func TestGroupedGoTypesHaveIndividualRanges(t *testing.T) {
+	p := NewParser()
+	defer p.Close()
+	nodes, _ := p.ParseFile("types.go", []byte("package p\ntype (\n A struct{}\n B interface{}\n C int\n)\n"))
+	want := map[string]int{"A": 3, "B": 4, "C": 5}
+	for _, n := range nodes {
+		if line, ok := want[n.Name]; ok {
+			if n.Line != line || n.EndLine != line {
+				t.Errorf("%s: range=%d-%d want %d", n.Name, n.Line, n.EndLine, line)
+			}
+			delete(want, n.Name)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing types: %v", want)
+	}
+}
+
+func TestScopedDefinitionsAndCallSources(t *testing.T) {
+	p := NewParser()
+	defer p.Close()
+	for _, tc := range []struct {
+		path, source string
+		want         map[int]string
+		name         string
+		count        int
+	}{
+		{"scope.go", "package p\ntype A struct{}\ntype B struct{}\nfunc (A) Foo(){ Help() }\nfunc (B) Foo(){ Help() }", map[int]string{4: "Foo", 5: "Foo"}, "Foo", 2},
+		{"scope.py", "def outer():\n    def inner():\n        Target()\n    Target()\n", map[int]string{3: "inner", 4: "outer"}, "", 0},
+		{"methods.py", "class A:\n    def run(self):\n        First()\nclass B:\n    def run(self):\n        Second()\n", map[int]string{3: "run", 6: "run"}, "run", 2},
+		{"scope.js", "function first(){ One(); } function second(){ Two(); }", map[int]string{}, "", 0},
+	} {
+		for repeat := 0; repeat < 25; repeat++ {
+			nodes, edges := p.ParseFile(tc.path, []byte(tc.source))
+			count := 0
+			for _, n := range nodes {
+				if n.Name == tc.name {
+					count++
+				}
+			}
+			if count != tc.count {
+				t.Fatalf("%s: %s count=%d want %d", tc.path, tc.name, count, tc.count)
+			}
+			for _, e := range edges {
+				if e.Kind != EdgeCalls {
+					continue
+				}
+				idx := int(-e.FromID - 1)
+				if e.FromID >= 0 || idx >= len(nodes) {
+					t.Fatalf("%s: unresolved caller: %+v", tc.path, e)
+				}
+				want := tc.want[e.Line]
+				if tc.path == "scope.js" {
+					if e.CalleeName == "One" {
+						want = "first"
+					} else {
+						want = "second"
+					}
+				}
+				if nodes[idx].Name != want || (tc.path == "scope.go" && nodes[idx].Line != e.Line) {
+					t.Fatalf("%s: call %+v attributed to %+v; want %s", tc.path, e, nodes[idx], want)
+				}
+			}
+			if len(edges) != 2 {
+				t.Fatalf("%s: got %d edges, want 2", tc.path, len(edges))
+			}
+		}
+	}
+}
+
+func TestImportVariants(t *testing.T) {
+	p := NewParser()
+	defer p.Close()
+	for _, tc := range []struct {
+		path, source string
+		want         []string
+	}{
+		{"imports.py", "import os\nimport numpy as np\nfrom . import sibling\nfrom pkg import (a, b)\nfrom .mod import thing\n", []string{"os", "numpy", ".", "pkg", ".mod"}},
+		{"imports.rs", "use std::fmt;\nuse std::io::*;\n", []string{"std::fmt", "std::io::*"}},
+	} {
+		_, edges := p.ParseFile(tc.path, []byte(tc.source))
+		got := map[string]bool{}
+		for _, e := range edges {
+			if e.Kind == EdgeImports {
+				got[e.ImportPath] = true
+			}
+		}
+		for _, want := range tc.want {
+			if !got[want] {
+				t.Errorf("%s: missing import %q: %+v", tc.path, want, got)
+			}
+		}
+	}
+}
+
 func TestSupportedLanguages(t *testing.T) {
 	for _, ext := range []string{".go", ".js", ".jsx", ".ts", ".tsx", ".py", ".rs"} {
 		if supportedLangs[ext].lang == nil {

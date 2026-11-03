@@ -41,15 +41,26 @@ func NewList(items ...Item) *List {
 }
 
 func (l *List) SetSize(width, height int) {
-	if l.width != width {
+	widthChanged := l.width != width
+	height = max(height, 0)
+	sizeChanged := widthChanged || l.height != height
+	if widthChanged {
 		l.totalHeight = -1
 		l.pixelsAbove = -1
 	}
-	l.width = width
-	if height < 0 {
-		height = 0
+	l.width, l.height = width, height
+	if !sizeChanged || len(l.items) == 0 || (l.offsetIdx == 0 && l.offsetLine == 0) {
+		return
 	}
-	l.height = height
+	// Reflow can shorten the anchored item. Keep its line within the new
+	// render, then clamp the viewport so a taller window cannot scroll past
+	// the actual bottom and leave avoidable blank space.
+	if widthChanged {
+		l.RestoreViewportAnchor(l.offsetIdx, l.offsetLine)
+	}
+	if l.ScrollY() > max(0, l.TotalContentHeight()-l.height) {
+		l.ScrollToBottom()
+	}
 }
 
 func (l *List) SetGap(gap int) { l.gap = gap }
@@ -69,7 +80,13 @@ func (l *List) RestoreViewportAnchor(index, line int) {
 		return
 	}
 	l.offsetIdx = max(0, min(index, len(l.items)-1))
-	l.offsetLine = max(0, min(line, l.getItem(l.offsetIdx).height-1))
+	lastLine := l.getItem(l.offsetIdx).height - 1
+	// Inter-message blank rows are valid anchors, just like content rows.
+	// The last item has no trailing gap in the scrollable content.
+	if l.offsetIdx < len(l.items)-1 {
+		lastLine += max(l.gap, 0)
+	}
+	l.offsetLine = max(0, min(line, lastLine))
 	l.pixelsAbove = -1
 }
 
@@ -190,6 +207,16 @@ func (l *List) InvalidateItem(idx int) {
 			l.pixelsAbove += newItem.height - old.height
 		}
 		l.cacheMu.Unlock()
+		if newItem.height < old.height {
+			// A live item can shrink without a resize (for example when a
+			// stream resets). Its former line may no longer be scrollable.
+			if idx == l.offsetIdx {
+				l.RestoreViewportAnchor(l.offsetIdx, l.offsetLine)
+			}
+			if l.ScrollY() > max(0, l.TotalContentHeight()-l.height) {
+				l.ScrollToBottom()
+			}
+		}
 	} else {
 		l.cacheMu.Lock()
 		l.totalHeight = -1
@@ -284,19 +311,22 @@ func (l *List) ScrollBy(lines int) {
 		}
 
 		l.offsetLine += lines
-		currentItem := l.getItem(l.offsetIdx)
-		for l.offsetLine >= currentItem.height {
-			l.offsetLine -= currentItem.height
-			if l.gap > 0 {
-				l.offsetLine = max(0, l.offsetLine-l.gap)
+		for {
+			span := l.getItem(l.offsetIdx).height
+			if l.offsetIdx < len(l.items)-1 {
+				span += max(l.gap, 0)
 			}
-
+			if l.offsetLine < span {
+				break
+			}
+			// The gap belongs to the preceding item. Do not advance into
+			// the next message until all of its blank rows were consumed.
+			l.offsetLine -= span
 			l.offsetIdx++
 			if l.offsetIdx > len(l.items)-1 {
 				l.ScrollToBottom()
 				return
 			}
-			currentItem = l.getItem(l.offsetIdx)
 		}
 
 		// pixelsAbove tracks cumulative scroll; lines already includes any consumed gaps.

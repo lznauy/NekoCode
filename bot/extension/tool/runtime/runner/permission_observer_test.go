@@ -156,7 +156,7 @@ func TestPermissionObserverRememberedGrantAndCapabilityDenial(t *testing.T) {
 		e.SetProjectStore(root)
 		e.SetPermissionPolicy(permission.PermissionsDecl{}, root, t.TempDir())
 		if deny {
-			path := filepath.Join(root, ".nekocode", "permissions.json")
+			path := e.permStore.Path()
 			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 				t.Fatal(err)
 			}

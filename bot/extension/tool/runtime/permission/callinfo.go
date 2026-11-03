@@ -1,7 +1,9 @@
 package permission
 
 import (
+	"nekocode/bot/extension/tool/runtime/toolutil"
 	"net/url"
+	"path/filepath"
 	"strings"
 )
 
@@ -9,7 +11,7 @@ import (
 // into the callInfo map the engine passes to SpecifierMatcher.Match.
 //
 //   - bash / shell: {"command": args["command"]}
-//   - file tools (read/edit/write/glob/grep/list/tree): {"path", "workspace", "home"}
+//   - file tools: {"path" or "paths", "workspace", "home"}
 //   - web_fetch: {"domain": host extracted from args["url"]}
 //
 // Tools without a known matcher just get an empty map (the engine treats a
@@ -24,15 +26,28 @@ func BuildCallInfo(toolName string, args map[string]any, workspace, home string)
 		if cmd, _ := args["command"].(string); cmd != "" {
 			return withTool(CallInfoForBash(cmd))
 		}
-	case "read", "edit", "write", "grep", "list", "tree":
-		path, _ := args["path"].(string)
-		return withTool(CallInfoForPath(path, workspace, home))
-	case "glob":
-		path, _ := args["path"].(string)
-		if path == "" {
-			path, _ = args["pattern"].(string)
+	case "image_understand":
+		paths, err := toolutil.ImageUnderstandingPaths(args)
+		if err != nil {
+			return withTool(map[string]any{})
 		}
-		return withTool(CallInfoForPath(path, workspace, home))
+		for i, path := range paths {
+			paths[i] = LexicalPath(path, workspace, home)
+		}
+		return withTool(map[string]any{"paths": paths, "workspace": workspace, "home": home})
+	case "read", "edit", "write", "grep", "list", "tree", "glob", "diff", "image_gen":
+		targets := FileToolTargets(toolName, args)
+		paths := make([]string, 0, len(targets))
+		for _, target := range targets {
+			paths = append(paths, LexicalPath(target.Path, workspace, home))
+		}
+		if toolName == "image_gen" && len(paths) == 0 {
+			paths = append(paths, filepath.Join(home, ".nekocode", "images"))
+		}
+		if len(paths) == 1 {
+			return withTool(CallInfoForPath(paths[0], workspace, home))
+		}
+		return withTool(map[string]any{"paths": paths, "workspace": workspace, "home": home})
 	case "web_fetch", "webfetch", "web_extract":
 		if u, _ := args["url"].(string); u != "" {
 			return withTool(CallInfoForDomain(hostFromURL(u)))
@@ -62,4 +77,21 @@ func hostFromURL(s string) string {
 		return ""
 	}
 	return u.Hostname()
+}
+
+// LexicalPath normalizes policy targets without touching the filesystem. Denied
+// UNC paths must be rejected before any resolution can initiate network access.
+func LexicalPath(path, workspace, home string) string {
+	if path == "" {
+		return ""
+	}
+	if path == "~" {
+		path = home
+	} else if strings.HasPrefix(path, "~/") {
+		path = filepath.Join(home, path[2:])
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workspace, path)
+	}
+	return filepath.Clean(path)
 }

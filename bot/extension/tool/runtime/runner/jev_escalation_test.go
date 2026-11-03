@@ -17,6 +17,7 @@ func escFixture(t *testing.T) (*Executor, *int) {
 	e := newTestExecutor(fakeRegistry{})
 	e.workspace.Configure("/repo", nil)
 	e.SetPermissionPolicy(permission.PermissionsDecl{}, "/repo", "/home/user")
+	e.SetPermissionMode(permission.ModeAuto)
 	confirmCalls := 0
 	e.SetConfirmFn(func(protocol.ConfirmRequest) protocol.ConfirmReply {
 		confirmCalls++

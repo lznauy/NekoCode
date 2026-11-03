@@ -20,6 +20,9 @@ import (
 // available; callers should treat it as a signal to request host-execution
 // permission.
 func Run(ctx context.Context, command string, profile Profile, timeout time.Duration) (string, error) {
+	if err := protectAuthority(profile); err != nil {
+		return "", err
+	}
 	if profile.OutboundDomains != nil {
 		return "", NetworkIsolationError{Reason: "domain isolation requires Linux native namespaces"}
 	}
@@ -70,6 +73,9 @@ func Run(ctx context.Context, command string, profile Profile, timeout time.Dura
 }
 
 func Start(ctx context.Context, command string, profile Profile) (*Process, error) {
+	if err := protectAuthority(profile); err != nil {
+		return nil, err
+	}
 	if profile.OutboundDomains != nil {
 		return nil, NetworkIsolationError{Reason: "domain isolation requires Linux native namespaces"}
 	}

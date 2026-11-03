@@ -3,6 +3,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"nekocode/interaction/tui/components"
 	"nekocode/interaction/tui/styles"
@@ -124,7 +125,56 @@ type pendingSessionChat struct {
 	images []controlruntime.ImageAttachment
 }
 
+type completedTurn struct {
+	retainedBytes int
+	omitted       bool
+	input         string
+	after         int // last known raw sequence before the run
+	before        int // first confirmed sequence of a later turn, exclusive
+	assistant     message.ChatMessage
+}
+
+// Temporary output is a bounded fallback for providers that do not commit a turn.
+// The normal transcript remains the source of durable, paginated history.
+const maxTransientTurns = 32
+const maxTransientBytes = 2 << 20
+
+func (m *Model) retainCompletedTurn(assistant message.ChatMessage) {
+	m.refreshTurn = nil
+	if !m.sessionHistoryPaging {
+		return
+	}
+	// A lightweight marker prevents this turn donating usage to an older
+	// answer when its oversized output cannot be retained.
+	m.refreshTurn = &completedTurn{omitted: true}
+	encoded, err := json.Marshal(assistant)
+	if err != nil {
+		return
+	}
+	size := len(encoded) + len(m.turnInput) + 512
+	if size > maxTransientBytes {
+		return
+	}
+	turn := &completedTurn{input: m.turnInput, after: m.turnHistoryAfter, assistant: assistant, retainedBytes: size}
+	turns := append(m.transientTurns, turn)
+	total, start := 0, len(turns)
+	for start > 0 && len(turns)-start < maxTransientTurns {
+		size := turns[start-1].retainedBytes
+		if total+size > maxTransientBytes {
+			break
+		}
+		total += size
+		start--
+	}
+	// Copy to release references to evicted answers and tool output.
+	m.transientTurns = append([]*completedTurn(nil), turns[start:]...)
+	m.refreshTurn = turn
+}
+
 type sessionLoadedMsg struct {
+	pendingTurns  []*completedTurn
+	turn          *completedTurn
+	telemetry     *controlruntime.MetricsSnapshot
 	window        *controlruntime.SessionHistoryWindow
 	pageIndex     int
 	requestBefore int
@@ -138,6 +188,22 @@ type sessionLoadedMsg struct {
 // Projection and initial layout may read large tool histories. Neither may
 // run inside Update: doing so freezes the spinner and keyboard handling.
 func (m *Model) loadSessionMessages() tea.Cmd {
+	// A completed run waiting for the previous projection must never be applied
+	// to another session. Loading alone also must not masquerade as a live run.
+	if m.sessionLoadDone != nil || (m.sessionLoading && !m.sessionLoadWaitForRun) {
+		m.transitionTo(stateReady)
+	}
+	m.sessionLoadDone = nil
+	m.sessionPendingChat = nil
+	m.sessionLoadNotices = nil
+	m.sessionLoading = false
+	m.sessionHistoryDirty = false
+	m.turnInput = ""
+	m.turnHistoryAfter = 0
+	m.refreshTelemetry = nil
+	m.refreshTurn = nil
+	m.transientTurns = nil
+	m.sessionHistoryTotal = 0
 	m.sessionHistoryCursors = []int{0}
 	m.sessionHistoryPage = 0
 	m.sessionHistoryPaging = false
@@ -167,6 +233,13 @@ func (m *Model) loadSessionWindow(before, pageIndex int) tea.Cmd {
 	m.setPhase(phaseSessionLoading)
 	m.Messages.SetProcessingStatus(phaseSessionLoading)
 	rt, width, height, telemetry := m.Runtime, m.Messages.Width(), m.Messages.Height(), m.refreshTelemetry
+	turn := m.refreshTurn
+	turns := append([]*completedTurn(nil), m.transientTurns...)
+	// The snapshot belongs to the newest turn, never to an older history page.
+	if before != 0 || pageIndex != 0 {
+		telemetry = nil
+		turn = nil
+	}
 	return func() (result tea.Msg) {
 		defer func() {
 			if failure := recover(); failure != nil {
@@ -175,6 +248,7 @@ func (m *Model) loadSessionWindow(before, pageIndex int) tea.Cmd {
 		}()
 		sty := styles.DefaultStyles()
 		var prepared *components.Messages
+		var pendingTurns []*completedTurn
 		var window *controlruntime.SessionHistoryWindow
 		if paged, ok := rt.(interface {
 			SessionHistoryWindow(int, int) (controlruntime.SessionHistoryWindow, error)
@@ -197,7 +271,8 @@ func (m *Model) loadSessionWindow(before, pageIndex int) tea.Cmd {
 					}
 					cursor = page.Before
 				}
-				history := withTurnTelemetry(restoredChatMessages(page.Messages), telemetry)
+				history, pending := withCompletedTurns(page, turns, turn, telemetry)
+				pendingTurns = pending
 				prepared = components.NewMessages(width, height, &sty)
 				prepared.ReplaceHistoryWindow(history, page.Before, page.End, page.Total, page.HasMore, pageIndex > 0)
 				if prepared.HistoryWindowBytes(history) <= 8<<20 || limit == 1 {
@@ -207,11 +282,13 @@ func (m *Model) loadSessionWindow(before, pageIndex int) tea.Cmd {
 				limit = max(1, limit/2)
 			}
 		} else {
-			history := withTurnTelemetry(restoredChatMessages(rt.SessionMessages()), telemetry)
+			messages := rt.SessionMessages()
+			history, pending := withCompletedTurns(controlruntime.SessionHistoryWindow{Messages: messages, Before: 1, End: len(messages)}, turns, turn, telemetry)
+			pendingTurns = pending
 			prepared = components.NewMessages(width, height, &sty)
 			prepared.ReplaceMessages(history)
 		}
-		return sessionLoadedMsg{generation: generation, messages: prepared, window: window, pageIndex: pageIndex, requestBefore: before, status: readRuntimeViewStatus(rt), width: width, height: height}
+		return sessionLoadedMsg{pendingTurns: pendingTurns, turn: turn, telemetry: telemetry, generation: generation, messages: prepared, window: window, pageIndex: pageIndex, requestBefore: before, status: readRuntimeViewStatus(rt), width: width, height: height}
 	}
 }
 
@@ -219,23 +296,29 @@ func (m *Model) applySessionLoaded(msg sessionLoadedMsg) tea.Cmd {
 	if msg.generation != m.sessionLoadGeneration {
 		return nil
 	}
-	if msg.err == nil && (msg.width != m.Messages.Width() || msg.height != m.Messages.Height()) {
-		// Build at the new size in the background too; resizing must not move
-		// the expensive cold layout back onto the event loop.
+	staleTelemetry := (msg.telemetry != nil && msg.telemetry != m.refreshTelemetry) ||
+		(msg.turn != nil && msg.turn != m.refreshTurn)
+	if msg.err == nil && (staleTelemetry || msg.width != m.Messages.Width() || msg.height != m.Messages.Height()) {
+		// Rebuild if a new run invalidated the captured footer or the viewport
+		// changed size. Keep the expensive layout off the event loop.
 		return m.loadSessionWindow(msg.requestBefore, msg.pageIndex)
 	}
 	m.sessionLoading = false
 	if msg.err != nil {
 		m.sessionPendingChat = nil
-		m.refreshTelemetry = nil
 		m.Messages.AddMessage(message.ChatMessage{Role: "error", Content: msg.err.Error()})
 	} else {
 		movingNewer := msg.pageIndex < m.sessionHistoryPage
+		// Item indices are stable when refreshing the same raw window start.
+		// Preserve an explicit reading position rather than re-enabling follow.
+		preserveViewport := m.sessionHistoryPaging && msg.window != nil &&
+			msg.pageIndex == m.sessionHistoryPage && msg.window.Before == m.sessionHistoryBefore && !m.Messages.Follow
+		anchorIndex, anchorLine := m.Messages.ViewportAnchor()
 		if m.sessionLoadWaitForRun {
 			msg.messages.MoveProcessingFrom(m.Messages)
 		}
 		m.Messages = msg.messages
-		m.refreshTelemetry = nil
+		m.transientTurns = msg.pendingTurns
 		for _, notice := range m.sessionLoadNotices {
 			m.Messages.AddMessage(notice)
 		}
@@ -243,6 +326,7 @@ func (m *Model) applySessionLoaded(msg sessionLoadedMsg) tea.Cmd {
 			m.sessionHistoryPaging = true
 			m.sessionHistoryPage = msg.pageIndex
 			m.sessionHistoryBefore = msg.window.Before
+			m.sessionHistoryTotal = msg.window.Total
 			if msg.pageIndex == 0 {
 				m.sessionHistoryCursors = []int{0}
 			}
@@ -251,6 +335,10 @@ func (m *Model) applySessionLoaded(msg sessionLoadedMsg) tea.Cmd {
 				m.Messages.ScrollToTop()
 				m.Messages.SetFollow(false)
 			}
+		}
+		if preserveViewport {
+			m.Messages.RestoreViewportAnchor(anchorIndex, anchorLine)
+			m.Messages.SetFollow(false)
 		}
 		m.applyRuntimeViewStatus(msg.status)
 	}
@@ -311,11 +399,153 @@ func (m *Model) requestHistoryPage(older bool) tea.Cmd {
 	return tea.Batch(spinnerTick(), load)
 }
 
+// Providers can return a visible failure without committing the turn. Merge
+// those UI-only turns at their raw boundary, and retire only confirmed records.
+func withCompletedTurns(page controlruntime.SessionHistoryWindow, turns []*completedTurn, current *completedTurn, telemetry *controlruntime.MetricsSnapshot) ([]message.ChatMessage, []*completedTurn) {
+	history := restoredChatMessages(page.Messages)
+	sequence := func(i int) int {
+		if i >= len(page.Messages) {
+			return page.End
+		}
+		if seq := page.Messages[i].Sequence; seq > 0 {
+			return seq
+		}
+		// Compatibility for custom runtimes whose display messages are ungrouped.
+		return max(page.Before, 1) + i
+	}
+	currentQueued := false
+	for _, turn := range turns {
+		if turn == current {
+			currentQueued = true
+		}
+	}
+	if !currentQueued && (current == nil || !current.omitted) {
+		history = withTurnTelemetry(history, telemetry)
+	}
+	usedInputs, usedAnswers := map[int]bool{}, map[int]bool{}
+	pending := make([]bool, len(turns))
+	positions := make([]int, len(turns))
+	inputs := make([]int, len(turns))
+	bounds := make([]int, len(turns))
+	nextInput := 0
+	for n := len(turns) - 1; n >= 0; n-- {
+		turn := turns[n]
+		limit := turn.before
+		if nextInput > turn.after && (limit == 0 || nextInput < limit) {
+			limit = nextInput
+		}
+		bounds[n] = limit
+		inRange := func(i int) bool {
+			seq := sequence(i)
+			return seq > turn.after && (limit == 0 || seq < limit)
+		}
+		input, answer := -1, -1
+		content := strings.TrimSpace(turn.assistant.RenderedContent)
+		if content == "" {
+			content = strings.TrimSpace(turn.assistant.Content)
+		}
+		if page.End > turn.after {
+			if turn.input != "" {
+				for i := len(history) - 1; i >= 0; i-- {
+					if history[i].Role == "user" && !usedInputs[i] && inRange(i) && history[i].Content == turn.input {
+						input = i
+						break
+					}
+				}
+			}
+			start := input + 1
+			if turn.input == "" || input >= 0 {
+				for i := start; i < len(history); i++ {
+					if history[i].Role == "user" && turn.input != "" {
+						break
+					}
+					if history[i].Role == "assistant" && !usedAnswers[i] && inRange(i) && (content == "" || strings.Contains(history[i].Content, content)) {
+						answer = i
+					}
+				}
+			}
+		}
+		inputs[n] = input
+		if input >= 0 {
+			usedInputs[input] = true
+			nextInput = sequence(input)
+		}
+		if answer >= 0 {
+			usedAnswers[answer] = true
+			if turn == current {
+				history[answer].Telemetry = telemetry
+			}
+			continue
+		}
+		pending[n] = true
+		positions[n] = -1
+		anchor := turn.after
+		if input >= 0 {
+			anchor = sequence(input)
+		}
+		if anchor > page.End || (page.Before > 1 && anchor < page.Before) {
+			continue
+		}
+		pos := len(history)
+		if input >= 0 {
+			for i := input + 1; i < len(history); i++ {
+				if history[i].Role == "user" {
+					pos = i
+					break
+				}
+			}
+		} else {
+			for i := range history {
+				if sequence(i) > turn.after {
+					pos = i
+					break
+				}
+			}
+		}
+		positions[n] = pos
+	}
+	insertions := make(map[int][]message.ChatMessage)
+	var remaining []*completedTurn
+	for n, turn := range turns {
+		if !pending[n] {
+			continue
+		}
+		if bounds[n] != turn.before {
+			// Worker snapshots share these pointers with the UI. Preserve a
+			// newly learned boundary by copying, never mutating the snapshot.
+			bounded := *turn
+			bounded.before = bounds[n]
+			turn = &bounded
+		}
+		remaining = append(remaining, turn)
+		if positions[n] < 0 {
+			continue
+		}
+		pos := positions[n]
+		if turn.input != "" && inputs[n] < 0 {
+			insertions[pos] = append(insertions[pos], message.ChatMessage{Role: "user", Content: turn.input})
+		}
+		insertions[pos] = append(insertions[pos], turn.assistant)
+	}
+	out := make([]message.ChatMessage, 0, len(history)+len(remaining)*2)
+	for i := 0; i <= len(history); i++ {
+		out = append(out, insertions[i]...)
+		if i < len(history) {
+			out = append(out, history[i])
+		}
+	}
+	return out, remaining
+}
+
 func withTurnTelemetry(history []message.ChatMessage, telemetry *controlruntime.MetricsSnapshot) []message.ChatMessage {
 	if telemetry == nil {
 		return history
 	}
 	for i := len(history) - 1; i >= 0; i-- {
+		// An empty latest turn must not donate its usage to an older answer.
+		if history[i].Role == "user" {
+			break
+		}
 		if history[i].Role == "assistant" {
 			history[i].Telemetry = telemetry
 			return history

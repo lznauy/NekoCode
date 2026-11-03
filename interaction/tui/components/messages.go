@@ -96,6 +96,7 @@ func (m *Messages) SetProcessing(on bool) {
 			m.followToBottom()
 		}
 	} else if !on && m.processingItem != nil {
+		anchorIndex, anchorLine := m.ViewportAnchor()
 		items := m.Items()
 		m.SetItems()
 		for _, item := range items {
@@ -110,6 +111,10 @@ func (m *Messages) SetProcessing(on bool) {
 		m.processingItem = nil
 		if follow {
 			m.followToBottom()
+		} else {
+			// Removing the live status item must not reset an explicit
+			// reading position in the preceding conversation.
+			m.RestoreViewportAnchor(anchorIndex, anchorLine)
 		}
 	}
 	m.mu.Unlock()

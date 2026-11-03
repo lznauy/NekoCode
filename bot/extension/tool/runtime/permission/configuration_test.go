@@ -2,7 +2,6 @@ package permission
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -53,7 +52,7 @@ func TestGrantHashObservesOtherStoreAndLoadFailure(t *testing.T) {
 	if _, ok := a.Match("shell", req); !ok {
 		t.Fatal("observation changed authority")
 	}
-	if err := os.WriteFile(filepath.Join(root, ".nekocode", "permissions.json"), []byte("malformed-secret-sentinel"), 0600); err != nil {
+	if err := os.WriteFile(a.Path(), []byte("malformed-secret-sentinel"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if hash, err := a.GrantsHash(); err == nil || hash != "" {

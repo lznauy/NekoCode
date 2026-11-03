@@ -192,7 +192,7 @@ func (a *adapter) SessionHistoryWindow(before, limit int) (controlruntime.Sessio
 			m.ToolCalls[j].Function.Arguments = historyPreview(m.ToolCalls[j].Function.Arguments)
 		}
 	}
-	return controlruntime.SessionHistoryWindow{Messages: viewmodel.DisplayMessages(raw.Messages), Before: raw.Before, End: raw.End, HasMore: raw.HasMore, Total: raw.Total}, nil
+	return controlruntime.SessionHistoryWindow{Messages: viewmodel.DisplayMessagesWindow(raw.Messages, raw.End), Before: raw.Before, End: raw.End, HasMore: raw.HasMore, Total: raw.Total}, nil
 }
 
 func historyPreview(content string) string {

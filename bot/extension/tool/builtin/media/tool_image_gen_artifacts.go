@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"nekocode/bot/extension/tool/runtime/authority"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,7 +36,7 @@ func (t *ImageGenTool) saveBase64Images(images []string, dir string) (string, er
 			return "", fmt.Errorf("decode base64 image %d: %w", i+1, err)
 		}
 		savePath := filepath.Join(dir, imageFilename(i, imageExt(data)))
-		if err := os.WriteFile(savePath, data, 0o644); err != nil {
+		if err := writeImageFile(savePath, func(f *os.File) error { _, err := f.Write(data); return err }); err != nil {
 			return "", fmt.Errorf("save image %d: %w", i+1, err)
 		}
 		fmt.Fprintf(&sb, "  %s\n", savePath)
@@ -46,17 +48,15 @@ func imageFilename(idx int, ext string) string {
 	return fmt.Sprintf("nekocode_img_%s_%d%s", time.Now().Format("20060102_150405"), idx+1, ext)
 }
 
-func imageExtFromURL(imgURL string) string {
-	ext := ".jpg"
-	if idx := strings.LastIndex(imgURL, "."); idx != -1 {
-		if e := strings.ToLower(imgURL[idx:]); strings.HasPrefix(e, ".png") || strings.HasPrefix(e, ".jpg") || strings.HasPrefix(e, ".jpeg") || strings.HasPrefix(e, ".webp") {
-			if end := strings.Index(imgURL[idx:], "?"); end != -1 {
-				return imgURL[idx : idx+end]
-			}
-			return imgURL[idx:]
+func imageExtFromURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err == nil {
+		switch ext := strings.ToLower(filepath.Ext(parsed.Path)); ext {
+		case ".png", ".jpg", ".jpeg", ".webp":
+			return ext
 		}
 	}
-	return ext
+	return ".jpg"
 }
 
 func stripDataURLPrefix(s string) string {
@@ -92,13 +92,36 @@ func (t *ImageGenTool) downloadFile(ctx context.Context, url, path string) error
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	f, err := os.Create(path)
+	return writeImageFile(path, func(f *os.File) error {
+		_, err := io.Copy(f, io.LimitReader(resp.Body, 20<<20))
+		return err
+	})
+}
+
+// Stage writes beside the destination and replace it atomically. Existing
+// symlinks are never opened for writing, including links outside the workspace.
+func writeImageFile(path string, write func(*os.File) error) error {
+	if err := authority.CheckWritable(path); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".nekocode-image-*")
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(f, io.LimitReader(resp.Body, 20<<20)); err != nil {
-		_ = f.Close()
+	temp := f.Name()
+	defer os.Remove(temp)
+	defer f.Close()
+	if err := write(f); err != nil {
 		return err
 	}
-	return f.Close()
+	if err := f.Chmod(0644); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := authority.CheckWritable(path); err != nil {
+		return err
+	}
+	return os.Rename(temp, path)
 }

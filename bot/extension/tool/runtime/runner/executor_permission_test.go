@@ -47,6 +47,52 @@ func TestPermEngine_DeniesSudo(t *testing.T) {
 	}
 }
 
+// A malformed declared rule must fail closed: every tool call is blocked until
+// the config is fixed, rather than falling back to the builtin (more
+// permissive) defaults.
+func TestPermEngine_MalformedConfigBlocksEveryCall(t *testing.T) {
+	e := newPermTestExecutor(t)
+	asked := false
+	e.SetConfirmFn(func(protocol.ConfirmRequest) protocol.ConfirmReply {
+		asked = true
+		return protocol.AllowOnce()
+	})
+	// "Tool(" has an unbalanced parenthesis, so ParseRule rejects it.
+	e.SetPermissionPolicy(permission.PermissionsDecl{Allow: []string{"shell("}}, "/repo", "/home/user")
+
+	for _, tc := range []struct {
+		name string
+		call core.ToolCallItem
+	}{
+		{"ordinary shell", core.ToolCallItem{ID: "1", Name: "shell", Args: map[string]any{"command": "pwd"}}},
+		{"builtin-allowed shell", core.ToolCallItem{ID: "2", Name: "shell", Args: map[string]any{"command": "ls -la"}}},
+		{"file tool", core.ToolCallItem{ID: "3", Name: "write", Args: map[string]any{"path": "/repo/a.txt", "content": "x"}}},
+	} {
+		r := e.ExecuteBatch(context.Background(), []core.ToolCallItem{tc.call})[0]
+		if r.Error == "" {
+			t.Fatalf("%s: malformed config must block the call, got no error", tc.name)
+		}
+	}
+	if asked {
+		t.Fatal("malformed config must block instead of prompting")
+	}
+}
+
+// Fixing the config restores normal evaluation.
+func TestPermEngine_RecoversAfterConfigIsFixed(t *testing.T) {
+	e := newPermTestExecutor(t)
+	e.SetPermissionPolicy(permission.PermissionsDecl{Allow: []string{"shell("}}, "/repo", "/home/user")
+	call := core.ToolCallItem{ID: "1", Name: "shell", Args: map[string]any{"command": "ls -la"}}
+	if r := e.ExecuteBatch(context.Background(), []core.ToolCallItem{call})[0]; r.Error == "" {
+		t.Fatal("expected the malformed config to block")
+	}
+
+	e.SetPermissionPolicy(permission.PermissionsDecl{}, "/repo", "/home/user")
+	if r := e.ExecuteBatch(context.Background(), []core.ToolCallItem{call})[0]; r.Error != "" {
+		t.Fatalf("builtin allow should apply once the config is valid, got %q", r.Error)
+	}
+}
+
 func TestPermEngine_GitAddDoesNotMatchDdDeny(t *testing.T) {
 	e := newPermTestExecutor(t)
 	asked := false

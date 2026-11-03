@@ -41,7 +41,19 @@ func DisplayMessagesPage(messages []types.Message, offset, limit int) (controlru
 	return controlruntime.SessionMessagePage{Messages: out, NextOffset: next, HasMore: next < total, Total: total}, nil
 }
 
+// DisplayMessagesWindow preserves raw positions even when the first tool
+// batch has a synthetic assistant header prepended by the history reader.
+func DisplayMessagesWindow(messages []types.Message, end int) []controlruntime.DisplayMessage {
+	base := end - len(messages)
+	out, _ := displayMessagePageAt(messages, 0, -1, &base)
+	return out
+}
+
 func displayMessagePage(messages []types.Message, offset, limit int) ([]controlruntime.DisplayMessage, int) {
+	return displayMessagePageAt(messages, offset, limit, nil)
+}
+
+func displayMessagePageAt(messages []types.Message, offset, limit int, base *int) ([]controlruntime.DisplayMessage, int) {
 	toolNames, toolArgs := toolMetaByID(messages)
 	var out []controlruntime.DisplayMessage
 	total := 0
@@ -70,6 +82,9 @@ func displayMessagePage(messages []types.Message, offset, limit int) ([]controlr
 		}
 		if visible {
 			if materialize {
+				if base != nil {
+					msg.Sequence = *base + i
+				}
 				out = append(out, msg)
 			}
 			total++

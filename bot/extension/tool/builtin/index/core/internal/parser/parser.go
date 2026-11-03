@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/smacker/go-tree-sitter/javascript"
 	"github.com/smacker/go-tree-sitter/python"
 	"github.com/smacker/go-tree-sitter/rust"
+	"github.com/smacker/go-tree-sitter/typescript/tsx"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 
 	graphpkg "nekocode/bot/extension/tool/builtin/index/core/internal/graph"
@@ -49,8 +51,8 @@ func buildSupportedLangs() map[string]langConfig {
 				"functions":    `(function_declaration name: (identifier) @name) @func`,
 				"methods":      `(method_declaration name: (field_identifier) @name) @method`,
 				"types":        `(type_declaration (type_spec name: (type_identifier) @name) @type)`,
-				"structs":      `(type_declaration (type_spec name: (type_identifier) @name type: (struct_type))) @struct`,
-				"interfaces":   `(type_declaration (type_spec name: (type_identifier) @name type: (interface_type))) @interface`,
+				"structs":      `(type_declaration (type_spec name: (type_identifier) @name type: (struct_type)) @struct)`,
+				"interfaces":   `(type_declaration (type_spec name: (type_identifier) @name type: (interface_type)) @interface)`,
 				"vars":         `(var_spec (identifier) @name) @var`,
 				"consts":       `(const_spec (identifier) @name) @const`,
 				"calls":        `(call_expression function: (identifier) @callee) @call`,
@@ -90,7 +92,7 @@ func buildSupportedLangs() map[string]langConfig {
 			},
 		},
 		".tsx": {
-			lang: typescript.GetLanguage(),
+			lang: tsx.GetLanguage(),
 			queries: map[string]string{
 				"functions": `(function_declaration name: (identifier) @name) @func`,
 				"classes":   `(class_declaration name: (type_identifier) @name) @class`,
@@ -100,12 +102,14 @@ func buildSupportedLangs() map[string]langConfig {
 		".py": {
 			lang: python.GetLanguage(),
 			queries: map[string]string{
-				"functions":    `(function_definition name: (identifier) @name) @func`,
-				"classes":      `(class_definition name: (identifier) @name) @class`,
-				"calls":        `(call function: (identifier) @callee) @call`,
-				"method_calls": `(call function: (attribute attribute: (identifier) @callee)) @call`,
-				"imports":      `(import_statement name: (dotted_name) @import_path) @import`,
-				"import_from":  `(import_from_statement module_name: (dotted_name) @import_path) @import`,
+				"functions":       `(function_definition name: (identifier) @name) @func`,
+				"classes":         `(class_definition name: (identifier) @name) @class`,
+				"calls":           `(call function: (identifier) @callee) @call`,
+				"method_calls":    `(call function: (attribute attribute: (identifier) @callee)) @call`,
+				"imports":         `(import_statement name: (dotted_name) @import_path) @import`,
+				"import_alias":    `(import_statement name: (aliased_import name: (dotted_name) @import_path)) @import`,
+				"import_from":     `(import_from_statement module_name: (dotted_name) @import_path) @import`,
+				"import_relative": `(import_from_statement module_name: (relative_import) @import_path) @import`,
 			},
 		},
 		".rs": {
@@ -118,7 +122,7 @@ func buildSupportedLangs() map[string]langConfig {
 				"impls":        `(impl_item type: (type_identifier) @name) @impl`,
 				"calls":        `(call_expression function: (identifier) @callee) @call`,
 				"method_calls": `(call_expression function: (field_expression field: (field_identifier) @callee)) @call`,
-				"uses":         `(use_wildcard) @use`,
+				"imports":      `(use_declaration argument: (_) @import_path) @import`,
 			},
 		},
 	}
@@ -179,15 +183,26 @@ func (p *Parser) ParseFile(path string, content []byte) ([]*Node, []*Edge) {
 	// Extract package/module info
 	pkgPath := p.extractPackagePath(root, path, content, ext)
 
-	// Track function/method definitions for resolving call edge sources.
-	// key = startLine, value = index into nodes slice.
-	funcByLine := make(map[int]int)
+	// Byte ranges distinguish same-line functions and let calls select the
+	// innermost definition rather than depending on map traversal order.
+	type functionRange struct {
+		start, end uint32
+		index      int
+	}
+	var functions []functionRange
+	definitions := make(map[uint32]int)
+	queryNames := make([]string, 0, len(cfg.queries))
+	for name := range cfg.queries {
+		queryNames = append(queryNames, name)
+	}
+	sort.Strings(queryNames)
 
 	qc := sitter.NewQueryCursor()
 	defer qc.Close()
 
 	// First pass: extract definitions (functions, classes, structs, etc.)
-	for queryName, pattern := range cfg.queries {
+	for _, queryName := range queryNames {
+		pattern := cfg.queries[queryName]
 		// Skip call/import queries in the first pass
 		if strings.Contains(queryName, "call") || strings.HasPrefix(queryName, "import") {
 			continue
@@ -227,21 +242,16 @@ func (p *Parser) ParseFile(path string, content []byte) ([]*Node, []*Edge) {
 			endLine := int(mainNode.EndPoint().Row) + 1
 			name := nameNode.Content(content)
 
-			// If a node with the same name and file already exists, prefer more specific kinds
-			// (struct/interface/class > type)
-			dup := false
-			for _, existing := range nodes {
-				if existing.Name == name && existing.File == path {
-					if existing.Kind == KindType && (queryName == "structs" || queryName == "interfaces") {
-						existing.Kind = map[string]NodeKind{"structs": KindStruct, "interfaces": KindInterface}[queryName]
-					}
-					dup = true
-					break
+			// Merge overlapping queries for the same declaration, never
+			// distinct declarations which merely share a name.
+			if idx, dup := definitions[nameNode.StartByte()]; dup {
+				existing := nodes[idx]
+				if existing.Kind == KindType && (queryName == "structs" || queryName == "interfaces") {
+					existing.Kind = map[string]NodeKind{"structs": KindStruct, "interfaces": KindInterface}[queryName]
 				}
-			}
-			if dup {
 				continue
 			}
+			definitions[nameNode.StartByte()] = len(nodes)
 
 			switch queryName {
 			case "functions", "methods":
@@ -262,7 +272,7 @@ func (p *Parser) ParseFile(path string, content []byte) ([]*Node, []*Edge) {
 					Signature: sig,
 					Doc:       doc,
 				})
-				funcByLine[startLine] = idx
+				functions = append(functions, functionRange{mainNode.StartByte(), mainNode.EndByte(), idx})
 
 			case "classes":
 				nodes = append(nodes, &Node{
@@ -358,7 +368,8 @@ func (p *Parser) ParseFile(path string, content []byte) ([]*Node, []*Edge) {
 	}
 
 	// Second pass: extract call and import edges
-	for queryName, pattern := range cfg.queries {
+	for _, queryName := range queryNames {
+		pattern := cfg.queries[queryName]
 		if !strings.Contains(queryName, "call") && !strings.HasPrefix(queryName, "import") {
 			continue
 		}
@@ -394,12 +405,11 @@ func (p *Parser) ParseFile(path string, content []byte) ([]*Node, []*Edge) {
 
 			// Find the enclosing function for this call/import
 			var fromID int64
-			for _, nodeIdx := range funcByLine {
-				if nodes[nodeIdx].File == path && nodes[nodeIdx].Line <= startLine && nodes[nodeIdx].EndLine >= startLine {
-					// Use the node's assigned ID (0 until graph assigns it; resolveReferences will fix it)
-					// We store the node index as a negative marker so resolveReferences can map it
-					fromID = int64(-(nodeIdx + 1)) // negative = unresolved, value = node index + 1
-					break
+			var smallest uint32 = ^uint32(0)
+			for _, fn := range functions {
+				if fn.start <= mainNode.StartByte() && mainNode.EndByte() <= fn.end && fn.end-fn.start < smallest {
+					fromID = -int64(fn.index + 1)
+					smallest = fn.end - fn.start
 				}
 			}
 

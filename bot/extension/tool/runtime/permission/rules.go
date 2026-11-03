@@ -42,16 +42,38 @@ func (e Effect) String() string {
 	return "unknown"
 }
 
+// RuleLifetime decides how long a remembered grant survives. Rules that can
+// be generalized to a reusable prefix are persistent; grants for one-off
+// commands (dynamic shell structures, exact statements) live only for the
+// current session and never reach the permissions file.
+type RuleLifetime string
+
+const (
+	// LifetimePersistent rules are written to the trusted permission store.
+	LifetimePersistent RuleLifetime = "persistent"
+	// LifetimeSession rules are held in memory by the executor and dropped
+	// when the session ends.
+	LifetimeSession RuleLifetime = "session"
+)
+
+// Persistent reports whether the rule may be written to the permissions file.
+// The zero value is persistent so declared and builtin rules keep their
+// existing semantics.
+func (r Rule) Persistent() bool {
+	return r.Lifetime != LifetimeSession
+}
+
 // Rule is a single permission rule: "tool(specifier)" with an effect.
 // An empty specifier matches every call of the tool (bare "Tool" form).
 type Rule struct {
-	Tool      string    `json:"tool"`
-	Specifier string    `json:"specifier,omitempty"` // raw specifier text (e.g. "npm run *", "/src/**", "domain:github.com")
-	Literal   string    `json:"literal,omitempty"`   // exact call text; persisted with an equal Specifier for safe rollback
-	Effect    Effect    `json:"effect"`
-	Source    string    `json:"source,omitempty"`    // "builtin" | "user" | "project" | "remembered"
-	Workspace string    `json:"workspace,omitempty"` // project root scope; empty → global (legacy)
-	CreatedAt time.Time `json:"createdAt,omitempty"` // set when persisted
+	Tool      string       `json:"tool"`
+	Specifier string       `json:"specifier,omitempty"` // raw specifier text (e.g. "npm run *", "/src/**", "domain:github.com")
+	Literal   string       `json:"literal,omitempty"`   // exact call text; never persisted (session-scoped only)
+	Effect    Effect       `json:"effect"`
+	Source    string       `json:"source,omitempty"`    // "builtin" | "user" | "project" | "remembered" | "session"
+	Lifetime  RuleLifetime `json:"lifetime,omitempty"`  // empty → persistent
+	Workspace string       `json:"workspace,omitempty"` // project root scope; empty → global (legacy)
+	CreatedAt time.Time    `json:"createdAt,omitempty"` // set when persisted
 }
 
 // SpecifierMatcher decodes a rule's specifier and decides whether a concrete
@@ -82,24 +104,21 @@ type EffectAwareMatcher interface {
 	MatchForEffect(specifier string, callInfo map[string]any, effect Effect) (bool, error)
 }
 
-// AllowCoverer is an optional SpecifierMatcher extension for matchers whose
-// calls can be compound (e.g. chained shell commands): it decides whether a
-// set of allow specifiers JOINTLY covers the whole call, so several narrow
-// allow rules can combine to cover one call. specs are the candidate rules'
-// specifiers in rule order; hasBareAllow reports whether the candidates
-// include a match-all (empty-specifier) rule. It returns the index of the
-// deciding specifier (-1 when coverage comes from the bare rule) and whether
-// coverage holds; covered=false means "not decidable here" and the engine
-// falls back to per-rule Match evaluation.
-type AllowCoverer interface {
-	SpecifierMatcher
-	CompoundAllowCoverage(hasBareAllow bool, specs []string, callInfo map[string]any) (deciding int, covered bool)
-}
+// JudgeVerdict is an authorization result, independent of display text.
+type JudgeVerdict uint8
+
+const (
+	JudgeNotRun JudgeVerdict = iota
+	JudgeSafe
+	JudgeDangerous
+	JudgeFailed
+)
 
 // CallAssessment is tool-specific risk metadata produced by a matcher before
 // the engine finalizes its decision. It lets the engine remain the sole
 // allow/ask/deny authority while still supporting structured command analysis.
 type CallAssessment struct {
+	Verdict JudgeVerdict
 	Reason  string
 	Signals []string
 }
@@ -144,6 +163,15 @@ func NewEngine(matchers map[string]SpecifierMatcher) *Engine {
 // Evaluate applies the deny→ask→allow precedence across them.
 func (e *Engine) SetRules(rules []Rule) {
 	e.rules = rules
+}
+
+// Rules returns a copy of the engine's current rule set. Callers that layer
+// extra grants on top of a rebuilt engine (for example session-scoped
+// approvals) use it so SetRules never silently drops existing rules.
+func (e *Engine) Rules() []Rule {
+	out := make([]Rule, len(e.rules))
+	copy(out, e.rules)
+	return out
 }
 
 // SetSandboxRules replaces the sandbox profile rule set. Sandbox rules never
@@ -205,6 +233,17 @@ type Decision struct {
 	Assessment CallAssessment
 }
 
+// DenyRule checks hard rules without running the judge or assessing approval.
+// Read-only previews use this same deny boundary as execution.
+func (e *Engine) DenyRule(toolName string, callInfo map[string]any) (Rule, bool) {
+	for _, rule := range e.rules {
+		if rule.Effect == EffectDeny && e.ruleApplies(rule, toolName, callInfo) {
+			return rule, true
+		}
+	}
+	return Rule{}, false
+}
+
 // Evaluate decides what to do with a tool call without cancellation support.
 // It is retained for API compatibility; runtime callers should use
 // EvaluateContext so remote judges inherit the tool call's context.
@@ -233,14 +272,13 @@ func (e *Engine) EvaluateContext(ctx context.Context, toolName string, callInfo 
 	defer func() {
 		if judgeReason != "" && decision.Assessment.Reason == "" {
 			decision.Assessment.Reason = judgeReason
+			decision.Assessment.Verdict = JudgeFailed
 		}
 		decision = e.applyAssessment(toolName, callInfo, decision)
 	}()
 	// 1. deny from any source (hard rules — the judge never overrides them)
-	for _, r := range e.rules {
-		if r.Effect == EffectDeny && e.ruleApplies(r, toolName, callInfo) {
-			return Decision{Effect: EffectDeny, Rule: r}
-		}
+	if r, ok := e.DenyRule(toolName, callInfo); ok {
+		return Decision{Effect: EffectDeny, Rule: r}
 	}
 	// 2. user-declared ask
 	for _, r := range e.rules {
@@ -262,7 +300,7 @@ func (e *Engine) EvaluateContext(ctx context.Context, toolName string, callInfo 
 	// commands not covered by a user rule are judged before builtin rules
 	// (rm, git push, ...) no longer preempt it. Confidently safe runs
 	// immediately; a dangerous verdict falls through to the chain, where
-	// builtin ask rules produce the prompt.
+	// a dangerous verdict requires approval even when builtin rules allow it.
 	judgedDangerous := false
 	if defaultEffect == EffectAsk && e.autoJudge != nil && toolName == "shell" && (e.autoJudgeEnabled == nil || e.autoJudgeEnabled()) {
 		if command, _ := callInfo["command"].(string); command != "" {
@@ -272,7 +310,7 @@ func (e *Engine) EvaluateContext(ctx context.Context, toolName string, callInfo 
 			active := e.autoJudgeEnabled == nil || e.autoJudgeEnabled()
 			if active && decided {
 				if allow {
-					return Decision{Effect: EffectAllow, Assessment: CallAssessment{Reason: "jev: judged safe"}}
+					return Decision{Effect: EffectAllow, Assessment: CallAssessment{Verdict: JudgeSafe, Reason: "jev: judged safe"}}
 				}
 				judgedDangerous = true
 			} else if active {
@@ -285,10 +323,15 @@ func (e *Engine) EvaluateContext(ctx context.Context, toolName string, callInfo 
 		if r.Effect == EffectAsk && r.isBuiltin() && e.ruleApplies(r, toolName, callInfo) {
 			d := Decision{Effect: EffectAsk, Rule: r}
 			if judgedDangerous {
-				d.Assessment = CallAssessment{Reason: "jev: judged dangerous"}
+				d.Assessment = CallAssessment{Verdict: JudgeDangerous, Reason: "jev: judged dangerous"}
 			}
 			return d
 		}
+	}
+	// Builtin convenience rules cannot overrule a content-specific danger
+	// verdict. User-declared allows were already considered before the judge.
+	if judgedDangerous {
+		return Decision{Effect: EffectAsk, Assessment: CallAssessment{Verdict: JudgeDangerous, Reason: "jev: judged dangerous"}}
 	}
 	// 6. builtin allow
 	if d, ok := e.evaluateAllowCoverage(toolName, callInfo, true); ok {
@@ -300,10 +343,7 @@ func (e *Engine) EvaluateContext(ctx context.Context, toolName string, callInfo 
 		}
 	}
 	// 7. defaultEffect (no rule matched): judge unavailable/uncertain keeps
-	// the default ask, a dangerous verdict is reported as the reason.
-	if judgedDangerous {
-		return Decision{Effect: defaultEffect, Assessment: CallAssessment{Reason: "jev: judged dangerous"}}
-	}
+	// the ordinary default policy.
 	return Decision{Effect: defaultEffect}
 }
 
@@ -312,13 +352,20 @@ func (e *Engine) applyAssessment(toolName string, callInfo map[string]any, decis
 	if !ok {
 		return decision
 	}
-	assessment := assessor.Assess(callInfo)
-	if strings.HasPrefix(decision.Assessment.Reason, "jev:") || assessment.Reason == "" && decision.Assessment.Reason != "" {
+	var assessment CallAssessment
+	switch assessor.(type) {
+	case BashMatcher, *BashMatcher:
+		assessment = e.assessShellWithRules(toolName, callInfo)
+	default:
+		assessment = assessor.Assess(callInfo)
+	}
+	if decision.Assessment.Verdict != JudgeNotRun || assessment.Reason == "" && decision.Assessment.Reason != "" {
 		// Keep the judge's verdict independently of dynamic structure signals.
 		assessment.Reason = decision.Assessment.Reason
+		assessment.Verdict = decision.Assessment.Verdict
 	}
 	decision.Assessment = assessment
-	if decision.Effect == EffectAllow && assessment.Reason == "jev: judged safe" {
+	if decision.Effect == EffectAllow && assessment.Verdict == JudgeSafe {
 		return decision // Auto judges the complete command, including dynamic syntax.
 	}
 	if !assessment.RequiresApproval() || decision.Effect == EffectDeny {
@@ -331,63 +378,15 @@ func (e *Engine) applyAssessment(toolName string, callInfo map[string]any, decis
 	return decision
 }
 
-// evaluateAllowCoverage lets several allow rules jointly cover a compound
-// call (e.g. "npm build && npm test" covered by two narrow bash allows). It
-// applies only when the tool's matcher implements AllowCoverer; otherwise
-// allow evaluation stays per-rule. builtinOnly selects the rule class being
-// evaluated (user-declared first, then builtin); user coverage also counts
-// builtin allows, mirroring the per-rule fallback order.
+// evaluateAllowCoverage combines shell rules using the same parsed approval
+// units as structure assessment. Other tools use ordinary per-rule matching.
 func (e *Engine) evaluateAllowCoverage(toolName string, callInfo map[string]any, builtinOnly bool) (Decision, bool) {
-	coverer, ok := e.matcherFor(toolName).(AllowCoverer)
-	if !ok {
+	switch e.matcherFor(toolName).(type) {
+	case BashMatcher, *BashMatcher:
+		return e.evaluateShellAllowCoverage(toolName, callInfo, builtinOnly)
+	default:
 		return Decision{}, false
 	}
-	// Bare "allow Tool" rules (empty specifier) match every call. Such a
-	// rule — user-declared or builtin — covers all parts of a compound call;
-	// without this branch a declared "Bash" allow silently failed to cover
-	// compound commands, leaving the engine to fall through to builtin ask
-	// rules and re-prompting the user for a call the user had already
-	// allowed as a whole.
-	var bareAllow *Rule
-	var allowRules []Rule
-	for _, r := range e.rules {
-		if r.Effect != EffectAllow || !toolNameMatches(r.Tool, toolName) {
-			continue
-		}
-		if r.Literal != "" {
-			continue
-		}
-		if builtinOnly != r.isBuiltin() {
-			continue
-		}
-		if r.Specifier == "" {
-			if bareAllow == nil {
-				rr := r
-				bareAllow = &rr
-			}
-			continue
-		}
-		allowRules = append(allowRules, r)
-	}
-	if !builtinOnly {
-		for _, r := range e.rules {
-			if r.Effect == EffectAllow && r.isBuiltin() && toolNameMatches(r.Tool, toolName) && r.Specifier != "" {
-				allowRules = append(allowRules, r)
-			}
-		}
-	}
-	specs := make([]string, len(allowRules))
-	for i, r := range allowRules {
-		specs[i] = r.Specifier
-	}
-	deciding, covered := coverer.CompoundAllowCoverage(bareAllow != nil, specs, callInfo)
-	if !covered {
-		return Decision{}, false
-	}
-	if bareAllow != nil {
-		return Decision{Effect: EffectAllow, Rule: *bareAllow}, true
-	}
-	return Decision{Effect: EffectAllow, Rule: allowRules[deciding]}, true
 }
 
 // isBuiltin reports whether a rule came from the baked-in default policy.
@@ -423,10 +422,11 @@ func (e *Engine) ruleApplies(r Rule, toolName string, callInfo map[string]any) b
 
 // hasRememberedLiteralAllow reports whether the user previously approved this
 // exact call text. It deliberately ignores declared and wildcard allows: only
-// a human-created literal grant may suppress a future dynamic-shell prompt.
+// a human-created literal grant (remembered for the project, or granted for
+// this session) may suppress a future dynamic-shell prompt.
 func (e *Engine) hasRememberedLiteralAllow(toolName string, callInfo map[string]any) bool {
 	for _, rule := range e.rules {
-		if rule.Source == "remembered" && rule.Effect == EffectAllow && rule.Literal != "" &&
+		if (rule.Source == "remembered" || rule.Source == "session") && rule.Effect == EffectAllow && rule.Literal != "" &&
 			e.ruleApplies(rule, toolName, callInfo) {
 			return true
 		}

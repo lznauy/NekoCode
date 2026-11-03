@@ -3,6 +3,8 @@ package workspace
 import (
 	"context"
 	"fmt"
+	"nekocode/bot/extension/tool/runtime/authority"
+	"nekocode/util/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -20,16 +22,21 @@ const (
 type Root struct {
 	Path   string `json:"path"`
 	Access Access `json:"access"`
+	// Canonical pins a remembered grant to its approved path. Unlike an
+	// explicit configuration root, it must never follow a replacement link.
+	Canonical bool `json:"-"`
 }
 
 // Manager owns workspace authority for one tool registry. Temporary roots are
 // isolated by session and never shared across Bot instances.
 type Manager struct {
-	mu         sync.RWMutex
-	primary    string
-	configured []Root
-	sessions   map[string][]Root
-	sessionID  string
+	mu               sync.RWMutex
+	primary          string
+	configured       []Root
+	sessions         map[string][]Root
+	sessionID        string
+	approvalRevision uint64
+	sessionRevision  uint64
 }
 
 func New(primary string, extra []Root) *Manager {
@@ -54,6 +61,7 @@ func (m *Manager) Configure(primary string, extra []Root) {
 		m.primary = ""
 		m.configured = nil
 		m.sessions = make(map[string][]Root)
+		m.approvalRevision++
 		m.mu.Unlock()
 		return
 	}
@@ -64,12 +72,16 @@ func (m *Manager) Configure(primary string, extra []Root) {
 		}
 		roots = append(roots, extraRoot)
 	}
+	configured := normalizeRoots(roots)
 	m.mu.Lock()
+	if m.primary != root.Path || !slices.Equal(m.configured, configured) {
+		m.approvalRevision++
+	}
 	if m.primary != root.Path {
 		m.sessions = make(map[string][]Root)
 	}
 	m.primary = root.Path
-	m.configured = normalizeRoots(roots)
+	m.configured = configured
 	m.mu.Unlock()
 }
 
@@ -94,6 +106,10 @@ func WorkingDirectory(ctx context.Context) (string, error) {
 
 func (m *Manager) SetSession(id string) {
 	m.mu.Lock()
+	if m.sessionID != id {
+		m.sessionRevision++
+		m.approvalRevision++
+	}
 	m.sessionID = id
 	m.mu.Unlock()
 }
@@ -106,6 +122,8 @@ func (m *Manager) DropSession(id string) {
 	delete(m.sessions, id)
 	if m.sessionID == id {
 		m.sessionID = ""
+		m.sessionRevision++
+		m.approvalRevision++
 	}
 	m.mu.Unlock()
 }
@@ -167,6 +185,11 @@ func (m *Manager) check(path string, need Access) (string, Root, bool, error) {
 	if err != nil {
 		return "", Root{}, false, err
 	}
+	if need == AccessReadWrite {
+		if err := authority.CheckWritable(resolved); err != nil {
+			return resolved, Root{}, false, err
+		}
+	}
 	for _, root := range m.Snapshot() {
 		if !rootAllows(root, need) {
 			continue
@@ -201,20 +224,11 @@ func FromContext(ctx context.Context) (*Manager, bool) {
 }
 
 func Resolve(path string) (string, error) {
-	abs, err := filepath.Abs(expandHome(path))
+	resolved, err := fs.CanonicalPath(expandHome(path))
 	if err != nil {
 		return "", fmt.Errorf("path resolution failed: %w", err)
 	}
-	real, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		parent := filepath.Dir(abs)
-		realParent, pErr := filepath.EvalSymlinks(parent)
-		if pErr != nil {
-			return filepath.Clean(abs), nil
-		}
-		return filepath.Join(realParent, filepath.Base(abs)), nil
-	}
-	return real, nil
+	return resolved, nil
 }
 
 func CandidateRoot(path string) (string, error) {
@@ -251,7 +265,12 @@ func normalizeRoot(r Root) (Root, error) {
 	if err != nil {
 		return Root{}, err
 	}
-	if real, err := filepath.EvalSymlinks(abs); err == nil {
+	if r.Canonical {
+		real, err := filepath.EvalSymlinks(abs)
+		if err != nil || filepath.Clean(real) != filepath.Clean(abs) {
+			return Root{}, fmt.Errorf("remembered workspace path changed")
+		}
+	} else if real, err := filepath.EvalSymlinks(abs); err == nil {
 		abs = real
 	}
 	r.Path = filepath.Clean(abs)
@@ -303,4 +322,14 @@ func defaultPrimary() string {
 	}
 	root, _ := os.Getwd()
 	return root
+}
+
+// SessionRevision invalidates temporary grants even after switching away and back.
+func (m *Manager) SessionRevision() uint64 {
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.sessionRevision
 }

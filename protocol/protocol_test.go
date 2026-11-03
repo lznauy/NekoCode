@@ -7,11 +7,15 @@ import (
 )
 
 func TestApprovalCloneDoesNotShareRememberedRules(t *testing.T) {
-	original := &ApprovalContext{RememberRules: []ApprovalRememberRule{{Tool: "shell", Literal: "echo ok"}}}
+	original := &ApprovalContext{RememberRules: []ApprovalRememberRule{{Tool: "shell", Literal: "echo ok"}}, ApprovedRules: []ApprovalRememberRule{{Tool: "shell", Specifier: "curl *"}}}
 	clone := original.Clone()
 	clone.RememberRules[0].Literal = "changed"
+	clone.ApprovedRules[0].Specifier = "changed"
 	if original.RememberRules[0].Literal != "echo ok" {
 		t.Fatal("approval preview shares mutable rules")
+	}
+	if original.ApprovedRules[0].Specifier != "curl *" {
+		t.Fatal("approval shares mutable approved rules")
 	}
 }
 
@@ -41,5 +45,37 @@ func TestMetricsJSONOmitsUnavailableReasoning(t *testing.T) {
 	}
 	if strings.Contains(string(data), `"turnReasoning"`) {
 		t.Fatalf("metrics exposed unavailable reasoning usage: %s", data)
+	}
+}
+
+func TestApprovalOptionsDescribeAuthority(t *testing.T) {
+	for _, tc := range []struct {
+		name, tool, scope string
+		rules             []ApprovalRememberRule
+	}{
+		{"session", "shell", "session", []ApprovalRememberRule{{Tool: "shell", Literal: "echo $x", Lifetime: "session"}}},
+		{"mixed", "shell", "mixed", []ApprovalRememberRule{{Tool: "shell", Specifier: "go *"}, {Tool: "shell", Literal: "echo $x", Lifetime: "session"}}},
+		{"workspace", "workspace", "project", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			original := &ApprovalContext{Scope: ApprovalScopeProject, RememberRules: tc.rules}
+			req := NewApprovalRequest(tc.tool, nil, ConfirmKindPermission, original)
+			options := req.Approval.Options
+			if len(options) != 3 || options[1].Scope != tc.scope || !options[1].Remember {
+				t.Fatalf("options=%+v", options)
+			}
+			if tc.tool == "workspace" && (options[0].Label != "本次会话允许" || options[0].Remember || options[0].Scope != "session") {
+				t.Fatalf("workspace=%+v", options)
+			}
+			clone := req.Approval.Clone()
+			clone.Options[0].Label = "changed"
+			if req.Approval.Options[0].Label == "changed" || original.Options != nil {
+				t.Fatal("shared options")
+			}
+		})
+	}
+	req := NewApprovalRequest("shell", nil, ConfirmKindPermission, &ApprovalContext{Scope: ApprovalScopeOnce})
+	if len(req.Approval.Options) != 2 {
+		t.Fatal("unexpected remember option")
 	}
 }

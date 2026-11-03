@@ -5,15 +5,65 @@ import (
 	"encoding/json"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/extension/skill"
+	tools "nekocode/bot/extension/tool"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"nekocode/bot/extension/tool/runtime/core"
+	"nekocode/bot/extension/tool/runtime/permission"
 	"nekocode/bot/policy"
 	"nekocode/protocol"
 )
+
+type previewIsolationTool struct {
+	evidenceCountingTool
+	name string
+}
+
+func (f *previewIsolationTool) Name() string { return f.name }
+
+func TestToolStartUsesPreparedPerCallPreviews(t *testing.T) {
+	a := newTestAgent()
+	a.deps.toolExecutor.SetPermissionMode(permission.ModeFull)
+	for _, name := range []string{"first", "blocked", "second"} {
+		a.deps.toolRegistry.RegisterWithOptions(&previewIsolationTool{name: name}, tools.RegistrationOptions{
+			Preview: func(context.Context, map[string]any) string {
+				if name == "blocked" {
+					t.Error("blocked tool preview was generated")
+				}
+				return name + " preview"
+			},
+		})
+	}
+	a.deps.gov.Register(policy.Hook{Name: "block-preview-fixture", Point: policy.PreToolUse, On: func(s policy.State) *policy.Result {
+		if s.Facts().Tool.Name == "blocked" {
+			return &policy.Result{BlockTool: &policy.BlockTool{Reason: "blocked by fixture"}}
+		}
+		return nil
+	}})
+	shared := map[string]any{"value": "original"}
+	calls := []core.ToolCallItem{
+		{ID: "first", Name: "first", Args: shared},
+		{ID: "blocked", Name: "blocked", Args: shared},
+		{ID: "second", Name: "second", Args: shared},
+	}
+	starts := make(map[string]string)
+	a.toolRunner.executeAndFeedback(calls, "", func(ev protocol.StepEvent) {
+		if ev.Action == protocol.StepActionToolStart || ev.Action == protocol.StepActionToolBlocked {
+			starts[ev.CallID] = ev.Output
+		}
+	})
+	for id, want := range map[string]string{"first": "first preview", "blocked": "blocked by fixture", "second": "second preview"} {
+		if starts[id] != want {
+			t.Errorf("start %s preview = %q, want %q", id, starts[id], want)
+		}
+	}
+	if shared["_preview"] != nil {
+		t.Fatal("preview preparation modified shared input arguments")
+	}
+}
 
 func TestApplyPostToolHooksForwardsStopResult(t *testing.T) {
 	a := newTestAgent()

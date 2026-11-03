@@ -8,6 +8,48 @@ import (
 	graphpkg "nekocode/bot/extension/tool/builtin/index/core/internal/graph"
 )
 
+func TestLoadOrBuildInvalidatesOldParserResults(t *testing.T) {
+	for _, oldVersion := range []string{"", "legacy"} {
+		t.Run("version="+oldVersion, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "methods.go")
+			if err := os.WriteFile(path, []byte("package p\ntype A struct{}\ntype B struct{}\nfunc(A) Foo(){}\nfunc(B) Foo(){}\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			i, err := NewIndexer(filepath.Join(dir, "index.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer i.Close()
+			if _, err := i.IndexAll(dir); err != nil {
+				t.Fatal(err)
+			}
+			hashes, err := i.db.LoadFileHashes()
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Simulate an older parser's incomplete graph with an unchanged
+			// source hash. Hash-based stale detection alone cannot repair it.
+			if err := i.db.ReplaceFile(path, hashes[path], "go", []*graphpkg.Node{{ID: 1, Name: "methods.go", Kind: graphpkg.KindFile, File: path}}, nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := i.db.SetIndexVersion(oldVersion); err != nil {
+				t.Fatal(err)
+			}
+			g, err := i.LoadOrBuild(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := len(g.FindNodesByName("Foo")); got != 2 {
+				t.Fatalf("old parser graph was reused: Foo count=%d", got)
+			}
+			if version, err := i.db.IndexVersion(); err != nil || version == "" || version == oldVersion {
+				t.Fatalf("index version not updated: %q, %v", version, err)
+			}
+		})
+	}
+}
+
 func setupTestProject(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

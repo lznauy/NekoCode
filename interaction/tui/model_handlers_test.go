@@ -784,3 +784,160 @@ func TestCheckAllPluginsMenuSubmitsRootCommand(t *testing.T) {
 		t.Fatalf("inputs: %v", inputs)
 	}
 }
+
+func TestInterruptedRunPreservesPartialAnswer(t *testing.T) {
+	for _, terminal := range []controlruntime.EventType{controlruntime.EventRunFailed, controlruntime.EventRunCancelled} {
+		t.Run(string(terminal), func(t *testing.T) {
+			m, err := NewModel(&statusFakeBot{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunStarted})
+			m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventAssistantDelta, Payload: controlruntime.DeltaPayload{Delta: "partial answer must stay visible"}})
+			m.handleRuntimeEvent(controlruntime.Event{Type: terminal, Payload: controlruntime.RunResult{Error: "connection interrupted"}})
+			var rendered strings.Builder
+			for _, item := range m.Messages.Items() {
+				rendered.WriteString(ansi.Strip(item.Render(120)))
+			}
+			if !strings.Contains(rendered.String(), "partial answer must stay visible") {
+				t.Fatal("terminal event discarded streamed partial answer")
+			}
+			if !strings.Contains(rendered.String(), "Error:") {
+				t.Fatal("terminal event lost the failure notice")
+			}
+		})
+	}
+}
+
+func TestWindowReflowKeepsFrameInsideTerminal(t *testing.T) {
+	m, err := NewModel(&statusFakeBot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 300, Height: 24})
+	m.Messages.AddMessage(message.ChatMessage{Role: "assistant", Content: strings.Repeat("wrapped answer ", 140)})
+	m.resizeMessages()
+	for _, width := range []int{40, 300, 60, 160} {
+		m.Update(tea.WindowSizeMsg{Width: width, Height: 24})
+		frame := m.View().Content
+		if got := strings.Count(frame, "\n") + 1; got > 24 {
+			t.Errorf("width %d: frame height %d exceeds terminal height 24", width, got)
+		}
+		firstHeight := m.Messages.Height()
+		m.resizeMessages()
+		if m.Messages.Height() != firstHeight {
+			t.Errorf("width %d: viewport height needs a second resize: %d -> %d", width, firstHeight, m.Messages.Height())
+		}
+	}
+}
+
+func TestStreamGrowthKeepsFrameInsideTerminal(t *testing.T) {
+	m, err := NewModel(&statusFakeBot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 24})
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunStarted})
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventAssistantDelta, Payload: controlruntime.DeltaPayload{Delta: strings.Repeat("streamed answer ", 140)}})
+	if got := strings.Count(m.View().Content, "\n") + 1; got > 24 {
+		t.Fatalf("stream growth pushed frame beyond terminal: %d lines", got)
+	}
+}
+
+func TestRepeatedViewPreservesManualScroll(t *testing.T) {
+	m, err := NewModel(&statusFakeBot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 24})
+	m.Messages.AddMessage(message.ChatMessage{Role: "assistant", Content: strings.Repeat("reading older output ", 140)})
+	m.View()
+	m.Messages.ScrollBy(-5)
+	m.Messages.SetFollow(false)
+	wantOffset := m.Messages.ScrollY()
+	for i := 0; i < 5; i++ {
+		m.View()
+		if m.Messages.ScrollY() != wantOffset || m.Messages.Follow {
+			t.Fatal("view calibration moved a manually scrolled viewport")
+		}
+	}
+}
+
+func TestTerminalEventPreservesManualReadingPosition(t *testing.T) {
+	for _, terminal := range []controlruntime.EventType{controlruntime.EventRunDone, controlruntime.EventRunFailed, controlruntime.EventRunCancelled} {
+		t.Run(string(terminal), func(t *testing.T) {
+			m, err := NewModel(&statusFakeBot{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.Update(tea.WindowSizeMsg{Width: 60, Height: 24})
+			m.Messages.AddMessage(message.ChatMessage{Role: "assistant", Content: strings.Repeat("previous answer ", 160)})
+			m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunStarted})
+			m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventAssistantDelta, Payload: controlruntime.DeltaPayload{Delta: "new answer"}})
+			m.View()
+			m.Messages.ScrollBy(-10)
+			m.Messages.SetFollow(false)
+			wantIndex, wantLine := m.Messages.ViewportAnchor()
+			m.handleRuntimeEvent(controlruntime.Event{Type: terminal, Payload: controlruntime.RunResult{Output: "new answer", Error: "interrupted"}})
+			index, line := m.Messages.ViewportAnchor()
+			if m.Messages.Follow || index != wantIndex || line != wantLine {
+				t.Fatalf("terminal event moved reading position: %d,%d -> %d,%d", wantIndex, wantLine, index, line)
+			}
+		})
+	}
+}
+
+func TestCompletedTurnsStayBounded(t *testing.T) {
+	for _, paged := range []bool{false, true} {
+		m, err := NewModel(&statusFakeBot{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.sessionHistoryPaging = paged
+		for i := 0; i < 40; i++ {
+			m.handleDone(doneMsg{content: strings.Repeat("x", 40000)})
+		}
+		if len(m.transientTurns) > 32 {
+			t.Fatalf("unbounded temporary turns: %d", len(m.transientTurns))
+		}
+		bytes := 0
+		for _, turn := range m.transientTurns {
+			bytes += len(turn.assistant.Content) + len(turn.assistant.RenderedContent)
+		}
+		if bytes > 2<<20 {
+			t.Fatalf("temporary history exceeds byte budget: %d", bytes)
+		}
+		if !paged && len(m.transientTurns) != 0 {
+			t.Fatal("unpaged runtime retained temporary turns")
+		}
+	}
+}
+
+func TestTransientTurnsEvictOldestAndSkipOversizedOutput(t *testing.T) {
+	m := &Model{sessionHistoryPaging: true}
+	for i := 0; i < 40; i++ {
+		m.turnHistoryAfter = i
+		m.retainCompletedTurn(message.ChatMessage{Role: "assistant", Content: "short"})
+	}
+	if len(m.transientTurns) != maxTransientTurns || m.transientTurns[0].after != 8 {
+		t.Fatal("oldest temporary turns were not evicted")
+	}
+	m.retainCompletedTurn(message.ChatMessage{Role: "assistant", Content: strings.Repeat("x", maxTransientBytes)})
+	if (m.refreshTurn == nil || !m.refreshTurn.omitted) || len(m.transientTurns) != maxTransientTurns {
+		t.Fatal("oversized output retained or erased bounded history")
+	}
+	m.retainCompletedTurn(message.ChatMessage{Role: "assistant", Content: "latest"})
+	if m.transientTurns[len(m.transientTurns)-1].assistant.Content != "latest" {
+		t.Fatal("latest temporary output was lost")
+	}
+}
+
+func TestOversizedUncommittedTurnDoesNotDonateTelemetry(t *testing.T) {
+	m := &Model{sessionHistoryPaging: true}
+	m.retainCompletedTurn(message.ChatMessage{Role: "assistant", Content: strings.Repeat("x", maxTransientBytes)})
+	telemetry := &controlruntime.MetricsSnapshot{TurnTotal: 1234}
+	history, _ := withCompletedTurns(controlruntime.SessionHistoryWindow{Before: 1, End: 1, Messages: []controlruntime.DisplayMessage{{Role: "assistant", Content: "old answer", Sequence: 1}}}, m.transientTurns, m.refreshTurn, telemetry)
+	if len(history) != 1 || history[0].Telemetry != nil {
+		t.Fatal("oversized uncommitted turn donated usage to old answer")
+	}
+}

@@ -21,6 +21,8 @@ func TestClassifyShellStructureDynamic(t *testing.T) {
 		{`. ./script.sh`, ShellSource},
 		{`bash -c 'echo ok'`, ShellCommandString},
 		{`env FOO=bar bash -lc 'echo ok'`, ShellCommandString},
+		{`env -- FOO=bar bash -lc 'echo ok'`, ShellCommandString},
+		{`env -- FOO=bar echo ok`, ShellEnvironment},
 		{`env -u HOME bash -c 'echo ok'`, ShellCommandString},
 		{`env -S "bash -c 'echo ok'"`, ShellDynamicCommand},
 		{`timeout 5 bash -c 'echo ok'`, ShellCommandString},

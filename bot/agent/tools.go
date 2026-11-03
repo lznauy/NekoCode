@@ -44,6 +44,15 @@ func (r *toolRunner) executeAndFeedback(calls []core.ToolCallItem, textContent s
 	defer cleanupSubagents()
 
 	r.agent.deps.toolExecutor.PreparePreviewsContext(r.agent.getCtx(), filtered.Allowed)
+	// Filtering copies call records. Carry prepared arguments back by original
+	// position so start events and execution use the same per-call previews.
+	prepared := 0
+	for i := range calls {
+		if _, blocked := filtered.Blocked[i]; !blocked {
+			calls[i] = filtered.Allowed[prepared]
+			prepared++
+		}
+	}
 	nonExecution := make(map[int]protocol.ToolNonExecution, len(filtered.Blocked))
 	for i, reason := range filtered.Blocked {
 		stage := "governance"

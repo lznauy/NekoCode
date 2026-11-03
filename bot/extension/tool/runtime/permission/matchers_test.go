@@ -2,6 +2,34 @@ package permission
 
 import "testing"
 
+func TestEnvSeparatorStillConsumesAssignments(t *testing.T) {
+	for _, command := range []string{`env -- FOO=bar rm target`, `env -i -- FOO=bar rm target`, `env FOO=bar rm target`} {
+		if !BashRuleMatches("rm *", map[string]any{"command": command}, MatchAnySubcommand) {
+			t.Errorf("deny projection missed wrapped rm: %q", command)
+		}
+	}
+}
+
+func TestBashMatcherRetainsCanonicalAssignmentConstraints(t *testing.T) {
+	for _, tc := range []struct {
+		spec, command string
+		want          bool
+	}{
+		{`FOO=bar echo *`, `FOO='bar' echo hello`, true},
+		{`FOO='bar' echo *`, `FOO=bar echo hello`, true},
+		{`FOO=bar echo *`, `echo hello`, false},
+		{`FOO=bar echo *`, `FOO=other echo hello`, false},
+		{`FOO=bar echo *`, `FOO=$value echo hello`, false},
+		{`FOO=bar echo *`, `FOO=bar echo hello && date`, false},
+		{`echo *`, `FOO=bar echo hello`, true},
+		{`env *`, `env rm target`, false},
+	} {
+		if got, _ := (BashMatcher{}).Match(tc.spec, map[string]any{"command": tc.command}); got != tc.want {
+			t.Errorf("Match(%q, %q)=%t want %t", tc.spec, tc.command, got, tc.want)
+		}
+	}
+}
+
 func TestBashMatcher(t *testing.T) {
 	m := BashMatcher{}
 	cases := []struct {
@@ -256,44 +284,22 @@ func TestBashMatchForEffect(t *testing.T) {
 	}
 }
 
-func TestBashCompoundAllowCoverage(t *testing.T) {
-	m := BashMatcher{}
-	info := map[string]any{"command": "npm run build && npm test"}
-
-	// union of two narrow allows covers the compound call
-	deciding, covered := m.CompoundAllowCoverage(false, []string{"npm run *", "npm test"}, info)
-	if !covered || deciding != 0 {
-		t.Errorf("coverage = (%d, %v), want (0, true)", deciding, covered)
-	}
-	// deciding is the first spec covering the FIRST subcommand
-	deciding, covered = m.CompoundAllowCoverage(false, []string{"npm test", "npm run *"}, info)
-	if !covered || deciding != 1 {
-		t.Errorf("coverage = (%d, %v), want (1, true)", deciding, covered)
-	}
-	// one uncovered subcommand → not covered
-	if _, covered = m.CompoundAllowCoverage(false, []string{"npm run *"}, info); covered {
-		t.Error("partial coverage must report covered=false")
-	}
-	// single (non-compound) commands are left to per-rule Match
-	if _, covered = m.CompoundAllowCoverage(false, []string{"npm run *"}, map[string]any{"command": "npm run build"}); covered {
-		t.Error("single subcommand must report covered=false")
-	}
-	// bare match-all allow covers everything, deciding = -1
-	deciding, covered = m.CompoundAllowCoverage(true, nil, info)
-	if !covered || deciding != -1 {
-		t.Errorf("bare allow coverage = (%d, %v), want (-1, true)", deciding, covered)
-	}
-	// no specs, no bare → not covered
-	if _, covered = m.CompoundAllowCoverage(false, nil, info); covered {
-		t.Error("no specs must report covered=false")
-	}
-	// command-substitution parts count as subcommands too
-	subInfo := map[string]any{"command": "echo ok && echo $(rm -rf /tmp/x)"}
-	if _, covered = m.CompoundAllowCoverage(false, []string{"echo *"}, subInfo); covered {
-		t.Error("uncovered command substitution must report covered=false")
-	}
-	if _, covered = m.CompoundAllowCoverage(false, []string{"echo *", "rm *"}, subInfo); !covered {
-		t.Error("union covering the substitution must report covered=true")
+func TestShellNormalizationCacheKeepsRuleAndCommandModesSeparate(t *testing.T) {
+	for pass := 0; pass < 2; pass++ {
+		for _, tc := range []struct {
+			input  string
+			unwrap bool
+			want   string
+		}{
+			{"env git status", false, "env git status"},
+			{"env git status", true, "git status"},
+			{"FOO=bar echo hello", false, "FOO=bar echo hello"},
+			{"FOO=bar echo hello", true, "echo hello"},
+		} {
+			if got := normalizeShellCommand(tc.input, tc.unwrap); got != tc.want {
+				t.Fatalf("normalize(%q, %t)=%q want %q", tc.input, tc.unwrap, got, tc.want)
+			}
+		}
 	}
 }
 

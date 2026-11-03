@@ -2,6 +2,7 @@ package connect
 
 import (
 	"fmt"
+	"nekocode/protocol"
 	"strings"
 
 	controlruntime "nekocode/runtime"
@@ -126,13 +127,18 @@ func Translate(ev controlruntime.Event) []Intent {
 // ApprovalActions is the canonical decision set for a pending approval,
 // shared by inline keyboards, feishu cards, and slash-command help.
 func ApprovalActions(p controlruntime.ApprovalView) []Action {
-	actions := []Action{
-		{ID: ActionOnce, Label: "仅本次允许"},
+	var actions []Action
+	for _, option := range approvalOptions(p) {
+		id := ActionReject
+		if option.Allowed {
+			id = ActionOnce
+			if option.Remember {
+				id = ActionAlways
+			}
+		}
+		actions = append(actions, Action{ID: id, Label: option.Label})
 	}
-	if p.Approval.CanRemember() {
-		actions = append(actions, Action{ID: ActionAlways, Label: "始终允许"})
-	}
-	actions = append(actions, Action{ID: ActionReject, Label: "拒绝"})
+
 	return actions
 }
 
@@ -210,4 +216,12 @@ func IsResolvedErr(err error) bool {
 	return strings.Contains(msg, "not pending") ||
 		strings.Contains(msg, "already resolved") ||
 		strings.Contains(msg, "not found")
+}
+
+func approvalOptions(p controlruntime.ApprovalView) []protocol.ApprovalOption {
+	approval := p.Approval
+	if approval == nil {
+		approval = &controlruntime.ApprovalContext{}
+	}
+	return approval.DecisionOptions(p.ToolName)
 }

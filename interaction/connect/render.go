@@ -73,11 +73,18 @@ func ApprovalText(p controlruntime.ApprovalView) string {
 	for _, detail := range ApprovalDetails(p) {
 		fmt.Fprintf(&b, "\n%s: %s", detail.Label, detail.Value)
 	}
-	parts := []string{fmt.Sprintf("/approve %s 仅本次允许", p.ID)}
-	if p.Approval.CanRemember() {
-		parts = append(parts, fmt.Sprintf("/always %s 始终允许", p.ID))
+	var parts []string
+	for _, option := range approvalOptions(p) {
+		command := "/reject"
+		if option.Allowed {
+			command = "/approve"
+			if option.Remember {
+				command = "/always"
+			}
+		}
+		parts = append(parts, fmt.Sprintf("%s %s %s", command, p.ID, option.Label))
 	}
-	parts = append(parts, fmt.Sprintf("/reject %s 拒绝", p.ID))
+
 	fmt.Fprintf(&b, "\n回复 %s", strings.Join(parts, ", "))
 	return b.String()
 }

@@ -145,6 +145,8 @@ type SessionMeta struct {
 // DisplayMessage is a persistent conversation projection for interaction
 // surfaces.
 type DisplayMessage struct {
+	// Sequence is the last raw transcript sequence in this display group.
+	Sequence  int            `json:"sequence,omitempty"`
 	Role      string         `json:"role"`
 	Content   string         `json:"content"`
 	Reasoning string         `json:"reasoning,omitempty"`

@@ -127,6 +127,20 @@ func TestManagersDoNotShareAuthority(t *testing.T) {
 	}
 }
 
+func TestMissingDescendantsDoNotHideAncestorSymlink(t *testing.T) {
+	primary, outside := t.TempDir(), t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(primary, "link")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	m := New(primary, nil)
+	target := filepath.Join(primary, "link", "missing", "nested", "file.txt")
+	resolved, _, allowed, err := m.CheckWrite(target)
+	want := filepath.Join(outside, "missing", "nested", "file.txt")
+	if err != nil || allowed || resolved != want {
+		t.Fatalf("missing descendants hid symlink escape: resolved=%q allowed=%t err=%v want=%q", resolved, allowed, err, want)
+	}
+}
+
 func TestResolveExpandsHome(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {

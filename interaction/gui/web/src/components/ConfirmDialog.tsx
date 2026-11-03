@@ -25,17 +25,17 @@ function ConfirmDialogRequest({
   onDone: () => void
 }) {
   const isPermission = isPermissionConfirm(entry)
-  // Any prompt except "once"-scope (shell.unknown / process.host) can be
-  // remembered as an allow rule by the rule engine.
-  const canRemember = permissionScope(entry) !== 'once'
-
-  const options: { label: string; ok: boolean; remember: boolean }[] = [
-    { label: '仅本次允许', ok: true, remember: false },
-  ]
-  if (canRemember) {
-    options.push({ label: '始终允许', ok: true, remember: true })
-  }
-  options.push({ label: '拒绝', ok: false, remember: false })
+  const suppliedOptions = entry.approval?.options
+  const canRemember = suppliedOptions?.length
+    ? suppliedOptions.some(option => option.remember)
+    : permissionScope(entry) !== 'once'
+  const options = suppliedOptions?.length
+    ? suppliedOptions.map(option => ({ label: option.label, ok: option.allowed, remember: option.remember }))
+    : [
+        { label: entry.toolName === 'workspace' ? '本次会话允许' : '仅本次允许', ok: true, remember: false },
+        ...(canRemember ? [{ label: '始终允许', ok: true, remember: true }] : []),
+        { label: '拒绝', ok: false, remember: false },
+      ]
 
   const [selected, setSelected] = useState(0)
   const [submitting, setSubmitting] = useState(false)
@@ -267,13 +267,16 @@ function RememberPreview({ entry, canRemember }: { entry: ConfirmEntry; canRemem
   const rules = approval?.remember_rules ?? []
   const hasCapabilities = !!approval?.capabilities?.length
   const workspaceRequest = entry.toolName === 'workspace'
+  const hasPersistent = hasCapabilities || workspaceRequest || rules.some(rule => rule.lifetime !== 'session')
   return <div className="mt-3 border-t border-border/35 pt-3 text-[11px] text-text-2">
-    <p className="font-medium">始终允许的范围</p>
+    <p className="font-medium">记住授权的范围</p>
+    {hasPersistent && <p className="mt-1 text-text-3">保存到用户授权存储</p>}
     {approval?.remember_workspace && <p className="mt-1 break-all">生效项目：{approval.remember_workspace}</p>}
     {rules.map((rule, i) => <div key={i} className="mt-2 rounded-md bg-surface p-2">
-      <p className="text-text-3">{rule.literal ? '完整命令，仅精确匹配' : '权限匹配规则'}</p>
+      <p className="text-text-3">{rule.lifetime === 'session' ? '本次会话，仅精确匹配' : rule.literal ? '完整命令，仅精确匹配' : '项目权限匹配规则'}</p>
       <code className="block whitespace-pre-wrap break-all">{rule.literal || `${rule.tool}(${rule.specifier ?? ''})`}</code>
     </div>)}
+    {(approval?.approved_rules ?? []).map((rule, i) => <p key={`approved-${i}`} className="mt-1 break-all">已允许：{rule.literal || `${rule.tool}(${rule.specifier ?? ''})`}</p>)}
     {hasCapabilities && <p className="mt-2">同时记住所使用的目录和网络授权范围。</p>}
     {workspaceRequest && <p className="mt-2 break-all">工作区访问：{approval?.workspace || String(entry.args.path ?? '')}（{String(entry.args.access ?? '')}）</p>}
     {!rules.length && !hasCapabilities && !workspaceRequest && <p className="mt-1 text-text-3">未提供规则预览，建议仅本次允许。</p>}

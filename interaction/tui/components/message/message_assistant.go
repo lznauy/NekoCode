@@ -113,7 +113,7 @@ func (m *AssistantMessageItem) Render(width int) string {
 		msgParts = append(msgParts, "", "  "+styles.SubtleStyle.Render(m.footer))
 	}
 	if m.telemetry != nil {
-		msgParts = append(msgParts, "", "  "+renderTelemetryLine(*m.telemetry, max(contentW-2, 1), m.sty))
+		msgParts = append(msgParts, "", renderTelemetryFooter(*m.telemetry, contentW, m.sty))
 	}
 
 	msgBlock := lipgloss.NewStyle().

@@ -27,6 +27,10 @@ func (e *Executor) ExecuteBatch(ctx context.Context, calls []core.ToolCallItem) 
 func (e *Executor) partitionCalls(calls []core.ToolCallItem) ([]indexedCall, []indexedCall) {
 	var parallel, sequential []indexedCall
 	for i, c := range calls {
+		// Workers and tool implementations own their argument containers. Calls
+		// may share caller maps, including a delegated target nested in Args.
+		c.Args = cloneToolArgs(c.Args)
+		c.EffectiveArgs = cloneToolArgs(c.EffectiveArgs)
 		if t, err := e.registry.Get(c.Name); err == nil && t.ExecutionMode(c.Args) == core.ModeParallel {
 			parallel = append(parallel, indexedCall{idx: i, call: c})
 		} else {
@@ -108,5 +112,43 @@ func (e *Executor) executeSequential(ctx context.Context, calls []indexedCall, r
 	for _, c := range calls {
 		e.emitPreview(ctx, c.call)
 		results[c.idx] = e.executeOne(ctx, c.call)
+	}
+}
+
+// cloneToolArgs detaches JSON-shaped containers without serializing opaque
+// runtime values such as task callbacks. Preserve nil versus empty lists.
+func cloneToolArgs(args map[string]any) map[string]any {
+	if args == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(args))
+	for key, value := range args {
+		cloned[key] = cloneToolArg(value)
+	}
+	return cloned
+}
+
+func cloneToolArg(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		return cloneToolArgs(value)
+	case []any:
+		if value == nil {
+			return []any(nil)
+		}
+		cloned := make([]any, len(value))
+		for i, item := range value {
+			cloned[i] = cloneToolArg(item)
+		}
+		return cloned
+	case []string:
+		if value == nil {
+			return []string(nil)
+		}
+		cloned := make([]string, len(value))
+		copy(cloned, value)
+		return cloned
+	default:
+		return value
 	}
 }

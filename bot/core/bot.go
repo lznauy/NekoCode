@@ -244,7 +244,7 @@ func (b *Bot) configuredWorkspaceRoots() []workspace.Root {
 		}
 	}
 	for _, r := range permission.NewStore(b.cwd).WorkspaceRoots() {
-		roots = append(roots, workspace.Root{Path: r.Path, Access: workspace.Access(r.Access)})
+		roots = append(roots, workspace.Root{Path: r.Path, Access: workspace.Access(r.Access), Canonical: true})
 	}
 	return roots
 }

@@ -3,7 +3,6 @@ package runner
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -52,7 +51,7 @@ func TestAccessObservationTracksActorModeRulesAndGrants(t *testing.T) {
 	if strings.Contains(string(raw), root) || strings.Contains(string(raw), "secret-sentinel") {
 		t.Fatal("rule or path leaked into observation")
 	}
-	if err := os.WriteFile(filepath.Join(root, ".nekocode", "permissions.json"), []byte("invalid-secret-sentinel"), 0600); err != nil {
+	if err := os.WriteFile(parent.permStore.Path(), []byte("invalid-secret-sentinel"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	failed := child.AccessObservation()

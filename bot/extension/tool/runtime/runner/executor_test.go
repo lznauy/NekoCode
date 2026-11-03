@@ -274,19 +274,6 @@ func TestPlanModeToolAllowlist(t *testing.T) {
 	}
 }
 
-func TestHasPermissionDeclIncludesSandboxOnlyPolicy(t *testing.T) {
-	if !hasPermissionDecl(permission.PermissionsDecl{
-		Sandbox: map[string]permission.SandboxProfile{
-			"Bash(git status *)": {SandboxMode: "read-only"},
-		},
-	}) {
-		t.Fatal("sandbox-only permission policy must not be treated as empty")
-	}
-	if hasPermissionDecl(permission.PermissionsDecl{}) {
-		t.Fatal("empty permission policy should be treated as empty")
-	}
-}
-
 func TestExecutorProcessActionsDoNotPromptByDefault(t *testing.T) {
 	e := newTestExecutor(fakeRegistry{
 		"process": fakeTool{name: "process", mode: core.ModeParallel},

@@ -16,6 +16,9 @@ import (
 // The returned error is an UnavailableError when no backend could be used;
 // callers should treat it as a signal to request host-execution permission.
 func Run(ctx context.Context, command string, profile Profile, timeout time.Duration) (string, error) {
+	if err := protectAuthority(profile); err != nil {
+		return "", err
+	}
 	// Validate the workspace up front so callers always get a clear
 	// "workspace is required" error rather than a confusing backend-specific
 	// failure (or an UnavailableError from a doomed landlock attempt).
@@ -67,6 +70,9 @@ func Run(ctx context.Context, command string, profile Profile, timeout time.Dura
 
 // Start launches a long-running command in the best available sandbox.
 func Start(ctx context.Context, command string, profile Profile) (*Process, error) {
+	if err := protectAuthority(profile); err != nil {
+		return nil, err
+	}
 	if profile.OutboundDomains != nil {
 		if !isNativeAvailable() {
 			return nil, NetworkIsolationError{Reason: "Linux native namespaces required"}

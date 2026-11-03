@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"nekocode/bot/config"
+	"nekocode/bot/extension/tool/runtime/authority"
 	"nekocode/bot/extension/tool/runtime/toolutil"
 	"nekocode/util/fs"
 )
@@ -39,6 +40,9 @@ func resolveOutputDir(ctx context.Context, args map[string]any) (string, error) 
 		safeOutputDir, err = toolutil.ValidatePath(outputDir)
 	}
 	if err != nil {
+		return "", fmt.Errorf("invalid output_dir: %w", err)
+	}
+	if err := authority.CheckWritable(safeOutputDir); err != nil {
 		return "", fmt.Errorf("invalid output_dir: %w", err)
 	}
 	if err := os.MkdirAll(safeOutputDir, 0o755); err != nil {

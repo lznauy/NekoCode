@@ -185,16 +185,52 @@ func TestRememberRuleRejectsAutoBroadenedBashSpecifier(t *testing.T) {
 	}
 }
 
-func TestRememberRulePersistsExactBashLiteral(t *testing.T) {
+// Exact-statement grants are session-scoped now; the store must never accept
+// them, because entries are append-only and would outlive the call they match.
+func TestRememberRuleRejectsExactBashLiteral(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
 	literal := `bash -c "$(cat task.txt)"`
-	if err := store.RememberRule(dir, Rule{Tool: "shell", Literal: literal, Effect: EffectAllow}); err != nil {
+	if err := store.RememberRule(dir, Rule{Tool: "shell", Literal: literal, Effect: EffectAllow, Lifetime: LifetimeSession}); err != nil {
 		t.Fatalf("RememberRule literal: %v", err)
 	}
+	if rules := store.RememberedRules(dir); len(rules) != 0 {
+		t.Fatalf("session literal reached the file: %+v", rules)
+	}
+}
+
+// Rules written by older binaries mirrored the literal into Specifier; they
+// are inert on load, without rewriting the store.
+func TestLegacyRulesAreFilteredWithoutRewritingStore(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	legacy := `curl https://a.test > out.json`
+	if err := store.mutate(func(f *permissionFile) bool {
+		p := f.Projects[dir]
+		p.Rules = []Rule{
+			{Tool: "shell", Specifier: legacy, Literal: legacy, Effect: EffectAllow, Source: "remembered"},
+			{Tool: "shell", Specifier: "echo *", Lifetime: LifetimeSession, Effect: EffectAllow, Source: "session"},
+			{Tool: "shell", Specifier: "npm *", Effect: EffectAllow, Source: "remembered"},
+		}
+		f.Projects[dir] = p
+		return true
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	before, err := os.ReadFile(store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
 	rules := store.RememberedRules(dir)
-	if len(rules) != 1 || rules[0].Literal != literal || rules[0].Specifier != literal {
-		t.Fatalf("remembered literal = %+v", rules)
+	if len(rules) != 1 || rules[0].Specifier != "npm *" {
+		t.Fatalf("legacy literal not filtered: %+v", rules)
+	}
+	if reloaded := NewStore(dir).RememberedRules(dir); len(reloaded) != 1 || reloaded[0].Specifier != "npm *" {
+		t.Fatalf("legacy literal not filtered after reload: %+v", reloaded)
+	}
+	after, err := os.ReadFile(store.Path())
+	if err != nil || string(before) != string(after) {
+		t.Fatal("reading rules rewrote the store")
 	}
 }
 
@@ -234,7 +270,7 @@ func TestDuplicateRememberSkipsSave(t *testing.T) {
 	if err := store.RememberRule(dir, rule); err != nil {
 		t.Fatalf("first RememberRule: %v", err)
 	}
-	path := filepath.Join(dir, ".nekocode", "permissions.json")
+	path := store.Path()
 	before, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat: %v", err)

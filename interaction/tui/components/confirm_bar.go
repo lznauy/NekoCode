@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"nekocode/interaction/tui/styles"
+	"nekocode/protocol"
 	controlruntime "nekocode/runtime"
 
 	"charm.land/lipgloss/v2"
@@ -96,10 +97,8 @@ func (c *ConfirmBar) Respond(ok bool, remember bool) {
 	c.respond = nil
 }
 
-// CanRemember reports whether the user can persist the decision. The legacy
-// capability model only persists "project"-scope grants; the new rule engine
-// persists an allow Rule for any ask except CapProcessHost, which is
-// intentionally non-persistent (every host-execution must prompt).
+// CanRemember reports whether every part of this approval can be persisted.
+// A once-only command or capability keeps the merged decision once-only.
 func (c *ConfirmBar) CanRemember() bool {
 	if c.req == nil || c.action != nil {
 		return false
@@ -126,13 +125,10 @@ func (c *ConfirmBar) options() []confirmOption {
 	if c.req == nil {
 		return nil
 	}
-	opts := []confirmOption{
-		{Label: "仅本次允许", Action: func(c *ConfirmBar) { c.Respond(true, false) }},
+	var opts []confirmOption
+	for _, option := range c.req.Approval.DecisionOptions(c.req.ToolName) {
+		opts = append(opts, confirmOption{Label: option.Label, Action: func(c *ConfirmBar) { c.Respond(option.Allowed, option.Remember) }})
 	}
-	if c.CanRemember() {
-		opts = append(opts, confirmOption{Label: "始终允许", Action: func(c *ConfirmBar) { c.Respond(true, true) }})
-	}
-	opts = append(opts, confirmOption{Label: "拒绝", Action: func(c *ConfirmBar) { c.Respond(false, false) }})
 	return opts
 }
 
@@ -371,38 +367,30 @@ func (c *ConfirmBar) isExecutionApproval() bool {
 		(c.req != nil && c.req.Approval != nil && len(c.req.Approval.Structures) > 0)
 }
 
+// formatPermissionDesc renders the body of a permission card. Callers reach it
+// only through isPermissionConfirm, which guarantees a non-nil approval, so the
+// card always has at least one field to show.
 func (c *ConfirmBar) formatPermissionDesc() string {
-	var lines []string
-	lines = append(lines, permissionSummary(c.req))
-	if c.isExecutionApproval() {
-		if command, ok := c.req.Args["command"].(string); ok && command != "" {
-			lines = append(lines, "命令: "+formatCommandPreview(command, 600))
-		}
-	}
 	approval := c.req.Approval
-	if approval == nil {
-		return strings.Join(lines, "\n")
-	}
+	// The title bar already says what kind of confirmation this is, so the
+	// body carries fields only, all in one shape: "标签: 值".
+	var lines []string
 	approvalReason := approval.Risk
 	if approvalReason == "" {
 		approvalReason = approval.Reason
 	}
-	if approvalReason != "" {
-		lines = append(lines, "确认原因: "+friendlyPermissionReason(approvalReason))
-	}
-	if source := map[string]string{"user_rule": "命中用户设置的询问规则", "builtin_rule": "命中内置询问规则", "default_policy": "当前权限策略需要人工确认", "workspace": "需要扩展工作区访问范围", "capability": "需要授予额外执行权限"}[approval.Source]; source != "" {
-		lines = append(lines, "审批来源: "+source)
-	}
 	if approval.Rule != "" {
 		lines = append(lines, "触发规则: "+approval.Rule)
+	} else if label := permissionReasonLabel(approvalReason); label != "" {
+		lines = append(lines, "原因: "+label)
 	}
-	if len(approval.Structures) > 0 {
-		lines = append(lines, "结构: "+friendlyShellStructures(approval.Structures))
-	}
-	if reason := approval.Reason; reason != "" {
-		if reason != approvalReason {
-			lines = append(lines, "原因: "+friendlyPermissionReason(reason))
+	if c.isExecutionApproval() {
+		if command, ok := c.req.Args["command"].(string); ok && command != "" {
+			lines = append(lines, formatCommandPreview(command, 600))
 		}
+	}
+	if reason := approval.Reason; reason != "" && reason != approvalReason {
+		lines = append(lines, "原因: "+friendlyPermissionReason(reason))
 	}
 	if path, ok := c.req.Args["path"].(string); ok && path != "" {
 		lines = append(lines, "路径: "+path)
@@ -430,92 +418,142 @@ func (c *ConfirmBar) formatPermissionDesc() string {
 	if len(approval.WritePaths) > 0 {
 		lines = append(lines, "可写目录: "+strings.Join(approval.WritePaths, "、"))
 	}
-	if approval.CanRemember() {
-		if approval.RememberWorkspace != "" {
-			lines = append(lines, "记住后生效项目: "+approval.RememberWorkspace)
-		}
-		for _, rule := range approval.RememberRules {
-			text := rule.Tool + "(" + rule.Specifier + ")"
-			if rule.Literal != "" {
-				text = "完整命令，仅精确匹配: " + rule.Literal
-			}
-			lines = append(lines, "将记住: "+text)
-		}
-		if len(approval.Capabilities) > 0 {
-			lines = append(lines, "同时记住所使用的目录和网络授权范围。")
-		}
+	// Decisions come first: what the user has to decide is the only part that
+	// changes the outcome. Reusable grants are grouped behind it as context.
+	persistent, session := splitRememberRules(approval.RememberRules)
+	if len(persistent) > 0 {
+		lines = append(lines, "待确认: "+formatRuleList(persistent))
+	}
+	if len(session) > 0 {
+		lines = append(lines, "本会话: "+formatRuleList(session)+"（会话结束后失效）")
+	}
+	if len(approval.ApprovedRules) > 0 {
+		lines = append(lines, "通过: "+formatRuleList(approval.ApprovedRules))
+	}
+	if approval.CanRemember() && len(persistent) > 0 && approval.RememberWorkspace != "" {
+		lines = append(lines, "长期授权生效项目: "+approval.RememberWorkspace)
+	}
+	if approval.CanRemember() && len(approval.Capabilities) > 0 {
+		lines = append(lines, "同时记住: 目录与网络范围")
 	}
 	return strings.Join(lines, "\n")
 }
 
-func permissionSummary(req *controlruntime.ConfirmRequest) string {
-	if req == nil {
-		return "需要确认权限"
-	}
-	if req.Approval != nil && req.Approval.Combined {
-		if len(req.Approval.Capabilities) > 0 {
-			return "将执行命令并开放所列权限"
+// splitRememberRules separates grants that will be written to the project
+// permissions file from those only valid for the current session.
+func splitRememberRules(rules []protocol.ApprovalRememberRule) (persistent, session []protocol.ApprovalRememberRule) {
+	for _, rule := range rules {
+		if rule.Session() {
+			session = append(session, rule)
+			continue
 		}
-		return "命令包含需要确认的动态执行结构"
+		persistent = append(persistent, rule)
 	}
-	if req.Approval != nil && len(req.Approval.Structures) > 0 {
-		return "命令包含需要确认的动态执行结构"
+	return persistent, session
+}
+
+// maxListedSpecs bounds how many specifiers a summary line spells out. Long
+// scripts produce dozens of units, and grouping by tool alone would let one
+// tool's list grow without limit: the count is what matters past a few.
+const maxListedSpecs = 3
+
+// formatRuleList renders rules compactly: reusable entries of the same tool
+// share one pair of parentheses, exact statements collapse to a short summary
+// (the full script is already shown as the command preview above), and long
+// lists collapse into a count.
+func formatRuleList(rules []protocol.ApprovalRememberRule) string {
+	if len(rules) == 0 {
+		return ""
 	}
-	if req.Approval == nil {
-		return "需要确认权限"
+	var parts []string
+	grouped := map[string][]string{}
+	var order []string
+	omitted := 0
+	flush := func() {
+		for _, tool := range order {
+			specs := grouped[tool]
+			if len(specs) > maxListedSpecs {
+				omitted += len(specs) - maxListedSpecs
+				specs = specs[:maxListedSpecs]
+			}
+			parts = append(parts, tool+"("+strings.Join(specs, ", ")+")")
+		}
+		grouped = map[string][]string{}
+		order = nil
 	}
-	switch req.Approval.Scope {
-	case controlruntime.ApprovalScopeOnce:
-		return "需要临时授权"
-	case controlruntime.ApprovalScopeProject:
-		return "需要项目级授权"
+	exact := 0
+	for _, rule := range rules {
+		if rule.Literal != "" || rule.Specifier == "" {
+			flush()
+			exact++
+			continue
+		}
+		if _, ok := grouped[rule.Tool]; !ok {
+			order = append(order, rule.Tool)
+		}
+		grouped[rule.Tool] = append(grouped[rule.Tool], rule.Specifier)
 	}
-	return "需要确认权限"
+	flush()
+	if exact == 1 {
+		parts = append(parts, "整段脚本")
+	} else if exact > 1 {
+		parts = append(parts, fmt.Sprintf("%d 段脚本", exact))
+	}
+	if len(parts) > maxListedSpecs {
+		omitted += len(parts) - maxListedSpecs
+		parts = parts[:maxListedSpecs]
+	}
+	out := strings.Join(parts, "、")
+	if omitted > 0 {
+		// The count names the whole set, matching the "N 条" wording used on
+		// the remember button for the same rules.
+		out += fmt.Sprintf(" 等 %d 项", omitted+shownSpecs(parts))
+	}
+	return out
+}
+
+// shownSpecs counts the specifiers actually spelled out in the rendered parts,
+// including the ones folded into a per-tool group.
+func shownSpecs(parts []string) int {
+	count := 0
+	for _, part := range parts {
+		if strings.HasSuffix(part, "段脚本") {
+			count++
+			continue
+		}
+		count += strings.Count(part, ", ") + 1
+	}
+	return count
 }
 
 func friendlyPermissionReason(reason string) string {
 	switch strings.TrimSpace(reason) {
 	case "command contains dynamic shell syntax that cannot be safely persisted":
-		return "命令包含动态 Shell 语法，无法安全记住为固定规则。"
+		return "运行时生成内容，无法记住"
 	case "dynamic shell execution":
-		return "命令包含运行时才能确定的间接执行。"
+		return "运行时生成内容"
+	case "explicit ask rule requires approval on every call":
+		return "你要求每次确认"
 	case "command requires public network access":
-		return "命令需要访问公共网络。"
+		return "需要访问公网"
 	case "jev: judged dangerous":
-		return "Jev 判定该命令存在风险。"
+		return "风险判定不安全"
 	case "jev: judgment failed":
-		return "jev判断失败，请手动决定。"
+		return "风险判定失败"
 	case "jev: URL judged risky by the risk judge":
-		return "Jev 判定该 URL 存在风险。"
+		return "网址风险判定不安全"
 	}
 	return reason
 }
 
-func friendlyShellStructures(structures []string) string {
-	labels := make([]string, 0, len(structures))
-	for _, structure := range structures {
-		switch structure {
-		case "command_substitution":
-			labels = append(labels, "命令替换")
-		case "process_substitution":
-			labels = append(labels, "进程替换")
-		case "dynamic_command":
-			labels = append(labels, "动态命令名")
-		case "eval":
-			labels = append(labels, "eval")
-		case "source":
-			labels = append(labels, "source")
-		case "shell_command_string":
-			labels = append(labels, "Shell -c")
-		case "shell_heredoc_code":
-			labels = append(labels, "heredoc 内联代码")
-		case "unparseable":
-			labels = append(labels, "无法解析的 Shell 语法")
-		default:
-			labels = append(labels, structure)
-		}
+// permissionReasonLabel renders a reason as a short field value. It returns
+// an empty string for reasons that carry no information a user can act on.
+func permissionReasonLabel(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return ""
 	}
-	return strings.Join(labels, "、")
+	return friendlyPermissionReason(reason)
 }
 
 func friendlyCapabilities(caps string) string {

@@ -25,6 +25,10 @@ const (
 	failNoConfirmFn                                    // no UI callback wired (subagent / headless)
 	failUserDenied                                     // user dismissed the confirm dialog
 	failRetryError                                     // ExecuteWithPermission ran but returned an error
+	failSaveApproval                                   // permanent capability approval could not be saved
+	failPermissionStore                                // capability rules could not be read
+	failApprovalContext                                // project or policy changed during approval
+	failFileTarget                                     // approved file target changed before dispatch
 )
 
 // tryPermissionEscalation tries to satisfy a RequiredPermissionError raised
@@ -46,53 +50,73 @@ func (e *Executor) tryPermissionEscalation(ctx context.Context, privileged tools
 	}
 
 	req := permErr.PermissionRequest()
-	if e.permissionDenied(tc.Name, req) {
+	policy := e.permissionSnapshot()
+	if preApproved.policy != nil && !preApproved.policy.current(e) {
+		return core.ToolOutput{}, false, failApprovalContext, errApprovalContextChanged
+	}
+	boundFileTargets := preApproved.fileTargets
+	if boundFileTargets == nil {
+		var targetErr error
+		_, boundFileTargets, targetErr = bindFilePolicyCall(tc)
+		if targetErr != nil {
+			return core.ToolOutput{}, false, failFileTarget, targetErr
+		}
+	}
+	originalPrivileged := privileged
+	privileged = func(callCtx context.Context, args map[string]any, request core.PermissionRequest) (core.ToolOutput, error) {
+		if !policy.current(e) {
+			return core.ToolOutput{}, errApprovalContextChanged
+		}
+		if err := validateFileTargetBinding(boundFileTargets); err != nil {
+			return core.ToolOutput{}, err
+		}
+		return originalPrivileged(callCtx, args, request)
+	}
+	decision := permission.CapabilityDecision{}
+	if policy.store != nil {
+		decision = policy.store.Decide(permissionToolAliases(tc.Name), req)
+	}
+	if decision.Err != nil {
+		return core.ToolOutput{}, false, failPermissionStore, decision.Err
+	}
+	if decision.Deny {
 		e.observePermissionDenial(ctx, tc, "denied by capability rule", &req)
 		return core.ToolOutput{}, false, failDeniedByRule, execErr
 	}
-	// Full-takeover mode: escalate without any dialog, including capabilities
-	// (like process.host) that manual mode never pre-approves. Deny rules
-	// above still block.
-	if e.FullAccess() {
+
+	// All authorization paths share one privileged invocation and error mapping.
+	runAuthorized := func() (core.ToolOutput, bool, escalationFailReason, error) {
 		out, err := privileged(e.toolContext(ctx), tc.Args, req)
-		if err == nil {
-			return out, true, 0, nil
+		if err != nil {
+			if errors.Is(err, errApprovalContextChanged) {
+				return out, false, failApprovalContext, err
+			}
+			if errors.Is(err, errFileTargetChanged) {
+				return out, false, failFileTarget, err
+			}
+			return out, false, failRetryError, err
 		}
-		return out, false, failRetryError, err
+		return out, true, 0, nil
 	}
-	if e.permissionAllowed(tc.Name, req) {
-		out, err := privileged(e.toolContext(ctx), tc.Args, req)
-		if err == nil {
-			return out, true, 0, nil
+	if policy.mode == permission.ModeFull || decision.Allow {
+		return runAuthorized()
+	}
+	if hasPreApproval && preApproved.requestCoveredBy(req) {
+		if err := validateFileTargetBinding(boundFileTargets); err != nil {
+			return core.ToolOutput{}, false, failFileTarget, err
 		}
-		return out, false, failRetryError, err
+		if err := e.rememberPermissionFor(policy, tc.Name, req, preApproved.remember); err != nil {
+			return core.ToolOutput{}, false, failSaveApproval, err
+		}
+		return runAuthorized()
+	}
+	// A previous automatic verdict is authority only while auto mode remains
+	// active. Recheck again immediately before dispatch in the wrapper above.
+	if jevSafe && e.permissionMode() == permission.ModeAuto {
+		return runAuthorized()
 	}
 	if confirmFn == nil {
 		return core.ToolOutput{}, false, failNoConfirmFn, execErr
-	}
-	if hasPreApproval && preApproved.requestCoveredBy(req) {
-		// The unified dialog already showed this call's predicted capabilities.
-		// Its call-ID-bound token authorizes the privileged retry directly;
-		// only an explicit remembered decision is persisted for later calls.
-		e.rememberPermission(tc.Name, req, preApproved.remember)
-		out, err := privileged(e.toolContext(ctx), tc.Args, req)
-		if err == nil {
-			return out, true, 0, nil
-		}
-		return out, false, failRetryError, err
-	}
-	if jevSafe {
-		// The auto-mode risk judge already vetted this call's content when
-		// the pre-execution check passed it silently; granting whatever
-		// capability it needs — sandbox relaxation or host execution alike —
-		// follows the same verdict instead of popping a second, redundant
-		// dialog. The owner opts into this by enabling auto mode; explicit
-		// deny rules above still block, and ask-rule hits keep jevSafe false.
-		out, err := privileged(e.toolContext(ctx), tc.Args, req)
-		if err == nil {
-			return out, true, 0, nil
-		}
-		return out, false, failRetryError, err
 	}
 	confirmReq := protocol.NewApprovalRequest(
 		canonicalPermissionTool(tc.Name),
@@ -101,18 +125,26 @@ func (e *Executor) tryPermissionEscalation(ctx context.Context, privileged tools
 		approvalContextFromPermission(req),
 	)
 	confirmReq.CallID = tc.ID
+	canRemember := confirmReq.Approval.CanRemember()
 	reply := confirmFn(confirmReq)
+	if !canRemember {
+		reply.Remember = false
+	}
 	if !reply.Allowed {
 		return core.ToolOutput{}, false, failUserDenied, execErr
 	}
+	if !policy.current(e) {
+		return core.ToolOutput{}, false, failApprovalContext, errApprovalContextChanged
+	}
+	if err := validateFileTargetBinding(boundFileTargets); err != nil {
+		return core.ToolOutput{}, false, failFileTarget, err
+	}
 	if reply.Remember {
-		e.rememberPermission(tc.Name, req, true)
+		if err := e.rememberPermissionFor(policy, tc.Name, req, true); err != nil {
+			return core.ToolOutput{}, false, failSaveApproval, err
+		}
 	}
-	out, err := privileged(e.toolContext(ctx), tc.Args, req)
-	if err == nil {
-		return out, true, 0, nil
-	}
-	return out, false, failRetryError, err
+	return runAuthorized()
 }
 
 // permissionFailureMessage renders the error string shown to the model when
@@ -160,6 +192,14 @@ func permissionFailureMessage(tc core.ToolCallItem, execErr error, reason escala
 		return "no approval available in this runtime"
 	case failDeniedByRule:
 		return fmt.Sprintf("denied by permission rule for capabilities [%s]", caps)
+	case failApprovalContext:
+		return "approval context changed; privileged execution was not started; do not retry automatically"
+	case failFileTarget:
+		return "privileged execution was not started: " + causeErr.Error()
+	case failPermissionStore:
+		return fmt.Sprintf("cannot read capability permission rules; privileged execution was not started: %v; do not retry automatically", causeErr)
+	case failSaveApproval:
+		return fmt.Sprintf("cannot save permanent capability approval; privileged execution was not started: %v. Fix the permissions file or choose allow once; do not retry automatically.", causeErr)
 	case failRetryError:
 		// ExecuteWithPermission actually ran (sandbox was opened up, host
 		// was hit, ...) and returned a real runtime error. Surface THAT
@@ -183,21 +223,6 @@ func permissionFailureMessage(tc core.ToolCallItem, execErr error, reason escala
 	return execErr.Error()
 }
 
-func (e *Executor) permissionDenied(toolName string, req core.PermissionRequest) bool {
-	e.fnMu.RLock()
-	store := e.permStore
-	e.fnMu.RUnlock()
-	if store == nil {
-		return false
-	}
-	for _, tool := range permissionToolAliases(toolName) {
-		if _, denied := store.Denied(tool, req); denied {
-			return true
-		}
-	}
-	return false
-}
-
 func (e *Executor) permissionAllowed(toolName string, req core.PermissionRequest) bool {
 	e.fnMu.RLock()
 	store := e.permStore
@@ -205,28 +230,29 @@ func (e *Executor) permissionAllowed(toolName string, req core.PermissionRequest
 	if store == nil {
 		return false
 	}
-	for _, tool := range permissionToolAliases(toolName) {
-		if _, ok := store.Match(tool, req); ok {
-			return true
-		}
-	}
-	return false
+	decision := store.Decide(permissionToolAliases(toolName), req)
+	return decision.Err == nil && decision.Allow && !decision.Deny
 }
 
-// rememberPermission persists a capability grant only for an explicit
+// rememberPermissionFor persists a capability grant only for an explicit
 // remembered approval. One-time approvals remain bound to the current call.
 // Host execution is persistable too: jev-safe can grant it automatically, so
 // refusing to remember an explicit user "always allow" trusted the machine
 // more than its owner. Deny rules and jev verdicts still apply on top of any
 // remembered grant.
-func (e *Executor) rememberPermission(toolName string, req core.PermissionRequest, persistStore bool) {
-	e.fnMu.RLock()
-	store := e.permStore
-	e.fnMu.RUnlock()
-	if store == nil || !persistStore {
-		return
+func (e *Executor) rememberPermissionFor(policy permissionSnapshot, toolName string, req core.PermissionRequest, persistStore bool) error {
+	e.fnMu.Lock()
+	defer e.fnMu.Unlock()
+	if !policy.currentLocked(e) {
+		return errApprovalContextChanged
 	}
-	_ = store.Allow(canonicalPermissionTool(toolName), req)
+	if policy.store == nil || !persistStore || req.Scope == string(protocol.ApprovalScopeOnce) {
+		return nil
+	}
+	if err := policy.store.Allow(canonicalPermissionTool(toolName), req); err != nil {
+		return fmt.Errorf("persist capability approval: %w", err)
+	}
+	return nil
 }
 
 func canonicalPermissionTool(toolName string) string {

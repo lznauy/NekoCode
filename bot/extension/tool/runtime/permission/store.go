@@ -3,6 +3,7 @@ package permission
 import (
 	"encoding/json"
 	"errors"
+	"nekocode/bot/extension/tool/runtime/authority"
 	"nekocode/bot/extension/tool/runtime/netpolicy"
 	"os"
 	"path/filepath"
@@ -24,7 +25,7 @@ const scopedNetworkCapability = "net.outbound.domains"
 var storeMu sync.Mutex
 
 // Store persists capability grants and remembered rules for one project. The
-// project's permissions live at <root>/.nekocode/permissions.json.
+// project's permissions live in the trusted user authority directory.
 type Store struct {
 	root string
 }
@@ -34,8 +35,12 @@ func NewStore(root string) *Store {
 	return &Store{root: filepath.Clean(root)}
 }
 
+// Path returns the trusted store path, or an empty string if it cannot be resolved.
+func (s *Store) Path() string { return s.projectPath() }
+
 func (s *Store) projectPath() string {
-	return filepath.Join(s.root, ".nekocode", "permissions.json")
+	path, _ := authority.StorePath(s.root)
+	return path
 }
 
 type permissionFile struct {
@@ -67,14 +72,40 @@ type WorkspaceRoot struct {
 	Access string `json:"access"`
 }
 
-func (s *Store) Match(tool string, req core.PermissionRequest) (Grant, bool) {
-	tool = normalizeToolName(tool)
-	if g, denied := s.Denied(tool, req); denied {
-		return g, false
-	}
-	return s.find(tool, req, "allow", grantAllowsRequest)
+// CapabilityDecision distinguishes unavailable policy from an unmatched request.
+// Deny always wins across every alias in one immutable file snapshot.
+type CapabilityDecision struct {
+	Allow bool
+	Deny  bool
+	Grant Grant
+	Err   error
 }
 
+func (s *Store) Decide(tools []string, req core.PermissionRequest) CapabilityDecision {
+	file, err := s.load()
+	if err != nil {
+		return CapabilityDecision{Err: err}
+	}
+	for _, tool := range tools {
+		if g, denied := s.findInFile(file, tool, req, "deny", grantDeniesRequest); denied {
+			return CapabilityDecision{Deny: true, Grant: g}
+		}
+	}
+	for _, tool := range tools {
+		if g, allowed := s.findInFile(file, tool, req, "allow", grantAllowsRequest); allowed {
+			return CapabilityDecision{Allow: true, Grant: g}
+		}
+	}
+	return CapabilityDecision{}
+}
+
+// Match is the legacy boolean interface; authorization callers should use Decide.
+func (s *Store) Match(tool string, req core.PermissionRequest) (Grant, bool) {
+	decision := s.Decide([]string{tool}, req)
+	return decision.Grant, decision.Allow
+}
+
+// Denied is the legacy boolean interface; authorization callers should use Decide.
 func (s *Store) Denied(tool string, req core.PermissionRequest) (Grant, bool) {
 	return s.find(normalizeToolName(tool), req, "deny", grantDeniesRequest)
 }
@@ -84,6 +115,11 @@ func (s *Store) find(tool string, req core.PermissionRequest, effect string, mat
 	if err != nil {
 		return Grant{}, false
 	}
+	return s.findInFile(f, tool, req, effect, match)
+}
+
+// findInFile keeps deny and allow decisions on the same immutable disk snapshot.
+func (s *Store) findInFile(f permissionFile, tool string, req core.PermissionRequest, effect string, match func(Grant, core.PermissionRequest) bool) (Grant, bool) {
 	project, ok := f.Projects[s.root]
 	if !ok {
 		return Grant{}, false
@@ -104,6 +140,9 @@ func (s *Store) find(tool string, req core.PermissionRequest, effect string, mat
 }
 
 func (s *Store) Allow(tool string, req core.PermissionRequest) error {
+	if req.Scope == "once" {
+		return errors.New("one-time capability approval cannot be persisted")
+	}
 	domains, err := netpolicy.FromDetails(req.Details)
 	if err != nil {
 		return err
@@ -171,18 +210,41 @@ func (s *Store) WorkspaceRoots() []WorkspaceRoot {
 	if !ok {
 		return nil
 	}
-	return append([]WorkspaceRoot(nil), p.Workspaces...)
+	var roots []WorkspaceRoot
+	for _, root := range p.Workspaces {
+		// Approval stores a canonical directory, not a link whose target can
+		// change on restart. Never let Configure rebind a remembered grant.
+		if !filepath.IsAbs(root.Path) || (root.Access != "read-only" && root.Access != "read-write") {
+			continue
+		}
+		real, err := filepath.EvalSymlinks(root.Path)
+		if err != nil || filepath.Clean(real) != filepath.Clean(root.Path) {
+			continue
+		}
+		roots = append(roots, root)
+	}
+	return roots
 }
 
 // mutate runs a load-modify-save cycle atomically across all Store instances
-// in this process. The update callback reports whether it changed anything;
+// and processes. A fixed sidecar lock remains stable across atomic file renames.
+// The update callback reports whether it changed anything;
 // no-change cycles skip the save entirely (common for repeated approvals that
 // hit the dedupe paths).
 func (s *Store) mutate(update func(*permissionFile) (changed bool)) error {
 	storeMu.Lock()
 	defer storeMu.Unlock()
 
-	f, err := s.load()
+	path, err := authority.StorePath(s.root)
+	if err != nil {
+		return err
+	}
+	unlock, err := lockStore(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	f, err := loadPermissionFile(path)
 	if err != nil {
 		return err
 	}
@@ -195,11 +257,18 @@ func (s *Store) mutate(update func(*permissionFile) (changed bool)) error {
 	if !update(&f) {
 		return nil
 	}
-	return s.save(f)
+	return savePermissionFile(path, f)
 }
 
 func (s *Store) load() (permissionFile, error) {
-	path := s.projectPath()
+	path, err := authority.StorePath(s.root)
+	if err != nil {
+		return permissionFile{}, err
+	}
+	return loadPermissionFile(path)
+}
+
+func loadPermissionFile(path string) (permissionFile, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return permissionFile{Version: permissionStoreVersion, Projects: map[string]permissionProject{}}, nil
@@ -217,8 +286,7 @@ func (s *Store) load() (permissionFile, error) {
 	return f, nil
 }
 
-func (s *Store) save(f permissionFile) error {
-	path := s.projectPath()
+func savePermissionFile(path string, f permissionFile) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}

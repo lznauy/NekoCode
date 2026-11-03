@@ -5,6 +5,145 @@ import (
 	"testing"
 )
 
+func TestExactCompoundGuardRules(t *testing.T) {
+	for _, command := range []string{`echo hello && date`, `echo hello | cat`, `echo hello > /tmp/target`} {
+		for _, effect := range []Effect{EffectDeny, EffectAsk} {
+			e := newBashEngine(Rule{Tool: "shell", Specifier: command, Effect: effect, Source: "project"}, Rule{Tool: "shell", Specifier: "*", Effect: EffectAllow, Source: "project"})
+			if d := e.EvaluateContext(context.Background(), "shell", bashCall(command), EffectAllow); d.Effect != effect {
+				t.Errorf("%q: got %s want %s", command, d.Effect, effect)
+			}
+		}
+	}
+}
+
+func TestStandaloneAssignmentsRequireFullApproval(t *testing.T) {
+	for _, command := range []string{`PATH=/tmp; git status`, `LD_PRELOAD=/tmp/payload.so; /bin/echo hello`} {
+		e := newBashEngine(Rule{Tool: "shell", Specifier: "*", Effect: EffectAllow, Source: "project"})
+		if d := e.EvaluateContext(context.Background(), "shell", bashCall(command), EffectAsk); d.Effect != EffectAsk {
+			t.Errorf("%q: got %s want ask", command, d.Effect)
+		}
+	}
+}
+
+func TestEnvironmentSpecificRuleDoesNotAllowPlainCommand(t *testing.T) {
+	e := newBashEngine(Rule{Tool: "shell", Specifier: `FOO=bar echo hello`, Effect: EffectAllow, Source: "project"})
+	if d := e.EvaluateContext(context.Background(), "shell", bashCall("echo hello"), EffectAsk); d.Effect != EffectAsk {
+		t.Fatalf("environment-specific rule broadened: %+v", d)
+	}
+	e = newBashEngine(Rule{Tool: "shell", Specifier: `FOO=bar echo hello`, Effect: EffectDeny, Source: "project"}, Rule{Tool: "shell", Specifier: "*", Effect: EffectAllow, Source: "project"})
+	if d := e.EvaluateContext(context.Background(), "shell", bashCall("FOO=bar echo hello && date"), EffectAsk); d.Effect != EffectDeny {
+		t.Fatalf("environment-specific deny disappeared inside compound command: %+v", d)
+	}
+}
+
+func TestEnvironmentSpecificGuardMatchesEquivalentAssignments(t *testing.T) {
+	for _, effect := range []Effect{EffectDeny, EffectAsk} {
+		for _, command := range []string{`FOO='bar' echo hello && date`, `FOO=b\ar echo hello && date`, `FOO=$'bar' echo hello && date`} {
+			e := newBashEngine(
+				Rule{Tool: "shell", Specifier: `FOO=bar echo hello`, Effect: effect, Source: "project"},
+				Rule{Tool: "shell", Literal: command, Effect: EffectAllow, Source: "remembered"},
+			)
+			if d := e.EvaluateContext(context.Background(), "shell", bashCall(command), EffectAsk); d.Effect != effect {
+				t.Errorf("%s guard bypassed by %q: %+v", effect, command, d)
+			}
+		}
+	}
+}
+
+func TestShellDeclarationsCannotDisappearFromApproval(t *testing.T) {
+	for _, command := range []string{`export PATH=/tmp; git status`, `readonly PATH=/tmp; git status`, `declare -x LD_PRELOAD=/tmp/payload.so; git status`} {
+		for _, spec := range []string{"git status", "*"} {
+			e := newBashEngine(Rule{Tool: "shell", Specifier: spec, Effect: EffectAllow, Source: "project"})
+			if d := e.EvaluateContext(context.Background(), "shell", bashCall(command), EffectAsk); d.Effect != EffectAsk {
+				t.Errorf("%s covered %s: %s", spec, command, d.Effect)
+			}
+		}
+		if BashRuleMatches("git status", bashCall(command), MatchAllSubcommands) {
+			t.Errorf("declaration dropped from subcommands: %s", command)
+		}
+	}
+}
+
+func TestShellDenyUsesDecodedCommandAndKeepsArguments(t *testing.T) {
+	for _, command := range []string{`r\m target`, `'rm' target`, `env rm "$TARGET"`, `timeout 5 r\m "$TARGET"`, `rm 'target'`} {
+		e := newBashEngine(
+			Rule{Tool: "shell", Specifier: "rm *", Effect: EffectDeny, Source: "project"},
+			Rule{Tool: "shell", Specifier: "*", Effect: EffectAllow, Source: "project"},
+		)
+		if d := e.EvaluateContext(context.Background(), "shell", bashCall(command), EffectAsk); d.Effect != EffectDeny {
+			t.Errorf("%s: got %s, want deny", command, d.Effect)
+		}
+	}
+	for _, command := range []string{`env 'git status'`, `env git 'status --short'`} {
+		e := newBashEngine(Rule{Tool: "shell", Specifier: "git status", Effect: EffectAllow, Source: "project"}, Rule{Tool: "shell", Specifier: "git status --short", Effect: EffectAllow, Source: "project"})
+		if d := e.EvaluateContext(context.Background(), "shell", bashCall(command), EffectAsk); d.Effect != EffectAsk {
+			t.Errorf("argv boundaries lost for %s: got %s", command, d.Effect)
+		}
+	}
+	for _, command := range []string{`g\it 'status'`, `env 'git' 'status'`} {
+		e := newBashEngine(Rule{Tool: "shell", Specifier: "git status", Effect: EffectAllow, Source: "project"})
+		if d := e.EvaluateContext(context.Background(), "shell", bashCall(command), EffectAsk); d.Effect != EffectAllow {
+			t.Errorf("equivalent argv should match: %s: %s", command, d.Effect)
+		}
+	}
+}
+
+func TestShellWrapperSideEffectsNeedFullApproval(t *testing.T) {
+	for _, command := range []string{`/usr/bin/time -o /tmp/target echo hello`, `timeout 5 /usr/bin/time --output /tmp/target echo hello`, `env LD_PRELOAD=/tmp/payload.so echo hello`, `env PATH=/tmp/bin echo hello`, `timeout 5 env FOO=bar echo hello`, `LD_PRELOAD=/tmp/payload.so echo hello`} {
+		e := newBashEngine(Rule{Tool: "shell", Specifier: "*", Effect: EffectAllow, Source: "project"})
+		if d := e.EvaluateContext(context.Background(), "shell", bashCall(command), EffectAsk); d.Effect != EffectAsk {
+			t.Errorf("%s: got %s, want ask", command, d.Effect)
+		}
+		e = newBashEngine(Rule{Tool: "shell", Literal: command, Effect: EffectAllow, Source: "remembered"})
+		if d := e.EvaluateContext(context.Background(), "shell", bashCall(command), EffectAsk); d.Effect != EffectAllow {
+			t.Errorf("exact approval rejected: %s: %s", command, d.Effect)
+		}
+	}
+}
+
+func TestASTShellApprovalBoundaries(t *testing.T) {
+	for _, command := range []string{
+		`e\val 'printf marker'`,
+		`$'\x65val' 'printf marker'`,
+		`"e"\val 'printf marker'`,
+		`\source ./script.sh`,
+		`bash \-c 'printf marker'`,
+		`bash $'\x2dc' 'printf marker'`,
+		`bash "${FLAG:--c}" 'printf marker'`,
+		`echo hello > /tmp/target`,
+		`echo hello >> /tmp/target`,
+		`echo hello 2> /tmp/target`,
+		`echo hello >& /tmp/target`,
+		`echo hello >& "$TARGET"`,
+		`{ echo hello; } > /tmp/target`,
+		`timeout 5 echo hello > /tmp/target`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			e := newBashEngine(Rule{Tool: "shell", Specifier: "*", Effect: EffectAllow, Source: "project"})
+			if d := e.EvaluateContext(context.Background(), "shell", bashCall(command), EffectAsk); d.Effect != EffectAsk {
+				t.Fatalf("broad rule allowed %q: %+v", command, d)
+			}
+			e = newBashEngine(Rule{Tool: "shell", Literal: command, Effect: EffectAllow, Source: "remembered"})
+			if d := e.EvaluateContext(context.Background(), "shell", bashCall(command), EffectAsk); d.Effect != EffectAllow {
+				t.Fatalf("exact approval should allow %q: %+v", command, d)
+			}
+		})
+	}
+	for _, command := range []string{`echo hello > /tmp/target`, `timeout 5 echo hello > /tmp/target`} {
+		if BashRuleMatches("echo hello", bashCall(command), MatchAllSubcommands) {
+			t.Errorf("plain command rule covered redirected command %q", command)
+		}
+		if !BashRuleMatches("echo hello", bashCall(command), MatchAnySubcommand) {
+			t.Errorf("deny/ask rule missed redirected command %q", command)
+		}
+	}
+	for _, command := range []string{`echo hello 2>&1`, `echo hello >&-`, `echo hello 2>&1-`} {
+		if ClassifyShellStructure(command).Dynamic() {
+			t.Errorf("fd-only redirection should remain static: %s", command)
+		}
+	}
+}
+
 // stubMatcher matches when specifier == callInfo["match"].
 type stubMatcher struct{}
 
@@ -384,5 +523,16 @@ func TestEvaluateBashBroadAllowCannotBypassWrappedDynamicCalls(t *testing.T) {
 		if decision := e.EvaluateContext(context.Background(), "shell", bashCall(command), EffectAsk); decision.Effect != EffectAsk {
 			t.Errorf("wrapped dynamic command %q = %v, want ask", command, decision.Effect)
 		}
+	}
+}
+
+func TestNonShellAllowUsesPerRuleMatching(t *testing.T) {
+	e := NewEngine(DefaultMatchers())
+	e.SetRules([]Rule{
+		{Tool: "web_fetch", Specifier: "domain:a.test", Effect: EffectAllow, Source: "user"},
+	})
+	d := e.EvaluateContext(context.Background(), "web_fetch", map[string]any{"domain": "a.test"}, EffectAsk)
+	if d.Effect != EffectAllow || d.Rule.Specifier != "domain:a.test" {
+		t.Fatalf("per-rule allow should still apply, got %+v", d)
 	}
 }

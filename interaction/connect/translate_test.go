@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"nekocode/protocol"
 	"strings"
 	"testing"
 
@@ -187,3 +188,20 @@ func TestApprovalActionsHideRememberForOnceScope(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+func TestApprovalActionsUseBackendScopes(t *testing.T) {
+	for _, tool := range []string{"shell", "workspace"} {
+		req := protocol.NewApprovalRequest(tool, nil, protocol.ConfirmKindPermission, &protocol.ApprovalContext{Scope: protocol.ApprovalScopeProject, RememberRules: []protocol.ApprovalRememberRule{{Tool: "shell", Literal: "echo $x", Lifetime: "session"}}})
+		view := controlruntime.ApprovalView{ID: "scoped", ToolName: tool, Approval: req.Approval}
+		actions := ApprovalActions(view)
+		if len(actions) != 3 || actions[1].ID != ActionAlways || actions[1].Label != req.Approval.Options[1].Label {
+			t.Fatalf("actions=%+v", actions)
+		}
+		if tool == "workspace" && actions[0].Label != "本次会话允许" {
+			t.Fatalf("workspace=%+v", actions)
+		}
+		if !strings.Contains(ApprovalText(view), req.Approval.Options[1].Label) {
+			t.Fatal("text did not use backend choice")
+		}
+	}
+}

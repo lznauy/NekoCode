@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"nekocode/protocol"
 	"path/filepath"
+	"strings"
 
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/permission"
@@ -42,15 +43,27 @@ func (e *Executor) ensureWorkspaceAccess(tc core.ToolCallItem, confirmFn protoco
 		tc.Args = next
 		return tc, "", true
 	}
+	// Each target gets its own workspace check; diff's display header is
+	// never a filesystem authority or an execution argument to rewrite.
 	access, ok := fileToolAccess(tc.Name)
 	if !ok {
 		return tc, "", true
 	}
-	path := fileToolPath(tc)
-	if path == "" {
-		return tc, "", true
+	for _, target := range permission.FileToolTargets(tc.Name, tc.Args) {
+		if target.Path == "" {
+			return tc, "file path must not be empty", false
+		}
+		safe, message, allowed := e.ensureFilePathAccess(tc.Name, tc.ID, target.Path, access, confirmFn)
+		if !allowed {
+			return tc, message, false
+		}
+		tc.Args = permission.SetFileTarget(tc.Args, target, safe)
 	}
+	return tc, "", true
+}
 
+func (e *Executor) ensureFilePathAccess(toolName, callID, path string, access workspace.Access, confirmFn protocol.ConfirmFunc) (string, string, bool) {
+	policy := e.permissionSnapshot()
 	var safePath string
 	var allowed bool
 	var err error
@@ -60,38 +73,45 @@ func (e *Executor) ensureWorkspaceAccess(tc core.ToolCallItem, confirmFn protoco
 		safePath, _, allowed, err = e.workspace.CheckRead(path)
 	}
 	if err != nil {
-		return tc, err.Error(), false
+		return "", err.Error(), false
 	}
 	if allowed {
-		tc.Args = setToolPath(tc.Name, tc.Args, safePath)
-		return tc, "", true
+		return safePath, "", true
 	}
 	// Full-takeover mode: grant session-scoped workspace access without the
 	// prompt, consistent with bypassing every other approval.
 	if e.FullAccess() {
-		rootPath, err := candidateWorkspaceRoot(tc.Name, safePath)
+		rootPath, err := candidateWorkspaceRoot(toolName, safePath)
 		if err != nil {
-			return tc, err.Error(), false
+			return "", err.Error(), false
 		}
 		if _, err := e.workspace.AddSessionRoot(rootPath, access); err != nil {
-			return tc, err.Error(), false
+			return "", err.Error(), false
 		}
-		tc.Args = setToolPath(tc.Name, tc.Args, safePath)
-		return tc, "", true
+		return safePath, "", true
 	}
 	if confirmFn == nil {
-		return tc, fmt.Sprintf("workspace access required for %s: %s", access, safePath), false
+		return "", fmt.Sprintf("workspace access required for %s: %s", access, safePath), false
 	}
 
-	rootPath, err := candidateWorkspaceRoot(tc.Name, safePath)
+	rootPath, err := candidateWorkspaceRoot(toolName, safePath)
 	if err != nil {
-		return tc, err.Error(), false
+		return "", err.Error(), false
 	}
+	rootApproval, err := e.workspace.PrepareRootApproval(rootPath, access)
+	if err != nil {
+		return "", err.Error(), false
+	}
+	rootPath = rootApproval.Root().Path
 	approval := &protocol.ApprovalContext{
-		Source:    "workspace",
-		Reason:    fmt.Sprintf("add %s workspace for %s", access, tc.Name),
-		Scope:     protocol.ApprovalScopeProject,
-		Workspace: rootPath,
+		Source:            "workspace",
+		Reason:            fmt.Sprintf("add %s workspace for %s", access, toolName),
+		Scope:             protocol.ApprovalScopeProject,
+		Workspace:         rootPath,
+		RememberWorkspace: policy.workspace,
+	}
+	if policy.store == nil || policy.workspace == "" {
+		approval.Scope = protocol.ApprovalScopeOnce
 	}
 	if access == workspace.AccessReadWrite {
 		approval.WritePaths = []string{rootPath}
@@ -101,28 +121,41 @@ func (e *Executor) ensureWorkspaceAccess(tc core.ToolCallItem, confirmFn protoco
 		"access":         string(access),
 		"requested_path": safePath,
 	}, protocol.ConfirmKindPermission, approval)
-	req.CallID = tc.ID
+	req.CallID = callID
+	canRemember := approval.CanRemember()
 	reply := confirmFn(req)
+	if !canRemember {
+		reply.Remember = false
+	}
 	if !reply.Allowed {
-		return tc, "workspace access denied by user; do not retry the same request — ask the user how to proceed", false
+		return "", "workspace access denied by user; do not retry the same request — ask the user how to proceed", false
 	}
-	root, err := e.workspace.AddSessionRoot(rootPath, access)
-	if err != nil {
-		return tc, err.Error(), false
+	if err := e.commitWorkspaceApproval(policy, rootApproval, reply.Remember); err != nil {
+		return "", err.Error(), false
 	}
-	if reply.Remember {
-		e.fnMu.RLock()
-		store := e.permStore
-		e.fnMu.RUnlock()
-		if store != nil {
-			_ = store.RememberWorkspaceRoot(permission.WorkspaceRoot{
-				Path:   root.Path,
-				Access: string(root.Access),
-			})
+	return safePath, "", true
+}
+
+func (e *Executor) commitWorkspaceApproval(policy permissionSnapshot, approval workspace.RootApproval, remember bool) error {
+	e.fnMu.Lock()
+	defer e.fnMu.Unlock()
+	if !policy.currentLocked(e) {
+		return errApprovalContextChanged
+	}
+	var persist func(workspace.Root) error
+	if remember && policy.store == nil {
+		return fmt.Errorf("cannot save workspace approval: project permission store is unavailable")
+	}
+	if remember && policy.store != nil {
+		persist = func(root workspace.Root) error {
+			if err := policy.store.RememberWorkspaceRoot(permission.WorkspaceRoot{Path: root.Path, Access: string(root.Access)}); err != nil {
+				return fmt.Errorf("cannot save workspace approval; access was not granted: %w", err)
+			}
+			return nil
 		}
 	}
-	tc.Args = setToolPath(tc.Name, tc.Args, safePath)
-	return tc, "", true
+	_, err := e.workspace.CommitRootApproval(approval, persist)
+	return err
 }
 
 func fileToolAccess(toolName string) (workspace.Access, bool) {
@@ -136,36 +169,15 @@ func fileToolAccess(toolName string) (workspace.Access, bool) {
 	}
 }
 
+// fileToolPath identifies all target arguments for detecting canonical changes.
+// It is not used to resolve a batch as though it were a single path.
 func fileToolPath(tc core.ToolCallItem) string {
-	if tc.Name == "image_gen" {
-		// The omitted output_dir uses the application's managed image directory;
-		// an explicit model-selected destination must pass workspace approval.
-		if p, ok := tc.Args["output_dir"].(string); ok && p != "" {
-			return p
-		}
-		return ""
+	targets := permission.FileToolTargets(tc.Name, tc.Args)
+	paths := make([]string, len(targets))
+	for i, target := range targets {
+		paths[i] = target.Path
 	}
-	if p, ok := tc.Args["path"].(string); ok && p != "" {
-		return p
-	}
-	switch tc.Name {
-	case "grep", "glob":
-		return "."
-	}
-	return ""
-}
-
-func setToolPath(toolName string, args map[string]any, path string) map[string]any {
-	next := make(map[string]any, len(args)+1)
-	for k, v := range args {
-		next[k] = v
-	}
-	key := "path"
-	if toolName == "image_gen" {
-		key = "output_dir"
-	}
-	next[key] = path
-	return next
+	return strings.Join(paths, "\x00")
 }
 
 func candidateWorkspaceRoot(toolName, safePath string) (string, error) {
@@ -173,4 +185,12 @@ func candidateWorkspaceRoot(toolName, safePath string) (string, error) {
 		return filepath.Abs(safePath)
 	}
 	return workspace.CandidateRoot(safePath)
+}
+
+func (e *Executor) normalizeFilePolicyPath(tc core.ToolCallItem) core.ToolCallItem {
+	policy := e.permissionSnapshot()
+	for _, target := range permission.FileToolTargets(tc.Name, tc.Args) {
+		tc.Args = permission.SetFileTarget(tc.Args, target, permission.LexicalPath(target.Path, e.workspace.Primary(), policy.home))
+	}
+	return tc
 }

@@ -50,6 +50,8 @@ type Model struct {
 
 	state                 chatState
 	preConfirmState       chatState
+	runtimePrompts        []runtimePrompt
+	runtimePromptActive   bool
 	processingStart       time.Time
 	processingPhase       string
 	Suggestions           *components.Suggestions
@@ -70,6 +72,11 @@ type Model struct {
 	sessionHistoryCursors []int
 	sessionHistoryPage    int
 	sessionHistoryBefore  int
+	sessionHistoryTotal   int
+	turnHistoryAfter      int
+	turnInput             string
+	refreshTurn           *completedTurn
+	transientTurns        []*completedTurn
 	sessionHistoryPaging  bool
 	sessionHistoryDirty   bool
 	refreshTelemetry      *controlruntime.MetricsSnapshot
@@ -165,13 +172,19 @@ func (m *Model) resizeMessages() {
 		extra += m.Suggestions.Height()
 	}
 	msgHeight := max(0, m.Height-m.Header.Height()-m.Input.Height()-contentMarginV-extra)
+	// Reflow at the new width before deciding whether the scrollbar needs
+	// a row; measuring the old layout can overflow the frame until the next
+	// resize event (or leave a spare row when widening the terminal).
+	width := m.Width
+	if m.Messages.Width() != width {
+		m.Messages.SetSize(width, m.Messages.Height())
+	}
 	// Horizontal scrollbar occupies 1 row above the header when content
 	// overflows the viewport; reserve it so the message area shrinks.
 	totalHeight, _, _ := m.Messages.ScrollbarMetrics()
 	if totalHeight > msgHeight && msgHeight > 0 {
 		msgHeight--
 	}
-	width := m.Width
 	m.Messages.SetSize(width, msgHeight)
 	if follow {
 		m.Messages.GotoBottom()
@@ -179,13 +192,22 @@ func (m *Model) resizeMessages() {
 }
 
 func (m *Model) transitionTo(state chatState) {
+	// Runtime completion owns runtime prompts, not an unrelated local dialog.
+	preserveLocalConfirmation := state == stateReady && m.state == stateConfirming && !m.runtimePromptActive && m.ConfirmBar.IsDestructive()
 	m.state = state
 	switch state {
 	case stateReady:
+		m.runtimePrompts = nil
+		m.runtimePromptActive = false
 		m.setPhase(PhaseReady)
 		m.Messages.SetProcessing(false)
 		m.Input.SetSending(false)
-		m.ConfirmBar.Clear()
+		if preserveLocalConfirmation {
+			m.state = stateConfirming
+			m.preConfirmState = stateReady
+		} else {
+			m.ConfirmBar.Clear()
+		}
 		m.QuestionBar.Clear()
 	case stateProcessing:
 		m.processingStart = time.Now()

@@ -20,6 +20,11 @@ func (i *Indexer) IndexAll(cwd string) (*graphpkg.Graph, error) {
 }
 
 func (i *Indexer) indexAllLocked(cwd string) (*graphpkg.Graph, error) {
+	// Invalidate before clearing/building; a failed build must never leave a
+	// partial graph marked as compatible on the next startup.
+	if err := i.db.SetIndexVersion(""); err != nil {
+		return nil, fmt.Errorf("invalidate index version: %w", err)
+	}
 	if err := i.db.Clear(); err != nil {
 		return nil, fmt.Errorf("clear db: %w", err)
 	}
@@ -29,6 +34,9 @@ func (i *Indexer) indexAllLocked(cwd string) (*graphpkg.Graph, error) {
 		return nil, err
 	}
 	resolveReferences(g)
+	if err := i.db.SetIndexVersion(indexFormatVersion); err != nil {
+		return nil, fmt.Errorf("save index version: %w", err)
+	}
 	return g, nil
 }
 

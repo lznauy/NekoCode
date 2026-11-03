@@ -114,10 +114,9 @@ const (
 	CapFsWritePath = "fs.write.path" // bind writable_roots argument dirs as read-write
 
 	// CapProcessHost: run entirely on the host without any sandbox isolation.
-	// Special: this capability is NEVER persisted — every invocation prompts
-	// the user regardless of prior grants. It is the escape hatch of last
-	// resort (needs TTY, Docker socket, writes to /etc, ...), not a routine
-	// escalation target.
+	// Explicit remembered approvals may persist it for the project; allow-once
+	// approvals remain bound to one call. Full/auto mode can also authorize it,
+	// while explicit deny rules always take precedence.
 	CapProcessHost = "process.host"
 )
 

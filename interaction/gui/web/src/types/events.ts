@@ -170,7 +170,9 @@ export interface ConfirmEvent {
 export interface ApprovalContext {
   source?: string
   rule?: string
-  remember_rules?: { tool: string; specifier?: string; literal?: string }[]
+  options?: { id: string; label: string; allowed: boolean; remember: boolean; scope: 'once' | 'session' | 'project' | 'mixed' }[]
+  remember_rules?: { tool: string; specifier?: string; literal?: string; lifetime?: string }[]
+  approved_rules?: { tool: string; specifier?: string; literal?: string; lifetime?: string }[]
   remember_workspace?: string
   risk?: string
   reason?: string

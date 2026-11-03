@@ -9,39 +9,70 @@ import (
 )
 
 // RememberRule persists a rule (typically an allow rule created when the user
-// approved an "ask" prompt) into the project's permissions file. The
+// approved an "ask" prompt) into the project's trusted permission store. The
 // workspace argument is kept for signature compatibility but ignored — the
 // store is already bound to a project root.
 func (s *Store) RememberRule(_ string, rule Rule) error {
 	if s.root == "" || rule.Tool == "" {
 		return nil
 	}
-	return s.rememberRule(s.root, rule)
+	return s.RememberRules(s.root, []Rule{rule})
 }
 
-func (s *Store) rememberRule(workspace string, rule Rule) error {
-	var err error
-	rule, err = canonicalRememberedRule(rule)
-	if err != nil {
-		return err
+// RememberRules validates the complete approval before atomically saving it.
+// A long script must not leave only some of its approved units persisted.
+// Session-scoped grants are rejected here: they must never reach the file,
+// because entries are append-only and would outlive the session that made
+// them meaningful.
+func (s *Store) RememberRules(_ string, rules []Rule) error {
+	if s.root == "" || len(rules) == 0 {
+		return nil
 	}
-	rule.Source = "remembered"
+	canonical := make([]Rule, 0, len(rules))
+	for _, rule := range rules {
+		if !rule.Persistent() {
+			continue
+		}
+		rule, err := canonicalRememberedRule(rule)
+		if err != nil {
+			return err
+		}
+		rule.Source = "remembered"
+		canonical = append(canonical, rule)
+	}
+	if len(canonical) == 0 {
+		return nil
+	}
+	type ruleKey struct {
+		tool, specifier, literal string
+		effect                   Effect
+	}
+	key := func(r Rule) ruleKey { return ruleKey{r.Tool, r.Specifier, r.Literal, r.Effect} }
 	return s.mutate(func(f *permissionFile) bool {
-		p := f.Projects[workspace]
+		p := f.Projects[s.root]
+		seen := map[ruleKey]bool{}
 		for _, existing := range p.Rules {
 			existing, err := canonicalRememberedRule(existing)
 			if err != nil {
 				continue
 			}
-			if existing.Tool == rule.Tool && existing.Specifier == rule.Specifier &&
-				existing.Literal == rule.Literal && existing.Effect == rule.Effect {
-				return false // already remembered
-			}
+			seen[key(existing)] = true
 		}
-		rule.CreatedAt = time.Now().UTC()
-		p.Rules = append(p.Rules, rule)
-		f.Projects[workspace] = p
-		return true
+		changed := false
+		now := time.Now().UTC()
+		for _, rule := range canonical {
+			if seen[key(rule)] {
+				continue
+			}
+			seen[key(rule)] = true
+			rule.CreatedAt = now
+			p.Rules = append(p.Rules, rule)
+			changed = true
+		}
+		if changed {
+			f.Projects[s.root] = p
+		}
+		return changed
 	})
 }
 
@@ -112,7 +143,9 @@ func isCommandWildcardSpecifier(spec string) bool {
 }
 
 // RememberedRules returns the rules persisted in the project's permissions
-// file.
+// file. Exact-statement (Literal) grants are session-scoped now, so entries
+// written by older binaries and session grants are inert. Reading never rewrites
+// the store; legacy entries may remain on disk without granting authority.
 func (s *Store) RememberedRules(_ string) []Rule {
 	if s.root == "" {
 		return nil
@@ -125,5 +158,12 @@ func (s *Store) RememberedRules(_ string) []Rule {
 	if !ok {
 		return nil
 	}
-	return append([]Rule(nil), p.Rules...)
+	rules := make([]Rule, 0, len(p.Rules))
+	for _, r := range p.Rules {
+		if r.Literal != "" || !r.Persistent() {
+			continue
+		}
+		rules = append(rules, r)
+	}
+	return rules
 }
