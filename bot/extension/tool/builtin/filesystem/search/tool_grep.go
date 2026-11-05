@@ -59,13 +59,12 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) (core.ToolO
 		}
 	}
 
-	if ctxLines, ok := args["context_lines"].(string); ok && ctxLines != "" {
-		ctxLines = strings.TrimSpace(ctxLines)
-		if _, err := strconv.Atoi(ctxLines); err == nil {
-			grepArgs = append(grepArgs, "-C", ctxLines)
-		} else {
-			grepArgs = append(grepArgs, strings.Fields(ctxLines)...)
+	if ctxLines, ok := args["context_lines"].(string); ok && strings.TrimSpace(ctxLines) != "" {
+		contextArgs, err := parseContextLines(ctxLines)
+		if err != nil {
+			return core.ToolOutput{}, err
 		}
+		grepArgs = append(grepArgs, contextArgs...)
 	}
 
 	grepArgs = append(grepArgs, "--", pattern, safeBasePath)
@@ -85,4 +84,47 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) (core.ToolO
 
 	output.Text = toolutil.StripAnsi(output.Text)
 	return output, nil
+}
+
+// Only context flags are allowed: other search options can execute programs.
+func parseContextLines(value string) ([]string, error) {
+	fields := strings.Fields(value)
+	invalid := func() ([]string, error) {
+		return nil, fmt.Errorf("context_lines must contain non-negative counts or -A/-B/-C counts")
+	}
+	count := func(s string) bool {
+		if s == "" {
+			return false
+		}
+		for _, c := range s {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+		_, err := strconv.Atoi(s)
+		return err == nil
+	}
+	if len(fields) == 1 && count(fields[0]) {
+		return []string{"-C", fields[0]}, nil
+	}
+	var args []string
+	for i := 0; i < len(fields); i++ {
+		field := fields[i]
+		if len(field) < 2 || field[0] != '-' || !strings.ContainsRune("ABC", rune(field[1])) {
+			return invalid()
+		}
+		n := field[2:]
+		if n == "" {
+			i++
+			if i == len(fields) {
+				return invalid()
+			}
+			n = fields[i]
+		}
+		if !count(n) {
+			return invalid()
+		}
+		args = append(args, field[:2], n)
+	}
+	return args, nil
 }

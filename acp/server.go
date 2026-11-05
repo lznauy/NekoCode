@@ -67,7 +67,9 @@ type activeTurn struct {
 }
 
 // Serve runs an ACP v1 server over the supplied newline-delimited stream.
-// The caller owns the backend lifecycle.
+// The caller owns the backend lifecycle. On cancellation, a closable input is
+// closed to interrupt Read. Its Close must unblock Read; nonclosable inputs
+// must be finite or provide their own cancellation.
 func Serve(ctx context.Context, in io.Reader, out io.Writer, runtime Backend, cwd string) error {
 	return ServeWithOptions(ctx, in, out, runtime, cwd, ServerOptions{})
 }

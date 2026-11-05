@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
-	"strings"
 
 	"nekocode/bot/provider/types"
 	"nekocode/logger"
@@ -381,7 +380,10 @@ func (c *Client) chatStream(ctx context.Context, messages []types.Message, tools
 		body := c.buildRequest(messages, tools, true)
 		jsonBody, _ := json.Marshal(body)
 		meta := c.RequestMeta()
-		tokenCh <- types.StreamToken{Request: &meta}
+		if err := types.SendStreamToken(ctx, tokenCh, types.StreamToken{Request: &meta}); err != nil {
+			errCh <- err
+			return
+		}
 		req, err := c.newStreamRequest(ctx, jsonBody)
 		if err != nil {
 			errCh <- err
@@ -397,11 +399,13 @@ func (c *Client) chatStream(ctx context.Context, messages []types.Message, tools
 		type toolAccum struct {
 			id   string
 			name string
-			args strings.Builder
 		}
 		toolAccums := make(map[int]*toolAccum)
 
 		types.StreamSSE(ctx, resp, tokenCh, errCh, func(data string, tokenCh chan<- types.StreamToken) error {
+			if err := types.StreamError(data); err != nil {
+				return err
+			}
 			var event sseEvent
 			if err := json.Unmarshal([]byte(data), &event); err != nil {
 				// Keep-alives and non-event payloads are ignored, but leave a
@@ -418,7 +422,9 @@ func (c *Client) chatStream(ctx context.Context, messages []types.Message, tools
 				usage := event.Message.Usage
 				if usage.InputTokens > 0 || usage.CacheCreationInputTokens != nil || usage.CacheReadInputTokens != nil {
 					u := normalizeUsage(usage)
-					tokenCh <- types.StreamToken{Usage: &u}
+					if err := types.SendStreamToken(ctx, tokenCh, types.StreamToken{Usage: &u}); err != nil {
+						return err
+					}
 				}
 			case "content_block_start":
 				var cb contentBlock
@@ -429,10 +435,14 @@ func (c *Client) chatStream(ctx context.Context, messages []types.Message, tools
 					toolAccums[event.Index] = &toolAccum{id: cb.ID, name: cb.Name}
 				} else if cb.Type == "thinking" {
 					if cb.Thinking != nil && *cb.Thinking != "" {
-						tokenCh <- types.StreamToken{ReasoningContent: *cb.Thinking}
+						if err := types.SendStreamToken(ctx, tokenCh, types.StreamToken{ReasoningContent: *cb.Thinking}); err != nil {
+							return err
+						}
 					}
 					if cb.Signature != "" {
-						tokenCh <- types.StreamToken{ReasoningSignature: cb.Signature}
+						if err := types.SendStreamToken(ctx, tokenCh, types.StreamToken{ReasoningSignature: cb.Signature}); err != nil {
+							return err
+						}
 					}
 				}
 			case "content_block_delta":
@@ -440,32 +450,41 @@ func (c *Client) chatStream(ctx context.Context, messages []types.Message, tools
 				if json.Unmarshal(event.Delta, &td) == nil {
 					switch td.Type {
 					case "text_delta":
-						tokenCh <- types.StreamToken{Content: td.Text}
+						if err := types.SendStreamToken(ctx, tokenCh, types.StreamToken{Content: td.Text}); err != nil {
+							return err
+						}
 						return nil
 					case "thinking_delta":
-						tokenCh <- types.StreamToken{ReasoningContent: td.Thinking}
+						if err := types.SendStreamToken(ctx, tokenCh, types.StreamToken{ReasoningContent: td.Thinking}); err != nil {
+							return err
+						}
 						return nil
 					case "signature_delta":
-						tokenCh <- types.StreamToken{ReasoningSignature: td.Signature}
+						if err := types.SendStreamToken(ctx, tokenCh, types.StreamToken{ReasoningSignature: td.Signature}); err != nil {
+							return err
+						}
 						return nil
 					}
 				}
 				var ijd inputJSONDelta
 				if json.Unmarshal(event.Delta, &ijd) == nil && ijd.Type == "input_json_delta" {
 					if acc := toolAccums[event.Index]; acc != nil {
-						acc.args.WriteString(ijd.PartialJSON)
-						tokenCh <- types.StreamToken{
+						if err := types.SendStreamToken(ctx, tokenCh, types.StreamToken{
 							ToolCallDelta: &types.ToolCallDelta{
 								Index: event.Index, ID: acc.id, Name: acc.name,
 								Arguments: ijd.PartialJSON,
 							},
+						}); err != nil {
+							return err
 						}
 					}
 				}
 			case "message_delta":
 				if event.Usage != nil && event.Usage.OutputTokens > 0 {
-					tokenCh <- types.StreamToken{
+					if err := types.SendStreamToken(ctx, tokenCh, types.StreamToken{
 						Usage: &types.StreamUsage{CompletionTokens: event.Usage.OutputTokens},
+					}); err != nil {
+						return err
 					}
 				}
 			}

@@ -15,7 +15,7 @@ type ReadTool struct {
 
 func (t *ReadTool) Name() string { return "read" }
 func (t *ReadTool) Description() string {
-	return "Read file contents (text, images, PDF). Absolute path required. Use startLine/endLine for range, max 500 lines. Text output includes [path#TAG] followed by lineNo:content lines. If output is truncated, read a smaller range before editing."
+	return "Read file contents (text, images, PDF). Absolute path required. Use startLine/endLine for range, max 500 lines. Text files are limited to 64 MiB. Text output includes [path#TAG] followed by lineNo:content lines. If output is truncated, read a smaller range before editing."
 }
 
 func (t *ReadTool) Parameters() []core.Parameter {
@@ -29,6 +29,9 @@ func (t *ReadTool) Parameters() []core.Parameter {
 const maxReadLines = 500
 
 func (t *ReadTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return core.ToolOutput{}, err
+	}
 	path, err := toolutil.RequireStringArg(args, "path")
 	if err != nil {
 		return core.ToolOutput{}, err
@@ -39,7 +42,7 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) (core.ToolO
 	}
 	switch strings.ToLower(filepath.Ext(safePath)) {
 	case ".png", ".jpg", ".jpeg", ".gif":
-		toolText, toolErr := t.readImage(safePath)
+		toolText, toolErr := t.readImage(ctx, safePath)
 		return core.ToolOutput{Text: toolText}, toolErr
 	case ".pdf":
 		toolText, toolErr := t.readPDF(safePath)

@@ -4,6 +4,7 @@ package deliver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/toolutil"
 	"nekocode/bot/extension/tool/runtime/workspace"
+	utilfs "nekocode/util/fs"
 )
 
 // Deliverer is the injection point for the file-delivery backend. It is
@@ -19,8 +21,9 @@ import (
 // internals (dependency direction: standard assembles bot+interaction).
 type Deliverer interface {
 	// DeliverConnectorFile sends path to the named connector's paired
-	// chats, or to every running file-capable connector when connector is
-	// empty. It returns the connector names that delivered the file.
+	// chats. An empty connector routes to the current request source; '*'
+	// explicitly broadcasts to every running file-capable connector. It returns
+	// the connector names that delivered the file.
 	DeliverConnectorFile(ctx context.Context, connector, path string) ([]string, error)
 }
 
@@ -36,20 +39,18 @@ func NewTool(deliverer Deliverer) *DeliverFileTool {
 func (t *DeliverFileTool) Name() string { return "deliver_file" }
 
 func (t *DeliverFileTool) Description() string {
-	return "Send a workspace file (e.g. generated archives, reports, datasets) to the user's chat via a configured IM connector (telegram or feishu). Only files inside the current workspace are allowed. Use it when the user asks you to send/give/transfer a file."
+	return "Send a workspace file (e.g. generated archives, reports, datasets) to the user's chat via a configured IM connector (telegram or feishu). Only regular files in authorized readable workspace roots are allowed. Relative paths use the project root. Use it when the user asks you to send/give/transfer a file."
 }
 
 func (t *DeliverFileTool) Parameters() []core.Parameter {
 	return []core.Parameter{
 		{Name: "path", Type: "string", Required: true, Description: "Path to the workspace file to deliver"},
-		{Name: "connector", Type: "string", Required: false, Description: "Target connector name (e.g. \"telegram\", \"feishu\"). Omit to deliver to every running file-capable connector."},
+		{Name: "connector", Type: "string", Required: false, Description: "Target connector name (e.g. \"telegram\", \"feishu\"). Omit to reply to the current request source; local requests must specify a connector. Use \"*\" only when the user explicitly requests broadcast."},
 	}
 }
 
-// maxDeliverFileBytes caps one delivered file. IM platforms hard-reject
-// oversized uploads (Telegram documents cap at 50 MB); failing fast in the
-// tool gives the model a clear, actionable error instead of a per-connector
-// platform rejection, and bounds the multipart memory spike on the send path.
+// maxDeliverFileBytes bounds the snapshot and subsequent multipart upload.
+// A connector or remote API may impose a lower limit.
 const maxDeliverFileBytes = 50 << 20
 
 func (t *DeliverFileTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
@@ -57,36 +58,58 @@ func (t *DeliverFileTool) Execute(ctx context.Context, args map[string]any) (cor
 	if path == "" {
 		return core.ToolOutput{}, fmt.Errorf("path is required")
 	}
-	// Resolve relative paths against the workspace root first — the readable
-	// roots check below only understands absolute paths.
+	if t.deliverer == nil {
+		return core.ToolOutput{}, fmt.Errorf("file delivery backend unavailable")
+	}
+	manager, ok := workspace.FromContext(ctx)
+	if !ok {
+		return core.ToolOutput{}, fmt.Errorf("file delivery requires a workspace")
+	}
 	if !filepath.IsAbs(path) {
-		if manager, ok := workspace.FromContext(ctx); ok {
-			if roots := manager.Snapshot(); len(roots) > 0 {
-				path = filepath.Join(roots[0].Path, path)
-			}
+		path = filepath.Join(manager.Primary(), path)
+	}
+	safePath, root, allowed, err := manager.CheckRead(path)
+	if err != nil {
+		return core.ToolOutput{}, err
+	}
+	if !allowed {
+		return core.ToolOutput{}, fmt.Errorf("file must be inside an authorized readable workspace")
+	}
+	relative, err := filepath.Rel(root.Path, safePath)
+	if err != nil {
+		return core.ToolOutput{}, err
+	}
+	data, err := utilfs.ReadRegularFileInRoot(ctx, root.Path, relative, maxDeliverFileBytes)
+	if err != nil {
+		if errors.Is(err, utilfs.ErrFileTooLarge) {
+			return core.ToolOutput{}, fmt.Errorf("file exceeds the %d MiB delivery limit; give the user the local path instead or split the file", maxDeliverFileBytes>>20)
 		}
+		return core.ToolOutput{}, fmt.Errorf("read delivery file: %w", err)
 	}
-	// Workspace gate: only files under the session workspace leave the machine.
-	safePath, err := toolutil.ValidatePathReadableContext(ctx, path)
+	// Connectors read this private snapshot, never reopening a mutable source.
+	dir, err := os.MkdirTemp("", "nekocode-delivery-*")
 	if err != nil {
-		return core.ToolOutput{}, fmt.Errorf("file must be inside the current workspace: %w", err)
+		return core.ToolOutput{}, err
 	}
-	info, err := os.Stat(safePath)
-	if err != nil {
-		return core.ToolOutput{}, fmt.Errorf("read file size: %w", err)
+	defer os.RemoveAll(dir)
+	snapshot := filepath.Join(dir, filepath.Base(safePath))
+	if err := os.WriteFile(snapshot, data, 0600); err != nil {
+		return core.ToolOutput{}, err
 	}
-	if info.Size() > maxDeliverFileBytes {
-		return core.ToolOutput{}, fmt.Errorf("file is %d MiB, above the %d MiB delivery limit (IM platform constraints); give the user the local path instead or split the file",
-			info.Size()>>20, maxDeliverFileBytes>>20)
+	if err := ctx.Err(); err != nil {
+		return core.ToolOutput{}, err
 	}
 
 	connector := strings.TrimSpace(toolutil.OptStringArg(args, "connector", ""))
-	sent, err := t.deliverer.DeliverConnectorFile(ctx, connector, safePath)
+	sent, err := t.deliverer.DeliverConnectorFile(ctx, connector, snapshot)
 	if err != nil {
 		if len(sent) > 0 {
-			return core.ToolOutput{Text: fmt.Sprintf("Delivered via %s, but other targets failed: %v", strings.Join(sent, ", "), err)}, nil
+			return core.ToolOutput{Text: fmt.Sprintf("Delivered via %s, but other targets failed: %v", strings.Join(sent, ", "), err)}, err
 		}
 		return core.ToolOutput{}, fmt.Errorf("file delivery failed: %w", err)
+	}
+	if len(sent) == 0 {
+		return core.ToolOutput{}, fmt.Errorf("file delivery returned no successful targets")
 	}
 	return core.ToolOutput{Text: fmt.Sprintf("File delivered to %s: %s", strings.Join(sent, ", "), safePath)}, nil
 }

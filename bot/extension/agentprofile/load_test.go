@@ -139,3 +139,17 @@ func TestProfileIsolation(t *testing.T) {
 		}
 	}
 }
+
+func TestBuiltinNavigationCapabilitiesAndExplicitCustomCeiling(t *testing.T) {
+	for _, p := range Builtins() {
+		for _, name := range []string{"index", "tree", "diff", "lsp_definition", "lsp_references", "lsp_hover", "lsp_diagnostics"} {
+			if !slices.Contains(p.Tools, name) {
+				t.Errorf("%s cannot use %s", p.Name, name)
+			}
+		}
+	}
+	p, err := parse("---\nname: narrow\nbase: explore\ntools: [read, grep]\n---\nInspect only.\n", knownTool)
+	if err != nil || !reflect.DeepEqual(p.Tools, []string{"read", "grep"}) {
+		t.Fatalf("custom ceiling expanded: %+v %v", p, err)
+	}
+}

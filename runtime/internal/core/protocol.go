@@ -37,6 +37,9 @@ type Input struct {
 type ImageAttachment struct {
 	Label string `json:"label"`
 	Path  string `json:"path"`
+	// Release transfers cleanup of a connector-owned download after successful adoption.
+	// It is process-local and is never restored from protocol or session data.
+	Release func() `json:"-"`
 }
 
 type RunStatus string
@@ -195,4 +198,16 @@ type ConnectorRuntime interface {
 	ExecuteLocalCommand(ctx context.Context, input string) (string, protocol.LocalCommandResult)
 	Events(ctx context.Context, filter EventFilter) (<-chan Event, error)
 	ReportConnectorStatus(payload ConnectorStatusPayload)
+}
+
+type runSourceContextKey struct{}
+
+// WithRunSource binds delivery routing to the run rather than global state.
+func WithRunSource(ctx context.Context, source SourceRef) context.Context {
+	return context.WithValue(ctx, runSourceContextKey{}, source)
+}
+
+func RunSourceFromContext(ctx context.Context) SourceRef {
+	source, _ := ctx.Value(runSourceContextKey{}).(SourceRef)
+	return source
 }

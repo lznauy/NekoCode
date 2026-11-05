@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	nethttp "net/http"
+	"strings"
 
 	utilhttp "nekocode/util/http"
 	"nekocode/util/sse"
@@ -53,6 +54,8 @@ func DoJSONRequest(ctx context.Context, url string, headers map[string]string, b
 
 // StreamSSE reads an SSE stream from resp, extracts data payloads, and calls
 // parseEvent for each one. Errors are sent to errCh (buffered, size 1).
+// A terminal SSE event is required; complete may additionally accept a clean
+// EOF after a provider-specific finish marker while retaining usage tail events.
 // This function runs synchronously and blocks until the stream ends;
 // the caller is responsible for launching it in a goroutine and managing
 // the channel lifetimes (close tokenCh/errCh when this returns).
@@ -62,6 +65,7 @@ func StreamSSE(
 	tokenCh chan<- StreamToken,
 	errCh chan<- error,
 	parseEvent func(data string, tokenCh chan<- StreamToken) error,
+	complete ...func() bool,
 ) {
 	defer func() { _ = resp.Body.Close() }()
 
@@ -81,14 +85,45 @@ func StreamSSE(
 		return
 	}
 
+	const maxEventBytes = 1024 * 1024
 	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024) // 1MB buffer for large SSE payloads
+	scanner.Split(splitSSELine)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxEventBytes)
+	var event strings.Builder
+	hasData := false
+	firstLine := true
 	for scanner.Scan() {
 		line := scanner.Text()
-		data, ok := sse.SSELineData(line)
-		if !ok {
+		if firstLine {
+			line = strings.TrimPrefix(line, "\ufeff")
+			firstLine = false
+		}
+		if line != "" {
+			data, ok := sse.SSELineData(line)
+			if !ok {
+				continue
+			}
+			extra := len(data)
+			if hasData {
+				extra++
+			}
+			if extra > maxEventBytes-event.Len() {
+				errCh <- errors.New("SSE event exceeds 1 MiB limit")
+				return
+			}
+			if hasData {
+				event.WriteByte('\n')
+			}
+			event.WriteString(data)
+			hasData = true
 			continue
 		}
+		if !hasData {
+			continue
+		}
+		data := event.String()
+		event.Reset()
+		hasData = false
 		if data == "[DONE]" {
 			return
 		}
@@ -97,14 +132,94 @@ func StreamSSE(
 				return
 			}
 			errCh <- err
-			break
+			return
 		}
+	}
+	// SSE dispatches only at a blank line; an unfinished event is discarded.
+
+	if ctx.Err() != nil {
+		errCh <- ctx.Err()
+		return
 	}
 	if err := scanner.Err(); err != nil {
-		if ctx.Err() != nil {
-			errCh <- ctx.Err()
-		} else {
-			errCh <- err
+		errCh <- err
+		return
+	}
+	if len(complete) == 0 || !complete[0]() {
+		errCh <- io.ErrUnexpectedEOF
+	}
+}
+
+// splitSSELine recognizes all SSE line endings: LF, CRLF, and bare CR.
+func splitSSELine(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	for i, b := range data {
+		if b == '\n' {
+			return i + 1, data[:i], nil
+		}
+		if b == '\r' {
+			if i+1 == len(data) && !atEOF {
+				return 0, nil, nil
+			}
+			advance = i + 1
+			if advance < len(data) && data[advance] == '\n' {
+				advance++
+			}
+			return advance, data[:i], nil
 		}
 	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
+// SendStreamToken lets a canceled consumer stop reading without stranding the producer.
+func SendStreamToken(ctx context.Context, out chan<- StreamToken, token StreamToken) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	select {
+	case out <- token:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// StreamError preserves the provider error payload and maps its error type to
+// the HTTP status contract consumed by retry classification.
+func StreamError(data string) error {
+	var envelope struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal([]byte(data), &envelope) != nil || len(envelope.Error) == 0 || string(envelope.Error) == "null" {
+		return nil
+	}
+	var detail struct {
+		Type string `json:"type"`
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal(envelope.Error, &detail)
+	status := 400
+	for _, code := range []string{detail.Type, detail.Code} {
+		switch code {
+		case "rate_limit_error", "rate_limit_exceeded":
+			status = 429
+		case "overloaded_error":
+			status = 529
+		case "api_error", "server_error", "internal_server_error":
+			status = 500
+		case "authentication_error", "invalid_api_key":
+			status = 401
+		case "permission_error":
+			status = 403
+		case "not_found_error":
+			status = 404
+		case "request_too_large":
+			status = 413
+		}
+	}
+	return utilhttp.NewHTTPError(status, data)
 }

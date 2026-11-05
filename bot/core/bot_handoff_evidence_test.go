@@ -12,11 +12,22 @@ import (
 	"testing"
 
 	"nekocode/bot/config"
+	toolcore "nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/refbridge"
 	"nekocode/bot/extension/tool/runtime/taskbridge"
+	"nekocode/bot/session"
 )
 
 func TestTaskRunnerResolvesSubmittedEvidenceAfterFinalCheckpoint(t *testing.T) {
+	testTaskRunnerEvidenceHandoff(t, true)
+}
+
+func TestTaskRunnerEvidenceRemainsQueryableWhenHandoffIDsOmitted(t *testing.T) {
+	testTaskRunnerEvidenceHandoff(t, false)
+}
+
+func testTaskRunnerEvidenceHandoff(t *testing.T, includeIDs bool) {
+	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	cwd := t.TempDir()
 	path := filepath.Join(cwd, "fixture.txt")
@@ -44,10 +55,14 @@ func TestTaskRunnerResolvesSubmittedEvidenceAfterFinalCheckpoint(t *testing.T) {
 		step++
 		mu.Unlock()
 		name, id, args := "read", "read-call", map[string]any{"path": path, "startLine": 1, "endLine": 1}
-		if current == 1 {
+		if current == 1 && includeIDs {
 			name, id, args = "evidence", "list-call", map[string]any{"action": "list"}
 		}
-		if current >= 2 {
+		submitStep := 1
+		if includeIDs {
+			submitStep = 2
+		}
+		if current >= submitStep {
 			evidenceID := ""
 			for _, msg := range request.Messages {
 				if msg.CallID == "list-call" {
@@ -62,7 +77,7 @@ func TestTaskRunnerResolvesSubmittedEvidenceAfterFinalCheckpoint(t *testing.T) {
 					}
 				}
 			}
-			if evidenceID == "" {
+			if includeIDs && evidenceID == "" {
 				t.Error("child did not discover its executed read receipt")
 				http.Error(w, "missing fixture receipt", 500)
 				return
@@ -71,7 +86,10 @@ func TestTaskRunnerResolvesSubmittedEvidenceAfterFinalCheckpoint(t *testing.T) {
 			submittedID = evidenceID
 			mu.Unlock()
 			name, id = "nekocode_submit_result", "submit-call"
-			args = map[string]any{"summary": "inspection done", "evidence": []string{"read fixture"}, "evidence_ids": []string{evidenceID}, "files": []string{}, "verification": "fixture read only", "unfinished": []string{}, "risks": []string{}}
+			args = map[string]any{"summary": "inspection done", "evidence": []string{"read fixture"}, "files": []string{}, "verification": "fixture read only", "unfinished": []string{}, "risks": []string{}}
+			if includeIDs {
+				args["evidence_ids"] = []string{evidenceID}
+			}
 		}
 		encoded, _ := json.Marshal(args)
 		delta := map[string]any{"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": id, "type": "function", "function": map[string]any{"name": name, "arguments": string(encoded)}}}}}}}
@@ -101,7 +119,43 @@ func TestTaskRunnerResolvesSubmittedEvidenceAfterFinalCheckpoint(t *testing.T) {
 	id := submittedID
 	calls := step
 	mu.Unlock()
-	if calls != 3 || id == "" || !strings.Contains(output.Text, id) || !strings.Contains(output.Text, `"status":"resolved"`) || !strings.Contains(output.Text, `"execution_status":"success"`) || !strings.Contains(output.Text, `"attempt_id":`) {
+	wantCalls := 2
+	if includeIDs {
+		wantCalls = 3
+	}
+	if calls != wantCalls {
+		t.Fatalf("unexpected model call count: %d", calls)
+	}
+	if includeIDs && (id == "" || !strings.Contains(output.Text, id) || !strings.Contains(output.Text, `"status":"resolved"`) || !strings.Contains(output.Text, `"execution_status":"success"`) || !strings.Contains(output.Text, `"attempt_id":`)) {
 		t.Fatalf("handoff not checked after commit: %s (calls=%d)", output.Text, calls)
+	}
+	if !includeIDs && (!strings.Contains(output.Text, "Execution evidence IDs:\n- None") || strings.Contains(output.Text, "Execution evidence associations")) {
+		t.Fatalf("omitted handoff IDs were misrepresented: %s", output.Text)
+	}
+	info, err := session.ReadSubagentMetadata(b.CurrentSessionID(), "worker")
+	if err != nil || info.LatestAttempt == nil {
+		t.Fatalf("missing committed child attempt: %+v %v", info, err)
+	}
+	query := map[string]any{"action": "list", "task_id": "worker", "attempt_id": info.LatestAttempt.ID}
+	listed := b.ag.Executor().ExecuteBatch(t.Context(), []toolcore.ToolCallItem{{ID: "parent-list", Name: "evidence", Args: query}})[0]
+	var page refbridge.Page
+	if listed.Error != "" || json.Unmarshal([]byte(listed.Output), &page) != nil {
+		t.Fatalf("parent evidence list failed: %+v", listed)
+	}
+	found := false
+	for _, item := range page.Evidence {
+		if item.Tool != "read" || includeIDs && item.ID != id {
+			continue
+		}
+		found = true
+		query["action"], query["id"] = "inspect", item.ID
+		inspected := b.ag.Executor().ExecuteBatch(t.Context(), []toolcore.ToolCallItem{{ID: "parent-inspect", Name: "evidence", Args: query}})[0]
+		var detail refbridge.Page
+		if inspected.Error != "" || json.Unmarshal([]byte(inspected.Output), &detail) != nil || detail.Status != "recorded" || len(detail.Evidence) != 1 || detail.Evidence[0].Status != "success" || detail.Evidence[0].ReceiptID != item.ReceiptID {
+			t.Fatalf("parent could not inspect child receipt: %+v", inspected)
+		}
+	}
+	if !found {
+		t.Fatalf("child read receipt missing from parent query: %+v", page)
 	}
 }

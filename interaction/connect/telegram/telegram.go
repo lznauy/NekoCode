@@ -101,7 +101,7 @@ func (c *Connector) Start(ctx context.Context) error {
 		return fmt.Errorf("telegram token is not configured")
 	}
 	c.mu.Lock()
-	if c.base.IsRunning() && c.active == profile.Name {
+	if c.base.IsRunning() && c.active == profile.Name && c.api != nil && c.api.token == profile.BotToken {
 		c.mu.Unlock()
 		return nil
 	}
@@ -149,19 +149,24 @@ func (c *Connector) Stop() error {
 	c.mu.Lock()
 	c.active = ""
 	c.api = nil
-	c.mu.Unlock()
+	defer c.mu.Unlock()
 	return c.base.Stop()
 }
 
 func (c *Connector) pollLoop(ctx context.Context, client *apiClient, generation int) {
 	defer func() {
 		c.mu.Lock()
-		c.active = ""
-		c.api = nil
+		if c.api == client {
+			c.active = ""
+			c.api = nil
+		}
 		c.mu.Unlock()
 		c.base.MarkStopped(generation)
 	}()
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		cfg, err := loadConfig()
 		if err != nil {
 			time.Sleep(3 * time.Second)
@@ -173,6 +178,10 @@ func (c *Connector) pollLoop(ctx context.Context, client *apiClient, generation 
 			continue
 		}
 		profile := &cfg.Profiles[idx]
+		if profile.BotToken != client.token {
+			return
+		}
+		name := profile.Name
 		updates, err := client.getUpdates(ctx, profile.UpdateOffset, 30)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -182,13 +191,61 @@ func (c *Connector) pollLoop(ctx context.Context, client *apiClient, generation 
 			continue
 		}
 		for _, update := range updates {
-			if update.UpdateID >= profile.UpdateOffset {
-				profile.UpdateOffset = update.UpdateID + 1
+			profile, paired, err := c.preparePolledUpdate(ctx, client, name, update)
+			if err != nil {
+				if ctx.Err() != nil || errors.Is(err, errConfigChanged) {
+					return
+				}
+				break
 			}
-			c.handleUpdate(ctx, client, profile, update)
+			if paired {
+				msg := update.Message
+				_ = client.sendMessage(ctx, msg.Chat.ID, "NekoCode connected. Send a message to control the current session.")
+				c.base.PublishStatus("paired", fmt.Sprintf("Telegram connected: @%s", msg.From.Username))
+				continue
+			}
+			c.handleUpdate(ctx, client, &profile, update)
 		}
-		_ = saveConfig(cfg)
 	}
+}
+
+// preparePolledUpdate commits pairing, owner metadata and offsets against the
+// latest configuration in one transaction. No network or runtime calls happen
+// under configMu; commands may themselves change connector configuration.
+func (c *Connector) preparePolledUpdate(ctx context.Context, client *apiClient, name string, update Update) (BotProfile, bool, error) {
+	configMu.Lock()
+	defer configMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return BotProfile{}, false, err
+	}
+	cfg, err := loadConfigLocked()
+	if err != nil {
+		return BotProfile{}, false, err
+	}
+	idx := cfg.activeIndex()
+	if idx < 0 || cfg.Profiles[idx].Name != name || cfg.Profiles[idx].BotToken != client.token {
+		return BotProfile{}, false, errConfigChanged
+	}
+	profile := &cfg.Profiles[idx]
+	paired := false
+	if msg := update.Message; msg != nil && msg.From != nil {
+		if nonce, ok := parseStartPayload(messageText(msg)); ok && profile.Valid(nonce, time.Now().Unix()) && (profile.Owner == nil || profile.isAllowed(msg.From.ID)) {
+			profile.setOwner(msg.From.ID, msg.From.Username, msg.Chat.ID)
+			profile.Clear()
+			paired = true
+		} else if profile.isAllowed(msg.From.ID) {
+			profile.touchOwner(msg.From.ID, msg.From.Username, msg.Chat.ID)
+		}
+	} else if cb := update.CallbackQuery; cb != nil && cb.Message != nil && profile.isAllowed(cb.From.ID) {
+		profile.touchOwner(cb.From.ID, cb.From.Username, cb.Message.Chat.ID)
+	}
+	if update.UpdateID >= profile.UpdateOffset {
+		profile.UpdateOffset = update.UpdateID + 1
+	}
+	if err := saveConfigLocked(cfg); err != nil {
+		return BotProfile{}, false, err
+	}
+	return *profile, paired, nil
 }
 
 func (c *Connector) handleUpdate(ctx context.Context, client *apiClient, profile *BotProfile, update Update) {
@@ -200,25 +257,13 @@ func (c *Connector) handleUpdate(ctx context.Context, client *apiClient, profile
 		return
 	}
 	msg := update.Message
-	text := strings.TrimSpace(msg.Text)
-	if text == "" {
-		// Photo messages carry their user prompt in Caption (if any); the
-		// image marker is appended later, right before StartRun.
-		if len(msg.Photo) == 0 {
-			return
-		}
-		text = strings.TrimSpace(msg.Caption)
+	text := messageText(msg)
+	if text == "" && len(msg.Photo) == 0 {
+		return
 	}
 	if nonce, ok := parseStartPayload(text); ok {
-		if profile.Valid(nonce, time.Now().Unix()) {
-			if profile.Owner != nil && profile.Owner.UserID != msg.From.ID {
-				_ = client.sendMessage(ctx, msg.Chat.ID, "Pairing failed: this Telegram profile is already paired. Run /connect telegram unpair in NekoCode first.")
-				return
-			}
-			profile.setOwner(msg.From.ID, msg.From.Username, msg.Chat.ID)
-			profile.Clear()
-			_ = client.sendMessage(ctx, msg.Chat.ID, "NekoCode connected. Send a message to control the current session.")
-			c.base.PublishStatus("paired", fmt.Sprintf("Telegram connected: @%s", msg.From.Username))
+		if profile.Valid(nonce, time.Now().Unix()) && !profile.isAllowed(msg.From.ID) {
+			_ = client.sendMessage(ctx, msg.Chat.ID, "Pairing failed: this Telegram profile is already paired. Run /connect telegram unpair in NekoCode first.")
 			return
 		}
 		if !profile.isAllowed(msg.From.ID) {
@@ -230,7 +275,6 @@ func (c *Connector) handleUpdate(ctx context.Context, client *apiClient, profile
 		_ = client.sendMessage(ctx, msg.Chat.ID, "This Telegram account is not connected to NekoCode. Run /connect telegram pair in NekoCode to bind this account.")
 		return
 	}
-	profile.touchOwner(msg.From.ID, msg.From.Username, msg.Chat.ID)
 	menuResult := c.menus.HandleText(ctx, c.rt, strconv.FormatInt(msg.Chat.ID, 10), text)
 	if menuResult.Handled {
 		_ = c.sendMenuResult(ctx, client, msg.Chat.ID, *msg.From, menuResult)
@@ -270,7 +314,7 @@ func (c *Connector) handleUpdate(ctx context.Context, client *apiClient, profile
 			label := fmt.Sprintf("[Image #%d]", msg.MessageID)
 			if path, err := savePhoto(ctx, client, msg); err == nil {
 				text = connect.AppendMarker(text, label)
-				images = append(images, controlruntime.ImageAttachment{Label: label, Path: path})
+				images = append(images, controlruntime.ImageAttachment{Label: label, Path: path, Release: connect.TemporaryImageRelease(path)})
 			} else {
 				c.base.PublishStatus("warning", "photo download failed: "+err.Error())
 				if text == "" {
@@ -294,6 +338,7 @@ func (c *Connector) handleUpdate(ctx context.Context, client *apiClient, profile
 			Images: images,
 		})
 		if err != nil {
+			connect.ReleaseImages(images)
 			_ = client.sendMessage(ctx, msg.Chat.ID, taskview.HTMLEscape("Error: "+err.Error()))
 		}
 	}
@@ -836,4 +881,12 @@ func (c *Connector) DeliverFile(ctx context.Context, path string) error {
 
 func (c *Connector) tracker() *taskview.Tracker {
 	return c.taskTracker
+}
+
+func messageText(msg *Message) string {
+	text := strings.TrimSpace(msg.Text)
+	if text == "" && len(msg.Photo) > 0 {
+		text = strings.TrimSpace(msg.Caption)
+	}
+	return text
 }

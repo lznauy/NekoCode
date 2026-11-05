@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"nekocode/runtime/standard"
+	"nekocode/util/stdio"
 )
 
 // ParseArgs recognizes the headless mode without consuming TUI/ACP arguments.
@@ -153,7 +154,7 @@ func RunStdio(ctx context.Context, options Options) error {
 }
 
 func serveStdio(ctx context.Context, backend Backend, cwd string, options Options) error {
-	in, out, restore, err := stdioStreams()
+	in, out, restore, err := stdio.Streams()
 	if err != nil {
 		return err
 	}

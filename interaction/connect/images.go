@@ -7,8 +7,10 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
+	controlruntime "nekocode/runtime"
 	sharedhttp "nekocode/util/http"
 )
 
@@ -81,7 +83,8 @@ func DownloadImage(ctx context.Context, rawURL, dst string) error {
 // DownloadToTemp saves the result of a download into a uniquely named
 // temp file and returns its path. The file outlives the run — the model may
 // re-read it later via the image_understand tool — so callers must not
-// delete it on success.
+// delete it before adoption. Attach TemporaryImageRelease to the runtime image
+// so successful adoption can release this connector-owned copy.
 func DownloadToTemp(pattern string, download func(dst string) error) (string, error) {
 	tmp, err := os.CreateTemp("", pattern)
 	if err != nil {
@@ -112,4 +115,32 @@ func AppendMarker(text, marker string) string {
 		return marker
 	}
 	return text + "\n" + marker
+}
+
+// TemporaryImageRelease captures cleanup ownership of a newly downloaded file.
+// A replaced path is no longer owned by this download and is left untouched.
+func TemporaryImageRelease(path string) func() {
+	original, err := os.Lstat(path)
+	if err != nil || !original.Mode().IsRegular() {
+		return nil
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			current, err := os.Lstat(path)
+			if err == nil && os.SameFile(original, current) {
+				_ = os.Remove(path)
+			}
+		})
+	}
+}
+
+// ReleaseImages cleans up connector-owned downloads that a run did not accept.
+// Attachments without a cleanup callback remain owned by their caller.
+func ReleaseImages(images []controlruntime.ImageAttachment) {
+	for _, image := range images {
+		if image.Release != nil {
+			image.Release()
+		}
+	}
 }

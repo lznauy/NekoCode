@@ -77,7 +77,7 @@ export default function App() {
 
 	useEffect(() => {
 	  const input = text.trim()
-	  if (busy || (input !== '/' && input !== '$' && !input.startsWith('/') && !input.startsWith('$'))) {
+	  if (busy || (!input.startsWith('/') && !input.startsWith('$'))) {
 		setCommandMenu(null)
 		return
 	  }

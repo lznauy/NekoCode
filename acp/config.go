@@ -186,6 +186,21 @@ func (s *server) cleanup() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	var cleanupErr error
+	// A timed-out prompt retains its active entry so cleanup can retry settlement.
+	s.mu.Lock()
+	runs := make([]controlruntime.RunID, 0, len(s.active))
+	for _, turn := range s.active {
+		turn.cancel()
+		if turn.runID != "" {
+			runs = append(runs, turn.runID)
+		}
+	}
+	s.mu.Unlock()
+	for _, id := range runs {
+		if err := s.cancelAndWait(ctx, id); err != nil {
+			return fmt.Errorf("settle active prompt before cleanup: %w", err)
+		}
+	}
 	if err := s.backend.ReplaceMCPServers(ctx, mcpSource, nil); err != nil {
 		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("clear session MCP servers: %w", err))
 	}

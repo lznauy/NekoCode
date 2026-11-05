@@ -153,6 +153,14 @@ func (m *Manager) Rebuild() error {
 	return nil
 }
 
+// Available reports whether the manager has a successfully loaded code graph.
+// An empty graph is available; a workspace without a project root is not.
+func (m *Manager) Available() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.graph != nil
+}
+
 func (m *Manager) Skeleton() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

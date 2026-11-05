@@ -2,6 +2,8 @@ package index
 
 import (
 	"context"
+	indexcore "nekocode/bot/extension/tool/builtin/index/core"
+	"nekocode/bot/extension/tool/runtime/workspace"
 	"os"
 	"path/filepath"
 	"strings"
@@ -141,42 +143,17 @@ func TestIndexToolSearch(t *testing.T) {
 	}
 }
 
-func TestIndexToolEmptyQuery(t *testing.T) {
+func TestIndexRejectsMalformedQueryBeforeInitialization(t *testing.T) {
 	setupTestProject(t)
 	tool := NewIndexTool()
-
-	result, err := tool.Execute(context.Background(), map[string]any{"query": ""})
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
+	defer tool.Close()
+	for _, query := range []any{nil, 42, "", "  ", "invalid", "unknown:value", "symbol:", "search:  ", "callers:"} {
+		if _, err := tool.Execute(t.Context(), map[string]any{"query": query}); err == nil {
+			t.Errorf("malformed query reported success: %#v", query)
+		}
 	}
-	if !strings.Contains(result.Render(), "Missing") {
-		t.Errorf("empty query should return error message, got: %s", result.Render())
-	}
-}
-
-func TestIndexToolInvalidFormat(t *testing.T) {
-	setupTestProject(t)
-	tool := NewIndexTool()
-
-	result, err := tool.Execute(context.Background(), map[string]any{"query": "invalid"})
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if !strings.Contains(result.Render(), "Invalid") {
-		t.Errorf("invalid format should return error message, got: %s", result.Render())
-	}
-}
-
-func TestIndexToolUnknownPrefix(t *testing.T) {
-	setupTestProject(t)
-	tool := NewIndexTool()
-
-	result, err := tool.Execute(context.Background(), map[string]any{"query": "unknown:value"})
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if !strings.Contains(result.Render(), "Unknown") {
-		t.Errorf("unknown prefix should return error message, got: %s", result.Render())
+	if _, err := os.Stat(".nekocode"); !os.IsNotExist(err) {
+		t.Fatalf("malformed query initialized the index: %v", err)
 	}
 }
 
@@ -208,5 +185,51 @@ func TestIndexToolNameAndDescription(t *testing.T) {
 	}
 	if len(tool.Parameters()) == 0 {
 		t.Error("Parameters() should not be empty")
+	}
+}
+
+func TestIndexFailureIsNotReportedAsSuccessfulEmptySearch(t *testing.T) {
+	for _, name := range []string{"closed", "no-project", "corrupt", "invalid-search"} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			if name != "no-project" {
+				writeFile(t, root, "go.mod", "module fixture\n")
+				writeFile(t, root, "main.go", "package fixture\nfunc NavigationTarget() {}\n")
+			}
+			if name == "corrupt" {
+				writeFile(t, root, ".nekocode/index.db", "broken sqlite")
+			}
+			tool := NewIndexTool()
+			if name == "no-project" {
+				tool.mgr = &indexcore.Manager{}
+			}
+			t.Cleanup(func() { _ = tool.Close() })
+			if name == "closed" {
+				_ = tool.Close()
+			}
+			ctx := workspace.WithManager(t.Context(), workspace.New(root, nil))
+			queries := []string{"skeleton", "symbol:Missing", "callers:Missing", "callees:Missing", "deps:missing", "file:missing", "search:missing"}
+			if name == "invalid-search" {
+				queries = []string{`search:"`}
+			}
+			for _, query := range queries {
+				_, err := tool.Execute(ctx, map[string]any{"query": query})
+				if err == nil {
+					t.Errorf("%s: %s reported success", name, query)
+				}
+			}
+		})
+	}
+}
+
+func TestIndexValidQueryWithoutMatchesStillSucceeds(t *testing.T) {
+	setupTestProject(t)
+	tool := NewIndexTool()
+	defer tool.Close()
+	for _, query := range []string{"symbol:AbsentNavigationSymbol", "search:AbsentNavigationSymbol"} {
+		out, err := tool.Execute(t.Context(), map[string]any{"query": query})
+		if err != nil || !strings.Contains(out.Text, "No ") {
+			t.Fatalf("valid empty query failed: %+v %v", out, err)
+		}
 	}
 }

@@ -30,7 +30,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"nekocode/interaction"
@@ -52,7 +51,6 @@ type App struct {
 	pendingImages            map[string]struct{}
 	attachmentDraftSessionID string
 	attachmentsClosed        bool
-	ready                    atomic.Bool
 	start                    time.Time
 }
 
@@ -97,7 +95,6 @@ func NewApp() (*App, error) {
 // Startup 在 Wails 窗口启动时调用。
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
-	a.ready.Store(true)
 	wailsruntime.LogInfo(ctx, "NekoCode GUI started, runtime ready")
 }
 

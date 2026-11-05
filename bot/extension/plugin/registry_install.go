@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	utilfs "nekocode/util/fs"
 	"nekocode/util/text"
 )
 
@@ -255,22 +257,30 @@ func copyDir(ctx context.Context, src, dst string) error {
 }
 
 func copyFile(ctx context.Context, src, dst string) error {
-	in, err := os.Open(src)
+	in, err := utilfs.OpenRegularFile(src)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = in.Close() }()
 
-	out, err := os.Create(dst)
+	info, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
 	_, copyErr := io.Copy(out, contextReader{ctx: ctx, reader: in})
-	closeErr := out.Close()
-	if copyErr != nil {
-		return copyErr
+	if copyErr == nil {
+		copyErr = out.Chmod(info.Mode().Perm())
 	}
-	return closeErr
+	closeErr := out.Close()
+	if copyErr != nil || closeErr != nil {
+		_ = os.Remove(dst)
+		return errors.Join(copyErr, closeErr)
+	}
+	return nil
 }
 
 type contextReader struct {

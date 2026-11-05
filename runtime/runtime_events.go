@@ -9,6 +9,7 @@ import (
 	"nekocode/logger"
 	"nekocode/protocol"
 	internalconnectors "nekocode/runtime/internal/connectors"
+	"nekocode/runtime/internal/core"
 	"nekocode/runtime/internal/eventbus"
 	"nekocode/runtime/internal/recording"
 	"nekocode/runtime/internal/runstore"
@@ -98,12 +99,28 @@ func (r *Runtime) RegisterConnector(name string, factory ConnectorFactory) {
 }
 
 // DeliverConnectorFile sends a local file to the paired chats of the named
-// connector, or to every running file-capable connector when name is empty.
+// connector. Empty names route to the run's source; * explicitly broadcasts.
 // It returns the connector names the file was sent through. It backs the
 // deliver_file tool.
 func (r *Runtime) DeliverConnectorFile(ctx context.Context, name, path string) ([]string, error) {
 	if err := r.ensureOpen(); err != nil {
 		return nil, err
+	}
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		// Agent lifecycle contexts preserve execution identity, but may rebuild
+		// other context values. Resolve the source from this exact active run.
+		identity := protocol.ExecutionFromContext(ctx)
+		r.mu.Lock()
+		var source SourceRef
+		if identity.RunID != "" && RunID(identity.RunID) == r.currentRun && r.runContext != nil {
+			source = core.RunSourceFromContext(r.runContext)
+		}
+		r.mu.Unlock()
+		name = strings.ToLower(strings.TrimSpace(source.Kind))
+		if name == "" || name == "*" {
+			return nil, fmt.Errorf("specify a delivery connector; * explicitly broadcasts")
+		}
 	}
 	return r.connectors.DeliverFile(ctx, name, path)
 }

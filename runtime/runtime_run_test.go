@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -705,5 +706,24 @@ func TestToolCompletionEvidenceIsDetachedAndNotInventedForOtherSteps(t *testing.
 		if payload.Evidence.Executions[0].ID != "physical" || payload.Evidence.Executions[0].Execution.AttemptID != payload.AttemptID {
 			t.Fatalf("receipt detached/identity: %+v", payload)
 		}
+	}
+}
+
+func TestRuntimeCommandFailureProducesFailedRun(t *testing.T) {
+	rt := newTestRuntime(&testBot{})
+	defer rt.Close()
+	rt.registerCommand("broken", "test", func(context.Context, []string) (string, error) { return "", fmt.Errorf("connector unavailable") })
+	id, err := rt.StartRun(t.Context(), Input{Text: "/broken"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, rt, id)
+	run, _ := rt.LookupRun(id)
+	if run.Status != RunFailed {
+		t.Fatalf("command failure status = %s", run.Status)
+	}
+	events := rt.events.History(EventFilter{RunID: id, Types: []EventType{EventRunFailed}})
+	if len(events) != 1 || events[0].Payload.(RunResult).Error != "connector unavailable" {
+		t.Fatalf("failure events = %+v", events)
 	}
 }

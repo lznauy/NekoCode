@@ -14,12 +14,24 @@ import (
 type fakeDeliverer struct {
 	connector string
 	path      string
+	content   []byte
+	hook      func(string) error
 	sent      []string
 	err       error
 }
 
 func (d *fakeDeliverer) DeliverConnectorFile(_ context.Context, connector, path string) ([]string, error) {
 	d.connector, d.path = connector, path
+	var err error
+	d.content, err = os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if d.hook != nil {
+		if err := d.hook(path); err != nil {
+			return nil, err
+		}
+	}
 	return d.sent, d.err
 }
 
@@ -49,8 +61,11 @@ func TestExecuteDeliversWorkspaceFile(t *testing.T) {
 		t.Fatalf("connector = %q", d.connector)
 	}
 	// Relative paths resolve against the workspace root.
-	if d.path != path {
-		t.Fatalf("path = %q, want %q", d.path, path)
+	if d.path == path || filepath.Base(d.path) != "report.zip" || string(d.content) != "zip" {
+		t.Fatalf("invalid upload snapshot: path=%q content=%q", d.path, d.content)
+	}
+	if _, err := os.Stat(d.path); !os.IsNotExist(err) {
+		t.Fatalf("snapshot not cleaned up: %v", err)
 	}
 	if !strings.Contains(out.Render(), "telegram") {
 		t.Fatalf("output = %q", out.Render())
@@ -111,13 +126,61 @@ func TestExecuteSurfacesDeliveryFailure(t *testing.T) {
 		t.Fatalf("err = %v, want delivery failure", err)
 	}
 
-	// Partial success (some connectors delivered) is reported, not an error.
+	// Partial success preserves both successful targets and failure status.
 	tool = NewTool(&fakeDeliverer{sent: []string{"telegram"}, err: errors.New("feishu: boom")})
 	out, err := tool.Execute(ctx, map[string]any{"path": "a.txt"})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatal("partial failure was reported as complete success")
 	}
 	if !strings.Contains(out.Render(), "telegram") || !strings.Contains(out.Render(), "feishu") {
 		t.Fatalf("partial result = %q", out.Render())
+	}
+}
+
+func TestRelativePathUsesPrimaryAndSnapshotSurvivesSourceChanges(t *testing.T) {
+	root := t.TempDir()
+	primary, reference := filepath.Join(root, "z-project"), filepath.Join(root, "a-reference")
+	for _, dir := range []string{primary, reference} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "report.txt"), []byte(filepath.Base(dir)), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := workspace.WithManager(context.Background(), workspace.New(primary, []workspace.Root{{Path: reference, Access: workspace.AccessReadOnly}}))
+	d := &fakeDeliverer{sent: []string{"telegram"}}
+	d.hook = func(snapshot string) error {
+		if err := os.WriteFile(filepath.Join(primary, "report.txt"), []byte("changed"), 0600); err != nil {
+			return err
+		}
+		data, err := os.ReadFile(snapshot)
+		if string(data) != "z-project" {
+			t.Errorf("upload changed with source: %q", data)
+		}
+		return err
+	}
+	if _, err := NewTool(d).Execute(ctx, map[string]any{"path": "report.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if string(d.content) != "z-project" {
+		t.Fatalf("selected wrong root: %q", d.content)
+	}
+	if _, err := os.Stat(d.path); !os.IsNotExist(err) {
+		t.Fatalf("snapshot leaked: %v", err)
+	}
+}
+
+func TestDeliverySnapshotCleanedOnFailure(t *testing.T) {
+	ctx, dir := wsContext(t)
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	d := &fakeDeliverer{err: errors.New("upload failed")}
+	if _, err := NewTool(d).Execute(ctx, map[string]any{"path": "a.txt"}); err == nil {
+		t.Fatal("missing failure")
+	}
+	if _, err := os.Stat(d.path); !os.IsNotExist(err) {
+		t.Fatalf("failed snapshot leaked: %v", err)
 	}
 }

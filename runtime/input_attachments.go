@@ -1,11 +1,15 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 
 	"nekocode/util/attachment"
+	utilfs "nekocode/util/fs"
 )
 
 const imageAttachmentsStart = "\n\n<image_attachments>\n"
@@ -91,22 +95,25 @@ func ValidImageAttachments(text string, images []ImageAttachment) []ImageAttachm
 // refuse to read; session storage carries a per-session read-only workspace
 // root. Attachments already inside storage (GUI/TUI paste path) and
 // unreadable sources pass through untouched.
-func (r *Runtime) adoptImageAttachments(input Input) Input {
+func (r *Runtime) adoptImageAttachments(ctx context.Context, input Input) (Input, error) {
 	if len(input.Images) == 0 || r.services.Sessions.CurrentSessionID == nil {
-		return input
+		return input, nil
 	}
 	sessionID := r.services.Sessions.CurrentSessionID()
 	dir, err := attachment.ImageDir(sessionID)
 	if sessionID == "" || err != nil {
-		return input
+		return input, nil
 	}
 	adopted := append([]ImageAttachment(nil), input.Images...)
 	for i, img := range adopted {
 		if img.Path == "" || strings.HasPrefix(img.Path, dir+string(os.PathSeparator)) {
 			continue
 		}
-		data, err := os.ReadFile(img.Path)
+		data, err := utilfs.ReadRegularFile(ctx, img.Path, attachment.MaxImageBytes)
 		if err != nil {
+			if errors.Is(err, utilfs.ErrNotRegular) || errors.Is(err, utilfs.ErrFileTooLarge) || ctx.Err() != nil {
+				return input, fmt.Errorf("read image attachment: %w", err)
+			}
 			continue
 		}
 		stored, err := attachment.SaveImage(sessionID, data)
@@ -114,14 +121,12 @@ func (r *Runtime) adoptImageAttachments(input Input) Input {
 			continue
 		}
 		adopted[i] = ImageAttachment{Label: img.Label, Path: stored}
-		// The connector-side download copy in the system temp dir is
-		// redundant once the image lives in session storage.
-		if strings.HasPrefix(img.Path, os.TempDir()+string(os.PathSeparator)) {
-			_ = os.Remove(img.Path)
+		if img.Release != nil {
+			img.Release()
 		}
 	}
 	input.Images = adopted
-	return input
+	return input, nil
 }
 
 // VisibleInputText removes runtime-added attachment metadata from persisted

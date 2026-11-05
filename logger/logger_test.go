@@ -68,3 +68,28 @@ func TestRotateIfNeeded(t *testing.T) {
 		t.Fatalf("rotated file mode = %o, want 600", info.Mode().Perm())
 	}
 }
+
+func TestLoggerRotatesWhileOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "debug.log")
+	logger := NewLogger(path)
+	t.Cleanup(func() {
+		if logger.file != nil {
+			_ = logger.file.Close()
+		}
+	})
+	logger.Log(2, "DBG", "", "first")
+	if err := logger.file.Truncate(maxSize + 1); err != nil {
+		t.Fatal(err)
+	}
+	logger.Log(2, "DBG", "", "after rotation")
+	if _, err := os.Stat(path + ".1"); err != nil {
+		t.Fatalf("active log was not rotated: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "after rotation") || strings.Contains(string(data), "first") {
+		t.Fatalf("unexpected current log: %q", data)
+	}
+}

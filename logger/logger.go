@@ -65,7 +65,12 @@ func (l *Logger) Log(skip int, level, prefix, format string, args ...any) {
 
 func (l *Logger) logFile() *os.File {
 	if l.file != nil {
-		return l.file
+		info, err := l.file.Stat()
+		if err == nil && info.Size() <= maxSize {
+			return l.file
+		}
+		_ = l.file.Close()
+		l.file = nil
 	}
 	if l.path == "" {
 		l.path = defaultPath()

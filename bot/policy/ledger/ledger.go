@@ -2,11 +2,14 @@
 package ledger
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"path/filepath"
 	"slices"
 	"sync"
+
+	"nekocode/protocol"
 )
 
 type pathSet map[string]struct{}
@@ -45,6 +48,17 @@ type ToolEvent struct {
 	Error     string
 	Blocked   bool
 	BlockText string
+}
+
+// MarshalJSON projects execution arguments into durable audit input. This also
+// protects snapshots supplied directly by programmatic callers or restored
+// outside RecordTool, without changing the live tool invocation.
+func (ev ToolEvent) MarshalJSON() ([]byte, error) {
+	type wireEvent ToolEvent
+	if ev.Args != nil {
+		ev.Args = protocol.ToolInputArgs(ev.Args)
+	}
+	return json.Marshal(wireEvent(ev))
 }
 
 // Ledger owns current-run read evidence and run-level audit evidence.
@@ -92,6 +106,10 @@ func (l *Ledger) RecordAuditTool(ev ToolEvent) {
 }
 
 func (l *Ledger) recordTool(ev ToolEvent, authorizeRead bool) {
+	// Keep executable callbacks and display metadata out of durable audit state.
+	if ev.Args != nil {
+		ev.Args = protocol.ToolInputArgs(ev.Args)
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.toolEventCount++

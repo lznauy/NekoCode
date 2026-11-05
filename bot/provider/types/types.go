@@ -1,13 +1,15 @@
 package types
 
 import (
+	"context"
 	nethttp "net/http"
-	"os"
 	"sync"
 	"time"
 
 	"nekocode/bot/reasoning"
 	"nekocode/protocol"
+	"nekocode/util/attachment"
+	utilfs "nekocode/util/fs"
 	utilhttp "nekocode/util/http"
 )
 
@@ -89,7 +91,7 @@ func DetectImageMIME(data []byte) string {
 // false when the file cannot be read; callers skip such images with a log
 // trail instead of failing the whole request.
 func LoadImage(image MessageImage) (data []byte, mediaType string, ok bool) {
-	data, err := os.ReadFile(image.Path)
+	data, err := utilfs.ReadRegularFile(context.Background(), image.Path, attachment.MaxImageBytes)
 	if err != nil {
 		return nil, "", false
 	}

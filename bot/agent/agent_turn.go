@@ -240,10 +240,6 @@ func (a *Agent) applyPostToolHookResult(result policy.Result) bool {
 	return a.toolRunner.applyPolicyResults([]policy.Result{result})
 }
 
-func (r *turnRunner) applyStopHookResult(result policy.Result, reasoning *reasoningResult, recordable bool, callback RunCallback) (bool, bool) {
-	return r.applyStopOutcome(policy.Resolve([]policy.Result{result}), reasoning, recordable, callback)
-}
-
 func (r *turnRunner) applyStopOutcome(out policy.Outcome, reasoning *reasoningResult, recordable bool, callback RunCallback) (bool, bool) {
 	a := r.agent
 	switch out.Action {

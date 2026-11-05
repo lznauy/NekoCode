@@ -7,8 +7,6 @@ import (
 	"os"
 )
 
-func stdioStreams() (*os.File, *os.File, func(), error) { return os.Stdin, os.Stdout, func() {}, nil }
-
 func openSchemaFile(path string) (*os.File, error) {
 	info, err := os.Stat(path)
 	if err != nil {

@@ -104,3 +104,38 @@ func TestTaskOutputRetryUsesFailedOffset(t *testing.T) {
 		t.Fatalf("retry offset = %d, want failed page %d", d.output.requestedOffset, failedOffset)
 	}
 }
+
+func TestTaskHistoryRetryUsesFailedPageCursor(t *testing.T) {
+	for _, target := range []int{0, 3} {
+		t.Run(fmt.Sprint(target), func(t *testing.T) {
+			m := openedTaskModel(t)
+			openTestDetail(m)
+			if target == 0 {
+				seedTaskOlderPage(m)
+			}
+			d := m.tasks.detail
+			m.handleTaskMessage(taskHistoryMsg{generation: m.tasks.generation, request: d.request, id: d.id, before: target, err: errors.New("temporary page error")})
+			cmd := m.handleTaskKey(tea.KeyPressMsg{Code: 'r', Text: "r"})
+			found := false
+			pending := []tea.Cmd{cmd}
+			for len(pending) > 0 {
+				child := pending[0]
+				pending = pending[1:]
+				msg := child()
+				if batch, ok := msg.(tea.BatchMsg); ok {
+					pending = append(pending, batch...)
+					continue
+				}
+				if reply, ok := msg.(taskHistoryMsg); ok {
+					found = true
+					if reply.before != target {
+						t.Fatalf("retried cursor %d instead of failed cursor %d", reply.before, target)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("history retry missing")
+			}
+		})
+	}
+}

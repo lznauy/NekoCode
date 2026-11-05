@@ -227,11 +227,22 @@ func matchQuestionOption(options []controlruntime.QuestionOption, token string) 
 		}
 	}
 	folded := strings.ToLower(token)
+	// Exact labels take precedence over another option's prefix.
 	for _, opt := range options {
-		label := strings.ToLower(opt.Label)
-		if folded == label || strings.HasPrefix(label, folded) {
+		if folded == strings.ToLower(opt.Label) {
 			return opt.Label, true
 		}
+	}
+	var matched string
+	matches := 0
+	for _, opt := range options {
+		if strings.HasPrefix(strings.ToLower(opt.Label), folded) {
+			matched = opt.Label
+			matches++
+		}
+	}
+	if matches == 1 {
+		return matched, true
 	}
 	return "", false
 }

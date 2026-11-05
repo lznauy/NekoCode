@@ -214,3 +214,46 @@ func TestCodecOverloadWithFullWriteQueueStopsReading(t *testing.T) {
 		t.Fatal("serve did not return after overload rejection")
 	}
 }
+
+func TestCodecCancellationInterruptsInput(t *testing.T) {
+	in, peer := io.Pipe()
+	defer in.Close()
+	defer peer.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- newConnection(io.Discard).serve(ctx, in, func(context.Context, string, json.RawMessage) (any, *wireError) { return nil, nil })
+	}()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("cancel did not interrupt input read")
+	}
+}
+
+func TestCodecWriteFailureInterruptsInput(t *testing.T) {
+	in, peer := io.Pipe()
+	defer in.Close()
+	defer peer.Close()
+	done := make(chan error, 1)
+	go func() {
+		done <- newConnection(errorWriter{}).serve(context.Background(), in, func(context.Context, string, json.RawMessage) (any, *wireError) { return nil, nil })
+	}()
+	if _, err := io.WriteString(peer, "invalid JSON\n"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "write message") {
+			t.Fatalf("serve error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("write failure did not interrupt input read")
+	}
+}
+
+type errorWriter struct{}
+
+func (errorWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }

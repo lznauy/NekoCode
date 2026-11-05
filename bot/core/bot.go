@@ -148,7 +148,13 @@ func (b *Bot) initConfig() error {
 		return fmt.Errorf("bot: resolve project: %w", err)
 	}
 	b.promptBuilder = prompt.New(b.cwd)
-	b.promptBuilder.SetEnvironmentProvider(b.environment)
+	b.promptBuilder.SetEnvironmentProvider(func() prompt.Environment {
+		env := b.environment()
+		if b.ext != nil {
+			env.MCPCapabilities = b.ext.MCPCapabilitySummary()
+		}
+		return env
+	})
 	b.reloadProject()
 	return nil
 }
@@ -266,7 +272,11 @@ func (b *Bot) initToolRegistry() {
 // RegisterExtraTools adds assembly-injected tools that survive registry
 // rebuilds. Call before the bot starts serving requests.
 func (b *Bot) RegisterExtraTools(tools ...toolcore.Tool) {
-	b.initToolRegistry()
+	// Agent, executor and extensions share this registry. Replacing it here
+	// discards extension tools and leaves those consumers on the old registry.
+	if b.toolbox == nil {
+		b.initToolRegistry()
+	}
 	b.toolbox.SetExtraTools(tools...)
 }
 

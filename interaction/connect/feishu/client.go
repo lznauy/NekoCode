@@ -287,3 +287,7 @@ func strVal(s *string) string {
 	}
 	return *s
 }
+
+func (c *feishuClient) matchesConfig(cfg Config) bool {
+	return c != nil && c.appID == cfg.AppID && c.appSecret == cfg.AppSecret
+}

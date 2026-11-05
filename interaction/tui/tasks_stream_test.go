@@ -139,7 +139,7 @@ func TestTaskStreamCoalescesAndReconcilesCommittedMessage(t *testing.T) {
 	if m.scheduleTaskFrame() != nil {
 		t.Fatal("a frame was scheduled per token")
 	}
-	if len(d.entries) != 4 {
+	if len(d.entries) != 5 {
 		t.Fatal("stream rendered before the coalesced frame")
 	}
 	sendTaskOutput(m, 101, controlruntime.SubAgentOutput{ID: d.id, MessageSeq: 5, Kind: "message", Text: "finished response", Reasoning: "verified evidence"})
@@ -233,13 +233,13 @@ func TestPausedLivePreviewSurvivesHistoryRefresh(t *testing.T) {
 	d.showProcess = true
 	sendTaskOutput(m, 1, controlruntime.SubAgentOutput{ID: d.id, MessageSeq: 5, Kind: "text_delta", Text: "visible progress"})
 	m.handleTaskMessage(taskFrameMsg{generation: m.tasks.generation, request: m.tasks.streamRequest, id: d.id})
-	preview := d.entries[len(d.entries)-1]
+	preview := d.entries[len(d.entries)-2]
 	d.follow = false
 	d.list.ScrollToTop()
 	index, line := d.list.ViewportAnchor()
 	sendTaskOutput(m, 2, controlruntime.SubAgentOutput{ID: d.id, MessageSeq: 5, Kind: "text_delta", Text: " buffered update"})
 	m.handleTaskMessage(taskHistoryMsg{generation: m.tasks.generation, request: d.request, id: d.id, page: taskTestHistory()})
-	last := d.entries[len(d.entries)-1]
+	last := d.entries[len(d.entries)-2]
 	gotIndex, gotLine := d.list.ViewportAnchor()
 	if last.key != preview.key || last.item != preview.item || gotIndex != index || gotLine != line {
 		t.Fatal("paused history refresh removed or changed the displayed live preview")

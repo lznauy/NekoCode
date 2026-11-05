@@ -1,6 +1,7 @@
 package subagent
 
 import (
+	"encoding/json"
 	"nekocode/bot/extension/agentprofile"
 	"nekocode/bot/extension/tool"
 	"nekocode/bot/provider/types"
@@ -68,5 +69,53 @@ func TestStepLimitAllowsFinalStructuredResult(t *testing.T) {
 	}
 	if len(llm.tools[1]) != 1 || !toolDefsContain(llm.tools[1], submitResultToolName) {
 		t.Fatalf("finalization tools = %+v, want only submit_result", llm.tools[1])
+	}
+}
+
+func TestNavigationToolsReachBuiltinModelsWithoutExpandingCustomProfile(t *testing.T) {
+	profiles := append(agentprofile.Builtins(), Profile{Name: "custom/narrow", Tools: []string{"read"}})
+	for _, profile := range profiles {
+		t.Run(profile.Name, func(t *testing.T) {
+			navigation := []string{"index", "tree", "diff", "lsp_definition", "lsp_references", "lsp_hover", "lsp_diagnostics"}
+			registry := tools.New()
+			root := t.TempDir()
+			registry.Workspace().Configure(root, nil)
+			treeArgs, _ := json.Marshal(map[string]any{"path": root})
+			counters := make(map[string]*countingTool)
+			for _, name := range append(navigation, "read", "write", "shell") {
+				counters[name] = &countingTool{name: name}
+				registry.Register(counters[name])
+			}
+			llm := &scriptedLLM{scripts: [][]types.StreamToken{
+				{
+					{ToolCallDelta: &types.ToolCallDelta{Index: 0, ID: "navigate", Name: "index", Arguments: `{"query":"symbol:Target"}`}},
+					{ToolCallDelta: &types.ToolCallDelta{Index: 1, ID: "inspect-tree", Name: "tree", Arguments: string(treeArgs)}},
+					{ToolCallDelta: &types.ToolCallDelta{Index: 2, ID: "compare", Name: "diff", Arguments: `{"old":"before","new":"after"}`}},
+				},
+				{{ToolCallDelta: &types.ToolCallDelta{Index: 0, ID: "done", Name: submitResultToolName, Arguments: `{"summary":"done","evidence":[],"files":[],"verification":"fixture","unfinished":[],"risks":[]}`}}},
+			}}
+			result, err := New(Config{LLM: llm, Tools: registry}).Run(t.Context(), RunConfig{Profile: profile, Prompt: "Locate the target symbol."})
+			if err != nil || result.Status != StatusCompleted {
+				t.Fatalf("navigation run failed: %+v %v", result, err)
+			}
+			custom := profile.Name == "custom/narrow"
+			for _, name := range navigation {
+				if got := toolDefsContain(llm.tools[0], name); got == custom {
+					t.Errorf("profile %s exposes %s=%v", profile.Name, name, got)
+				}
+			}
+			wantCalls := 1
+			if custom {
+				wantCalls = 0
+			}
+			for _, name := range []string{"index", "tree", "diff"} {
+				if counters[name].calls != wantCalls {
+					t.Fatalf("profile executed %s %d times, want %d", name, counters[name].calls, wantCalls)
+				}
+			}
+			if profile.Name == "explore" && (toolDefsContain(llm.tools[0], "write") || toolDefsContain(llm.tools[0], "shell")) {
+				t.Fatal("read-only exploration gained mutation tools")
+			}
+		})
 	}
 }

@@ -2,8 +2,10 @@ package types
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -85,5 +87,60 @@ func TestStreamSSEStopsOnProviderTerminalEvent(t *testing.T) {
 	case <-time.After(streamReturnTimeout):
 		_ = body.Close()
 		t.Fatal("StreamSSE waited for EOF after a provider terminal event")
+	}
+}
+
+func TestStreamSSEDispatchesDataEvents(t *testing.T) {
+	for _, tc := range []struct {
+		name, payload string
+		want          []string
+	}{
+		{"multiline JSON", "data: {\"choices\":\r\ndata: []}\r\n\r\ndata: [DONE]\r\n\r\n", []string{"{\"choices\":\n[]}"}},
+		{"fields and empty data", ": comment\nevent: message\nid: 1\ndata\ndata:  tail\nretry: 10\n\ndata: [DONE]\n\n", []string{"\n tail"}},
+		{"BOM and CR lines", "\ufeffdata: hello\rdata: world\r\rdata: [DONE]\r\r", []string{"hello\nworld"}},
+		{"empty events", "\nevent: message\n\ndata:\n\ndata: [DONE]\n\n", []string{""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []string
+			errs := make(chan error, 1)
+			StreamSSE(context.Background(), &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(tc.payload))}, make(chan StreamToken), errs, func(data string, _ chan<- StreamToken) error { got = append(got, data); return nil })
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("events = %#v, want %#v", got, tc.want)
+			}
+			select {
+			case err := <-errs:
+				t.Fatal(err)
+			default:
+			}
+		})
+	}
+}
+
+func TestStreamSSEDiscardsUnterminatedEvent(t *testing.T) {
+	for _, payload := range []string{"data: partial", "data: [DONE]\n"} {
+		errs := make(chan error, 1)
+		StreamSSE(context.Background(), &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(payload))}, make(chan StreamToken), errs, func(string, chan<- StreamToken) error { t.Error("dispatched incomplete event"); return nil })
+		select {
+		case err := <-errs:
+			if !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Fatal(err)
+			}
+		default:
+			t.Fatal("missing EOF error")
+		}
+	}
+}
+
+func TestStreamSSEBoundsMultilineEvent(t *testing.T) {
+	errs := make(chan error, 1)
+	payload := strings.Repeat("data: "+strings.Repeat("x", 1024)+"\n", 1025) + "\n"
+	StreamSSE(context.Background(), &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(payload))}, make(chan StreamToken), errs, func(string, chan<- StreamToken) error { t.Error("dispatched oversized event"); return nil })
+	select {
+	case err := <-errs:
+		if err == nil || errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Fatalf("expected size error, got %v", err)
+		}
+	default:
+		t.Fatal("missing size error")
 	}
 }

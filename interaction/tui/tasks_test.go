@@ -453,14 +453,14 @@ func TestTaskRunningViewKeepsIntermediateTextInsideStatus(t *testing.T) {
 	d.info.LatestAttempt = cloneTaskAttempt(d.attempt)
 	d.showProcess = false
 	m.rebuildTaskDetail()
-	if len(d.entries) != 1 {
+	if len(d.entries) != 2 {
 		t.Fatalf("running view should keep intermediate text in the status card: %d entries", len(d.entries))
 	}
 	if d.processing == nil {
 		t.Fatal("running detail is missing the main-style processing card")
 	}
 	var rendered string
-	for _, entry := range d.entries {
+	for _, entry := range d.entries[:1] {
 		rendered += ansi.Strip(entry.item.Render(70))
 	}
 	if strings.Contains(rendered, "当前执行") || !strings.Contains(rendered, "检查当前实现") || strings.Contains(rendered, "已找到三个调用点") {
@@ -468,7 +468,7 @@ func TestTaskRunningViewKeepsIntermediateTextInsideStatus(t *testing.T) {
 	}
 }
 
-func TestProcessingCardStaysVisibleBelowManyToolsAndClearsOnCompletion(t *testing.T) {
+func TestProcessingCardScrollsWithHistoryAndClearsOnCompletion(t *testing.T) {
 	m := openedTaskModel(t)
 	openTestDetail(m)
 	d := m.tasks.detail
@@ -487,16 +487,26 @@ func TestProcessingCardStaysVisibleBelowManyToolsAndClearsOnCompletion(t *testin
 		)
 	}
 	m.rebuildTaskDetail()
-	view := ansi.Strip(m.taskPanelView(80, 24))
-	section := "activity"
-	if strings.Contains(view, "changes") {
-		section = "changes"
-	}
-	if d.processing == nil || !strings.Contains(view, section) || !strings.Contains(view, "Running go test") {
+	m.taskPanelView(80, 24)
+	view := ansi.Strip(d.list.Render())
+	if d.processing == nil || !strings.Contains(view, "Running go test") {
 		t.Fatalf("main-style processing card is not visible: %s", view)
 	}
-	if strings.LastIndex(view, section) < strings.LastIndex(view, "检查当前实现") {
-		t.Fatal("processing card was placed above the prompt")
+	// A long prompt makes the history taller than the viewport even in compact mode.
+	d.attempt.Prompt = strings.Repeat("历史消息\n", 400)
+	d.fullPrompt = d.attempt.Prompt
+	d.fullPromptLoaded = true
+	m.rebuildTaskDetail()
+	m.taskPanelView(80, 24)
+	d.follow = false
+	d.list.ScrollToTop()
+	if top := ansi.Strip(m.taskPanelView(80, 24)); strings.Contains(top, "activity") || strings.Contains(top, "changes") {
+		t.Fatalf("processing card stayed pinned while reading history: %s", top)
+	}
+	d.follow = true
+	d.list.ScrollToBottom()
+	if bottom := ansi.Strip(d.list.Render()); !strings.Contains(bottom, "Running go test") {
+		t.Fatalf("processing card missing after returning to bottom: %s", bottom)
 	}
 	for _, size := range [][2]int{{80, 24}, {40, 12}, {20, 10}} {
 		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})

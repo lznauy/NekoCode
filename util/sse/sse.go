@@ -3,11 +3,14 @@ package sse
 
 import "strings"
 
-// SSELineData extracts the data payload from an SSE "data: " line.
-// Returns the data string and true if the line is a data line, or ("", false) otherwise.
+// SSELineData extracts a data field's payload, removing at most one optional space.
+// A field without a colon has an empty value, as specified by SSE.
 func SSELineData(line string) (string, bool) {
-	if !strings.HasPrefix(line, "data: ") {
+	if line == "data" {
+		return "", true
+	}
+	if !strings.HasPrefix(line, "data:") {
 		return "", false
 	}
-	return strings.TrimPrefix(line, "data: "), true
+	return strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "), true
 }

@@ -30,6 +30,33 @@ func TestTaskHistoryDoesNotReloadUnchangedOrEmptyRecords(t *testing.T) {
 	}
 }
 
+func TestTaskDispatchAppearsInActivity(t *testing.T) {
+	m := openedTaskModel(t)
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunStarted})
+	for _, id := range []string{"first", "second"} {
+		m.applyRuntimeToolEvent(controlruntime.Event{Type: controlruntime.EventToolStarted, Payload: controlruntime.ToolPayload{
+			CallID: id, ToolName: "task", Args: fmt.Sprintf(`{"profile":"explore","prompt":"inspect %s"}`, id),
+		}})
+	}
+	view := ansi.Strip(m.Messages.Render())
+	for _, want := range []string{"activity", "task", "explore", "inspect first", "inspect second"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("dispatch missing %q: %s", want, view)
+		}
+	}
+	m.applyRuntimeToolEvent(controlruntime.Event{Type: controlruntime.EventToolCompleted, Payload: controlruntime.ToolPayload{
+		CallID: "second", ToolName: "task", Output: "full delegated response belongs in task details",
+	}})
+	blocks := m.Messages.ProcessingBlocks()
+	if len(blocks) != 2 || blocks[0].Done || !blocks[1].Done || blocks[1].IsError || blocks[1].Content != "" {
+		t.Fatalf("dispatch settled incorrectly: %+v", blocks)
+	}
+	view = ansi.Strip(m.Messages.Render())
+	if !strings.Contains(view, "inspect second") || strings.Contains(view, "full delegated response") {
+		t.Fatalf("successful dispatch vanished or expanded its output: %s", view)
+	}
+}
+
 func TestHundredTasksProduceOneMainSummary(t *testing.T) {
 	m := openedTaskModel(t)
 	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunStarted})
@@ -52,11 +79,11 @@ func TestHundredTasksProduceOneMainSummary(t *testing.T) {
 			t.Fatalf("missing %q in summary: %s", want, view)
 		}
 	}
-	if len(m.Messages.ProcessingBlocks()) != 0 || strings.Contains(view, "individual task output") {
-		t.Fatal("successful tasks expanded into main conversation")
+	if len(m.Messages.ProcessingBlocks()) != 100 || strings.Contains(view, "individual task output") {
+		t.Fatal("task dispatch activity missing or successful output expanded")
 	}
 	m.applyRuntimeToolEvent(controlruntime.Event{Type: controlruntime.EventToolCompleted, Payload: controlruntime.ToolPayload{CallID: "failed", ToolName: "task", IsError: true, Output: "task could not start"}})
-	if blocks := m.Messages.ProcessingBlocks(); len(blocks) != 1 || !blocks[0].IsError || blocks[0].Content != "task could not start" {
+	if blocks := m.Messages.ProcessingBlocks(); len(blocks) != 101 || !blocks[100].IsError || blocks[100].Content != "task could not start" {
 		t.Fatal("actionable task failure was hidden")
 	}
 	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunStarted})

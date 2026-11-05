@@ -582,3 +582,29 @@ func (m *Manager) ModelSkill(name string) (skill.Command, error) {
 	}
 	return skill.Command{Name: sk.Name, Context: skill.FormatForContext(sk)}, nil
 }
+
+// MCPCapabilitySummary is a cheap live inventory for the main agent's runtime
+// context. Do not include credentials, startup errors, or full tool schemas.
+func (m *Manager) MCPCapabilitySummary() string {
+	health := m.mcp.Health()
+	if len(health) == 0 {
+		return "No MCP servers configured."
+	}
+	names := make([]string, 0, len(health))
+	for name := range health {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var out strings.Builder
+	out.WriteString("Discover tools with capability(action=list); inspect a tool before calling it.\n")
+	for i, name := range names {
+		h := health[name]
+		line := fmt.Sprintf("%q: %s, %d tools\n", name, h.Status, h.ToolCount)
+		if out.Len()+len(line) > 8192 {
+			fmt.Fprintf(&out, "%d more servers; use capability(action=list) for the complete inventory.\n", len(names)-i)
+			break
+		}
+		out.WriteString(line)
+	}
+	return strings.TrimSpace(out.String())
+}

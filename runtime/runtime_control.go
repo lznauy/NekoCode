@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"nekocode/protocol"
+	"nekocode/runtime/internal/core"
 	"net/url"
 	"strings"
 
@@ -97,7 +98,7 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 	r.currentRun = runID
 	r.status = RunRunning
 	delete(r.cancelled, runID)
-	runCtx, cancel := context.WithCancel(ctx)
+	runCtx, cancel := context.WithCancel(core.WithRunSource(ctx, input.Source))
 	r.runContext = runCtx
 	r.cancelRun = cancel
 	r.cancelDone = nil

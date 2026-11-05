@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"nekocode/runtime/standard"
+	"nekocode/util/stdio"
 )
 
 // RunStdio starts the standard NekoCode runtime as an ACP agent on stdin/stdout.
@@ -24,5 +25,12 @@ func RunStdioWithOptions(ctx context.Context, options ServerOptions) error {
 		return err
 	}
 	defer runtime.Close()
-	return ServeWithOptions(ctx, os.Stdin, os.Stdout, runtime, cwd, options)
+	in, out, restore, err := stdio.Streams()
+	if err != nil {
+		return fmt.Errorf("acp: prepare standard streams: %w", err)
+	}
+	defer restore()
+	defer in.Close()
+	defer out.Close()
+	return ServeWithOptions(ctx, in, out, runtime, cwd, options)
 }

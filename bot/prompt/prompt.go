@@ -19,6 +19,7 @@ type Environment struct {
 	Cwd              string
 	Roots            []Root
 	ManagedProcesses string
+	MCPCapabilities  string
 }
 
 type EnvironmentProvider func() Environment
@@ -76,7 +77,7 @@ func (b *Builder) BuildEnvironment() string {
 			info.Cwd = b.cwd
 		}
 	}
-	if info.Cwd == "" && len(info.Roots) == 0 && info.ManagedProcesses == "" {
+	if info.Cwd == "" && len(info.Roots) == 0 && info.ManagedProcesses == "" && info.MCPCapabilities == "" {
 		return ""
 	}
 	now := b.now

@@ -645,7 +645,13 @@ func (m *Model) cycleSuggestion(delta int) {
 func (m *Model) handleSpinnerTick(msg spinner.TickMsg) tea.Cmd {
 	m.Spinner, _ = m.Spinner.Update(msg)
 	if m.tasks != nil && m.tasks.open && m.tasks.detail != nil && m.tasks.detail.processing != nil {
-		m.tasks.detail.processing.SetSpinnerView(m.Spinner.View())
+		d := m.tasks.detail
+		d.processing.SetSpinnerView(m.Spinner.View())
+		// The card is part of the history list, which caches rendered rows.
+		// Refresh only the card so animation preserves the reader's position.
+		if d.list != nil {
+			d.list.InvalidateItem(d.list.Len() - 1)
+		}
 	}
 
 	if m.state == stateConfirming {
@@ -903,8 +909,13 @@ func (m *Model) applyRuntimeToolEvent(ev controlruntime.Event) {
 		return
 	}
 	if p.SubAgentID == "" && p.ToolName == "task" && canObserveTasks(m.Runtime) {
-		// Keep actionable failures visible, without expanding every successful
-		// delegation into a separate activity/tool-output box.
+		// Keep delegation visible in activity; full results belong in task details.
+		if ev.Type == controlruntime.EventToolStarted {
+			m.Messages.ProcessToolBlock(block.NewTool(p.ToolName, p.CallID, p.Args))
+		} else if ev.Type == controlruntime.EventToolCompleted || ev.Type == controlruntime.EventToolBlocked {
+			m.Messages.AddToolOutput(p.ToolName, "", p.IsError || ev.Type == controlruntime.EventToolBlocked, p.CallID)
+		}
+		// Actionable failures also remain available after the parent run settles.
 		if ev.Type == controlruntime.EventToolBlocked || (ev.Type == controlruntime.EventToolCompleted && p.IsError) {
 			m.Messages.ProcessToolBlock(block.ContentBlock{Type: block.BlockTool, ToolName: "子任务失败", CallID: p.CallID, Content: p.Output, Done: true, IsError: true})
 		} else if ev.Type == controlruntime.EventToolCompleted && strings.HasPrefix(p.Output, "[Subagent returned a partial result]") {

@@ -63,3 +63,23 @@ func TestGrepPreservesNoMatchAndCancellation(t *testing.T) {
 		t.Fatal("cancellation was swallowed")
 	}
 }
+
+func TestGrepRejectsInjectedContextOptions(t *testing.T) {
+	td := testutil.SetupTemp(t)
+	for _, value := range []string{"--pre=echo", "--pre-glob=*", "-A1 --pre=echo", "-1", "-C-1", "-A", "1 2"} {
+		t.Run(value, func(t *testing.T) {
+			_, err := (&GrepTool{}).Execute(testutil.Context(td), map[string]any{"pattern": "func", "path": td, "context_lines": value})
+			if err == nil || !strings.Contains(err.Error(), "context_lines") {
+				t.Fatalf("expected context_lines validation error, got %v", err)
+			}
+		})
+	}
+}
+func TestGrepAcceptsContextOptions(t *testing.T) {
+	td := testutil.SetupTemp(t)
+	for _, value := range []string{"0", "2", "-A1", "-B2", "-C3", "-A 1 -B 2"} {
+		if _, err := (&GrepTool{}).Execute(testutil.Context(td), map[string]any{"pattern": "func", "path": td, "context_lines": value}); err != nil {
+			t.Errorf("%q: %v", value, err)
+		}
+	}
+}

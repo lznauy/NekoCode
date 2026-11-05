@@ -41,9 +41,21 @@ func newConnection(out io.Writer) *connection {
 	return &connection{out: out, pending: make(map[string]chan message)}
 }
 
+// serve owns cancellation of closable inputs: Close must interrupt Read.
+// Nonclosable readers must be finite or provide their own cancellation.
 func (c *connection) serve(ctx context.Context, in io.Reader, handle handler) error {
+	parent := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	if closer, ok := in.(io.Closer); ok {
+		closed := make(chan struct{})
+		stop := context.AfterFunc(ctx, func() { _ = closer.Close(); close(closed) })
+		defer func() {
+			if !stop() {
+				<-closed
+			}
+		}()
+	}
 	c.writeQ = make(chan outboundMessage, maxQueuedWrites)
 	c.stopQ = make(chan struct{})
 	c.writeErr = make(chan error, 1)
@@ -120,13 +132,16 @@ readLoop:
 	workers.Wait()
 	c.flushWrites(100 * time.Millisecond)
 	c.failPending()
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("acp: read message: %w", err)
-	}
 	select {
 	case err := <-c.writeErr:
 		return fmt.Errorf("acp: write message: %w", err)
 	default:
+	}
+	if err := parent.Err(); err != nil {
+		return err
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("acp: read message: %w", err)
 	}
 	return nil
 }

@@ -45,7 +45,7 @@ func New() (*controlruntime.Runtime, error) {
 }
 
 // runtimeDeliverer adapts the runtime's connector file delivery into the
-// deliver tool's injection interface.
+// deliver tool's injection interface. Empty targets are resolved from the run source.
 type runtimeDeliverer struct {
 	rt *controlruntime.Runtime
 }

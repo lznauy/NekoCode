@@ -186,8 +186,8 @@ func TestDeliverFileRoutesByConnectorName(t *testing.T) {
 		t.Fatalf("delivered: tg=%v feishu=%v", tg.delivered, feishuConn.delivered)
 	}
 
-	// Empty name delivers to every file-capable running connector.
-	sent, err = manager.DeliverFile(context.Background(), "", "/ws/b.zip")
+	// Explicit * delivers to every file-capable running connector.
+	sent, err = manager.DeliverFile(context.Background(), "*", "/ws/b.zip")
 	if err != nil || len(sent) != 2 {
 		t.Fatalf("DeliverFile(all) = %v err=%v", sent, err)
 	}
@@ -207,7 +207,7 @@ func TestDeliverFileRoutesByConnectorName(t *testing.T) {
 	if _, err := manager.connector(context.Background(), "wecom"); err != nil {
 		t.Fatal(err)
 	}
-	sent, err = manager.DeliverFile(context.Background(), "", "/ws/d.zip")
+	sent, err = manager.DeliverFile(context.Background(), "*", "/ws/d.zip")
 	if err != nil {
 		t.Fatalf("broadcast err = %v", err)
 	}
@@ -218,9 +218,31 @@ func TestDeliverFileRoutesByConnectorName(t *testing.T) {
 		t.Fatalf("stopped connector must be excluded: %v", sent)
 	}
 
+	if _, err := manager.DeliverFile(context.Background(), "", "/ws/report.zip"); err == nil {
+		t.Fatal("empty target broadcast implicitly")
+	}
 	// When a named target fails, its error surfaces.
 	feishuConn.fail = true
 	if _, err := manager.DeliverFile(context.Background(), "feishu", "/ws/e.zip"); err == nil {
 		t.Fatal("failing connector should surface the error")
+	}
+}
+
+func TestBroadcastPreservesPartialFailure(t *testing.T) {
+	manager := NewManager(nil)
+	tg := &fileConnector{}
+	tg.name = "telegram"
+	fs := &fileConnector{fail: true}
+	fs.name = "feishu"
+	manager.Register("telegram", func(core.ConnectorRuntime) Connector { return tg })
+	manager.Register("feishu", func(core.ConnectorRuntime) Connector { return fs })
+	for _, name := range []string{"telegram", "feishu"} {
+		if _, err := manager.connector(context.Background(), name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sent, err := manager.DeliverFile(context.Background(), "*", "/ws/report.zip")
+	if len(sent) != 1 || sent[0] != "telegram" || err == nil || !strings.Contains(err.Error(), "feishu") {
+		t.Fatalf("partial failure lost: sent=%v err=%v", sent, err)
 	}
 }

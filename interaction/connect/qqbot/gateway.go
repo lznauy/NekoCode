@@ -103,14 +103,19 @@ func (s *gatewaySession) run(ctx context.Context, onMessage func(inboundMessage)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = conn.Close() }()
-	go func() {
-		<-ctx.Done()
+	connectionCtx, cancelConnection := context.WithCancel(ctx)
+	var workers sync.WaitGroup
+	defer func() {
+		cancelConnection()
 		_ = conn.Close()
+		workers.Wait()
 	}()
+	workers.Go(func() {
+		<-connectionCtx.Done()
+		_ = conn.Close()
+	})
 
-	stopHB := make(chan struct{})
-	defer close(stopHB)
+	stopHB := connectionCtx.Done()
 	hbStarted := false
 
 	for {
@@ -129,7 +134,7 @@ func (s *gatewaySession) run(ctx context.Context, onMessage func(inboundMessage)
 				return errors.New("gateway hello missing heartbeat_interval")
 			}
 			if !hbStarted {
-				go s.heartbeatLoop(ctx, conn, interval, stopHB)
+				workers.Go(func() { s.heartbeatLoop(connectionCtx, conn, interval, stopHB) })
 				hbStarted = true
 			}
 			if err := s.identifyOrResume(conn, token); err != nil {

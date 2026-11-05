@@ -165,7 +165,7 @@ func (c *Connector) handleMessage(ctx context.Context, client *apiClient, msg in
 		}
 		marker := fmt.Sprintf("[Image #%s-%d]", msg.msgID, i)
 		text = connect.AppendMarker(text, marker)
-		images = append(images, controlruntime.ImageAttachment{Label: marker, Path: path})
+		images = append(images, controlruntime.ImageAttachment{Label: marker, Path: path, Release: connect.TemporaryImageRelease(path)})
 	}
 	if text == "" {
 		c.reply(ctx, client, msg, "图片下载失败，请重发。")
@@ -178,6 +178,7 @@ func (c *Connector) handleMessage(ctx context.Context, client *apiClient, msg in
 		Images: images,
 	})
 	if err != nil {
+		connect.ReleaseImages(images)
 		c.reply(ctx, client, msg, "错误: "+err.Error())
 	}
 }

@@ -78,7 +78,7 @@ func (t *IndexTool) ExecutionMode(args map[string]any) core.ExecutionMode {
 }
 
 func (t *IndexTool) Description() string {
-	return "Query the project index for symbols (symbol:), callers/callees, files (file:), package dependencies (deps:), text (search:), or an architecture overview (skeleton). Use it when code structure is the question; confirm relevant source before editing because index results are navigation evidence, not current file contents."
+	return "Query the project index for symbols (symbol:), callers/callees, files (file:), package dependencies (deps:), symbol names/signatures/docs (search:), or an architecture overview (skeleton). Use it when code structure is the question; confirm relevant source before editing because index results are navigation evidence, not current file contents. Call relations use name matching; verify important relationships with LSP or source. Use grep/read if the index is unavailable."
 }
 
 func (t *IndexTool) Parameters() []core.Parameter {
@@ -95,32 +95,38 @@ func (t *IndexTool) Parameters() []core.Parameter {
 func (t *IndexTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	t.opMu.RLock()
 	defer t.opMu.RUnlock()
+	query, _ := args["query"].(string)
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return core.ToolOutput{}, fmt.Errorf("missing required parameter 'query'; use symbol:<name>, callers:<name>, callees:<name>, deps:<pkg>, file:<name>, search:<term>, or skeleton")
+	}
+	prefix, value := "skeleton", ""
+	if query != "skeleton" {
+		var ok bool
+		prefix, value, ok = strings.Cut(query, ":")
+		if !ok {
+			return core.ToolOutput{}, fmt.Errorf("invalid index query format; use <prefix>:<value> or skeleton")
+		}
+		switch prefix {
+		case "symbol", "callers", "callees", "deps", "file", "search":
+		default:
+			return core.ToolOutput{}, fmt.Errorf("unknown index query prefix %q; use symbol, callers, callees, deps, file, search, or skeleton", prefix)
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return core.ToolOutput{}, fmt.Errorf("index query %q requires a nonempty value", prefix)
+		}
+	}
 	mgr, err := t.ensureInit(ctx)
 	if err != nil {
-		return core.ToolOutput{Text: fmt.Sprintf("Index initialization failed: %v", err)}, nil
+		return core.ToolOutput{}, fmt.Errorf("index initialization failed: %w; use grep/read for this task", err)
 	}
-
-	query, _ := args["query"].(string)
-	if query == "" {
-		return core.ToolOutput{Text: "Missing required parameter 'query'. Usage: query=\"file:manager.go\" or query=\"symbol:Agent\". Note: 'file' is not a parameter name — use query=\"file:<name>\"."}, nil
+	if !mgr.Available() {
+		return core.ToolOutput{}, fmt.Errorf("project index unavailable: no supported project marker found; use glob/grep/read for this task")
 	}
-
-	if strings.HasPrefix(query, "search:") {
-		value := strings.TrimSpace(strings.TrimPrefix(query, "search:"))
-		return core.ToolOutput{Text: querySearch(mgr, value)}, nil
-	}
-
-	if query == "skeleton" {
-		return core.ToolOutput{Text: mgr.Skeleton()}, nil
-	}
-
-	prefix, value, ok := strings.Cut(query, ":")
-	if !ok {
-		return core.ToolOutput{Text: "Invalid query format. Use '<prefix>:<value>' (e.g. \"file:manager.go\", \"symbol:Agent\") or \"skeleton\"."}, nil
-	}
-	value = strings.TrimSpace(value)
-
 	switch prefix {
+	case "skeleton":
+		return core.ToolOutput{Text: mgr.Skeleton()}, nil
 	case "symbol":
 		return core.ToolOutput{Text: querySymbol(mgr, value)}, nil
 	case "callers":
@@ -132,7 +138,8 @@ func (t *IndexTool) Execute(ctx context.Context, args map[string]any) (core.Tool
 	case "file":
 		return core.ToolOutput{Text: queryFile(mgr, value)}, nil
 	default:
-		return core.ToolOutput{Text: fmt.Sprintf("Unknown query prefix '%s'. Available: symbol, callers, callees, deps, file, search, skeleton", prefix)}, nil
+		text, err := querySearch(mgr, value)
+		return core.ToolOutput{Text: text}, err
 	}
 }
 
@@ -204,23 +211,23 @@ func queryFile(mgr *indexcore.Manager, name string) string {
 	return b.String()
 }
 
-func querySearch(mgr *indexcore.Manager, term string) string {
+func querySearch(mgr *indexcore.Manager, term string) (string, error) {
 	nodes, err := mgr.Search(term, 50)
 	if err != nil {
-		return fmt.Sprintf("Search error: %v", err)
+		return "", fmt.Errorf("index search failed: %w; use grep/read for this task", err)
 	}
 	if nodes == nil {
-		return "Full-text search is not available (database not initialized)."
+		return "", fmt.Errorf("index search unavailable; use grep/read for this task")
 	}
 	if len(nodes) == 0 {
-		return fmt.Sprintf("No results for '%s' in project index.", term)
+		return fmt.Sprintf("No results for '%s' in project index.", term), nil
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d result(s) for '%s':\n", len(nodes), term)
 	for _, n := range nodes {
 		fmt.Fprintf(&b, "  %s %s — %s:%d\n", n.Kind, n.Name, shortenPath(n.File), n.Line)
 	}
-	return b.String()
+	return b.String(), nil
 }
 
 func shortenPath(path string) string {

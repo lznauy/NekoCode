@@ -257,7 +257,12 @@ func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runL
 	// anything consumes them. This is file I/O, so it deliberately runs here —
 	// in the run goroutine, outside StartRun's mutation lock — rather than
 	// blocking capability changes (model/config switches) on large copies.
-	input = r.adoptImageAttachments(input)
+	var attachmentErr error
+	input, attachmentErr = r.adoptImageAttachments(ctx, input)
+	if attachmentErr != nil {
+		r.finishRun(runID, "", attachmentErr, false)
+		return
+	}
 	host := runHost{runtime: r, runID: runID, lease: lease, images: input.Images}
 	source := input.Source
 	if source.Kind == "" {
@@ -366,7 +371,7 @@ func (r *Runtime) handleRuntimeCommand(ctx context.Context, runID RunID, input I
 		response = err.Error()
 	}
 	host.system(response, SourceRef{Kind: "runtime"})
-	r.finishRun(runID, "", nil, false)
+	r.finishRun(runID, "", err, false)
 	return true
 }
 

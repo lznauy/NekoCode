@@ -3,7 +3,9 @@ package search
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -40,19 +42,40 @@ func (t *GlobTool) Execute(ctx context.Context, args map[string]any) (core.ToolO
 		return core.ToolOutput{}, err
 	}
 
+	if filepath.IsAbs(pattern) || filepath.VolumeName(pattern) != "" {
+		return core.ToolOutput{}, fmt.Errorf("glob pattern must be relative to path")
+	}
+	pattern = filepath.ToSlash(pattern)
+	for _, segment := range strings.Split(pattern, "/") {
+		if segment == ".." {
+			return core.ToolOutput{}, fmt.Errorf("glob pattern must not contain parent traversal")
+		}
+		if _, err := path.Match(segment, ""); err != nil {
+			return core.ToolOutput{}, fmt.Errorf("glob failed: %w", err)
+		}
+	}
+	pattern = path.Clean(pattern)
+	if err := ctx.Err(); err != nil {
+		return core.ToolOutput{}, err
+	}
+	// Root's filesystem rejects escaping symlinks while opening directories,
+	// including replacements during traversal, before their names can be read.
+	root, err := os.OpenRoot(safeBasePath)
+	if err != nil {
+		return core.ToolOutput{}, fmt.Errorf("glob failed: %w", err)
+	}
+	defer root.Close()
 	var matches []string
 	if strings.Contains(pattern, "**") {
-		var err error
-		matches, err = globRecursive(safeBasePath, pattern)
-		if err != nil {
-			return core.ToolOutput{}, fmt.Errorf("glob failed: %w", err)
-		}
+		matches, err = globRecursive(ctx, root.FS(), strings.Split(pattern, "/"))
 	} else {
-		var err error
-		matches, err = filepath.Glob(filepath.Join(safeBasePath, pattern))
-		if err != nil {
-			return core.ToolOutput{}, fmt.Errorf("glob failed: %w", err)
-		}
+		matches, err = fs.Glob(root.FS(), pattern)
+	}
+	if err != nil {
+		return core.ToolOutput{}, fmt.Errorf("glob failed: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return core.ToolOutput{}, err
 	}
 
 	if len(matches) == 0 {
@@ -61,83 +84,52 @@ func (t *GlobTool) Execute(ctx context.Context, args map[string]any) (core.ToolO
 
 	var sb strings.Builder
 	for _, m := range matches {
-		sb.WriteString(m)
+		sb.WriteString(filepath.Join(safeBasePath, filepath.FromSlash(m)))
 		sb.WriteByte('\n')
 	}
 	return core.ToolOutput{Text: sb.String()}, nil
 }
 
-func globRecursive(basePath, pattern string) ([]string, error) {
+func globRecursive(ctx context.Context, filesystem fs.FS, pattern []string) ([]string, error) {
 	var matches []string
-	parts := strings.Split(pattern, "**")
-
-	err := filepath.Walk(basePath, func(p string, info os.FileInfo, err error) error {
+	err := fs.WalkDir(filesystem, ".", func(name string, entry fs.DirEntry, err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if err != nil {
+			if name == "." {
+				return err
+			}
 			return nil
 		}
-		rel, err := filepath.Rel(basePath, p)
-		if err != nil {
-			return nil
-		}
-		if rel == "." {
-			return nil
-		}
-		// Match each segment between ** anchors. A segment may be empty.
-		if matchGlobParts(rel, parts) {
-			matches = append(matches, p)
+		if name != "." && matchGlobParts(name, pattern) {
+			matches = append(matches, name)
 		}
 		return nil
 	})
 	return matches, err
 }
 
-// matchGlobParts matches a path against pattern segments separated by **.
-// e.g. pattern "docs/**/*.md" → parts ["docs/", "/*.md"]
-// The ** matches zero or more directory levels.
-func matchGlobParts(path string, parts []string) bool {
-	if len(parts) == 1 {
-		// No ** in pattern — use standard Match.
-		ok, _ := filepath.Match(parts[0], path)
-		return ok
-	}
-	// Must start with first part.
-	if !strings.HasPrefix(path, parts[0]) {
-		return false
-	}
-	// Must end with last part.
-	if !hasSuffixMatch(path, parts[len(parts)-1]) {
-		return false
-	}
-	// Middle segments must appear in order (if non-empty).
-	remaining := path[len(parts[0]):]
-	for _, seg := range parts[1 : len(parts)-1] {
-		if seg == "" {
-			continue
+// matchGlobParts matches whole path components; ** consumes zero or more levels.
+func matchGlobParts(name string, pattern []string) bool {
+	names := strings.Split(name, "/")
+	// Dynamic programming avoids exponential backtracking with repeated **.
+	matched := make([]bool, len(names)+1)
+	matched[0] = true
+	for _, segment := range pattern {
+		next := make([]bool, len(names)+1)
+		if segment == "**" {
+			next[0] = matched[0]
+			for j := 1; j <= len(names); j++ {
+				next[j] = matched[j] || next[j-1]
+			}
+		} else {
+			for j := 1; j <= len(names); j++ {
+				ok, _ := path.Match(segment, names[j-1])
+				next[j] = matched[j-1] && ok
+			}
 		}
-		idx := strings.Index(remaining, seg)
-		if idx < 0 {
-			return false
-		}
-		remaining = remaining[idx+len(seg):]
+		matched = next
 	}
-	return true
-}
-
-func hasSuffixMatch(path, suffix string) bool {
-	if suffix == "" {
-		return true
-	}
-	// filepath.Match semantics: suffix like "/*.md" should match "/ARCHITECTURE.md".
-	ok, _ := filepath.Match("*"+suffix, path)
-	if ok {
-		return true
-	}
-	// Also try matching from a path separator boundary.
-	for i := len(path) - 1; i >= 0; i-- {
-		if path[i] == '/' {
-			ok, _ = filepath.Match("*"+suffix, path[i:])
-			return ok
-		}
-	}
-	return false
+	return matched[len(names)]
 }

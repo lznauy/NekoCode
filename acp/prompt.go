@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	controlruntime "nekocode/runtime"
 )
 
-func (s *server) prompt(ctx context.Context, params json.RawMessage) (any, *wireError) {
+func (s *server) prompt(ctx context.Context, params json.RawMessage) (response any, failure *wireError) {
 	var request promptRequest
 	if err := json.Unmarshal(params, &request); err != nil || request.SessionID == "" {
 		return nil, rpcError(-32602, "invalid session/prompt params")
@@ -30,8 +31,19 @@ func (s *server) prompt(ctx context.Context, params json.RawMessage) (any, *wire
 	}
 	s.active[request.SessionID] = turn
 	s.mu.Unlock()
+	var startedRun controlruntime.RunID
+	settled := false
 	defer func() {
 		cancelTurn()
+		if startedRun != "" && !settled {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			if err := s.cancelAndWait(ctx, startedRun); err != nil {
+				failure = backendError("settle prompt", errors.Join(err, wireFailure(failure)))
+				response = nil
+				return
+			}
+		}
 		s.mu.Lock()
 		delete(s.active, request.SessionID)
 		s.mu.Unlock()
@@ -88,12 +100,19 @@ func (s *server) prompt(ctx context.Context, params json.RawMessage) (any, *wire
 		}
 		return nil, backendError("start prompt", err)
 	}
+	startedRun = runID
 	s.mu.Lock()
 	turn.runID = runID
 	cancelled = turn.cancelled
 	s.mu.Unlock()
 	if cancelled {
-		_ = s.backend.CancelRun(context.Background(), runID)
+		cancelCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		err := s.backend.CancelRun(cancelCtx, runID)
+		cancel()
+		if err != nil {
+			s.sessionMu.Unlock()
+			return nil, backendError("cancel prompt", err)
+		}
 	}
 	s.sessionMu.Unlock()
 
@@ -101,7 +120,6 @@ func (s *server) prompt(ctx context.Context, params json.RawMessage) (any, *wire
 	for {
 		select {
 		case <-ctx.Done():
-			_ = s.backend.CancelRun(context.Background(), runID)
 			return nil, backendError("prompt", ctx.Err())
 		case event, ok := <-events:
 			if !ok {
@@ -135,18 +153,21 @@ func (s *server) prompt(ctx context.Context, params json.RawMessage) (any, *wire
 				if err := s.backend.WaitRun(ctx, runID); err != nil {
 					return nil, backendError("settle prompt", err)
 				}
+				settled = true
 				result, _ := event.Payload.(controlruntime.RunResult)
 				return terminalPromptResult("end_turn", result), nil
 			case controlruntime.EventRunCancelled:
 				if err := s.backend.WaitRun(ctx, runID); err != nil {
 					return nil, backendError("settle prompt", err)
 				}
+				settled = true
 				result, _ := event.Payload.(controlruntime.RunResult)
 				return terminalPromptResult("cancelled", result), nil
 			case controlruntime.EventRunFailed:
 				if err := s.backend.WaitRun(ctx, runID); err != nil {
 					return nil, backendError("settle prompt", err)
 				}
+				settled = true
 				result, _ := event.Payload.(controlruntime.RunResult)
 				if result.Error == "" {
 					result.Error = "prompt failed"
@@ -167,4 +188,18 @@ func terminalPromptResult(reason string, result controlruntime.RunResult) map[st
 		response["_meta"] = map[string]any{"nekocode/evidence_incomplete": true}
 	}
 	return response
+}
+
+// Cancellation is asynchronous; configuration mutations require lifecycle completion.
+func (s *server) cancelAndWait(ctx context.Context, id controlruntime.RunID) error {
+	cancelErr := s.backend.CancelRun(ctx, id)
+	waitErr := s.backend.WaitRun(ctx, id)
+	return errors.Join(cancelErr, waitErr)
+}
+
+func wireFailure(err *wireError) error {
+	if err == nil {
+		return nil
+	}
+	return errors.New(err.Message)
 }

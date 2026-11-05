@@ -57,20 +57,15 @@ func (m *Model) resizeTasks() {
 	d := m.tasks.detail
 	if d.list != nil {
 		inner, bodyHeight := taskContentSize(w, h)
-		anchor, line := d.list.ViewportAnchor()
+		// SetSize preserves the anchor and clamps it to the new viewport.
 		d.list.SetSize(inner, bodyHeight)
-		if !d.follow {
-			d.list.RestoreViewportAnchor(anchor, line)
-		}
 		if d.follow {
 			d.list.ScrollToBottom()
 		}
 	}
 	if d.inspector != nil {
 		inner, bodyHeight := taskContentSize(w, h)
-		anchor, line := d.inspector.ViewportAnchor()
 		d.inspector.SetSize(inner, bodyHeight)
-		d.inspector.RestoreViewportAnchor(anchor, line)
 	}
 }
 
@@ -166,26 +161,10 @@ func (m *Model) taskPanelView(w, h int) string {
 		if !d.historyLoaded && (d.loading || d.attemptsLoading) {
 			status += " · 加载中"
 		}
-		processingView := ""
-		processingHeight := 0
-		listBodyHeight := bodyHeight
-		showProcessing := d.active() && !d.showAttempts && d.inspector == nil && d.processing != nil
-		if showProcessing {
-			processingView = d.processing.RenderWithin(inner, max(1, bodyHeight-2))
-			processingHeight = lipgloss.Height(processingView)
-			if bodyHeight < 3 {
-				listBodyHeight = 0
-			} else {
-				listBodyHeight = max(1, bodyHeight-processingHeight-1)
-			}
-		}
-		if d.list != nil && !d.showAttempts && d.inspector == nil && d.list.Height() != listBodyHeight {
-			anchor, line := d.list.ViewportAnchor()
-			d.list.SetSize(inner, listBodyHeight)
+		if d.list != nil && !d.showAttempts && d.inspector == nil && (d.list.Height() != bodyHeight || d.list.Width() != inner) {
+			d.list.SetSize(inner, bodyHeight)
 			if d.follow {
 				d.list.ScrollToBottom()
-			} else {
-				d.list.RestoreViewportAnchor(anchor, line)
 			}
 		}
 		if d.showAttempts {
@@ -217,13 +196,6 @@ func (m *Model) taskPanelView(w, h int) string {
 			}
 		} else if d.list != nil {
 			body = d.list.Render()
-		}
-		if showProcessing {
-			if body != "" && listBodyHeight > 0 {
-				body = strings.TrimRight(body, "\n") + "\n\n" + processingView
-			} else {
-				body = processingView
-			}
 		}
 		if d.err != "" {
 			status = "读取失败：" + d.err + " · r 重试"
@@ -703,6 +675,7 @@ func (m *Model) rebuildTaskDetail() {
 		p.SetStreamText(output, thinking)
 		p.SetTodos(taskProcessingTodos(records, results))
 		p.SetSkill(strings.Join(d.info.Skills, ", "))
+		entries = append(entries, taskEntry{key: "processing", item: p})
 	} else {
 		d.processing = nil
 	}
@@ -717,7 +690,7 @@ func (m *Model) rebuildTaskDetail() {
 	}
 	if stable {
 		for i, old := range d.entries {
-			if old.item != entries[i].item {
+			if old.item != entries[i].item || entries[i].key == "processing" {
 				d.list.ReplaceItem(i, entries[i].item)
 			}
 		}
@@ -808,14 +781,16 @@ func (m *Model) inspectVisibleTaskTool() tea.Cmd {
 	index, skipped := d.list.ViewportAnchor()
 	// Enter targets the first visible tool, rather than an off-screen call.
 	remaining := d.list.Height() + skipped
+	processingVisible := false
 	for i := index; i < len(d.entries) && remaining > 0; i++ {
 		entry := d.entries[i]
+		processingVisible = processingVisible || entry.key == "processing"
 		if entry.call != nil {
 			return m.inspectTaskTool(entry)
 		}
 		remaining -= lipgloss.Height(entry.item.Render(d.list.Width())) + 1
 	}
-	if d.processing != nil {
+	if d.processing != nil && processingVisible {
 		records := d.visibleRecords()
 		hasOutput := func(id string) bool {
 			if d.committedResults[id].OutputPath != "" {

@@ -12,18 +12,19 @@ func taskProcessingText(records []controlruntime.SubagentRecord, live *taskLiveM
 		if record.ContextOnly || record.Role != "assistant" {
 			continue
 		}
-		output = processing.DisplayText(record.Content)
+		if text := processing.DisplayText(record.Content); text != "" {
+			output = text
+		}
 		if text := processing.DisplayText(record.Reasoning); text != "" {
 			thinking = text
 		}
-		// The main page moves intermediate assistant text out of output when
-		// a tool starts. Keep it in the explicit process history instead.
-		if len(record.ToolCalls) > 0 {
-			output = ""
-		}
 	}
 	if live != nil {
-		output = processing.DisplayText(live.text.String())
+		// Compact task details have no separate intermediate messages. Keep
+		// the last output during tool-only turns and the next stream's reset.
+		if text := processing.DisplayText(live.text.String()); text != "" {
+			output = text
+		}
 		if text := processing.DisplayText(live.reasoning.String()); text != "" {
 			thinking = text
 		}

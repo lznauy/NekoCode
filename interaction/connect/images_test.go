@@ -1,6 +1,8 @@
 package connect
 
 import (
+	"fmt"
+	controlruntime "nekocode/runtime"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,5 +44,60 @@ func TestLocalImagePaths(t *testing.T) {
 	}
 	if p := LocalImagePaths(strings.Join(many, " ")); len(p) != maxOutboundImages {
 		t.Fatalf("cap = %d, want %d", len(p), maxOutboundImages)
+	}
+}
+
+func TestTemporaryImageRelease(t *testing.T) {
+	for _, replace := range []bool{false, true} {
+		t.Run(fmt.Sprint("replace=", replace), func(t *testing.T) {
+			path, err := DownloadToTemp("nekocode-owned-test-*.png", func(path string) error { return os.WriteFile(path, []byte("original"), 0600) })
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Remove(path) })
+			release := TemporaryImageRelease(path)
+			if release == nil {
+				t.Fatal("missing ownership callback")
+			}
+			if replace {
+				// Keep the original inode allocated so this checks a true replacement.
+				old := path + ".old"
+				if err := os.Rename(path, old); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Remove(old) })
+				if err := os.WriteFile(path, []byte("replacement"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			release()
+			release()
+			_, err = os.Stat(path)
+			if replace && err != nil {
+				t.Fatalf("replacement removed: %v", err)
+			}
+			if !replace && !os.IsNotExist(err) {
+				t.Fatalf("owned temporary file not removed: %v", err)
+			}
+		})
+	}
+}
+
+func TestReleaseImagesOnlyCleansOwnedDownloads(t *testing.T) {
+	owned := filepath.Join(t.TempDir(), "owned.png")
+	caller := filepath.Join(t.TempDir(), "caller.png")
+	for _, path := range []string{owned, caller} {
+		if err := os.WriteFile(path, []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	images := []controlruntime.ImageAttachment{{Path: owned, Release: TemporaryImageRelease(owned)}, {Path: caller}}
+	ReleaseImages(images)
+	ReleaseImages(images)
+	if _, err := os.Stat(owned); !os.IsNotExist(err) {
+		t.Fatalf("owned download retained: %v", err)
+	}
+	if _, err := os.Stat(caller); err != nil {
+		t.Fatalf("caller file removed: %v", err)
 	}
 }

@@ -11,7 +11,7 @@ import (
 // resolve paths and choose an authorized capability. Runtime implementation
 // details belong to tool schemas and permission enforcement, not this block.
 func FormatEnvironment(env Environment, date, shell, goos, goarch string) string {
-	if env.Cwd == "" && len(env.Roots) == 0 && env.ManagedProcesses == "" && date == "" && shell == "" && goos == "" && goarch == "" {
+	if env.Cwd == "" && len(env.Roots) == 0 && env.ManagedProcesses == "" && env.MCPCapabilities == "" && date == "" && shell == "" && goos == "" && goarch == "" {
 		return ""
 	}
 	var b strings.Builder
@@ -34,6 +34,7 @@ func FormatEnvironment(env Environment, date, shell, goos, goarch string) string
 	if strings.TrimSpace(env.ManagedProcesses) != "" {
 		fmt.Fprintf(&b, "<managed_processes>%s</managed_processes>\n", escapeEnvValue(env.ManagedProcesses))
 	}
+	writeEnvField(&b, "mcp_capabilities", env.MCPCapabilities)
 	b.WriteString("</environment_context>")
 	return b.String()
 }

@@ -95,3 +95,18 @@ func TestParseAnswerCommand(t *testing.T) {
 		t.Fatalf("bare /answer: answer=%q", answer)
 	}
 }
+
+func TestMatchQuestionOptionExactAndAmbiguous(t *testing.T) {
+	options := []controlruntime.QuestionOption{{Label: "Delete all"}, {Label: "Delete"}, {Label: "Keep"}}
+	for _, tc := range []struct {
+		token, want string
+		ok          bool
+	}{
+		{"delete", "Delete", true}, {"del", "", false}, {"kee", "Keep", true}, {"1", "Delete all", true},
+	} {
+		got, ok := matchQuestionOption(options, tc.token)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("match(%q) = (%q, %v), want (%q, %v)", tc.token, got, ok, tc.want, tc.ok)
+		}
+	}
+}

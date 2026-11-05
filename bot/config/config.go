@@ -245,6 +245,14 @@ func (c Config) Clone() Config {
 	}
 	if c.Jev != nil {
 		jev := *c.Jev
+		if c.Jev.Enabled != nil {
+			enabled := *c.Jev.Enabled
+			jev.Enabled = &enabled
+		}
+		if c.Jev.KeepThreshold != nil {
+			threshold := *c.Jev.KeepThreshold
+			jev.KeepThreshold = &threshold
+		}
 		out.Jev = &jev
 	}
 	return out
@@ -455,9 +463,6 @@ func Validate(cfg *Config) error {
 			}
 			srv := cfg.MCPServers[rawName]
 			srv.Command = strings.TrimSpace(srv.Command)
-			for i := range srv.Args {
-				srv.Args[i] = strings.TrimSpace(srv.Args[i])
-			}
 			if srv.Env != nil {
 				env := make(map[string]string, len(srv.Env))
 				for k, v := range srv.Env {
@@ -465,7 +470,7 @@ func Validate(cfg *Config) error {
 					if key == "" {
 						return fmt.Errorf("mcp server %q has empty env key", name)
 					}
-					env[key] = strings.TrimSpace(v)
+					env[key] = v
 				}
 				srv.Env = env
 			}

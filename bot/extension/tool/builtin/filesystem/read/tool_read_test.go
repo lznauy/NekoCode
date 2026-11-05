@@ -2,6 +2,7 @@ package read
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -29,6 +30,24 @@ func TestReadTool(t *testing.T) {
 	}
 	if out.Render() == "" {
 		t.Error("empty output")
+	}
+}
+
+func TestReadUTF8AcrossBinarySampleBoundary(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "utf8.txt")
+	text := strings.Repeat("a", 65535) + "中\n"
+	if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := (&ReadTool{}).Execute(testutil.Context(root), map[string]any{"path": path, "startLine": float64(1), "endLine": float64(1)})
+	if err != nil || !strings.Contains(out.Render(), "中") {
+		t.Fatalf("valid UTF-8 rejected: %v", err)
+	}
+	for _, data := range [][]byte{[]byte("abc\x00"), []byte("abc\xff"), []byte("abc\xe4\xb8")} {
+		if !isBinary(data) {
+			t.Errorf("invalid text accepted: %x", data)
+		}
 	}
 }
 
@@ -68,5 +87,22 @@ func TestReadToolDoesNotEmitEditViewMetadata(t *testing.T) {
 	}
 	if !strings.Contains(out.Render(), "[") || !strings.Contains(out.Render(), "#") || !strings.Contains(out.Render(), "1:package main") {
 		t.Fatalf("expected tag header and line output, got:\n%s", out.Render())
+	}
+}
+
+func TestReadRejectsOversizedTextBeforeAllocating(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "large.txt")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(maxReadFileBytes + 1); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	file.Close()
+	if _, err := (&ReadTool{}).Execute(testutil.Context(dir), map[string]any{"path": path, "startLine": float64(1), "endLine": float64(1)}); err == nil || !strings.Contains(err.Error(), "size limit") {
+		t.Fatalf("oversized text accepted: %v", err)
 	}
 }

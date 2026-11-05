@@ -49,10 +49,6 @@ func newLoopRunner(agent *Agent) *loopRunner {
 	return &loopRunner{agent: agent}
 }
 
-func (r *loopRunner) run(input string, images []types.MessageImage, callback RunCallback) *RunResult {
-	return r.runContext(context.Background(), input, images, callback)
-}
-
 func (r *loopRunner) runContext(ctx context.Context, input string, images []types.MessageImage, callback RunCallback) *RunResult {
 	if err := ctx.Err(); err != nil {
 		return &RunResult{Error: err, Interrupted: true}

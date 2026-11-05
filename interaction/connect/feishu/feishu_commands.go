@@ -65,6 +65,8 @@ func (c *Connector) addApp(args []string) (string, error) {
 	if len(args) < 2 || strings.TrimSpace(args[0]) == "" || strings.TrimSpace(args[1]) == "" {
 		return usageAdd, nil
 	}
+	c.apiMu.Lock()
+	defer c.apiMu.Unlock()
 	cfg, err := loadConfig()
 	if err != nil {
 		return "", err
@@ -73,10 +75,17 @@ func (c *Connector) addApp(args []string) (string, error) {
 	if cfg.AppID != "" && cfg.AppID != nextAppID {
 		cfg.unpair()
 	}
+	credentialsChanged := cfg.AppID != nextAppID || cfg.AppSecret != strings.TrimSpace(args[1])
 	cfg.AppID = nextAppID
 	cfg.AppSecret = strings.TrimSpace(args[1])
 	if err := saveConfig(cfg); err != nil {
 		return "", err
+	}
+	if credentialsChanged {
+		c.api = nil
+		if err := c.base.Stop(); err != nil {
+			return "", err
+		}
 	}
 	return "Feishu app saved.\nRun /connect feishu pair to bind your Feishu account.", nil
 }
@@ -92,6 +101,9 @@ func (c *Connector) pair(ctx context.Context) (string, error) {
 		return setupInstructions(), nil
 	}
 	if cfg.Owner != nil {
+		if err := c.Start(ctx); err != nil {
+			return "", err
+		}
 		return fmt.Sprintf("Feishu is already paired with %s.\nRun /connect feishu unpair before pairing another account.", cfg.Owner.UserID), nil
 	}
 	nonce, err := connect.NewNonce(9)

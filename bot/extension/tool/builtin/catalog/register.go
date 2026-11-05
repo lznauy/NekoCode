@@ -47,8 +47,8 @@ func registerAll(r *tools.Registry, imageGenModels []config.ImageGenConfig, imag
 	r.RegisterWithOptions(referencesTool, plan)
 	r.RegisterWithOptions(evidenceTool, plan)
 	diffTool := diff.NewTool()
-	r.RegisterWithOptions(diffTool, tools.RegistrationOptions{Preview: diffTool.PreviewContext})
-	r.Register(indexTool)
+	r.RegisterWithOptions(diffTool, tools.RegistrationOptions{PlanAllowed: true, Preview: diffTool.PreviewContext})
+	r.RegisterWithOptions(indexTool, plan)
 	for _, t := range lspTool.Tools() {
 		options := tools.RegistrationOptions{}
 		switch t.Name() {

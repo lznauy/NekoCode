@@ -162,24 +162,19 @@ func (c *Connector) handleMessage(ctx context.Context, sender messageSender, fra
 		return
 	}
 
-	cfg, err := loadConfig()
+	cfg, paired, err := prepareMessage(msg.From.UserID, msg.chatTarget(), text)
 	if err != nil {
 		return
 	}
+	if paired {
+		_ = sender.replyText(ctx, frame.Headers.RequestID, "NekoCode 已连接。现在可以发送任务或命令。")
+		c.base.PublishStatus("paired", "WeCom connected: "+msg.From.UserID)
+		return
+	}
 	if !cfg.isAllowed(msg.From.UserID) {
-		if cfg.Valid(text, time.Now().Unix()) {
-			cfg.finishPairing(msg.From.UserID, msg.chatTarget())
-			if err := saveConfig(cfg); err == nil {
-				_ = sender.replyText(ctx, frame.Headers.RequestID, "NekoCode 已连接。现在可以发送任务或命令。")
-				c.base.PublishStatus("paired", "WeCom connected: "+msg.From.UserID)
-			}
-			return
-		}
 		_ = sender.replyText(ctx, frame.Headers.RequestID, "此企业微信账号尚未连接 NekoCode。请先在 NekoCode 中运行 /connect wecom pair。")
 		return
 	}
-	cfg.touchOwner(msg.From.UserID, msg.chatTarget())
-	_ = saveConfig(cfg)
 
 	menuResult := c.menus.HandleText(ctx, c.rt, menuScope(msg), text)
 	if menuResult.Handled {
@@ -208,7 +203,7 @@ func (c *Connector) handleMessage(ctx context.Context, sender messageSender, fra
 		}
 		marker := fmt.Sprintf("[Image #%s]", msg.MessageID)
 		text = connect.AppendMarker(text, marker)
-		images = append(images, controlruntime.ImageAttachment{Label: marker, Path: path})
+		images = append(images, controlruntime.ImageAttachment{Label: marker, Path: path, Release: connect.TemporaryImageRelease(path)})
 	}
 	err = c.startRunRouted(context.WithoutCancel(ctx), msg.chatTarget(), controlruntime.Input{
 		Source: controlruntime.SourceRef{Kind: "wecom", ID: msg.chatTarget()},
@@ -217,6 +212,7 @@ func (c *Connector) handleMessage(ctx context.Context, sender messageSender, fra
 		Images: images,
 	})
 	if err != nil {
+		connect.ReleaseImages(images)
 		_ = sender.replyText(ctx, frame.Headers.RequestID, "错误: "+err.Error())
 		return
 	}

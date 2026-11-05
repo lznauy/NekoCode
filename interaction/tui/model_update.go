@@ -128,6 +128,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				key = "down"
 			}
 			if key != "" {
+				if d := m.tasks.detail; !m.tasks.searching && d != nil && !d.showAttempts && d.inspector == nil {
+					lines := 3
+					if key == "up" {
+						lines = -3
+					}
+					return m, m.scrollTaskDetail(lines)
+				}
 				return m, m.handleTaskKey(tea.KeyPressMsg{Code: map[string]rune{"up": tea.KeyUp, "down": tea.KeyDown}[key]})
 			}
 			return m, nil

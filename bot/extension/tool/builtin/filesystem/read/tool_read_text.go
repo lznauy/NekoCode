@@ -13,7 +13,10 @@ import (
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/execution"
 	"nekocode/bot/extension/tool/runtime/toolutil"
+	utilfs "nekocode/util/fs"
 )
+
+const maxReadFileBytes = 64 << 20
 
 func (t *ReadTool) readTextCached(ctx context.Context, path string, args map[string]any) (core.ToolOutput, error) {
 	startLine, err := toolutil.RequireIntArg(args, "startLine")
@@ -37,7 +40,7 @@ func (t *ReadTool) readTextCached(ctx context.Context, path string, args map[str
 	if checked != path {
 		return core.ToolOutput{}, fmt.Errorf("read target changed while waiting; retry the read")
 	}
-	data, err := readFileData(path)
+	data, err := readFileData(ctx, path)
 	if err != nil {
 		return core.ToolOutput{}, err
 	}
@@ -61,8 +64,8 @@ func (t *ReadTool) readTextCached(ctx context.Context, path string, args map[str
 	return core.ToolOutput{Text: result, ReadID: execution.FileReadsFromContext(ctx).Record(path, data, result)}, nil
 }
 
-func readFileData(path string) ([]byte, error) {
-	data, err := os.ReadFile(path)
+func readFileData(ctx context.Context, path string) ([]byte, error) {
+	data, err := utilfs.ReadRegularFile(ctx, path, maxReadFileBytes)
 	if err != nil {
 		if os.IsNotExist(err) {
 			msg := fmt.Sprintf("File not found: %s", filepath.Base(path))
@@ -118,5 +121,11 @@ func isBinary(data []byte) bool {
 	if slices.Contains(data[:min(len(data), 8192)], byte(0)) {
 		return true
 	}
-	return !utf8.Valid(data[:min(len(data), 65536)])
+	end := min(len(data), 65536)
+	// Include the rest of a rune crossing the sample boundary. A short file's
+	// incomplete final rune must still be rejected as invalid UTF-8.
+	for end < min(len(data), 65536+utf8.UTFMax-1) && !utf8.RuneStart(data[end]) {
+		end++
+	}
+	return !utf8.Valid(data[:end])
 }

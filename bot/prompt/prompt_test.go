@@ -37,7 +37,7 @@ func TestStaticPromptBytesAreStable(t *testing.T) {
 	if one != two || runtimeCalls != 0 {
 		t.Fatalf("BuildStatic depends on runtime state: equal=%v runtimeCalls=%d", one == two, runtimeCalls)
 	}
-	const wantSHA256 = "d02b98cdc9d0f410a77e3bd237e7fc6fd1237c54d58fa233f30de36ce55b9ed9"
+	const wantSHA256 = "4e732ee462d4b56d85eb1af7aaab4eb02e1fc9816942ab53889437b4b01dbffc"
 	if got := fmt.Sprintf("%x", sha256.Sum256([]byte(one))); got != wantSHA256 {
 		t.Fatalf("static prompt bytes changed: sha256=%s, want %s", got, wantSHA256)
 	}
@@ -165,7 +165,8 @@ func TestStaticPromptDefinesLeanCoreContract(t *testing.T) {
 			t.Errorf("static prompt should delegate workflow detail %q to skills", delegated)
 		}
 	}
-	if len([]byte(got)) > 7000 {
+	// The core contract includes bounded navigation and MCP discovery guidance.
+	if len([]byte(got)) > 9000 {
 		t.Errorf("static prompt grew beyond lean budget: %d bytes", len([]byte(got)))
 	}
 }

@@ -53,6 +53,8 @@ func New(rt controlruntime.ConnectorRuntime) *Connector {
 func (c *Connector) Name() string { return "feishu" }
 
 func (c *Connector) Start(ctx context.Context) error {
+	c.apiMu.Lock()
+	defer c.apiMu.Unlock()
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
@@ -60,14 +62,12 @@ func (c *Connector) Start(ctx context.Context) error {
 	if !cfg.configured() {
 		return fmt.Errorf("feishu app credentials are not configured")
 	}
-	if c.base.IsRunning() {
+	if c.base.IsRunning() && c.api.matchesConfig(cfg) {
 		return nil
 	}
 	runCtx, generation := c.base.Start(ctx)
 	client := newFeishuClient(cfg.AppID, cfg.AppSecret)
-	c.apiMu.Lock()
 	c.api = client
-	c.apiMu.Unlock()
 
 	c.base.PublishStatus("running", "")
 	go c.wsLoop(runCtx, client, generation)
@@ -78,7 +78,7 @@ func (c *Connector) Start(ctx context.Context) error {
 func (c *Connector) Stop() error {
 	c.apiMu.Lock()
 	c.api = nil
-	c.apiMu.Unlock()
+	defer c.apiMu.Unlock()
 	return c.base.Stop()
 }
 
@@ -94,6 +94,9 @@ func (c *Connector) DeliverFile(ctx context.Context, path string) error {
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
+	}
+	if !client.matchesConfig(cfg) {
+		return errConfigChanged
 	}
 	chats := cfg.pairedChatIDs()
 	if len(chats) == 0 {
@@ -136,7 +139,13 @@ func (c *Connector) wsLoop(ctx context.Context, client *feishuClient, generation
 		err := client.serveWS(ctx, func(evtCtx context.Context, ev *larkim.P2MessageReceiveV1) error {
 			c.handleMessage(evtCtx, client, ev)
 			return nil
-		}, c.handleCardAction)
+		}, func(eventCtx context.Context, ev *larkcallback.CardActionTriggerEvent) (*larkcallback.CardActionTriggerResponse, error) {
+			cfg, err := loadConfig()
+			if ctx.Err() != nil || err != nil || !client.matchesConfig(cfg) {
+				return toastResponse("error", "连接已变更，请重新打开卡片"), nil
+			}
+			return c.handleCardAction(eventCtx, ev)
+		})
 		if ctx.Err() != nil {
 			return
 		}
@@ -163,32 +172,30 @@ func (c *Connector) handleMessage(ctx context.Context, client *feishuClient, ev 
 		return
 	}
 
-	cfg, err := loadConfig()
+	cfg, paired, err := c.prepareMessage(client, openID, chatID, text)
 	if err != nil {
 		return
 	}
-
-	// Pairing: an unpaired sender who presents the in-flight nonce becomes
-	// the owner. Everyone else gets turned away.
+	if paired {
+		_ = client.sendText(ctx, chatID, "NekoCode connected. Send a message to control the current session.")
+		c.base.PublishStatus("paired", "Feishu connected: "+openID)
+		return
+	}
 	if !cfg.isAllowed(openID) {
-		if cfg.Valid(text, time.Now().Unix()) {
-			cfg.finishPairing(openID, chatID)
-			if err := saveConfig(cfg); err == nil {
-				_ = client.sendText(ctx, chatID, "NekoCode connected. Send a message to control the current session.")
-				c.base.PublishStatus("paired", "Feishu connected: "+openID)
-			}
-			return
-		}
 		_ = client.sendText(ctx, chatID, "This Feishu account is not connected to NekoCode. Run /connect feishu pair in NekoCode to bind this account.")
 		return
 	}
-	cfg.touchOwner(openID, chatID)
-	_ = saveConfig(cfg)
 
 	// Image messages: download after the pairing gate (no fetches for
 	// strangers) and reference the file via the marker convention shared
 	// with the runtime's attachment envelope.
 	var images []controlruntime.ImageAttachment
+	accepted := false
+	defer func() {
+		if !accepted {
+			connect.ReleaseImages(images)
+		}
+	}()
 	if msgType == "image" {
 		path, label, err := saveImage(ctx, client, ev)
 		if err != nil {
@@ -196,7 +203,7 @@ func (c *Connector) handleMessage(ctx context.Context, client *feishuClient, ev 
 			return
 		}
 		text = label
-		images = append(images, controlruntime.ImageAttachment{Label: label, Path: path})
+		images = append(images, controlruntime.ImageAttachment{Label: label, Path: path, Release: connect.TemporaryImageRelease(path)})
 	}
 
 	menuResult := c.menus.HandleText(ctx, c.rt, openID, text)
@@ -225,6 +232,7 @@ func (c *Connector) handleMessage(ctx context.Context, client *feishuClient, ev 
 		Text:   text,
 		Images: images,
 	})
+	accepted = err == nil
 	if err != nil {
 		_ = client.sendText(ctx, chatID, "Error: "+err.Error())
 	}
@@ -277,6 +285,15 @@ func (s eventSink) Caps() connect.Capabilities {
 }
 
 func (s eventSink) Post(ctx context.Context, in connect.Intent) error {
+	if client, ok := s.client.(*feishuClient); ok {
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		if !client.matchesConfig(cfg) {
+			return errConfigChanged
+		}
+	}
 	switch in.Kind {
 	case connect.IntentApproval:
 		// Approval requests go out as interactive cards; on any card

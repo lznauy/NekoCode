@@ -172,9 +172,6 @@ const (
 	maxCommandSegments = 12
 	// recentCommandsKept is how many executed commands the risk prompt sees.
 	recentCommandsKept = 5
-	// minAssistantPruneRunes: only substantial assistant messages are worth
-	// a judgment; trivial ones cost less to keep than to prune.
-	minAssistantPruneRunes = 160
 	// assistantCandidate marks assistant-message candidates in PruneTools.
 	assistantCandidate = "assistant"
 )

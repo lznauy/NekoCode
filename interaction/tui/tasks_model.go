@@ -57,6 +57,7 @@ type taskDetail struct {
 	info                controlruntime.SubagentSummary
 	page                controlruntime.SubagentHistoryPage
 	loadedCursor        int
+	historyRetryBefore  int
 	cursors             []int
 	request             uint64
 	loading             bool
@@ -104,7 +105,13 @@ type taskListMsg struct {
 	page                controlruntime.SubagentPage
 	err                 error
 }
+type taskHistoryViewport struct {
+	index, line int
+}
+
 type taskHistoryMsg struct {
+	viewport            *taskHistoryViewport
+	following           bool
 	prompt              string
 	promptLoaded        bool
 	generation, request uint64
@@ -322,6 +329,12 @@ func (m *Model) loadTaskHistory(before int) tea.Cmd {
 		m.rebuildTaskDetail()
 	}
 	generation, request, parent, id := s.generation, d.request, s.sessionID, d.id
+	following := d.follow
+	var viewport *taskHistoryViewport
+	if len(d.page.Records) > 0 {
+		index, line := d.list.ViewportAnchor()
+		viewport = &taskHistoryViewport{index: index, line: line}
+	}
 	reader := m.Runtime.(controlruntime.SubagentReader)
 	promptStart, promptEnd := 1, 0
 	if d.attempt != nil {
@@ -330,7 +343,7 @@ func (m *Model) loadTaskHistory(before int) tea.Cmd {
 	needPrompt := !d.fullPromptLoaded && promptStart > 0
 	return func() tea.Msg {
 		page, err := reader.SubagentHistory(parent, id, before, 100)
-		reply := taskHistoryMsg{generation: generation, request: request, id: id, before: before, page: page, err: err}
+		reply := taskHistoryMsg{generation: generation, request: request, id: id, before: before, page: page, err: err, following: following, viewport: viewport}
 		if err != nil || !needPrompt {
 			return reply
 		}
@@ -547,19 +560,24 @@ func (m *Model) handleTaskMessage(msg tea.Msg) (bool, tea.Cmd) {
 		d.loading = false
 		d.historyLoaded = true
 		if msg.err != nil {
+			d.historyRetryBefore = msg.before
 			d.err = msg.err.Error()
 			return true, nil
 		}
 		d.err = ""
+		d.historyRetryBefore = 0
 		if msg.promptLoaded {
 			d.fullPrompt, d.fullPromptLoaded = msg.prompt, true
 		}
+		index, line := d.list.ViewportAnchor()
+		readerMoved := msg.viewport != nil && (index != msg.viewport.index || line != msg.viewport.line)
 		tailRefresh := d.attempt != nil && d.isLatestAttempt() && len(d.cursors) == 1 && msg.before >= d.loadedCursor
-		if !d.follow && len(d.page.Records) > 0 && (msg.before == d.loadedCursor || tailRefresh) && msg.page.End > d.page.End {
+		if !d.follow && len(d.page.Records) > 0 && (readerMoved || msg.following || (msg.before == d.loadedCursor || tailRefresh) && msg.page.End > d.page.End) {
 			d.newRecords = max(d.newRecords, msg.page.Total-d.seenTranscriptSeq)
 			return true, nil
 		}
 		previousCursor := d.loadedCursor
+		movingNewer := msg.before != previousCursor && (msg.before == 0 || previousCursor != 0 && msg.before > previousCursor)
 		foundCursor := -1
 		if d.isLatestAttempt() && len(d.cursors) == 1 && msg.before > d.cursors[0] {
 			d.cursors[0] = msg.before
@@ -570,7 +588,9 @@ func (m *Model) handleTaskMessage(msg tea.Msg) (bool, tea.Cmd) {
 				break
 			}
 		}
-		if foundCursor >= 0 {
+		if msg.before == taskAttemptCursor(d.attempt) {
+			d.cursors = []int{msg.before}
+		} else if foundCursor >= 0 {
 			d.cursors = d.cursors[:foundCursor+1]
 		} else {
 			d.cursors = append(d.cursors, msg.before)
@@ -625,9 +645,12 @@ func (m *Model) handleTaskMessage(msg tea.Msg) (bool, tea.Cmd) {
 			}
 		}
 		d.liveOrder = liveOrder
+		if movingNewer && d.atLatestTail() {
+			d.follow = true
+		}
 		m.rebuildTaskDetail()
 		if hadPage && previousCursor != msg.before {
-			if d.follow || msg.before > previousCursor {
+			if d.follow || movingNewer {
 				d.list.ScrollToBottom()
 			} else {
 				d.list.ScrollToTop()
@@ -846,6 +869,7 @@ func (m *Model) selectTaskAttempt(attempt *controlruntime.SubagentAttemptSummary
 	d.historyLoaded = false
 	d.loading = false
 	d.err = ""
+	d.historyRetryBefore = 0
 	d.tools = make(map[string]liveTaskTool)
 	d.committedResults = make(map[string]controlruntime.SubagentRecord)
 	d.liveMessage = nil
@@ -1002,14 +1026,17 @@ func (m *Model) handleTaskKey(msg tea.KeyPressMsg) tea.Cmd {
 		case "enter":
 			return m.inspectVisibleTaskTool()
 		case "r":
-			return tea.Batch(m.loadTaskHistory(d.currentCursor()), m.loadTaskAttempts())
+			cursor := d.currentCursor()
+			if d.err != "" {
+				cursor = d.historyRetryBefore
+			}
+			return tea.Batch(m.loadTaskHistory(cursor), m.loadTaskAttempts())
 		case "p":
 			d.showProcess = !d.showProcess
 			if !d.showProcess {
 				d.follow = true
 				cursor := taskAttemptCursor(d.attempt)
 				if d.currentCursor() != cursor {
-					d.cursors = []int{cursor}
 					cmd := m.loadTaskHistory(cursor)
 					m.rebuildTaskDetail()
 					return cmd
@@ -1022,21 +1049,23 @@ func (m *Model) handleTaskKey(msg tea.KeyPressMsg) tea.Cmd {
 		case "]":
 			return m.stepTaskAttempt(1)
 		case "end":
+			d.list.ScrollToBottom()
 			d.follow = true
-			d.cursors = []int{taskAttemptCursor(d.attempt)}
-			return tea.Batch(m.loadTaskHistory(d.currentCursor()), m.scheduleTaskFrame())
-		case "up", "pgup", "home":
+			return tea.Batch(m.loadTaskHistory(taskAttemptCursor(d.attempt)), m.scheduleTaskFrame())
+		case "home":
 			d.follow = false
 			if d.list.ScrollY() == 0 && d.historyHasMore() && !d.loading {
 				return m.loadTaskHistory(d.page.Before)
 			}
-			scrollTaskList(d.list, msg.String())
-		case "down", "pgdown":
-			if d.list.AtBottom() && len(d.cursors) > 1 && !d.loading {
-				return m.loadTaskHistory(d.cursors[len(d.cursors)-2])
-			}
-			scrollTaskList(d.list, msg.String())
-			d.follow = d.list.AtBottom() && d.atLatestTail()
+			d.list.ScrollToTop()
+		case "up":
+			return m.scrollTaskDetail(-1)
+		case "pgup":
+			return m.scrollTaskDetail(-max(1, d.list.Height()))
+		case "down":
+			return m.scrollTaskDetail(1)
+		case "pgdown":
+			return m.scrollTaskDetail(max(1, d.list.Height()))
 		}
 		return nil
 	}
@@ -1086,6 +1115,25 @@ func (m *Model) handleTaskKey(msg tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
+// Scroll the detail with the same steps and follow transitions as the main view.
+func (m *Model) scrollTaskDetail(lines int) tea.Cmd {
+	d := m.tasks.detail
+	if lines < 0 {
+		d.follow = false
+		if d.list.ScrollY() == 0 && d.historyHasMore() && !d.loading {
+			return m.loadTaskHistory(d.page.Before)
+		}
+	} else if d.list.AtBottom() && len(d.cursors) > 1 && !d.loading {
+		return m.loadTaskHistory(d.cursors[len(d.cursors)-2])
+	}
+	d.list.ScrollBy(lines)
+	d.follow = d.list.AtBottom() && d.atLatestTail()
+	if d.follow {
+		return m.scheduleTaskFrame()
+	}
+	return nil
+}
+
 func scrollTaskList(list *components.List, key string) {
 	switch key {
 	case "up":
@@ -1093,9 +1141,9 @@ func scrollTaskList(list *components.List, key string) {
 	case "down":
 		list.ScrollBy(1)
 	case "pgup":
-		list.ScrollBy(-max(1, list.Height()-1))
+		list.ScrollBy(-max(1, list.Height()))
 	case "pgdown":
-		list.ScrollBy(max(1, list.Height()-1))
+		list.ScrollBy(max(1, list.Height()))
 	case "home":
 		list.ScrollToTop()
 	case "end":

@@ -211,11 +211,15 @@ func (m *Manager) runningFileDeliverers() map[string]protocol.FileDeliverer {
 }
 
 // DeliverFile sends a local file to the named connector's paired chats.
-// An empty name delivers to every running connector that supports files.
+// The name * explicitly broadcasts to every running file-capable connector.
 // It returns the connector names the file was sent through.
 func (m *Manager) DeliverFile(ctx context.Context, name, path string) ([]string, error) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return nil, errors.New("specify a delivery connector; * explicitly broadcasts")
+	}
 	deliverers := m.runningFileDeliverers()
-	if name != "" {
+	if name != "*" {
 		deliverer, ok := deliverers[name]
 		if !ok {
 			m.mu.Lock()
@@ -233,7 +237,17 @@ func (m *Manager) DeliverFile(ctx context.Context, name, path string) ([]string,
 	}
 	var sent []string
 	var errs []error
-	for connectorName, deliverer := range deliverers {
+	names := make([]string, 0, len(deliverers))
+	for name := range deliverers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, connectorName := range names {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err)
+			break
+		}
+		deliverer := deliverers[connectorName]
 		if err := deliverer.DeliverFile(ctx, path); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", connectorName, err))
 			continue
@@ -244,7 +258,7 @@ func (m *Manager) DeliverFile(ctx context.Context, name, path string) ([]string,
 	if len(sent) == 0 {
 		return nil, errors.Join(errs...)
 	}
-	return sent, nil
+	return sent, errors.Join(errs...)
 }
 
 func (m *Manager) usageFor(command string) string {

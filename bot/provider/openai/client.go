@@ -139,7 +139,10 @@ func (c *Client) chatStream(ctx context.Context, messages []types.Message, tools
 		body := c.buildBody(messages, tools, true)
 		jsonBody, _ := json.Marshal(body)
 		meta := c.RequestMeta()
-		tokenCh <- types.StreamToken{Request: &meta}
+		if err := types.SendStreamToken(ctx, tokenCh, types.StreamToken{Request: &meta}); err != nil {
+			errCh <- err
+			return
+		}
 		req, err := c.newStreamRequest(ctx, jsonBody)
 		if err != nil {
 			errCh <- err
@@ -152,7 +155,11 @@ func (c *Client) chatStream(ctx context.Context, messages []types.Message, tools
 			return
 		}
 
+		finished := false
 		types.StreamSSE(ctx, resp, tokenCh, errCh, func(data string, tokenCh chan<- types.StreamToken) error {
+			if err := types.StreamError(data); err != nil {
+				return err
+			}
 			var chunk streamChunk
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 				// Providers send keep-alives and occasional non-chunk payloads;
@@ -168,9 +175,14 @@ func (c *Client) chatStream(ctx context.Context, messages []types.Message, tools
 			if len(chunk.Choices) == 0 {
 				// Mimo sends usage in a separate final chunk with empty choices.
 				if chunk.Usage != nil {
-					tokenCh <- types.StreamToken{Usage: chunk.Usage}
+					if err := types.SendStreamToken(ctx, tokenCh, types.StreamToken{Usage: chunk.Usage}); err != nil {
+						return err
+					}
 				}
 				return nil
+			}
+			if chunk.Choices[0].FinishReason != "" {
+				finished = true
 			}
 			delta := chunk.Choices[0].Delta
 			token := types.StreamToken{
@@ -180,17 +192,21 @@ func (c *Client) chatStream(ctx context.Context, messages []types.Message, tools
 				FinishReason:     chunk.Choices[0].FinishReason,
 			}
 			if token.Content != "" || token.ReasoningContent != "" || token.Usage != nil || token.FinishReason != "" {
-				tokenCh <- token
+				if err := types.SendStreamToken(ctx, tokenCh, token); err != nil {
+					return err
+				}
 			}
 			for _, tc := range delta.ToolCalls {
-				tokenCh <- types.StreamToken{
+				if err := types.SendStreamToken(ctx, tokenCh, types.StreamToken{
 					ToolCallDelta: &types.ToolCallDelta{
 						Index: tc.Index, ID: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
 					},
+				}); err != nil {
+					return err
 				}
 			}
 			return nil
-		})
+		}, func() bool { return finished })
 	}()
 
 	return tokenCh, errCh

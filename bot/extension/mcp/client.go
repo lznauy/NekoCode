@@ -287,39 +287,68 @@ func (c *client) sendRequest(ctx context.Context, method string, params any) (js
 	if reader == nil {
 		return nil, fmt.Errorf("read: MCP server stdout unavailable")
 	}
-	readCh := make(chan readResult, 1)
-	go func() {
-		line, err := reader.ReadBytes('\n')
-		readCh <- readResult{line: line, err: err}
-	}()
+	// Requests are serialized by c.mu. Read only while a request is pending,
+	// discarding notifications instead of queuing them without a bound.
+	for {
+		readCh := make(chan readResult, 1)
+		go func() {
+			line, err := reader.ReadBytes('\n')
+			readCh <- readResult{line: line, err: err}
+		}()
 
-	var line []byte
-	select {
-	case result := <-readCh:
-		if result.err != nil {
-			return nil, fmt.Errorf("read: %w", result.err)
+		var line []byte
+		select {
+		case result := <-readCh:
+			if result.err != nil {
+				return nil, fmt.Errorf("read: %w", result.err)
+			}
+			line = result.line
+		case <-ctx.Done():
+			_ = c.stopLocked(100 * time.Millisecond)
+			<-readCh
+			return nil, ctx.Err()
+		case <-timer.C:
+			_ = c.stopLocked(100 * time.Millisecond)
+			<-readCh
+			return nil, fmt.Errorf("%s timed out after %s", method, timeout)
 		}
-		line = result.line
-	case <-ctx.Done():
-		_ = c.stopLocked(100 * time.Millisecond)
-		return nil, ctx.Err()
-	case <-timer.C:
-		_ = c.stopLocked(100 * time.Millisecond)
-		return nil, fmt.Errorf("%s timed out after %s", method, timeout)
-	}
 
-	var resp jsonrpcResponse
-	if err := json.Unmarshal(line, &resp); err != nil {
-		return nil, fmt.Errorf("unmarshal: %w", err)
+		var message struct {
+			Method string          `json:"method"`
+			ID     json.RawMessage `json:"id"`
+		}
+		if err := json.Unmarshal(line, &message); err != nil {
+			return nil, fmt.Errorf("unmarshal: %w", err)
+		}
+		if message.Method != "" {
+			if len(message.ID) != 0 {
+				// No server-initiated capabilities are advertised. Preserve its ID
+				// (which may be a string) and explicitly reject unsupported requests.
+				body, err := json.Marshal(map[string]any{
+					"jsonrpc": "2.0", "id": message.ID,
+					"error": map[string]any{"code": -32601, "message": "Method not supported"},
+				})
+				if err != nil {
+					return nil, fmt.Errorf("marshal: %w", err)
+				}
+				if err := c.writeMessage(ctx, timer.C, method, timeout, body); err != nil {
+					return nil, err
+				}
+			}
+			continue
+		}
+		var resp jsonrpcResponse
+		if err := json.Unmarshal(line, &resp); err != nil {
+			return nil, fmt.Errorf("unmarshal: %w", err)
+		}
+		if resp.ID != id {
+			return nil, fmt.Errorf("response id mismatch: got %d, expected %d", resp.ID, id)
+		}
+		if resp.Error != nil {
+			return nil, fmt.Errorf("rpc error %d: %s", resp.Error.Code, resp.Error.Message)
+		}
+		return resp.Result, nil
 	}
-	if resp.Error != nil {
-		return nil, fmt.Errorf("rpc error %d: %s", resp.Error.Code, resp.Error.Message)
-	}
-	if resp.ID != id {
-		return nil, fmt.Errorf("response id mismatch: got %d, expected %d", resp.ID, id)
-	}
-
-	return resp.Result, nil
 }
 
 func (c *client) sendNotification(ctx context.Context, method string, params any) error {
