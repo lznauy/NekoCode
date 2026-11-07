@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"nekocode/mode"
 	"nekocode/protocol"
 	textutil "nekocode/util/text"
 )
@@ -281,7 +282,15 @@ func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runL
 	if !proceed {
 		return
 	}
-	if !lease.guard(func() { r.publishAcceptedInput(runID, input) }) {
+	if resolve := r.services.Modes.Resolve; resolve != nil {
+		snapshot, err := resolve(input.Text)
+		if err != nil {
+			r.finishRun(runID, "", err, false)
+			return
+		}
+		ctx = mode.WithSnapshot(ctx, snapshot)
+	}
+	if !lease.guard(func() { r.publishAcceptedInput(ctx, runID, input) }) {
 		return
 	}
 
@@ -295,11 +304,13 @@ func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runL
 // publishAcceptedInput records only inputs that continue to the agent. Runtime
 // and bot commands are control-plane operations: their system response is
 // visible, but the command text is not projected as a conversation message.
-func (r *Runtime) publishAcceptedInput(runID RunID, input Input) {
+func (r *Runtime) publishAcceptedInput(ctx context.Context, runID RunID, input Input) {
+	snapshot, _ := mode.FromContext(ctx)
 	r.events.Publish(Event{
 		RunID: runID, Type: EventInputAccepted, Source: input.Source,
 		Payload: MessagePayload{
-			Role: "user", Content: RedactInputText(input.Text),
+			InteractionMode: snapshot,
+			Role:            "user", Content: RedactInputText(input.Text),
 			Source: input.Source, Sender: input.Sender,
 			Images: ValidImageAttachments(input.Text, input.Images),
 		},
@@ -314,7 +325,11 @@ func (r *Runtime) handleBotCommand(ctx context.Context, runID RunID, input strin
 	if r.services.Sessions.CurrentSessionID != nil {
 		sessionID = r.services.Sessions.CurrentSessionID()
 	}
+	previousMode := r.InteractionMode().Selected
 	result, err := r.services.Commands.ExecuteCommand(ctx, input, host)
+	if r.services.Modes.Current != nil && r.InteractionMode().Selected != previousMode {
+		r.publishInteractionModeChanged()
+	}
 	if err != nil {
 		r.finishRun(runID, "", err, false)
 		return "", false

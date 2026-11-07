@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"nekocode/interaction"
+	"nekocode/mode"
 	"strings"
 	"time"
 
@@ -48,6 +49,11 @@ type Model struct {
 	terminalWidth  int
 	terminalHeight int
 
+	activeMode            mode.Snapshot
+	activeModeOneShot     bool
+	modePicker            bool
+	modeChanging          bool
+	modeControlY          int
 	state                 chatState
 	preConfirmState       chatState
 	runtimePrompts        []runtimePrompt
@@ -129,10 +135,15 @@ type runtimeViewStatus struct {
 	selection  controlruntime.ModelSelection
 	context    controlruntime.ContextSnapshot
 	permission string
+	mode       controlruntime.InteractionMode
 }
 
 func readRuntimeViewStatus(rt RuntimeClient) runtimeViewStatus {
-	return runtimeViewStatus{selection: rt.CurrentModel(), context: rt.ContextSnapshot(), permission: rt.PermissionMode()}
+	status := runtimeViewStatus{selection: rt.CurrentModel(), context: rt.ContextSnapshot(), permission: rt.PermissionMode()}
+	if source, ok := rt.(modeRuntime); ok {
+		status.mode = source.InteractionMode()
+	}
+	return status
 }
 
 func (m *Model) refreshRuntimeStatus() { m.applyRuntimeViewStatus(readRuntimeViewStatus(m.Runtime)) }
@@ -149,6 +160,7 @@ func (m *Model) applyRuntimeViewStatus(status runtimeViewStatus) {
 	m.Input.SetModel(label)
 	m.Input.SetReasoningEffort(status.selection.ReasoningEffort)
 	m.Input.SetPermissionMode(status.permission)
+	m.applyModeStatus(status.mode)
 }
 
 func (m *Model) Init() tea.Cmd {

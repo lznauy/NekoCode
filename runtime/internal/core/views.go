@@ -3,28 +3,30 @@ package core
 import (
 	"time"
 
+	"nekocode/mode"
 	"nekocode/protocol"
 )
 
 type RunSnapshot struct {
-	ID         RunID               `json:"id"`
-	Status     RunStatus           `json:"status"`
-	Source     SourceRef           `json:"source"`
-	Sender     SenderRef           `json:"sender"`
-	Input      string              `json:"input,omitempty"`
-	Phase      string              `json:"phase,omitempty"`
-	StartedAt  time.Time           `json:"started_at"`
-	UpdatedAt  time.Time           `json:"updated_at"`
-	FinishedAt *time.Time          `json:"finished_at,omitempty"`
-	Tools      []ToolView          `json:"tools,omitempty"`
-	Todos      []protocol.TodoItem `json:"todos,omitempty"`
-	SubAgents  []SubAgentView      `json:"subagents,omitempty"`
-	Approvals  []ApprovalView      `json:"approvals,omitempty"`
-	Questions  []QuestionView      `json:"questions,omitempty"`
-	Output     string              `json:"output,omitempty"`
-	Reasoning  string              `json:"reasoning,omitempty"`
-	Error      string              `json:"error,omitempty"`
-	EventCount int                 `json:"event_count"`
+	InteractionMode mode.Snapshot       `json:"interaction_mode,omitzero"`
+	ID              RunID               `json:"id"`
+	Status          RunStatus           `json:"status"`
+	Source          SourceRef           `json:"source"`
+	Sender          SenderRef           `json:"sender"`
+	Input           string              `json:"input,omitempty"`
+	Phase           string              `json:"phase,omitempty"`
+	StartedAt       time.Time           `json:"started_at"`
+	UpdatedAt       time.Time           `json:"updated_at"`
+	FinishedAt      *time.Time          `json:"finished_at,omitempty"`
+	Tools           []ToolView          `json:"tools,omitempty"`
+	Todos           []protocol.TodoItem `json:"todos,omitempty"`
+	SubAgents       []SubAgentView      `json:"subagents,omitempty"`
+	Approvals       []ApprovalView      `json:"approvals,omitempty"`
+	Questions       []QuestionView      `json:"questions,omitempty"`
+	Output          string              `json:"output,omitempty"`
+	Reasoning       string              `json:"reasoning,omitempty"`
+	Error           string              `json:"error,omitempty"`
+	EventCount      int                 `json:"event_count"`
 
 	EvidenceIncomplete bool `json:"evidence_incomplete,omitempty"`
 }

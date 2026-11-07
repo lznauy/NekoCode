@@ -39,6 +39,7 @@ func (r *Runtime) invalidateContext() {
 // CapabilityManifest lets an interaction surface discover optional features
 // without probing methods or depending on a concrete bot.
 type CapabilityManifest struct {
+	InteractionModes  bool   `json:"interaction_modes"`
 	Checkpoints       bool   `json:"checkpoints"`
 	ModelCatalog      bool   `json:"model_catalog"`
 	SessionCreate     bool   `json:"session_create"`
@@ -81,12 +82,13 @@ func (r *Runtime) Capabilities() CapabilityManifest {
 	hasCommands := r.services.Commands.ExecuteCommand != nil || len(r.runtimeCommands) > 0
 	r.mu.Unlock()
 	return CapabilityManifest{
-		Checkpoints:   r.services.Tools.Checkpoints != nil,
-		ModelCatalog:  r.services.Models.ModelOptions != nil,
-		SessionCreate: r.services.Sessions.NewSession != nil,
-		SessionResume: r.services.Sessions.ResumeSession != nil,
-		SessionDelete: r.services.Sessions.DeleteSession != nil,
-		ToolCatalog:   r.services.Tools.ToolNames != nil, Rewind: r.services.Tools.Rewind != nil, ModelSelection: r.services.Models.SwitchSessionModel != nil, PermissionControl: r.services.Permissions.SetFullAccess != nil,
+		InteractionModes: r.services.Modes.Set != nil,
+		Checkpoints:      r.services.Tools.Checkpoints != nil,
+		ModelCatalog:     r.services.Models.ModelOptions != nil,
+		SessionCreate:    r.services.Sessions.NewSession != nil,
+		SessionResume:    r.services.Sessions.ResumeSession != nil,
+		SessionDelete:    r.services.Sessions.DeleteSession != nil,
+		ToolCatalog:      r.services.Tools.ToolNames != nil, Rewind: r.services.Tools.Rewind != nil, ModelSelection: r.services.Models.SwitchSessionModel != nil, PermissionControl: r.services.Permissions.SetFullAccess != nil,
 		Protocol: ProtocolVersion, Steering: r.services.Commands.Steer != nil,
 		Commands: hasCommands,
 		Metrics:  r.services.Lifecycle.Metrics != nil, Models: r.services.Models.CurrentModel != nil,

@@ -20,6 +20,8 @@ import { mapDisplayMessage, shouldHydrateEmptySession, shouldReloadSessionMessag
 import { useTheme } from './hooks/useTheme'
 import {
   safeClearSelectedSkill,
+  safeInteractionMode,
+  safeSetInteractionMode,
 	safeCommandMenu,
   safeContextSnapshot,
   safeEventsOn,
@@ -29,7 +31,7 @@ import {
   safeSkillManagementView,
   safeSwitchModel,
 } from './lib/wails'
-import type { GUICommandMenu } from './lib/wails'
+import type { GUICommandMenu, GUIInteractionMode } from './lib/wails'
 import type { ConfirmEvent, Msg, QuestionEvent } from './types/events'
 import type { ModelConfig } from './types/config'
 import type { protocol } from '../wailsjs/go/models'
@@ -66,6 +68,9 @@ export default function App() {
   const [skills, setSkills] = useState<SkillView[]>([])
   const [selectedSkill, setSelectedSkill] = useState('')
   const [controlError, setControlError] = useState('')
+  const [interactionMode, setInteractionMode] = useState<GUIInteractionMode | null>(null)
+  const [modeChanging, setModeChanging] = useState(false)
+  const [activeMode, setActiveMode] = useState('')
 	const attachmentDraftSessionRef = useRef<string | null>(null)
   const sessionActionRef = useRef(0)
   const [contextOpen, setContextOpen] = useState(false)
@@ -73,7 +78,39 @@ export default function App() {
   const [contextSnapshot, setContextSnapshot] = useState<ContextSnapshot | null>(null)
 	const [commandMenu, setCommandMenu] = useState<GUICommandMenu | null>(null)
   const [commandMenuQuery, setCommandMenuQuery] = useState('')
-  const activeCommandMenu = !busy && commandMenuQuery === text.trim() ? commandMenu : null
+  const activeCommandMenu = !busy && !modeChanging && commandMenuQuery === text.trim() ? commandMenu : null
+
+  useEffect(() => {
+    if (modeChanging) return
+    let current = true
+    void safeInteractionMode().then(state => { if (current) setInteractionMode(state) })
+      .catch(err => { if (current) setControlError('读取模式失败：' + String(err)) })
+    return () => { current = false }
+  }, [currentId, modelRefreshKey, busy, modeChanging])
+
+  useEffect(() => safeEventsOn('mode:changed', () => setModelRefreshKey(key => key + 1)), [])
+
+  useEffect(() => safeEventsOn('agent:input_accepted', (payload: unknown) => {
+    const p = payload as {interaction_mode?: {id?: string}; content?: string}
+    const id = p.interaction_mode?.id
+    if (id) setActiveMode(id + (/^\s*\/plan\s+\S/i.test(p.content ?? '') ? '*' : ''))
+  }), [])
+
+  useEffect(() => { if (!busy) setActiveMode('') }, [busy])
+
+  const switchInteractionMode = useCallback(async (id: string) => {
+    if (busy || modeChanging) return
+    const sessionAction = sessionActionRef.current
+    setModeChanging(true)
+    setControlError('')
+    try {
+      const state = await safeSetInteractionMode(id)
+      if (sessionAction === sessionActionRef.current) setInteractionMode(state)
+    } catch (err) {
+      if (sessionAction === sessionActionRef.current) setControlError('切换模式失败：' + String(err))
+    } finally { setModeChanging(false) }
+  }, [busy, modeChanging])
+
 
 	useEffect(() => {
 	  const input = text.trim()
@@ -179,6 +216,7 @@ export default function App() {
   )
 
   const handleSend = useCallback(() => {
+    if (modeChanging) return
     setControlError('')
     send()
     follow()
@@ -187,7 +225,7 @@ export default function App() {
         taRef.current.style.height = 'auto'
       }
     })
-  }, [send, taRef, follow])
+  }, [send, taRef, follow, modeChanging])
 
 	const handleCommandSelect = useCallback((item: GUICommandMenu['items'][number]) => {
       if (!activeCommandMenu) return
@@ -302,6 +340,7 @@ export default function App() {
 
   useEffect(() => {
     return safeEventsOn('agent:done', () => {
+      setActiveMode('')
       void refreshSessions()
       setModelRefreshKey(key => key + 1)
     })
@@ -362,6 +401,10 @@ export default function App() {
           text={text}
           busy={busy}
           stopping={stopping}
+          interactionMode={interactionMode}
+          activeMode={busy ? activeMode : ''}
+          modeChanging={modeChanging}
+          onSelectMode={switchInteractionMode}
           skills={skills}
           selectedSkill={selectedSkill}
           textareaRef={taRef}

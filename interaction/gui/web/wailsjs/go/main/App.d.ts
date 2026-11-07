@@ -53,3 +53,6 @@ export function SendMessage(arg1:string,arg2:Array<core.ImageAttachment>):Promis
 export function SetPluginEnabled(arg1:string,arg2:boolean):Promise<runtime.SkillManagementView>;
 
 export function SwitchModel(arg1:string):Promise<string>;
+
+export function InteractionMode(): Promise<{selected: string; options: Array<{id: string; label: string; description: string}> | null}>;
+export function SetInteractionMode(arg1: string): ReturnType<typeof InteractionMode>;

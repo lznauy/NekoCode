@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"nekocode/mode"
 	controlruntime "nekocode/runtime"
 )
 
@@ -61,6 +62,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /connect/{name}", s.handleConnectCommand)
 	mux.HandleFunc("POST /disconnect/{name}", s.handleDisconnectCommand)
 	mux.HandleFunc("GET /model", s.handleModel)
+	mux.HandleFunc("GET /mode", s.handleInteractionMode)
+	mux.HandleFunc("POST /mode", s.handleSetInteractionMode)
 	mux.HandleFunc("GET /commands", s.handleCommands)
 	mux.HandleFunc("GET /commands/menu", s.handleCommandMenu)
 	mux.HandleFunc("GET /metrics", s.handleMetrics)
@@ -479,4 +482,41 @@ func parseEventCursor(raw, lastEventID string) uint64 {
 	}
 	cursor, _ := strconv.ParseUint(raw, 10, 64)
 	return cursor
+}
+
+type modeRuntime interface {
+	InteractionMode() controlruntime.InteractionMode
+	SetInteractionMode(mode.ID) error
+}
+
+func (s *Server) handleInteractionMode(w http.ResponseWriter, r *http.Request) {
+	source, ok := s.rt.(modeRuntime)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "interaction modes unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, source.InteractionMode())
+}
+func (s *Server) handleSetInteractionMode(w http.ResponseWriter, r *http.Request) {
+	source, ok := s.rt.(modeRuntime)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "interaction modes unavailable")
+		return
+	}
+	var request struct {
+		Mode mode.ID `json:"mode"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if request.Mode == "" {
+		writeError(w, http.StatusBadRequest, "mode is required")
+		return
+	}
+	if err := source.SetInteractionMode(request.Mode); err != nil {
+		writeRuntimeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, source.InteractionMode())
 }

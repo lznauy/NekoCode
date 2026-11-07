@@ -20,9 +20,10 @@ import (
 )
 
 type Snapshot struct {
-	Subagent    *SubagentMetadata `json:"subagent,omitempty"`
-	ForkedFrom  string            `json:"forked_from,omitempty"`
-	ForkedAtSeq int               `json:"forked_at_seq,omitempty"`
+	InteractionMode string            `json:"interaction_mode,omitempty"`
+	Subagent        *SubagentMetadata `json:"subagent,omitempty"`
+	ForkedFrom      string            `json:"forked_from,omitempty"`
+	ForkedAtSeq     int               `json:"forked_at_seq,omitempty"`
 
 	FormatVersion int    `json:"format_version"`
 	ID            string `json:"id"`

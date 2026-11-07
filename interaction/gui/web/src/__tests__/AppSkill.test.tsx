@@ -7,7 +7,7 @@ function emit(name:string,payload:unknown){for(const cb of state.listeners.get(n
 vi.mock('../lib/wails.ts',()=>({
  safeEventsOn:(e:string,f:Function)=>{if(!state.listeners.has(e))state.listeners.set(e,new Set());state.listeners.get(e)!.add(f);return()=>state.listeners.get(e)?.delete(f)},
  safeListSessions:()=>state.list(),safeNewSession:async()=>{for(const cb of state.listeners.get('session:changed')??[])cb({id:'draft',reason:'new',changedId:'draft',currentChanged:true,messages:[]});return{id:'draft'}},safeLoadSession:(id:string)=>state.load(id),safeDeleteSession:vi.fn(),
- safeGetConfig:async()=>null,safeSkillManagementView:async()=>null,safeCurrentModel:async()=>'',safeCommandMenu:async()=>null,
+ safeInteractionMode:async()=>null,safeSetInteractionMode:vi.fn(),safeGetConfig:async()=>null,safeSkillManagementView:async()=>null,safeCurrentModel:async()=>'',safeCommandMenu:async()=>null,
  safeSendMessage:async()=>{},safeAbort:vi.fn(),safeDeleteClipboardImage:async()=>{},safeSaveClipboardImage:vi.fn(),safeClearSelectedSkill:vi.fn(),safeContextSnapshot:vi.fn(),safeQuit:vi.fn(),safeSelectSkill:()=>state.select(),safeSwitchModel:vi.fn()
 }));
 vi.mock('../hooks/useTheme.ts',()=>({useTheme:()=>({theme:'dark',toggle:vi.fn()})}));

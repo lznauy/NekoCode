@@ -171,3 +171,28 @@ describe('InputBar', () => {
   })
 
 })
+
+it('selects a server-provided mode without changing the input draft', () => {
+ const onSelectMode = vi.fn()
+ const { props } = setup({text: 'unfinished [Image #1]', imageAttachments: [{label: '[Image #1]', path: '/draft.png'}], interactionMode: {selected: 'standard', options: [{id: 'standard', label: 'Standard', description: 'Execute'}, {id: 'plan', label: 'Plan', description: 'Read only'}]}, onSelectMode})
+ fireEvent.change(screen.getByRole('combobox', {name: '工作模式'}), {target: {value: 'plan'}})
+ expect(onSelectMode).toHaveBeenCalledWith('plan')
+ expect(props.onChange).not.toHaveBeenCalled()
+ expect(props.onSend).not.toHaveBeenCalled()
+ expect(screen.getByRole('textbox')).toHaveValue('unfinished [Image #1]')
+})
+
+it('locks sending and mode selection during a pending mode mutation', () => {
+ const {props} = setup({text: 'draft', modeChanging: true, interactionMode: {selected: 'plan', options: [{id: 'plan', label: 'Plan', description: 'Read only'}]}})
+ expect(screen.getByRole('combobox')).toBeDisabled()
+ expect(screen.getByRole('button', {name: /发送/})).toBeDisabled()
+ fireEvent.keyDown(screen.getByRole('textbox'), {key: 'Enter'})
+ expect(props.onSend).not.toHaveBeenCalled()
+})
+
+it('shows the actual one-shot Plan policy while the saved selection is Standard', () => {
+ setup({busy: true, activeMode: 'plan*', interactionMode: {selected: 'standard', options: [{id: 'standard', label: 'Standard', description: 'Execute'}, {id: 'plan', label: 'Plan', description: 'Read only'}]}})
+ expect(screen.getByRole('combobox')).toHaveValue('plan')
+ expect(screen.getByRole('combobox')).toBeDisabled()
+ expect(screen.getByRole('option', {name: 'Plan*'})).toBeInTheDocument()
+})

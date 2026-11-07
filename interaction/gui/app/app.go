@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"nekocode/interaction"
+	"nekocode/mode"
 	controlruntime "nekocode/runtime"
 	"nekocode/runtime/standard"
 	"nekocode/util/attachment"
@@ -334,6 +335,8 @@ func (a *App) consumeAttachmentDraftSession(sessionID string) bool {
 
 func (a *App) dispatchRuntimeEvent(ev controlruntime.Event) {
 	switch ev.Type {
+	case controlruntime.EventInteractionModeChanged:
+		wailsruntime.EventsEmit(a.ctx, "mode:changed", a.InteractionMode())
 	case controlruntime.EventInputAccepted:
 		if p, ok := ev.Payload.(controlruntime.MessagePayload); ok {
 			a.commitAcceptedImages(p.Images)
@@ -783,4 +786,23 @@ func (a *App) ReplyQuestion(id string, answersJSON string, rejected bool) error 
 
 func (a *App) MCPAuthorizationAction(name, action string) error {
 	return a.rt.MCPAuthorizationAction(name, action)
+}
+
+// Mode selection is optional for older/custom runtimes. The standard runtime
+// owns synchronization and persistence; the GUI never changes executor flags.
+func (a *App) InteractionMode() controlruntime.InteractionMode {
+	if source, ok := a.rt.(interface {
+		InteractionMode() controlruntime.InteractionMode
+	}); ok {
+		return source.InteractionMode()
+	}
+	return controlruntime.InteractionMode{Selected: mode.Standard}
+}
+func (a *App) SetInteractionMode(id string) (controlruntime.InteractionMode, error) {
+	source, ok := a.rt.(interface{ SetInteractionMode(mode.ID) error })
+	if !ok {
+		return a.InteractionMode(), fmt.Errorf("interaction modes unavailable")
+	}
+	err := source.SetInteractionMode(mode.ID(id))
+	return a.InteractionMode(), err
 }

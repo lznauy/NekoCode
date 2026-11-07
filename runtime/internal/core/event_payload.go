@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"nekocode/mode"
 	"nekocode/protocol"
 )
 
@@ -29,7 +30,8 @@ func codec[T any]() payloadCodec {
 // This table is the single mapping between event kinds and typed payloads.
 // Recording replay and transport validation must not maintain separate maps.
 var payloadCodecs = map[EventType]payloadCodec{
-	EventInputAccepted: codec[MessagePayload](), EventSystemMessage: codec[MessagePayload](), EventAssistantMessage: codec[MessagePayload](),
+	EventInteractionModeChanged: codec[mode.ID](),
+	EventInputAccepted:          codec[MessagePayload](), EventSystemMessage: codec[MessagePayload](), EventAssistantMessage: codec[MessagePayload](),
 	EventAssistantDelta: codec[DeltaPayload](), EventReasoningDelta: codec[DeltaPayload](),
 	EventPhaseChanged: codec[PhasePayload](), EventCompaction: codec[protocol.CompactionEvent](),
 	EventToolStarted: codec[ToolPayload](), EventToolBlocked: codec[ToolPayload](), EventToolPreview: codec[ToolPayload](), EventToolCompleted: codec[ToolPayload](),

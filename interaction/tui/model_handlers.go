@@ -12,6 +12,7 @@ import (
 	"nekocode/interaction/tui/components/block"
 	"nekocode/interaction/tui/components/message"
 	"nekocode/interaction/tui/components/processing"
+	"nekocode/mode"
 	controlruntime "nekocode/runtime"
 	"nekocode/util/attachment"
 
@@ -54,6 +55,7 @@ func (m *Model) handleDone(msg doneMsg) tea.Cmd {
 	if accumulated == "" {
 		accumulated = strings.TrimSpace(m.Messages.AccumulatedText())
 	}
+	m.activeMode, m.activeModeOneShot = mode.Snapshot{}, false
 	m.transitionTo(stateReady)
 	var telemetry *controlruntime.MetricsSnapshot
 	if msg.metrics.HasTurnUsage() {
@@ -211,6 +213,8 @@ func (m *Model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
+	case "ctrl+o":
+		return m.openModePicker()
 	case "ctrl+g":
 		return m.toggleTasks()
 	case "ctrl+v":
@@ -532,6 +536,8 @@ func inputImageAttachments(images []components.InputImageAttachment) []controlru
 // --- suggestions ---
 
 func (m *Model) refreshSuggestions() {
+	// Draft edits (including asynchronous paste) return focus to the input.
+	m.modePicker = false
 	m.commandMenuBack = nil
 	value := m.Input.Value()
 	prefix := ""
@@ -698,7 +704,17 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) (cmd tea.Cmd) {
 		}
 	}()
 	m.observeTaskLifecycle(ev)
+	if ev.Type == controlruntime.EventRunStarted && m.modePicker {
+		m.modePicker = false
+		m.Suggestions.Hide()
+		m.resizeMessages()
+	}
 	switch ev.Type {
+	case controlruntime.EventInteractionModeChanged:
+		m.modePicker = false
+		m.Suggestions.Hide()
+		m.refreshRuntimeStatus()
+		m.resizeMessages()
 	case controlruntime.EventCompaction:
 		if p, ok := ev.Payload.(controlruntime.CompactionPayload); ok {
 			m.Messages.UpdateCompaction(p)
@@ -706,6 +722,7 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) (cmd tea.Cmd) {
 	case controlruntime.EventInputAccepted:
 		m.sessionHistoryDirty = true
 		if p, ok := ev.Payload.(controlruntime.MessagePayload); ok {
+			m.showRunMode(p)
 			m.turnInput = p.Content
 			if p.Source.Kind == "tui" {
 				if len(p.Images) > 0 || len(m.Input.ImageAttachments()) == 0 {
@@ -748,6 +765,7 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) (cmd tea.Cmd) {
 		m.refreshRuntimeStatus()
 		return clipboard
 	case controlruntime.EventRunStarted:
+		m.activeMode, m.activeModeOneShot = mode.Snapshot{}, false
 		m.taskStates = nil
 		m.taskSummarySyncedAt = time.Time{}
 		reloadHistory := m.sessionLoading && m.sessionLoadDone != nil

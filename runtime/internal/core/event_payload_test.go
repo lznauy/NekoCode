@@ -4,7 +4,7 @@ import "testing"
 
 func TestEveryEventTypeHasOnePayloadContract(t *testing.T) {
 	for _, eventType := range []EventType{
-		EventRunStarted, EventAssistantReset,
+		EventRunStarted, EventAssistantReset, EventInteractionModeChanged,
 		EventInputAccepted, EventSystemMessage, EventAssistantDelta, EventAssistantMessage,
 		EventReasoningDelta, EventPhaseChanged, EventCompaction, EventToolStarted,
 		EventToolBlocked, EventToolPreview, EventToolCompleted, EventSubAgentStarted,
@@ -20,7 +20,7 @@ func TestEveryEventTypeHasOnePayloadContract(t *testing.T) {
 			t.Errorf("event %q has no payload codec", eventType)
 		}
 	}
-	if len(payloadCodecs) != 28 {
-		t.Fatalf("payload codec count = %d, want 28", len(payloadCodecs))
+	if len(payloadCodecs) != 29 {
+		t.Fatalf("payload codec count = %d, want 29", len(payloadCodecs))
 	}
 }

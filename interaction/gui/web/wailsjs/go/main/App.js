@@ -101,3 +101,11 @@ export function SetPluginEnabled(arg1, arg2) {
 export function SwitchModel(arg1) {
   return window['go']['main']['App']['SwitchModel'](arg1);
 }
+
+export function InteractionMode() {
+  return window['go']['main']['App']['InteractionMode']();
+}
+
+export function SetInteractionMode(arg1) {
+  return window['go']['main']['App']['SetInteractionMode'](arg1);
+}

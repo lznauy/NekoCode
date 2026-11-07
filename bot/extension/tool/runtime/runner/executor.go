@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"nekocode/bot/extension/tool/runtime/netpolicy"
+	"nekocode/mode"
 	"nekocode/protocol"
 	"os"
 	"path/filepath"
@@ -26,7 +27,7 @@ type Executor struct {
 	confirmSource      func() protocol.ConfirmFunc
 	permissionObserver func(context.Context, PermissionEvent)
 	phaseFn            protocol.PhaseFunc
-	planMode           bool
+	interactionMode    mode.Snapshot
 	// Mode state is published atomically for delegated executors. Explicit
 	// deny rules apply in every mode.
 	modeState  atomic.Pointer[permissionModeState]
@@ -205,8 +206,25 @@ func (e *Executor) SetPhaseFn(fn protocol.PhaseFunc) {
 
 func (e *Executor) SetPlanMode(on bool) {
 	e.fnMu.Lock()
-	e.planMode = on
+	id := mode.Standard
+	if on {
+		id = mode.Plan
+	}
+	d, _ := mode.Resolve(id)
+	e.interactionMode = d.Snapshot
 	e.fnMu.Unlock()
+}
+
+// SetInteractionMode installs a validated, immutable run policy. Permission
+// modes such as full access cannot relax its tool restrictions.
+func (e *Executor) SetInteractionMode(snapshot mode.Snapshot) error {
+	if _, err := mode.Validate(snapshot); err != nil {
+		return err
+	}
+	e.fnMu.Lock()
+	e.interactionMode = snapshot
+	e.fnMu.Unlock()
+	return nil
 }
 
 // SetFullAccess toggles the full-takeover permission mode. When on, every

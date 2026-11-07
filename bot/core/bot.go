@@ -81,9 +81,10 @@ type Bot struct {
 	operationMu     sync.Mutex // A Bot owns one mutable agent and callback scope.
 	runHost         RunHost
 	// Lock-free snapshot for menu/status reads that already hold b.mu.
-	permissionMode atomic.Int32
-	jevAvailable   atomic.Bool
-	riskJudge      decision.RiskJudge
+	interactionMode atomic.Pointer[string]
+	permissionMode  atomic.Int32
+	jevAvailable    atomic.Bool
+	riskJudge       decision.RiskJudge
 }
 
 // New assembles the standard bot and loads its persisted configuration,
@@ -441,7 +442,8 @@ func (b *Bot) BashAuto() bool { return permission.Mode(b.permissionMode.Load()) 
 func (b *Bot) initCommands() {
 	deps := command.Deps{
 		CtxMgr:             b.ctxMgr,
-		SetPlanMode:        func(enabled bool) { b.getAgent().Executor().SetPlanMode(enabled) },
+		GetInteractionMode: b.InteractionMode,
+		SetInteractionMode: b.setInteractionMode,
 		SetFullAccess:      b.SetFullAccess,
 		GetFullAccess:      b.FullAccess,
 		SetBashAuto:        b.SetBashAuto,

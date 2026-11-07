@@ -2,6 +2,7 @@ package runner
 
 import (
 	"nekocode/bot/extension/tool/runtime/permission"
+	workmode "nekocode/mode"
 	"nekocode/protocol"
 )
 
@@ -10,7 +11,7 @@ import (
 func (e *Executor) AccessObservation() protocol.AccessObservation {
 	e.fnMu.RLock()
 	engine, store, workspace, home := e.permEngine, e.permStore, e.permWorkspace, e.permHome
-	plan, shellJudge, webJudge := e.planMode, e.bashAutoJudge != nil, e.webAutoJudge != nil
+	plan, shellJudge, webJudge := e.interactionMode.ToolPolicy == workmode.ReadOnlyTools, e.bashAutoJudge != nil, e.webAutoJudge != nil
 	e.fnMu.RUnlock()
 	mode := "unknown"
 	switch e.permissionMode() {

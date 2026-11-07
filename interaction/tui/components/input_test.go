@@ -386,3 +386,21 @@ func TestSanitizeInputLimitBoundsLargeInputAndNormalizesCRLF(t *testing.T) {
 		t.Fatalf("sanitized input length = %d, want 8", len([]rune(got)))
 	}
 }
+
+func TestPlanModeRemainsVisibleOnNarrowFooter(t *testing.T) {
+	for _, width := range []int{10, 20, 42, 80, 120} {
+		in := NewInput(width)
+		in.SetInteractionMode("Plan", false, true)
+		in.SetPermissionMode("full")
+		in.SetModel("provider/a-very-long-model-name")
+		clean := ansi.Strip(in.View())
+		if !strings.Contains(clean, "Plan") {
+			t.Fatalf("width %d hid plan: %s", width, clean)
+		}
+		for _, line := range strings.Split(in.View(), "\n") {
+			if ansi.StringWidth(line) > max(20, width) {
+				t.Fatalf("footer overflow at width %d: %s", width, clean)
+			}
+		}
+	}
+}

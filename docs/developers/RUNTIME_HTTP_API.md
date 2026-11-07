@@ -102,6 +102,8 @@ the daemon's HTTP management API and is not needed by IM connectors.
 | POST | `/connect/{name}` | Configure or start a connector |
 | POST | `/disconnect/{name}` | Stop a connector |
 | GET | `/model` | Read the active provider and model |
+| GET | `/mode` | Read selected interaction mode and available definitions |
+| POST | `/mode` | Select a session interaction mode while idle |
 | GET | `/commands` | Compatibility list derived from the `/` and `$` root menus |
 | GET | `/commands/menu?input=/model` | Resolve a transport-neutral command menu |
 | GET | `/metrics` | Read the latest operational metrics |
@@ -109,6 +111,21 @@ the daemon's HTTP management API and is not needed by IM connectors.
 | GET | `/memory?scope=project` | Read project memory |
 | GET | `/sessions` | List sessions |
 | GET | `/sessions/current/messages` | Read current session messages |
+
+## Work modes
+
+`GET /mode` returns `selected` and `options`. `POST /mode` accepts
+`{"mode":"standard"}` or `{"mode":"plan"}`. Discover support with
+`interaction_modes` in `/capabilities`. Unknown IDs are rejected; changes
+while running or waiting for approval/answers return `409 Conflict`.
+
+Selection persists per session. A run captures its own `interaction_mode`
+policy snapshot in `input_accepted` and the run view. A later selection never
+rewrites that snapshot. The global `interaction_mode_changed` event carries
+the selected mode ID, including changes made by `/mode` commands. Existing
+clients need not add fields to `/input`; `/plan <task>` remains a one-run
+override. Mode limits are independent of permission modes, so Plan remains
+read-only under full access.
 
 ## Input
 

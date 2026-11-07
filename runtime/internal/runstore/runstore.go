@@ -66,6 +66,9 @@ func (s *RunStore) Record(ev core.Event) {
 		}
 		if p, ok := ev.Payload.(core.MessagePayload); ok {
 			rec.snapshot.Input = p.Content
+			if p.InteractionMode.ID != "" && rec.snapshot.InteractionMode.ID == "" {
+				rec.snapshot.InteractionMode = p.InteractionMode
+			}
 			// Keep the first concrete source: later frames may carry an empty
 			// SourceRef and must not erase who started the run.
 			if p.Source.Kind != "" {

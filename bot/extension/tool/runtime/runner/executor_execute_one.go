@@ -12,6 +12,7 @@ import (
 	"nekocode/bot/extension/tool/runtime/permission"
 	"nekocode/bot/extension/tool/runtime/workspace"
 	"nekocode/logger"
+	"nekocode/mode"
 	"nekocode/protocol"
 	textutil "nekocode/util/text"
 )
@@ -698,7 +699,7 @@ func urlHostForRemember(raw string) string {
 
 func (e *Executor) callbacks() (protocol.PhaseFunc, protocol.ConfirmFunc, bool) {
 	e.fnMu.RLock()
-	phase, plan := e.phaseFn, e.planMode
+	phase, plan := e.phaseFn, e.interactionMode.ToolPolicy == mode.ReadOnlyTools
 	e.fnMu.RUnlock()
 	return phase, e.ConfirmFn(), plan
 }

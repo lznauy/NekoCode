@@ -1,10 +1,14 @@
 package runtime
 
-import "context"
+import (
+	"context"
+	"nekocode/mode"
+)
 
 // ServiceGroups is the canonical, domain-grouped application capability set.
 // The composition root supplies it once; Runtime stores this representation directly.
 type ServiceGroups struct {
+	Modes       ModesServices
 	Commands    CommandsServices
 	Models      ModelsServices
 	Permissions PermissionsServices
@@ -100,4 +104,13 @@ type MCPServices struct {
 type LifecycleServices struct {
 	Metrics func() MetricsSnapshot
 	Close   func() error
+}
+
+// ModesServices keeps mode selection separate from permission and model state.
+// Resolve is called only for input that will enter the agent, after commands.
+type ModesServices struct {
+	Current func() mode.ID
+	Options func() []mode.Definition
+	Set     func(mode.ID) error
+	Resolve func(string) (mode.Snapshot, error)
 }

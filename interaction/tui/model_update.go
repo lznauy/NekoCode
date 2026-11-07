@@ -58,6 +58,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionLoadedMsg:
 		return m, m.applySessionLoaded(msg)
 
+	case modeChangedMsg:
+		return m, m.applyModeChange(msg)
+
 	case doneMsg:
 		return m, m.handleDone(msg)
 
@@ -80,6 +83,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.tasks != nil && m.tasks.open {
 			return m, m.handleTaskKey(msg)
+		}
+		if m.modeChanging {
+			return m, nil
+		}
+		if m.modePicker {
+			return m, m.handleModeKey(msg)
 		}
 		return m, m.handleKeyPress(msg)
 
@@ -119,6 +128,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.MouseMsg:
+		if click, ok := msg.(tea.MouseClickMsg); ok && click.Button == tea.MouseLeft && click.Y == m.modeControlY && click.X >= 2 && click.X < 2+m.Input.ModeControlWidth() && (m.tasks == nil || !m.tasks.open) {
+			return m, m.openModePicker()
+		}
 		if m.tasks != nil && m.tasks.open && m.state != stateConfirming && m.state != stateQuestioning {
 			key := ""
 			switch msg.Mouse().Button {

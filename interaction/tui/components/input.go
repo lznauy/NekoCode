@@ -46,6 +46,9 @@ type inputDraft struct {
 }
 
 type Input struct {
+	modeLabel       string
+	modeOneShot     bool
+	modeAvailable   bool
 	taskObserver    bool
 	textarea        textarea.Model
 	width           int
@@ -265,6 +268,55 @@ func (i *Input) SetSending(sending bool) {
 		text = styles.CatEyeStyle.Bold(true).Render("┃ ")
 	}
 	i.textarea.SetPromptFunc(promptCols, func(info textarea.PromptInfo) string { return text })
+}
+
+func (i *Input) SetInteractionMode(label string, oneShot, available bool) {
+	i.modeLabel, i.modeOneShot, i.modeAvailable = label, oneShot, available
+}
+
+func (i *Input) modeControl(compact bool) string {
+	label := i.modeLabel
+	if label == "" {
+		label = "Standard"
+	}
+	if i.modeOneShot {
+		label += "*"
+	}
+	if i.modeAvailable && !i.sending {
+		label += " ▾"
+	}
+	prefix := "Mode: "
+	if compact {
+		prefix = "M:"
+	}
+	style := styles.TealStyle
+	if label != "Standard" && label != "Standard ▾" {
+		style = styles.YellowStyle.Bold(true)
+	}
+	return styles.SubtleStyle.Render(prefix) + style.Render(label)
+}
+
+// ModeControlWidth shares rendering with hit testing, including compact widths.
+func (i *Input) ModeControlWidth() int {
+	return min(lipgloss.Width(i.modeControl(i.compactFooter())), max(0, i.width-3))
+}
+
+func (i *Input) compactFooter() bool {
+	txt := "Auto"
+	if !i.follow {
+		txt = "Manual"
+	}
+	permission := "Manual"
+	if i.permissionMode == "full" {
+		permission = "FULL"
+	} else if i.permissionMode != "" && i.permissionMode != "manual" {
+		permission = i.permissionMode
+	}
+	width := 2 + lipgloss.Width(i.modeControl(false)) + len(" · Follow: "+txt+" · Perm: "+permission)
+	if i.model != "" {
+		width += lipgloss.Width(" · Effort: " + i.displayReasoningEffort() + " · Model: " + i.model)
+	}
+	return width > i.width-1
 }
 
 func (i *Input) SetFollow(follow bool) { i.follow = follow }
@@ -633,7 +685,7 @@ func (i *Input) View() string {
 		txt = "Manual"
 	}
 	prefix := styles.BorderStyle.Render(styles.Vertical + " ")
-	footer := prefix +
+	footer := prefix + i.modeControl(false) + styles.SubtleStyle.Render(" · ") +
 		styles.SubtleStyle.Render("Follow:") + " " +
 		styles.TealStyle.Render(txt)
 	permission := "Manual"
@@ -659,19 +711,13 @@ func (i *Input) View() string {
 	}
 
 	if lipgloss.Width(footer) > w-1 {
-		compact := prefix + styles.SubtleStyle.Render("F:") + styles.TealStyle.Render(txt) +
+		compact := prefix + i.modeControl(true) + styles.SubtleStyle.Render(" · ") + styles.SubtleStyle.Render("F:") + styles.TealStyle.Render(txt) +
 			styles.SubtleStyle.Render(" · P:") + permissionStyle.Render(permission)
 		if i.model != "" {
 			compact += styles.SubtleStyle.Render(" · E:") + styles.YellowStyle.Render(i.displayReasoningEffort()) +
 				styles.SubtleStyle.Render(" · ") + styles.CatEyeStyle.Render(i.model)
 		}
 		footer = compact
-		if lipgloss.Width(footer) > w-1 {
-			footer = prefix + styles.SubtleStyle.Render("E:") + styles.YellowStyle.Render(i.displayReasoningEffort()) +
-				styles.SubtleStyle.Render(" · F:") + styles.TealStyle.Render(txt) +
-				styles.SubtleStyle.Render(" · P:") + permissionStyle.Render(permission) +
-				styles.SubtleStyle.Render(" · ") + styles.CatEyeStyle.Render(i.model)
-		}
 	}
 	hint := styles.SubtleStyle.Render(" · Ctrl+G 子任务")
 	if i.taskObserver && lipgloss.Width(footer)+lipgloss.Width(hint) < w-1 {

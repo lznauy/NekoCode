@@ -12,6 +12,7 @@ import (
 	"nekocode/bot/extension/plugin"
 	"nekocode/bot/extension/tool/runtime/permission"
 	"nekocode/bot/provider/types"
+	"nekocode/mode"
 	"nekocode/protocol"
 )
 
@@ -45,8 +46,30 @@ func (b *Bot) runAgent(ctx context.Context, input string, images []types.Message
 	if protocol.ExecutionFromContext(ctx).RunID == "" {
 		ctx = protocol.WithExecutionIdentity(ctx, protocol.ExecutionIdentity{RunID: uuid.NewString()})
 	}
+	snapshot, captured := mode.FromContext(ctx)
+	if !captured {
+		var err error
+		snapshot, err = b.ResolveInteractionMode(input)
+		if err != nil {
+			return "", err
+		}
+	}
+	definition, err := mode.Validate(snapshot)
+	if err != nil {
+		return "", err
+	}
+	// The strategy boundary is explicit: future delegated hosts enter here,
+	// without changing UI selection, session storage or permission semantics.
+	if definition.Strategy != mode.Direct {
+		return "", errors.New("bot: unsupported execution strategy")
+	}
+	ctx = mode.WithSnapshot(ctx, snapshot)
 	sessionID := b.sess.CurrentID()
 	ag := b.getAgent()
+	if err := ag.Executor().SetInteractionMode(snapshot); err != nil {
+		return "", err
+	}
+	b.ctxMgr.SetRuntimePolicy(definition.Prompt)
 	defer func() {
 		ag.Executor().SetPlanMode(false)
 		b.ctxMgr.SetRuntimePolicy("")
@@ -214,12 +237,14 @@ func (b *Bot) ExecuteCommand(ctx context.Context, input string, host RunHost) (p
 	release := b.bindHost(host)
 	defer release()
 
+	previousMode := b.InteractionMode()
 	resp, handled := b.cmd.Execute(ctx, input, b.ctxMgr)
 	if !handled {
 		return protocol.CommandResult{Action: protocol.CommandIgnored}, nil
 	}
 
 	if err := b.saveSession(); err != nil {
+		b.storeInteractionMode(string(previousMode))
 		return protocol.CommandResult{}, err
 	}
 

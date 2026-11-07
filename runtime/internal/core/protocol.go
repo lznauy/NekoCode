@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"nekocode/mode"
 	"nekocode/protocol"
 )
 
@@ -62,32 +63,33 @@ const (
 	EventAssistantDelta EventType = "assistant_delta"
 	// EventAssistantReset tells hosts that text already delivered through
 	// assistant_delta for this run was provider-injected and must be dropped.
-	EventAssistantReset    EventType = "assistant_reset"
-	EventAssistantMessage  EventType = "assistant_message"
-	EventReasoningDelta    EventType = "reasoning_delta"
-	EventPhaseChanged      EventType = "phase_changed"
-	EventCompaction        EventType = "compaction"
-	EventToolStarted       EventType = "tool_started"
-	EventToolBlocked       EventType = "tool_blocked"
-	EventToolPreview       EventType = "tool_preview"
-	EventToolCompleted     EventType = "tool_completed"
-	EventSubAgentStarted   EventType = "subagent_started"
-	EventSubAgentEnded     EventType = "subagent_ended"
-	EventSubAgentUpdated   EventType = "subagent_updated"
-	EventTodosUpdated      EventType = "todos_updated"
-	EventApprovalRequested EventType = "approval_requested"
-	EventApprovalResolved  EventType = "approval_resolved"
-	EventQuestionRequested EventType = "question_requested"
-	EventQuestionResolved  EventType = "question_resolved"
-	EventRunStarted        EventType = "run_started"
-	EventRunSummary        EventType = "run_summary"
-	EventSubAgentOutput    EventType = "subagent_output"
-	EventRunDone           EventType = "run_done"
-	EventRunFailed         EventType = "run_failed"
-	EventRunCancelled      EventType = "run_aborted"
-	EventSessionChanged    EventType = "session_changed"
-	EventConnectorStatus   EventType = "connector_status"
-	EventMetricsUpdated    EventType = "metrics_updated"
+	EventAssistantReset         EventType = "assistant_reset"
+	EventAssistantMessage       EventType = "assistant_message"
+	EventReasoningDelta         EventType = "reasoning_delta"
+	EventPhaseChanged           EventType = "phase_changed"
+	EventCompaction             EventType = "compaction"
+	EventToolStarted            EventType = "tool_started"
+	EventToolBlocked            EventType = "tool_blocked"
+	EventToolPreview            EventType = "tool_preview"
+	EventToolCompleted          EventType = "tool_completed"
+	EventSubAgentStarted        EventType = "subagent_started"
+	EventSubAgentEnded          EventType = "subagent_ended"
+	EventSubAgentUpdated        EventType = "subagent_updated"
+	EventTodosUpdated           EventType = "todos_updated"
+	EventApprovalRequested      EventType = "approval_requested"
+	EventApprovalResolved       EventType = "approval_resolved"
+	EventQuestionRequested      EventType = "question_requested"
+	EventQuestionResolved       EventType = "question_resolved"
+	EventRunStarted             EventType = "run_started"
+	EventInteractionModeChanged EventType = "interaction_mode_changed"
+	EventRunSummary             EventType = "run_summary"
+	EventSubAgentOutput         EventType = "subagent_output"
+	EventRunDone                EventType = "run_done"
+	EventRunFailed              EventType = "run_failed"
+	EventRunCancelled           EventType = "run_aborted"
+	EventSessionChanged         EventType = "session_changed"
+	EventConnectorStatus        EventType = "connector_status"
+	EventMetricsUpdated         EventType = "metrics_updated"
 	// EventContextUpdated carries the active context window's composition so
 	// hosts can render it live; it is read-only observation, never state.
 	EventContextUpdated EventType = "context_updated"
@@ -125,11 +127,12 @@ type EventFilter struct {
 }
 
 type MessagePayload struct {
-	Role    string            `json:"role"`
-	Content string            `json:"content"`
-	Source  SourceRef         `json:"source"`
-	Sender  SenderRef         `json:"sender"`
-	Images  []ImageAttachment `json:"images,omitempty"`
+	InteractionMode mode.Snapshot     `json:"interaction_mode,omitzero"`
+	Role            string            `json:"role"`
+	Content         string            `json:"content"`
+	Source          SourceRef         `json:"source"`
+	Sender          SenderRef         `json:"sender"`
+	Images          []ImageAttachment `json:"images,omitempty"`
 }
 
 type DeltaPayload struct {

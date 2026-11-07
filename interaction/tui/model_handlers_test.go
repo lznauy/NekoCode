@@ -180,7 +180,7 @@ func TestSystemEventRefreshesInputModelFooter(t *testing.T) {
 	bot.selection.ReasoningEffort = "high"
 	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventSystemMessage})
 	footer := ansi.Strip(m.Input.View())
-	if !strings.Contains(footer, "openai/new") || !strings.Contains(footer, "Effort: high") || strings.Contains(footer, "openai/old") || strings.Contains(footer, "Effort: low") {
+	if !strings.Contains(footer, "openai/new") || (!strings.Contains(footer, "Effort: high") && !strings.Contains(footer, "E:high")) || strings.Contains(footer, "openai/old") || strings.Contains(footer, "Effort: low") {
 		t.Fatalf("model footer was not refreshed:\n%s", footer)
 	}
 }

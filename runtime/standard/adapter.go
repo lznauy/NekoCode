@@ -221,6 +221,7 @@ func (a *adapter) ReplaceMCPServers(ctx context.Context, source string, servers 
 
 func (a *adapter) services() controlruntime.ServiceGroups {
 	return controlruntime.ServiceGroups{
+		Modes: controlruntime.ModesServices{Current: a.bot.InteractionMode, Options: a.bot.InteractionModes, Set: a.bot.SetInteractionMode, Resolve: a.bot.ResolveInteractionMode},
 		Commands: controlruntime.CommandsServices{
 			ExecuteCommand:      a.ExecuteCommand,
 			ExecuteLocalCommand: a.bot.ExecuteLocalCommand,

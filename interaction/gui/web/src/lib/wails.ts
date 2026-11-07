@@ -13,6 +13,8 @@ import {
   LoadSession,
   NewSession,
   CurrentModel,
+  InteractionMode,
+  SetInteractionMode,
   ReadImageBase64,
   RefreshSkillManagement,
   ResolveModelProfile,
@@ -234,4 +236,22 @@ export function safeQuit(): void {
 export function safeMCPAuthorizationAction(name: string, action: string): Promise<void> {
   if (!isWailsEnvironment()) return Promise.reject(new Error('请在 NekoCode 桌面应用中授权'))
   return MCPAuthorizationAction(name, action)
+}
+
+export interface GUIInteractionMode {
+  selected: string
+  options: Array<{id: string; label: string; description: string}> | null
+}
+
+export async function safeInteractionMode(): Promise<GUIInteractionMode | null> {
+  if (!isWailsEnvironment()) return null
+  // Older hosts can still use /mode through the command entry point.
+  const api = (window as unknown as {go?: {main?: {App?: Record<string, unknown>}}}).go?.main?.App
+  if (typeof api?.InteractionMode !== 'function') return null
+  return InteractionMode()
+}
+
+export async function safeSetInteractionMode(id: string): Promise<GUIInteractionMode> {
+  if (!isWailsEnvironment()) throw new Error('Interaction modes unavailable')
+  return SetInteractionMode(id)
 }

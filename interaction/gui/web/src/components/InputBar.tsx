@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { cn } from '../lib/classnames'
-import type { GUICommandMenu } from '../lib/wails'
+import type { GUICommandMenu, GUIInteractionMode } from '../lib/wails'
 import type { SkillView } from '../types/skills'
 import type { ImageInputAttachment } from '../hooks/useChat'
 
@@ -8,6 +8,10 @@ interface InputBarProps {
   text: string
   busy: boolean
   stopping?: boolean
+  interactionMode?: GUIInteractionMode | null
+  activeMode?: string
+  modeChanging?: boolean
+  onSelectMode?: (id: string) => void
   skills?: SkillView[]
   selectedSkill?: string
   textareaRef: React.RefObject<HTMLTextAreaElement>
@@ -27,6 +31,10 @@ export function InputBar({
   text,
   busy,
   stopping = false,
+  interactionMode,
+  activeMode = '',
+  modeChanging = false,
+  onSelectMode,
   skills = [],
   selectedSkill,
   textareaRef,
@@ -90,6 +98,7 @@ export function InputBar({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (busy || modeChanging || pastingImages) return
       if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return
 	  const atomic = imageMarkerForKey(text, imageAttachments, e.currentTarget.selectionStart, e.currentTarget.selectionEnd, e.key)
 	  if (atomic) {
@@ -124,7 +133,7 @@ export function InputBar({
 		else onSend()
       }
     },
-	[commandIndex, commandMenu, imageAttachments, menuDismissed, onChange, onSelectCommand, onSend, onTextareaChange, text],
+	[busy, modeChanging, pastingImages, commandIndex, commandMenu, imageAttachments, menuDismissed, onChange, onSelectCommand, onSend, onTextareaChange, text],
   )
 
   const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -157,6 +166,9 @@ export function InputBar({
 	const inserted = native.inputType === 'insertText' || native.inputType === 'insertCompositionText' ? (native.data ?? '') : ''
 	if (replaceAtomicSelection(start, end, inserted)) e.preventDefault()
   }, [replaceAtomicSelection])
+
+  const displayMode = busy && activeMode ? activeMode.replace(/\*$/, '') : interactionMode?.selected
+  const oneShotMode = busy && activeMode.endsWith('*')
 
   return (
     <div className="border-t border-border/50 bg-surface-2 px-5 pb-5 pt-3">
@@ -196,16 +208,28 @@ export function InputBar({
           onKeyDown={handleKeyDown}
           onBeforeInput={handleBeforeInput}
           onPaste={handlePaste}
-          disabled={busy || pastingImages}
+          disabled={busy || modeChanging || pastingImages}
           rows={1}
           placeholder={busy ? '正在处理...' : pastingImages ? '正在附加图片...' : '描述要修改、排查或构建的内容'}
           className="mx-1 my-0.5 max-h-[min(180px,30dvh)] min-h-[24px] w-full resize-none bg-transparent text-sm leading-[1.5] text-text outline-none placeholder:text-text-3 disabled:opacity-40"
         />
         <div className="flex min-h-[30px] items-center gap-2 px-1">
+          {!!interactionMode?.options?.length && (
+            <label className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md bg-surface-2 px-2 text-[11px] text-primary">
+              <span>Mode:</span>
+              <select aria-label="工作模式" title={busy ? '当前任务结束后可切换模式' : '选择工作模式'}
+                disabled={busy || modeChanging} value={displayMode}
+                onChange={event => onSelectMode?.(event.target.value)}
+                className="max-w-28 bg-surface-2 text-[11px] outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:opacity-60">
+                {!interactionMode.options.some(option => option.id === displayMode) && <option value={displayMode}>{interactionMode.selected}?</option>}
+                {interactionMode.options.map(option => <option key={option.id} value={option.id}>{option.label}{oneShotMode && option.id === displayMode ? '*' : ''}</option>)}
+              </select>
+            </label>
+          )}
           <div className="group relative flex h-[30px] items-center">
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || modeChanging}
               className={cn(
                 'inline-flex h-7 max-w-[220px] items-center rounded-md px-2.5 text-[11px] font-medium leading-none transition-all active:scale-95',
                 selectedSkill ? 'bg-primary/15 text-primary' : 'bg-surface-2 text-text-3 hover:bg-surface-3 hover:text-text',
@@ -217,7 +241,7 @@ export function InputBar({
               {selectedSkill && (
                 <button
                   type="button"
-                  disabled={busy}
+                  disabled={busy || modeChanging}
                   onClick={onClearSkill}
                   className="mb-1 block w-full rounded px-2 py-1.5 text-left text-[11px] text-danger hover:bg-danger/10"
                 >
@@ -228,7 +252,7 @@ export function InputBar({
                 <button
                   key={skill.name}
                   type="button"
-                  disabled={busy}
+                  disabled={busy || modeChanging}
                   onClick={() => onSelectSkill?.(skill.name)}
                   className="block w-full rounded px-2 py-1.5 text-left hover:bg-surface-3"
                 >
@@ -258,7 +282,7 @@ export function InputBar({
             <button
               type="button"
               onClick={onSend}
-              disabled={!text.trim() || pastingImages}
+              disabled={modeChanging || !text.trim() || pastingImages}
               className="flex h-7 min-w-20 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-[12.5px] font-semibold leading-none text-black transition-all hover:brightness-110 active:scale-95 disabled:cursor-default disabled:opacity-25 disabled:active:scale-100"
             >
               发送 <SendIcon />

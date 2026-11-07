@@ -117,6 +117,7 @@ func (b *Bot) saveSession() error {
 	if b.ext != nil {
 		loadedSkills = b.ext.Snapshot().LoadedSkills
 	}
+	snapshot.InteractionMode = string(b.InteractionMode())
 	snapshot.CaptureContext(b.ctxMgr.Snapshot(), promptTokens, completionTokens, loadedSkills)
 	if b.checkpoints != nil {
 		snapshot.CheckpointTurns = b.checkpoints.Index(snapshot.ID)
@@ -185,6 +186,7 @@ func (b *Bot) resumeSessionLocked(id string) (*session.Snapshot, error) {
 	if err := b.sess.Activate(snapshot); err != nil {
 		return nil, err
 	}
+	b.storeInteractionMode(snapshot.InteractionMode)
 	b.ctxMgr.Restore(snapshot.ContextSnapshot())
 	if b.checkpoints != nil {
 		b.checkpoints.Activate(snapshot.ID, snapshot.CheckpointTurns, snapshot.CheckpointNext)
@@ -259,6 +261,7 @@ func (b *Bot) resetConversation() (string, error) {
 
 // clearConversationState resets the session-owned conversation state together.
 func (b *Bot) clearConversationState() {
+	b.storeInteractionMode("")
 	b.ctxMgr.Reset()
 	if ag := b.getAgent(); ag != nil {
 		ag.RestoreSessionUsage(0)

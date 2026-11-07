@@ -99,6 +99,7 @@ func New(runner Runner, services ServiceGroups) *Runtime {
 }
 
 func validateServices(services ServiceGroups) {
+	requireCompleteService("modes", services.Modes.Current != nil, services.Modes.Options != nil, services.Modes.Set != nil, services.Modes.Resolve != nil)
 	requireCompleteService("commands", services.Commands.ExecuteCommand != nil, services.Commands.CommandMenu != nil)
 	requireCompleteService("context", services.Context.ContextSnapshot != nil, services.Context.MemoryView != nil)
 	requireCompleteService("config", services.Config.ConfigView != nil, services.Config.ResolveModelProfile != nil, services.Config.ApplyConfig != nil)

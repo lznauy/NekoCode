@@ -78,7 +78,13 @@ func (m *Model) View() tea.View {
 		}
 	}
 
-	parts = append(parts, historyHint, m.Input.View())
+	parts = append(parts, historyHint)
+	m.modeControlY = 0
+	for _, part := range parts {
+		m.modeControlY += lipgloss.Height(part)
+	}
+	m.modeControlY += m.Input.Height() - 2
+	parts = append(parts, m.Input.View())
 
 	if sug := m.Suggestions.View(m.Width); sug != "" {
 		parts = append(parts, sug)
