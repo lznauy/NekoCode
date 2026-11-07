@@ -15,8 +15,8 @@ type modeRuntime interface {
 }
 
 type modeChangedMsg struct {
-	status controlruntime.InteractionMode
-	err    error
+	generation uint64
+	err        error
 }
 
 func modeLabel(state controlruntime.InteractionMode) string {
@@ -83,10 +83,11 @@ func (m *Model) handleModeKey(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		m.modePicker, m.modeChanging = false, true
+		generation := m.sessionLoadGeneration
 		m.resizeMessages()
 		return func() tea.Msg {
 			err := source.SetInteractionMode(mode.ID(item.Key))
-			return modeChangedMsg{status: source.InteractionMode(), err: err}
+			return modeChangedMsg{generation: generation, err: err}
 		}
 	}
 	m.resizeMessages()
@@ -95,7 +96,14 @@ func (m *Model) handleModeKey(msg tea.KeyPressMsg) tea.Cmd {
 
 func (m *Model) applyModeChange(msg modeChangedMsg) tea.Cmd {
 	m.modeChanging = false
-	m.applyModeStatus(msg.status)
+	// A completed mutation can be queued behind another client's session
+	// switch. Read the current mode instead of replaying the old session's view.
+	if source, ok := m.Runtime.(modeRuntime); ok {
+		m.applyModeStatus(source.InteractionMode())
+	}
+	if msg.generation != m.sessionLoadGeneration {
+		return nil
+	}
 	if msg.err != nil {
 		m.Messages.AddMessage(message.ChatMessage{Role: "error", Content: "Mode unchanged: " + msg.err.Error()})
 	}

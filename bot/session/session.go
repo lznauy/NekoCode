@@ -111,6 +111,17 @@ func (m *Manager) ClearCurrent() {
 // history is removed from disk instead of being written, so empty sessions
 // never show up as invalid records in session lists.
 func (m *Manager) Save(sess *Snapshot) error {
+	return m.save(sess, false)
+}
+
+// SavePreservingDraft keeps an empty conversation's active identity in memory
+// without creating a saved-history entry. UI preferences and pending attachments
+// belong to that draft until the user explicitly starts another session.
+func (m *Manager) SavePreservingDraft(sess *Snapshot) error {
+	return m.save(sess, true)
+}
+
+func (m *Manager) save(sess *Snapshot, keepDraft bool) error {
 	m.persistMu.Lock()
 	defer m.persistMu.Unlock()
 	if sess == nil {
@@ -120,7 +131,11 @@ func (m *Manager) Save(sess *Snapshot) error {
 		if err := deleteSnapshot(sess.ID); err != nil {
 			return err
 		}
-		m.clearCurrentIfID(sess.ID)
+		if keepDraft {
+			m.set(sess)
+		} else {
+			m.clearCurrentIfID(sess.ID)
+		}
 		return nil
 	}
 	if err := sess.save(); err != nil {

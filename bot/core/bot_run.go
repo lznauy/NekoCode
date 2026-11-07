@@ -238,13 +238,19 @@ func (b *Bot) ExecuteCommand(ctx context.Context, input string, host RunHost) (p
 	defer release()
 
 	previousMode := b.InteractionMode()
+	previousSessionID := b.sess.CurrentID()
 	resp, handled := b.cmd.Execute(ctx, input, b.ctxMgr)
 	if !handled {
 		return protocol.CommandResult{Action: protocol.CommandIgnored}, nil
 	}
 
+	// A command may already have committed a session switch. Its target's
+	// policy must not be replaced with the source policy if persistence fails.
+	sameSession := b.sess.CurrentID() == previousSessionID
 	if err := b.saveSession(); err != nil {
-		b.storeInteractionMode(string(previousMode))
+		if sameSession {
+			b.storeInteractionMode(string(previousMode))
+		}
 		return protocol.CommandResult{}, err
 	}
 

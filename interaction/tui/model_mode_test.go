@@ -131,3 +131,23 @@ func TestPastingWhileModePickerOpenRestoresInputFocus(t *testing.T) {
 		t.Fatal("typing remained trapped after paste")
 	}
 }
+
+func TestLateModeReplyDoesNotOverwriteNewSessionMode(t *testing.T) {
+	r := &modeFakeRuntime{selected: mode.Standard}
+	m, _ := NewModel(r)
+	m.openModePicker()
+	m.handleModeKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	cmd := m.handleModeKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	reply := cmd()             // Mutation completed in session A; reply is still queued.
+	r.selected = mode.Standard // Another client activates session B.
+	m.sessionLoadGeneration++
+	m.Input.SetValue("session B draft")
+	m.refreshRuntimeStatus()
+	m.Update(reply)
+	if strings.Contains(ansi.Strip(m.Input.View()), "Plan") {
+		t.Fatal("late session A reply overwrote session B mode")
+	}
+	if m.Input.Value() != "session B draft" || m.modeChanging {
+		t.Fatal("late reply lost draft or left input locked")
+	}
+}

@@ -16,7 +16,7 @@ Direct strategy → agent → executor tool ceiling + existing authorization
 
 `mode` owns immutable definitions: stable ID, version, role, execution strategy, tool policy and prompt. Built-in Standard and Plan both use the direct strategy. Unknown IDs and mismatched policy snapshots fail closed. Registry values and context snapshots are detached values.
 
-The Bot owns selection and persists it in the session snapshot. Missing fields mean Standard. New sessions reset to Standard; forks retain the source selection. Empty conversations remain absent from session listings under the existing persistence rules. A selected mode remains in memory until a real conversation is saved. Unknown restored IDs are preserved so history remains viewable and `/mode standard` can recover explicitly.
+The Bot owns selection and persists it in the session snapshot. Missing fields mean Standard. New sessions reset to Standard; forks retain the source selection. Empty conversations remain absent from session listings, while their active draft identity and mode remain in memory until the user starts another session. Saving a preference does not replace the draft or cause attachment initialization to reset its mode. Unknown restored IDs are preserved so history remains viewable and `/mode standard` can recover explicitly.
 
 Runtime resolves the effective snapshot after command dispatch, only when an input will reach the agent. Its mutation boundary blocks selection changes while running or waiting for human interaction. The snapshot travels in context, the accepted-input event and the recorded run view. Steering does not replace it. `/plan <task>` selects Plan for one run without changing the saved preference. Control commands do not become conversation messages.
 

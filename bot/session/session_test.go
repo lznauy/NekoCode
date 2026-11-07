@@ -258,3 +258,27 @@ func TestManagerLoadDoesNotChangeCurrentSession(t *testing.T) {
 		t.Fatalf("activate current id = %q, want %q", manager.CurrentID(), target.ID)
 	}
 }
+
+func TestSavePreservingDraftKeepsIdentityWithoutListingEmptyHistory(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := New(t.TempDir())
+	draft := m.Current()
+	draft.InteractionMode = "plan"
+	if err := m.SavePreservingDraft(draft); err != nil {
+		t.Fatal(err)
+	}
+	if m.CurrentID() != draft.ID || m.Current().InteractionMode != "plan" {
+		t.Fatal("draft identity or preference lost")
+	}
+	if len(m.List()) != 0 {
+		t.Fatal("empty draft listed as saved conversation")
+	}
+	draft.Messages = []types.Message{{Role: "user", Content: "inspect"}}
+	if err := m.SavePreservingDraft(draft); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := m.Load(draft.ID)
+	if err != nil || saved.InteractionMode != "plan" {
+		t.Fatalf("draft did not become a saved conversation: %+v %v", saved, err)
+	}
+}
