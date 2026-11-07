@@ -77,6 +77,7 @@ func (t *ShellTool) Description() string {
 		"Use the process tool only when you need to wait for, watch, list, or stop such a task. " +
 		"A non-zero exit is reported as status: failed with exit_code; judge verification by that status, not by trailing success text. Pipelines use normal shell semantics, so preserve upstream failures with pipefail or separate commands when they matter. " +
 		"Network, extra writable roots, and host execution require the corresponding minimal permission request. " +
+		"If a command fails because of a likely sandbox restriction, inspect the error and retry shell with the minimal required outbound_domains, network, writable_roots, or sandbox_mode request so the runtime can obtain approval; do not stop at reporting the restriction. Check partial side effects before retrying, respect explicit denials and configured domain restrictions, and do not assume every permission or network error requires host execution. " +
 		"By default commands run in an isolated workspace-write sandbox: the host filesystem is visible read-only (host binaries like npm globals and nix profiles are executable), but writes outside the workspace and authorized writable roots fail. For HTTP/HTTPS access to known domains, prefer outbound_domains with workspace-write or read-only mode. Use sandbox_mode=host only when unsandboxed host execution is needed; it cannot be combined with outbound_domains, including restrictions inherited from permissions.sandbox rules."
 }
 

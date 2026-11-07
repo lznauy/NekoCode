@@ -7,6 +7,33 @@ import (
 	"time"
 )
 
+func TestSandboxFailureRecoveryForShellAndManagedProcesses(t *testing.T) {
+	for _, managed := range []bool{false, true} {
+		for _, output := range []string{
+			"mkdir: Read-only file system", "npm ERR! EACCES: permission denied",
+			"curl: (6) Could not resolve host: example.com", "connect: Network is unreachable",
+		} {
+			result := processResult{info: processInfo{status: "failed", exitCode: 1, managed: managed, name: "build"}, output: output}
+			text := processToolOutput(result).Text
+			for _, want := range []string{"status: failed", "exit_code: 1", output, "recovery_hint:", "retry shell", "runtime obtain approval", "partial side effects", "explicit denials", "domain restrictions"} {
+				if !strings.Contains(text, want) {
+					t.Errorf("managed=%v output=%q: missing %q in %s", managed, output, want, text)
+				}
+			}
+		}
+	}
+	for _, result := range []processResult{
+		{info: processInfo{status: "done"}, output: "test checks permission denied"},
+		{info: processInfo{status: "running"}, output: "permission denied"},
+		{info: processInfo{status: "failed", exitCode: 1}, output: "syntax error near unexpected token"},
+		{info: processInfo{status: "failed", exitCode: 1}, output: "assertion failed"},
+	} {
+		if text := processToolOutput(result).Text; strings.Contains(text, "recovery_hint:") {
+			t.Errorf("unexpected escalation hint: %s", text)
+		}
+	}
+}
+
 func TestProcessWaitTimeoutLeavesTaskRunning(t *testing.T) {
 	tool := testShellTool()
 	processTool := NewProcessTool(tool)

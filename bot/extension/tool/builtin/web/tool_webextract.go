@@ -2,9 +2,9 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -23,6 +23,7 @@ import (
 // process; local validation still refuses private or loopback targets before
 // the request is made.
 var defuddleBaseURL = "https://defuddle.md/"
+var readerBaseURL = "https://r.jina.ai/"
 
 const (
 	// extractTimeout bounds the third-party hop so the local fallback still has
@@ -40,10 +41,13 @@ type WebExtractTool struct {
 	client *http.Client
 	// extractor talks to the constant defuddleBaseURL host.
 	extractor *http.Client
+	// reader returns rendered source HTML so local conversion retains sections
+	// that aggressive readability services can discard (e.g. image-only headings).
+	reader *http.Client
 }
 
 func NewWebExtractTool() *WebExtractTool {
-	return &WebExtractTool{client: newDirectClient(), extractor: newExtractorClient()}
+	return &WebExtractTool{client: newDirectClient(), extractor: newExtractorClient(), reader: newHostedReaderClient(readerBaseURL)}
 }
 
 // newExtractorClient builds the client for the extractor hop. Its destination is
@@ -52,8 +56,12 @@ func NewWebExtractTool() *WebExtractTool {
 // does not move the SSRF check onto the proxy address the way it would for the
 // user-supplied destinations newDirectClient handles.
 func newExtractorClient() *http.Client {
+	return newHostedReaderClient(defuddleBaseURL)
+}
+
+func newHostedReaderClient(baseURL string) *http.Client {
 	transport := utilhttp.NewSharedTransport() // Proxy: ProxyFromEnvironment
-	transport.DialContext = hardenedDialer(true, proxyHostPort(defuddleBaseURL))
+	transport.DialContext = hardenedDialer(true, proxyHostPort(baseURL))
 
 	client := &http.Client{Transport: transport, Timeout: 15 * time.Second}
 	client.CheckRedirect = checkRedirect
@@ -83,17 +91,24 @@ func proxyHostPort(rawURL string) string {
 func (t *WebExtractTool) Name() string { return "web_extract" }
 
 func (t *WebExtractTool) Description() string {
-	return "Extract a public web page's main content as Markdown, dropping navigation, ads, and boilerplate. Use only for public web pages: do not pass authenticated, private, signed, one-time, or credential-bearing URLs. The target URL is sent to the defuddle.md extraction service; if that fails the page is fetched and converted locally instead. Private, intranet, and loopback addresses are rejected either way. When quoting, cite the source URL and keep quotes ≤125 characters."
+	return "Extract a public web page's main content as Markdown, dropping navigation, ads, and boilerplate. Use only for public web pages: do not pass authenticated, private, signed, one-time, or credential-bearing URLs. The target URL is sent to the r.jina.ai HTML reader for local conversion; if it fails the URL is sent to the defuddle.md extraction service, then fetched directly as a final fallback. Filtered or truncated results preserve full retrieved content in an actor-owned artifact: use read and the section line numbers to retrieve omitted details. Fallback results disclose that completeness is not independently verified. Private, intranet, and loopback addresses are rejected on every path. Prefer this tool when web_fetch reports a JavaScript challenge. When quoting, cite the source URL and keep quotes ≤125 characters."
 }
 
 func (t *WebExtractTool) Parameters() []core.Parameter {
 	return []core.Parameter{
 		{Name: "url", Type: "string", Required: true, Description: "Web page URL to extract"},
 		{Name: "prompt", Type: "string", Required: false, Description: "Content extraction hint, e.g. 'extract API parameters'"},
+		webContentLimitParameter(),
 	}
 }
 
 func (t *WebExtractTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	limit, err := webContentLimit(args)
+	if err != nil {
+		return core.ToolOutput{}, err
+	}
 	rawURL, err := toolutil.RequireStringArg(args, "url")
 	if err != nil {
 		return core.ToolOutput{}, err
@@ -102,14 +117,27 @@ func (t *WebExtractTool) Execute(ctx context.Context, args map[string]any) (core
 	// Validate before anything else: a private, loopback, or non-http(s) target
 	// must be refused locally rather than handed to the extractor, and the answer
 	// must not depend on how that third party treats such a URL.
-	if err := validateURL(rawURL); err != nil {
+	if err := validateURLContext(ctx, rawURL); err != nil {
 		return core.ToolOutput{}, fmt.Errorf("URL validation failed: %w", err)
 	}
 
 	prompt := toolutil.OptStringArg(args, "prompt", "")
+	if t.reader != nil {
+		content, readerErr := t.readSource(ctx, rawURL)
+		if readerErr == nil {
+			return webResult(ctx, rawURL, "jina-html", content, prompt, limit, false)
+		}
+		if ctx.Err() != nil {
+			return core.ToolOutput{}, ctx.Err()
+		}
+	}
 
+	method := "defuddle"
 	content, err := t.extract(ctx, rawURL)
 	if err != nil {
+		if ctx.Err() != nil {
+			return core.ToolOutput{}, ctx.Err()
+		}
 		// The error text of a transport failure wraps the third-party request
 		// URL, which carries the user's query: log only the underlying cause.
 		var urlErr *url.Error
@@ -118,11 +146,78 @@ func (t *WebExtractTool) Execute(ctx context.Context, args map[string]any) (core
 		}
 		logger.Log("web_extract: extractor unavailable (%v); falling back to direct fetch", err)
 		content, err = fetchPageDirect(ctx, t.client, rawURL)
+		method = "direct-http"
 		if err != nil {
 			return core.ToolOutput{}, err
 		}
 	}
-	return core.ToolOutput{Text: finalizeContent(content, prompt)}, nil
+	return webResult(ctx, rawURL, method, content, prompt, limit, t.reader != nil)
+}
+
+func (t *WebExtractTool) readSource(ctx context.Context, rawURL string) (string, error) {
+	target, err := defuddleTarget(rawURL)
+	if err != nil {
+		return "", err
+	}
+	hopCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(hopCtx, http.MethodGet, readerBaseURL+target, nil)
+	if err != nil {
+		return "", fmt.Errorf("build reader request: %w", err)
+	}
+	req.Header.Set("User-Agent", "NekoCode/1.0")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Respond-With", "html")
+	resp, err := doWebRequest(t.reader, req)
+	if err != nil {
+		return "", fmt.Errorf("reader request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("reader HTTP %d", resp.StatusCode)
+	}
+	body, err := readWebBody(resp.Body, 5<<20)
+	if err != nil {
+		return "", err
+	}
+	var result struct {
+		Data struct {
+			HTML       string `json:"html"`
+			Content    string `json:"content"`
+			FinalURL   string `json:"finalUrl"`
+			HTTPStatus int    `json:"httpStatus"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("reader returned invalid JSON metadata: %w", err)
+	}
+	if result.Data.HTTPStatus >= 400 {
+		return "", fmt.Errorf("reader origin HTTP %d", result.Data.HTTPStatus)
+	}
+	htmlContent := result.Data.HTML
+	if htmlContent == "" {
+		htmlContent = result.Data.Content
+	}
+	if !looksLikeHTML(strings.TrimSpace(htmlContent)) {
+		return "", fmt.Errorf("reader did not return source HTML")
+	}
+	// The reader can follow origin redirects independently of its own HTTP
+	// response URL. Resolve citations against its final origin, never a guess.
+	if err := validateURLContext(hopCtx, result.Data.FinalURL); err != nil {
+		return "", fmt.Errorf("reader final URL: %w", err)
+	}
+	base, err := url.Parse(result.Data.FinalURL)
+	if err != nil {
+		return "", err
+	}
+	content, err := pageMarkdown(hopCtx, []byte(htmlContent), base)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(content) == "" {
+		return "", fmt.Errorf("reader returned no readable content")
+	}
+	return content, nil
 }
 
 // extract asks the hosted extractor to convert rawURL into Markdown. Any
@@ -146,7 +241,7 @@ func (t *WebExtractTool) extract(ctx context.Context, rawURL string) (string, er
 	req.Header.Set("User-Agent", "NekoCode/1.0")
 	req.Header.Set("Accept", "text/markdown,text/plain,*/*")
 
-	resp, err := t.extractor.Do(req)
+	resp, err := doWebRequest(t.extractor, req)
 	if err != nil {
 		return "", fmt.Errorf("extractor request failed: %w", err)
 	}
@@ -155,7 +250,7 @@ func (t *WebExtractTool) extract(ctx context.Context, rawURL string) (string, er
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("extractor HTTP %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, extractMaxBody))
+	body, err := readWebBody(resp.Body, extractMaxBody)
 	if err != nil {
 		return "", fmt.Errorf("failed to read extractor response: %w", err)
 	}

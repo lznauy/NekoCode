@@ -107,7 +107,28 @@ func formatProcessResult(result processResult) string {
 		fmt.Fprintf(&b, "reason: %s\n", result.reason)
 	}
 	appendProcessOutput(&b, result.output)
+	if result.info.status == "failed" && possibleSandboxRestriction(result.output) {
+		b.WriteString("recovery_hint: This failure may be caused by sandbox restrictions. Inspect the command and error, then retry shell with the minimal required outbound_domains, network, writable_roots, or sandbox_mode request to let the runtime obtain approval. Check partial side effects before retrying. Respect explicit denials and configured domain restrictions; do not assume host execution is required or stop at reporting the restriction.\n")
+	}
 	return b.String()
+}
+
+// These diagnostics are evidence for the agent to investigate, not authority
+// to widen permissions or automatically replay a partially executed command.
+func possibleSandboxRestriction(output string) bool {
+	output = strings.ToLower(output)
+	for _, diagnostic := range []string{
+		"read-only file system", "readonly filesystem", "permission denied",
+		"operation not permitted", "eacces", "eperm", "erofs",
+		"network is unreachable", "network is down", "temporary failure in name resolution",
+		"could not resolve host", "could not resolve proxy", "eai_again", "enotfound",
+		"sandbox denied", "sandbox violation",
+	} {
+		if strings.Contains(output, diagnostic) {
+			return true
+		}
+	}
+	return false
 }
 
 func formatProcessList(tasks []processInfo) string {
