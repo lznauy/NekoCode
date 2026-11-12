@@ -26,7 +26,7 @@ nekocode-tui
 
 - 指定版本：`curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/lznauy/NekoCode/master/scripts/install.sh | sh -s -- --version v0.5.0`
 - 指定目录：`curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/lznauy/NekoCode/master/scripts/install.sh | sh -s -- --dir /你的/目录`
-- 源码编译（需要 Go 1.26.10+）：`go build -o nekocode-tui ./cmd/tui`
+- 源码编译（需要 Go 1.26.11+）：`go build -o nekocode-tui ./cmd/tui`
 - Windows 用户：请通过 WSL 运行
 
 ## 二、首次配置：接入模型

@@ -4,7 +4,7 @@
 
 ## 开发环境
 
-- Go 1.26.10（版本以 `go.mod` 为准）
+- Go 1.26.11（版本以 `go.mod` 为准）
 - 可选：Zig（交叉编译 CGO 依赖时使用，见 CI 的 Zig CC wrapper）
 - 可选：Node.js 20+（GUI 前端和 `official` 官网需要）
 
