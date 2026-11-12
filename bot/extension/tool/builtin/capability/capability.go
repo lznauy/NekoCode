@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"strings"
 
-	"nekocode/bot/extension/mcp"
 	tools "nekocode/bot/extension/tool"
 	"nekocode/bot/extension/tool/runtime/core"
 )
@@ -19,12 +18,18 @@ import (
 // reaches every MCP server tool.
 const ToolName = "capability"
 
-type tool struct {
-	mcp *mcp.Manager
+// Runtime is the MCP invocation contract; a captured snapshot implements the
+// same contract without following later server replacement.
+type Runtime interface {
+	ListCapabilities() string
+	InspectTool(string, string) (string, error)
+	CallServerTool(context.Context, string, string, map[string]any) (string, error)
 }
 
+type tool struct{ mcp Runtime }
+
 // New creates the capability proxy tool bound to the MCP runtime it adapts.
-func New(manager *mcp.Manager) core.Tool {
+func New(manager Runtime) core.Tool {
 	return &tool{mcp: manager}
 }
 
@@ -40,11 +45,7 @@ func ResolveTarget(args map[string]any) (tools.CallTarget, bool) {
 		return tools.CallTarget{}, false
 	}
 	callArgs, _ := args["args"].(map[string]any)
-	return tools.CallTarget{Name: canonicalTargetName(server, toolName), Args: callArgs}, true
-}
-
-func canonicalTargetName(server, toolName string) string {
-	return "mcp__" + escapeTargetPart(server) + "__" + escapeTargetPart(toolName)
+	return tools.CallTarget{Name: TargetName(server, toolName), Args: callArgs}, true
 }
 
 func escapeTargetPart(value string) string {
@@ -101,4 +102,9 @@ func (t *tool) Execute(ctx context.Context, args map[string]any) (core.ToolOutpu
 		return core.ToolOutput{Text: toolText}, toolErr
 	}
 	return core.ToolOutput{}, fmt.Errorf("unknown action %q: must be list, inspect, or call", action)
+}
+
+// TargetName is the canonical authorization identity, including escaping.
+func TargetName(server, tool string) string {
+	return "mcp__" + escapeTargetPart(server) + "__" + escapeTargetPart(tool)
 }

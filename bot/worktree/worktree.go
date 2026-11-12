@@ -1,4 +1,4 @@
-// Package worktree manages durable, opt-in Git working copies for delegated tasks.
+// Package worktree manages durable Git working copies for delegated tasks.
 package worktree
 
 import (
@@ -20,12 +20,15 @@ var validBase = regexp.MustCompile(`^[0-9a-f]{40,64}$`)
 var validID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
 
 type Info struct {
+	Snapshot   bool   `json:"snapshot,omitempty"`
+	SourceHead string `json:"source_head,omitempty"`
 	TaskID     string `json:"task_id"`
 	Repository string `json:"repository"`
 	CommonDir  string `json:"common_dir"`
 	Base       string `json:"base"`
 	Path       string `json:"path"`
 	Cwd        string `json:"cwd"`
+	Removing   bool   `json:"removing,omitempty"`
 	Removed    bool   `json:"removed,omitempty"`
 }
 
@@ -113,6 +116,17 @@ func (l *Lease) save() error {
 // Open creates from HEAD or validates an existing worktree. Never silently
 // replaces a missing worktree during task resume.
 func (l *Lease) Open(ctx context.Context, cwd, id string, resume bool) (Info, error) {
+	return l.open(ctx, cwd, id, resume, false)
+}
+
+// OpenSnapshot creates a private copy of the current staged, unstaged and
+// non-ignored untracked files. Parent files and the real index are untouched.
+// Its saved base excludes the copied changes from later Diff/Apply operations.
+func (l *Lease) OpenSnapshot(ctx context.Context, cwd, id string) (Info, error) {
+	return l.open(ctx, cwd, id, false, true)
+}
+
+func (l *Lease) open(ctx context.Context, cwd, id string, resume, snapshot bool) (result Info, runErr error) {
 	root, common, err := repository(ctx, cwd)
 	if err != nil {
 		return Info{}, err
@@ -149,18 +163,59 @@ func (l *Lease) Open(ctx context.Context, cwd, id string, resume bool) (Info, er
 		return Info{}, err
 	}
 	path := filepath.Join(l.dir, "tree")
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		if err == nil {
+			err = fmt.Errorf("unregistered worktree files exist; inspect before explicit discard")
+		}
+		return Info{}, err
+	}
 	l.Info = Info{TaskID: id, Repository: root, CommonDir: common, Base: head, Path: path, Cwd: filepath.Join(path, rel)}
+	var captured workspaceSnapshot
+	if snapshot {
+		captured, err = l.captureSnapshot(ctx, root, cwd, head)
+		if err != nil {
+			return Info{}, err
+		}
+		l.Info.Snapshot, l.Info.SourceHead, l.Info.Base = true, head, captured.base
+	}
 	// Persist before creation so a crash still leaves an observable recovery record.
 	if err = l.save(); err != nil {
 		return Info{}, err
+	}
+	// This call owns a newly created workspace and no worker has run yet.
+	// Recoverable process crashes retain the manifest; ordinary errors clean up.
+	defer func() {
+		if runErr == nil {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if err := l.Remove(cleanupCtx, true); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("workspace creation cleanup failed; retry /worktree remove %s --discard: %w", id, err))
+			return
+		}
+		if err := os.Remove(filepath.Join(l.dir, "meta.json")); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("remove failed creation manifest: %w", err))
+		}
+	}()
+	if snapshot {
+		if _, err = git(ctx, root, nil, nil, "update-ref", l.snapshotBaseRef(), l.Info.Base, strings.Repeat("0", len(l.Info.Base))); err != nil {
+			return Info{}, err
+		}
 	}
 	if _, err = git(ctx, root, nil, nil, "worktree", "add", "--detach", "--no-checkout", "--", path, head); err != nil {
 		return Info{}, err
 	}
 	// Conditional includes can activate only inside the new worktree. Discover
 	// and disable its filters before the first checkout of repository files.
-	if _, err = git(ctx, path, nil, nil, "reset", "--hard", head); err != nil {
-		return Info{}, err
+	if snapshot {
+		if err = l.restoreSnapshot(ctx, captured); err != nil {
+			return Info{}, err
+		}
+	} else {
+		if _, err = git(ctx, path, nil, nil, "reset", "--hard", head); err != nil {
+			return Info{}, err
+		}
 	}
 	if err = l.validate(ctx, root, common, id); err != nil {
 		return Info{}, err
@@ -169,11 +224,14 @@ func (l *Lease) Open(ctx context.Context, cwd, id string, resume bool) (Info, er
 }
 func (l *Lease) validate(ctx context.Context, root, common, id string) error {
 	i := l.Info
-	if i.Removed {
+	if i.Removed || i.Removing {
 		return fmt.Errorf("worktree was removed; start a new task")
 	}
 	if !validBase.MatchString(i.Base) {
 		return fmt.Errorf("invalid worktree base commit")
+	}
+	if i.Snapshot && !validBase.MatchString(i.SourceHead) {
+		return fmt.Errorf("invalid snapshot source commit")
 	}
 	if i.TaskID != id || i.Repository != root || i.CommonDir != common || i.Path != filepath.Join(l.dir, "tree") {
 		return fmt.Errorf("worktree identity mismatch")
@@ -196,6 +254,12 @@ func (l *Lease) validate(ctx context.Context, root, common, id string) error {
 	}
 	if actual != i.Path || actualCommon != common {
 		return fmt.Errorf("worktree repository mismatch")
+	}
+	if i.Snapshot {
+		base, err := output(ctx, i.Path, "rev-parse", "--verify", l.snapshotBaseRef()+"^{commit}")
+		if err != nil || base != i.Base {
+			return fmt.Errorf("snapshot base is missing or changed; result retained")
+		}
 	}
 	return nil
 }
@@ -225,6 +289,9 @@ func (l *Lease) Diff(ctx context.Context) ([]byte, error) {
 // deliberately independent of patch text parsing, including for binary files
 // and paths containing whitespace or newlines.
 func (l *Lease) diff(ctx context.Context) (patch, raw []byte, err error) {
+	if !validBase.MatchString(l.Info.Base) {
+		return nil, nil, fmt.Errorf("invalid worktree base commit")
+	}
 	f, err := os.CreateTemp(l.dir, "diff-index-")
 	if err != nil {
 		return nil, nil, err
@@ -362,7 +429,7 @@ func (l *Lease) Apply(ctx context.Context, checkpoints ...ApplyCheckpoint) (chan
 }
 
 // LoadForRemoval tolerates incomplete creation, but never trusts saved paths
-// outside this task directory. Only explicit discard uses this recovery path.
+// outside this task directory. Remove still checks existing files unless discard is explicit.
 func (l *Lease) LoadForRemoval(ctx context.Context, cwd, id string) (Info, error) {
 	root, common, err := repository(ctx, cwd)
 	if err != nil {
@@ -376,6 +443,9 @@ func (l *Lease) LoadForRemoval(ctx context.Context, cwd, id string) (Info, error
 		return Info{}, err
 	}
 	i := l.Info
+	if !validBase.MatchString(i.Base) || i.Snapshot && !validBase.MatchString(i.SourceHead) {
+		return Info{}, fmt.Errorf("invalid worktree base commit")
+	}
 	if i.TaskID != id || i.Repository != root || i.CommonDir != common || i.Path != filepath.Join(l.dir, "tree") {
 		return Info{}, fmt.Errorf("worktree identity mismatch")
 	}
@@ -395,7 +465,11 @@ func (l *Lease) LoadForRemoval(ctx context.Context, cwd, id string) (Info, error
 }
 
 func (l *Lease) Remove(ctx context.Context, discard bool) error {
-	if !discard {
+	_, pathErr := os.Lstat(l.Info.Path)
+	if pathErr != nil && !errors.Is(pathErr, os.ErrNotExist) {
+		return pathErr
+	}
+	if !discard && !(l.Info.Removing && errors.Is(pathErr, os.ErrNotExist)) {
 		status, err := git(ctx, l.Info.Path, nil, nil, "status", "--porcelain=v1", "--ignored=matching", "--untracked-files=all", "-z")
 		if err != nil {
 			return err
@@ -421,12 +495,20 @@ func (l *Lease) Remove(ctx context.Context, discard bool) error {
 			registered = true
 		}
 	}
+	if !registered && !discard && !l.Info.Removing {
+		return fmt.Errorf("worktree registration missing; review before explicit discard")
+	}
+	if !l.Info.Removing {
+		l.Info.Removing = true
+		if err := l.save(); err != nil {
+			l.Info.Removing = false
+			return err
+		}
+	}
 	if registered {
 		if _, err := git(ctx, l.Info.Repository, nil, nil, "worktree", "remove", "--force", "--", l.Info.Path); err != nil {
 			return err
 		}
-	} else if !discard {
-		return fmt.Errorf("worktree registration missing; review before explicit discard")
 	}
 	// Interrupted creation may leave files without a registered worktree.
 	dir, err := os.OpenRoot(l.dir)
@@ -437,8 +519,19 @@ func (l *Lease) Remove(ctx context.Context, discard bool) error {
 	if err = dir.RemoveAll("tree"); err != nil {
 		return err
 	}
+	if l.Info.Snapshot {
+		if _, err = git(ctx, l.Info.Repository, nil, nil, "update-ref", "-d", l.snapshotBaseRef(), l.Info.Base); err != nil {
+			return err
+		}
+	}
 	l.Info.Removed = true
-	return l.save()
+	l.Info.Removing = false
+	if err := l.save(); err != nil {
+		l.Info.Removed = false
+		l.Info.Removing = true
+		return err
+	}
+	return nil
 }
 
 func List(parent string) ([]Info, error) {

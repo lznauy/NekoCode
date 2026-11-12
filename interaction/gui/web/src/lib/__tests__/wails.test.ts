@@ -25,3 +25,9 @@ describe('safe wrappers', () => {
 	await expect(safeCommandMenu('/')).resolves.toBeNull()
   })
 })
+
+it('provides the full generated usage shape outside Wails', async () => {
+ const { safeBackgroundUsage } = await import('../wails')
+ const usage = await safeBackgroundUsage('session')
+ expect(usage).toEqual({total_tokens: 0, cache_hit_tokens: 0, cache_miss_tokens: 0, tool_use_count: 0, duration_ms: 0})
+})

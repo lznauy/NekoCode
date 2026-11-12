@@ -71,8 +71,8 @@ func TestModePickerPreservesDraftAndAttachments(t *testing.T) {
 	}
 }
 
-func TestModePickerClickAndBusyLock(t *testing.T) {
-	r := &modeFakeRuntime{selected: mode.Standard}
+func TestModeLabelIsDisplayOnlyAndPickerRespectsBusyLock(t *testing.T) {
+	r := &modeFakeRuntime{selected: mode.SuperAgent}
 	m, _ := NewModel(r)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 35})
 	view := strings.Split(ansi.Strip(m.View().Content), "\n")
@@ -82,12 +82,15 @@ func TestModePickerClickAndBusyLock(t *testing.T) {
 			actual = n
 		}
 	}
-	if actual < 0 || actual != m.modeControlY {
-		t.Fatalf("hit row = %d, rendered = %d", m.modeControlY, actual)
+	if actual < 0 {
+		t.Fatal("mode label missing")
+	}
+	if !strings.Contains(view[actual], "Mode: Super") || strings.Contains(view[actual], "Super Agent") || strings.Contains(view[actual], "▾") {
+		t.Fatalf("unexpected mode label: %s", view[actual])
 	}
 	m.Update(tea.MouseClickMsg{X: 3, Y: actual, Button: tea.MouseLeft})
-	if !m.modePicker {
-		t.Fatal("click did not open picker")
+	if m.modePicker {
+		t.Fatal("click opened mode picker")
 	}
 	m.handleModeKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m.transitionTo(stateProcessing)

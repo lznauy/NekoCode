@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"context"
 	"io"
 	"sync"
 	"time"
@@ -38,23 +39,27 @@ type shellTask struct {
 	name      string
 	owner     string
 	cmd       string
+	launchKey string
 	startedAt time.Time
 	proc      processHandle
+	cancel    context.CancelFunc
 
-	mu          sync.Mutex
-	status      taskStatus
-	timedOut    bool
-	stopping    bool
-	monitoring  bool
-	managed     bool
-	endedAt     time.Time
-	exitCode    int
-	readFailed  bool
-	logs        []byte
-	logStart    uint64
-	logEnd      uint64
-	watchOffset uint64
-	removeAt    time.Time
+	mu             sync.Mutex
+	status         taskStatus
+	timedOut       bool
+	stopping       bool
+	monitoring     bool
+	managed        bool
+	endedAt        time.Time
+	exitCode       int
+	readFailed     bool
+	logs           []byte
+	logStart       uint64
+	logEnd         uint64
+	watchOffset    uint64
+	observedOffset uint64
+	unchangedWaits int
+	removeAt       time.Time
 
 	done    chan struct{}
 	drained chan struct{}
@@ -220,7 +225,16 @@ func (t *shellTask) resultLocked(reason string, output []byte, fromStart bool) p
 		complete = t.status != taskRunning && !t.readFailed && fromStart && uint64(len(output)) == t.logEnd
 	default:
 	}
-	observation := core.ProcessObservation{State: t.status.String(), OutputComplete: complete}
+	newBytes := t.logEnd - t.observedOffset
+	if reason != "reused_running" {
+		if reason == "wait_timeout" && t.status == taskRunning && newBytes == 0 {
+			t.unchangedWaits++
+		} else if newBytes > 0 || t.status != taskRunning {
+			t.unchangedWaits = 0
+		}
+		t.observedOffset = t.logEnd
+	}
+	observation := core.ProcessObservation{State: t.status.String(), OutputComplete: complete, Task: t.name, Reason: reason, NewOutputBytes: newBytes, UnchangedWaits: t.unchangedWaits}
 	if t.status == taskExited {
 		observation.ExitCode, observation.ExitCodeKnown = t.exitCode, true
 	}

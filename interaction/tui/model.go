@@ -53,7 +53,6 @@ type Model struct {
 	activeModeOneShot     bool
 	modePicker            bool
 	modeChanging          bool
-	modeControlY          int
 	state                 chatState
 	preConfirmState       chatState
 	runtimePrompts        []runtimePrompt
@@ -274,6 +273,9 @@ func todoItemsText(items []controlruntime.TodoItem) string {
 	fmt.Fprintf(&b, "Tasks %d/%d", done, len(items))
 	for _, it := range items {
 		fmt.Fprintf(&b, "\n%s %s", todoStatusIcon(it.Status), it.Content)
+		if it.Reason != "" {
+			fmt.Fprintf(&b, "（%s）", it.Reason)
+		}
 	}
 	return b.String()
 }
@@ -294,6 +296,10 @@ func todoStatusIcon(status string) string {
 		return "▸"
 	case "completed":
 		return "✓"
+	case "blocked":
+		return "!"
+	case "cancelled":
+		return "–"
 	default:
 		return "·"
 	}

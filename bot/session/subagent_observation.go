@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -17,23 +18,28 @@ import (
 
 // SubagentInfo is a bounded read model. It never carries active model context.
 type SubagentInfo struct {
-	Isolation        string           `json:"isolation,omitempty"`
-	ID               string           `json:"id"`
-	ParentSessionID  string           `json:"parent_session_id"`
-	Title            string           `json:"title,omitempty"`
-	Profile          string           `json:"profile"`
-	Skills           []string         `json:"skills,omitempty"`
-	Prompt           string           `json:"prompt"`
-	Status           string           `json:"status"`
-	RunCount         int              `json:"run_count"`
-	Result           string           `json:"result,omitempty"`
-	CreatedAt        int64            `json:"created_at"`
-	UpdatedAt        int64            `json:"updated_at"`
-	UpdatedAtNano    int64            `json:"-"` // actual committed snapshot mtime, not second-resolution UI time
-	TranscriptSeq    int              `json:"transcript_seq"`
-	Error            string           `json:"error,omitempty"`
-	CurrentAttemptID string           `json:"current_attempt_id,omitempty"`
-	LatestAttempt    *SubagentAttempt `json:"latest_attempt,omitempty"`
+	GroupID            string           `json:"-"`
+	WorkspaceKind      string           `json:"workspace_kind,omitempty"`
+	ResultInputs       []string         `json:"-"`
+	TaskUpdateSequence uint64           `json:"-"`
+	ToolCeiling        []string         `json:"-"`
+	Isolation          string           `json:"isolation,omitempty"`
+	ID                 string           `json:"id"`
+	ParentSessionID    string           `json:"parent_session_id"`
+	Title              string           `json:"title,omitempty"`
+	Profile            string           `json:"profile"`
+	Skills             []string         `json:"skills,omitempty"`
+	Prompt             string           `json:"prompt"`
+	Status             string           `json:"status"`
+	RunCount           int              `json:"run_count"`
+	Result             string           `json:"result,omitempty"`
+	CreatedAt          int64            `json:"created_at"`
+	UpdatedAt          int64            `json:"updated_at"`
+	UpdatedAtNano      int64            `json:"-"` // actual committed snapshot mtime, not second-resolution UI time
+	TranscriptSeq      int              `json:"transcript_seq"`
+	Error              string           `json:"error,omitempty"`
+	CurrentAttemptID   string           `json:"current_attempt_id,omitempty"`
+	LatestAttempt      *SubagentAttempt `json:"latest_attempt,omitempty"`
 }
 
 type SubagentAttemptPage struct {
@@ -59,7 +65,7 @@ func infoFromSnapshot(s *Snapshot) SubagentInfo {
 		copy.Result = protocol.SubagentTextPreview(copy.Result, 4096)
 		latest = &copy
 	}
-	return SubagentInfo{Isolation: m.Isolation, ID: s.ID, ParentSessionID: m.ParentSessionID, Title: m.Title, Profile: m.Profile, Skills: append([]string(nil), m.Skills...), Prompt: protocol.SubagentTextPreview(m.Prompt, 1024), Status: m.Status, RunCount: m.RunCount, Result: protocol.SubagentTextPreview(m.Result, 4096), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, TranscriptSeq: s.TranscriptSeq, CurrentAttemptID: m.CurrentAttemptID, LatestAttempt: latest}
+	return SubagentInfo{GroupID: m.GroupID, ResultInputs: slices.Clone(m.ResultInputs), TaskUpdateSequence: s.TaskUpdateSequence, ToolCeiling: slices.Clone(m.ToolCeiling), WorkspaceKind: m.WorkspaceKind, Isolation: m.Isolation, ID: s.ID, ParentSessionID: m.ParentSessionID, Title: m.Title, Profile: m.Profile, Skills: append([]string(nil), m.Skills...), Prompt: protocol.SubagentTextPreview(m.Prompt, 1024), Status: m.Status, RunCount: m.RunCount, Result: protocol.SubagentTextPreview(m.Result, 4096), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, TranscriptSeq: s.TranscriptSeq, CurrentAttemptID: m.CurrentAttemptID, LatestAttempt: latest}
 }
 
 // Projection failure does not invalidate a committed context. Readers detect
@@ -77,16 +83,22 @@ func (s *SubagentSession) writeProjection() {
 }
 
 func readSubagentInfo(root, parentID, id string) (SubagentInfo, error) {
+	return readSubagentInfoSource(root, parentID, id, true)
+}
+
+func readSubagentInfoSource(root, parentID, id string, useProjection bool) (SubagentInfo, error) {
 	d := filepath.Join(root, id)
 	stat, err := os.Stat(filepath.Join(d, "session.json"))
 	if err != nil {
 		return SubagentInfo{}, err
 	}
-	var projection subagentProjection
-	data, err := os.ReadFile(filepath.Join(d, "observation.json"))
-	if err == nil && json.Unmarshal(data, &projection) == nil && projection.SourceSize == stat.Size() && projection.SourceTime == stat.ModTime().UnixNano() && projection.Info.ID == id && projection.Info.ParentSessionID == parentID {
-		projection.Info.UpdatedAtNano = stat.ModTime().UnixNano()
-		return observeOwnership(d, projection.Info)
+	if useProjection {
+		var projection subagentProjection
+		data, err := os.ReadFile(filepath.Join(d, "observation.json"))
+		if err == nil && json.Unmarshal(data, &projection) == nil && projection.SourceSize == stat.Size() && projection.SourceTime == stat.ModTime().UnixNano() && projection.Info.ID == id && projection.Info.ParentSessionID == parentID {
+			projection.Info.UpdatedAtNano = stat.ModTime().UnixNano()
+			return observeOwnership(d, projection.Info)
+		}
 	}
 	// Decode only required fields on cache miss; active context is discarded.
 	f, err := os.Open(filepath.Join(d, "session.json"))
@@ -95,12 +107,13 @@ func readSubagentInfo(root, parentID, id string) (SubagentInfo, error) {
 	}
 	defer f.Close()
 	var header struct {
-		ID            string            `json:"id"`
-		FormatVersion int               `json:"format_version"`
-		CreatedAt     int64             `json:"created_at"`
-		UpdatedAt     int64             `json:"updated_at"`
-		TranscriptSeq int               `json:"transcript_seq"`
-		Subagent      *SubagentMetadata `json:"subagent"`
+		TaskUpdateSequence uint64            `json:"task_update_sequence"`
+		ID                 string            `json:"id"`
+		FormatVersion      int               `json:"format_version"`
+		CreatedAt          int64             `json:"created_at"`
+		UpdatedAt          int64             `json:"updated_at"`
+		TranscriptSeq      int               `json:"transcript_seq"`
+		Subagent           *SubagentMetadata `json:"subagent"`
 	}
 	if err := json.NewDecoder(f).Decode(&header); err != nil {
 		return SubagentInfo{}, err
@@ -108,7 +121,7 @@ func readSubagentInfo(root, parentID, id string) (SubagentInfo, error) {
 	if header.ID != id || header.Subagent == nil || header.Subagent.ParentSessionID != parentID || (header.FormatVersion < 2 || header.FormatVersion > currentSnapshotVersion) || header.TranscriptSeq < 0 {
 		return SubagentInfo{}, fmt.Errorf("invalid subagent snapshot")
 	}
-	info := infoFromSnapshot(&Snapshot{ID: id, CreatedAt: header.CreatedAt, UpdatedAt: header.UpdatedAt, TranscriptSeq: header.TranscriptSeq, Subagent: header.Subagent})
+	info := infoFromSnapshot(&Snapshot{TaskUpdateSequence: header.TaskUpdateSequence, ID: id, CreatedAt: header.CreatedAt, UpdatedAt: header.UpdatedAt, TranscriptSeq: header.TranscriptSeq, Subagent: header.Subagent})
 	info.UpdatedAtNano = stat.ModTime().UnixNano()
 	return observeOwnership(d, info)
 }

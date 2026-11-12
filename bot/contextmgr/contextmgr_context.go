@@ -33,7 +33,7 @@ type ModelRequest struct {
 //	Layer 0  system prompt + skill list (immutable within a session)
 //	Layer 1  long-term memory
 //	Layer 2  compaction archive
-//	Layer 3  message history (append-only)
+//	Layer 3  working history (append-only between pressure checkpoints)
 //
 // Dynamic runtime state is represented by tagged user messages already
 // appended to Layer 3 by BuildRequest.
@@ -96,7 +96,7 @@ func (m *Manager) buildLocked(request ModelRequest) ([]types.Message, int, int) 
 // old values so stale todos or runtime policies do not remain active.
 func (m *Manager) appendRuntimeContextLocked(environment string) {
 	projection := &m.state.runtimeProjection
-	todos := m.state.ctx.TodoText()
+	todos := m.state.ctx.todoContext()
 	if !hasRuntimeContextState(environment, todos, m.state.runtimePolicy) && !projection.seen {
 		return
 	}
@@ -306,9 +306,17 @@ func (m *Manager) restoreRuntimeContextLocked() {
 }
 
 func (m *Manager) SetTodos(items []protocol.TodoItem) {
+	m.todoWriteMu.Lock()
+	defer m.todoWriteMu.Unlock()
 	m.state.mu.Lock()
 	defer m.state.mu.Unlock()
-	m.state.ctx.LoadTodos(items)
+	m.state.ctx.LoadTodos(append([]protocol.TodoItem(nil), items...))
+	if group := m.state.ctx.TodoGroup; group != "" {
+		if m.state.ctx.TodoPlans == nil {
+			m.state.ctx.TodoPlans = TodoPlans{}
+		}
+		m.state.ctx.TodoPlans[group] = append([]protocol.TodoItem(nil), items...)
+	}
 }
 
 func (m *Manager) Len() int {
@@ -318,15 +326,16 @@ func (m *Manager) Len() int {
 }
 
 type Status struct {
-	Messages     int
-	Tokens       int
-	Budget       int
-	HasArchive   bool
-	CacheHit     int
-	CacheMiss    int
-	HasTasks     bool
-	TasksDone    bool
-	CompactCount int
+	Messages        int
+	Tokens          int
+	Budget          int
+	HasArchive      bool
+	CacheHit        int
+	CacheMiss       int
+	HasTasks        bool
+	TasksDone       bool
+	TasksActionable bool
+	CompactCount    int
 }
 
 // Status returns one coherent snapshot of context occupancy and session usage.
@@ -338,7 +347,7 @@ func (m *Manager) Status() Status {
 		Messages: len(m.state.ctx.Messages), Tokens: m.estimatedTokens(),
 		Budget: m.state.contextWindow, HasArchive: m.state.ctx.Archive != "",
 		CacheHit: hit, CacheMiss: miss,
-		HasTasks: m.state.ctx.HasTasks(), TasksDone: m.state.ctx.AllTasksDone(),
+		HasTasks: m.state.ctx.HasTasks(), TasksDone: m.state.ctx.AllTasksDone(), TasksActionable: m.state.ctx.HasActionableTasks(),
 		CompactCount: m.state.compactCount,
 	}
 }
@@ -395,4 +404,45 @@ func (m *Manager) estimatedTokens() int {
 		return calibrated
 	}
 	return estimated
+}
+
+// Todos returns a copy of the current plan, including unfinished deliverables.
+func (m *Manager) Todos() []protocol.TodoItem {
+	m.state.mu.RLock()
+	defer m.state.mu.RUnlock()
+	return append([]protocol.TodoItem(nil), m.state.ctx.TodoItems...)
+}
+
+// TodoPlans preserves independent demand plans across interleaved coordinator turns.
+type TodoPlans map[string][]protocol.TodoItem
+
+func (plans TodoPlans) Clone() TodoPlans {
+	if plans == nil {
+		return nil
+	}
+	copy := make(TodoPlans, len(plans))
+	for group, items := range plans {
+		copy[group] = append([]protocol.TodoItem(nil), items...)
+	}
+	return copy
+}
+
+// SelectTodoGroup exposes only this demand's plan to the next model turn.
+// Empty selects an ordinary turn with no inherited plan.
+func (m *Manager) SelectTodoGroup(group string) {
+	m.todoWriteMu.Lock()
+	defer m.todoWriteMu.Unlock()
+	m.state.mu.Lock()
+	defer m.state.mu.Unlock()
+	m.state.ctx.TodoGroup = group
+	m.state.ctx.TodoItems = append([]protocol.TodoItem(nil), m.state.ctx.TodoPlans[group]...)
+	if group == "" {
+		m.state.ctx.TodoItems = nil
+	}
+}
+
+func (m *Manager) ActiveTodoPlanID() string {
+	m.state.mu.RLock()
+	defer m.state.mu.RUnlock()
+	return m.state.ctx.TodoGroup
 }

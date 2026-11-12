@@ -43,7 +43,7 @@ func taskProcessingTodos(records []controlruntime.SubagentRecord, results map[st
 			var args struct {
 				Todos []controlruntime.TodoItem `json:"todos"`
 			}
-			if json.Unmarshal([]byte(call.Arguments), &args) == nil {
+			if json.Unmarshal([]byte(call.Arguments), &args) == nil && args.Todos != nil {
 				text = todoItemsText(args.Todos)
 			}
 		}

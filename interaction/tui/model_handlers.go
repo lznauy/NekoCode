@@ -31,8 +31,39 @@ func (m *Model) handleDone(msg doneMsg) tea.Cmd {
 		m.sessionLoadDone = &msg
 		return nil
 	}
+	// A foreground terminal event cannot dismiss prompts owned by workers.
+	var backgroundPrompts []runtimePrompt
+	for _, p := range m.runtimePrompts {
+		if p.approval != nil && p.approval.SubAgentID != "" || p.question != nil && p.question.SubAgentID != "" {
+			backgroundPrompts = append(backgroundPrompts, p)
+		}
+	}
+	if len(backgroundPrompts) > 0 {
+		// Keep the active worker card intact: SetRequest would erase choices,
+		// custom answers and cursor positions while the user is interacting.
+		preserveActive := m.runtimePromptActive && len(m.runtimePrompts) > 0 &&
+			(m.runtimePrompts[0].approval != nil && m.runtimePrompts[0].approval.SubAgentID != "" ||
+				m.runtimePrompts[0].question != nil && m.runtimePrompts[0].question.SubAgentID != "")
+		confirm, question, modal := *m.ConfirmBar, *m.QuestionBar, m.state
+		defer func() {
+			m.runtimePrompts = backgroundPrompts
+			if preserveActive {
+				*m.ConfirmBar, *m.QuestionBar = confirm, question
+				m.runtimePromptActive = true
+				m.preConfirmState = stateReady
+				m.state = modal
+				m.resizeMessages()
+			} else {
+				m.runtimePromptActive = false
+				m.showRuntimePrompt()
+			}
+		}()
+	}
 	m.Messages.SettleCompactions()
 	for id, status := range m.taskStates {
+		if m.activeMode.ID == mode.SuperAgent {
+			continue
+		}
 		if status == "running" || status == "queued" || status == "waiting_approval" || status == "waiting_question" {
 			m.taskStates[id] = "interrupted"
 		}
@@ -553,6 +584,18 @@ func (m *Model) refreshSuggestions() {
 	}
 	menu, ok := m.Runtime.CommandMenu(context.Background(), prefix)
 	if prefix == "/" {
+		if _, supported := m.Runtime.(backgroundController); supported {
+			menu.Items = append(menu.Items,
+				controlruntime.CommandMenuItem{Value: "/inbox", Label: "/inbox", Description: "查看需求收件箱与重启恢复状态", Submit: true},
+				controlruntime.CommandMenuItem{Value: "/demand-resume ", Label: "/demand-resume", Description: "继续尚未开始的恢复需求"},
+				controlruntime.CommandMenuItem{Value: "/demand-discard ", Label: "/demand-discard", Description: "忽略恢复需求记录"},
+				controlruntime.CommandMenuItem{Value: "/background", Label: "/background", Description: "查看后台任务状态与任务 ID", Submit: true},
+				controlruntime.CommandMenuItem{Value: "/task-add ", Label: "/task-add", Description: "向指定任务追加指示"},
+				controlruntime.CommandMenuItem{Value: "/task-stop ", Label: "/task-stop", Description: "停止指定后台任务"},
+				controlruntime.CommandMenuItem{Value: "/tasks-stop", Label: "/tasks-stop", Description: "停止协调轮次、后台任务和排队需求", Submit: true},
+			)
+			ok = true
+		}
 		if canObserveTasks(m.Runtime) {
 			menu.Items = append(menu.Items, controlruntime.CommandMenuItem{Value: "/tasks", Label: "/tasks", Description: "查看子任务执行记录 · Ctrl+G", Submit: true})
 			ok = true
@@ -704,6 +747,16 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) (cmd tea.Cmd) {
 		}
 	}()
 	m.observeTaskLifecycle(ev)
+	if strings.HasPrefix(string(ev.RunID), "task_") {
+		// Background workers have independent history and metrics. Only their
+		// interaction controls belong in the foreground event projection.
+		switch ev.Type {
+		case controlruntime.EventApprovalRequested, controlruntime.EventApprovalResolved,
+			controlruntime.EventQuestionRequested, controlruntime.EventQuestionResolved:
+		default:
+			return nil
+		}
+	}
 	if ev.Type == controlruntime.EventRunStarted && m.modePicker {
 		m.modePicker = false
 		m.Suggestions.Hide()
@@ -740,7 +793,16 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) (cmd tea.Cmd) {
 					title += " @" + p.Sender.Username
 				}
 			}
-			m.Messages.AddMessage(message.ChatMessage{Role: "user", Title: title, Content: p.Content})
+			role := "user"
+			if p.Source.Kind == "task_completion" {
+				role = "system"
+				title = ""
+				// The coordinator input is a hidden runtime event in durable
+				// history, not a visible user turn. Reconcile its answer by the
+				// raw sequence range instead of looking for this display notice.
+				m.turnInput = ""
+			}
+			m.Messages.AddMessage(message.ChatMessage{Role: role, Title: title, Content: p.Content})
 			m.Messages.ClearProcessing()
 			m.Messages.SetBlocks(nil)
 			m.Messages.GotoBottom()
@@ -766,7 +828,13 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) (cmd tea.Cmd) {
 		return clipboard
 	case controlruntime.EventRunStarted:
 		m.activeMode, m.activeModeOneShot = mode.Snapshot{}, false
-		m.taskStates = nil
+		super := false
+		if source, ok := m.Runtime.(modeRuntime); ok {
+			super = source.InteractionMode().Selected == mode.SuperAgent
+		}
+		if !super {
+			m.taskStates = nil
+		}
 		m.taskSummarySyncedAt = time.Time{}
 		reloadHistory := m.sessionLoading && m.sessionLoadDone != nil
 		if reloadHistory {
@@ -908,7 +976,18 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) (cmd tea.Cmd) {
 			m.tasks.savedDetail = nil
 			m.tasks.sessionID = ""
 		}
-		return m.loadSessionMessages()
+		cancelled := m.state == stateConfirming && !m.runtimePromptActive && m.ConfirmBar.IsDestructive()
+		if cancelled {
+			m.ConfirmBar.Respond(false, false)
+			m.ConfirmBar.Clear()
+			m.finishPromptInput()
+		}
+		cmd := m.loadSessionMessages()
+		if cancelled {
+			text := "已切换会话，原会话的操作确认已取消。"
+			m.sessionLoadNotices = append(m.sessionLoadNotices, message.ChatMessage{Role: "system", Content: text, RenderedContent: text})
+		}
+		return cmd
 	case controlruntime.EventConnectorStatus:
 		if p, ok := ev.Payload.(controlruntime.ConnectorStatusPayload); ok && p.Message != "" {
 			m.Messages.AddMessage(message.ChatMessage{

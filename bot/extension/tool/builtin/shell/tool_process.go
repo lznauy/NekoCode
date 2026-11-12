@@ -10,8 +10,6 @@ import (
 	"nekocode/bot/extension/tool/runtime/toolutil"
 )
 
-const defaultProcessWaitTimeout = 5 * time.Minute
-
 // ProcessTool operates on commands that shell has already returned as managed
 // tasks. Waiting is event-driven inside the runtime; the model never polls.
 type ProcessTool struct {
@@ -28,7 +26,7 @@ func (t *ProcessTool) Name() string { return "process" }
 func (t *ProcessTool) Description() string {
 	return "Manage a still-running task returned by shell. " +
 		"Use wait when subsequent work needs the command to finish, watch when it needs the next output or exit event, list for recovery or inspection, and stop to terminate it. " +
-		"wait and watch suspend this run until the event or a runtime safety boundary; wait_timeout leaves the process running. Do not poll."
+		"wait and watch suspend inference until the requested event, cancellation or an explicit host wait budget; there is no periodic model wake-up. wait_timeout, when a host budget is supplied, leaves the process running. Reuse its task ID, never restart shell just because waiting expired. new_output_bytes measures captured output since observation, not CPU/work progress. Repeated unchanged_waits calls for diagnosis or justified waiting, not blind polling or automatic killing."
 }
 
 func (t *ProcessTool) Parameters() []core.Parameter {
@@ -91,7 +89,7 @@ func (t *ProcessTool) waitDuration() time.Duration {
 	if t.waitTimeout > 0 {
 		return t.waitTimeout
 	}
-	return defaultProcessWaitTimeout
+	return 0 // No periodic timeout: the host waits without sampling the model.
 }
 
 func formatProcessResult(result processResult) string {
@@ -105,6 +103,23 @@ func formatProcessResult(result processResult) string {
 	}
 	if result.reason != "" {
 		fmt.Fprintf(&b, "reason: %s\n", result.reason)
+	}
+	if result.info.managed && result.info.status == "running" {
+		fmt.Fprintf(&b, "new_output_bytes: %d\nunchanged_waits: %d\n", result.observation.NewOutputBytes, result.observation.UnchangedWaits)
+		if result.observation.UnchangedWaits < 2 {
+			fmt.Fprintf(&b, "next_call: {\"action\":\"wait\",\"task\":%q}\n", result.info.name)
+		}
+		if result.observation.UnchangedWaits >= 2 {
+			b.WriteString("diagnostic_hint: Repeated waits captured no new output. This does not prove the process is stuck. Inspect the retained output/state and choose justified waiting, an explicit stop, or report a blocker. Do not blindly repeat waits or relaunch the command.\n")
+		} else if result.reason == "wait_timeout" {
+			b.WriteString("wait_hint: Only this observation wait expired; the process is still running. Continue managing this task, not a new shell launch.\n")
+		}
+	}
+	if result.reason == "reused_running" {
+		b.WriteString("launch: reused existing process; no new command was started\n")
+	}
+	if result.info.status == "timeout" {
+		b.WriteString("timeout_hint: The hard lifetime was reached and this process has exited. Waiting cannot resume it. Inspect the cause and partial side effects before deciding whether a changed retry is justified.\n")
 	}
 	appendProcessOutput(&b, result.output)
 	if result.info.status == "failed" && possibleSandboxRestriction(result.output) {

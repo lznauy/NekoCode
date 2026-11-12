@@ -347,3 +347,27 @@ frames (`phase_changed`, `todos_updated`, `subagent_*`, `context_updated`) and
 
 Both paths are backed by the same runtime projections, so an application that
 mixes them sees identical numbers.
+
+## 任务与后台管理
+
+使用既有 HTTP 认证。任务详情和所有写操作必须显式传入 `?session_id=<父会话 ID>`；列表省略时固定为请求开始时的当前会话。详情、历史、轮次和工具输出分别分页，不把正文放进列表。
+
+| 方法与路径 | 行为与参数 |
+| --- | --- |
+| `GET /tasks` | `all=1` 跨会话；`offset`、`limit`（1–1000）、`query`、`status` |
+| `GET /tasks/{taskID}/history` | `before`、`limit` |
+| `GET /tasks/{taskID}/attempts` | `before`、`limit` |
+| `GET /tasks/{taskID}/output` | `sequence`、字节 `offset` |
+| `GET /tasks/{taskID}/search` | `query`、`after`（消息序号）、`limit`（1–100）；返回 hits、next、has_more |
+| `GET /tasks/{taskID}/export` | 流式纯文本导出所有已提交工具输出；中途失败通过 `X-Export-Error` trailer 标记，首字节前失败返回错误 |
+| `DELETE /tasks/{taskID}` | 删除任务和专属输出；活动/依赖任务拒绝删除；可幂等重试 |
+| `GET /background` | 返回 tasks 与累计 usage |
+| `POST /background/{taskID}/append` | JSON `{"text":"追加内容"}` |
+| `POST /background/{taskID}/cancel` | 取消指定任务 |
+| `POST /background/{taskID}/retry` | 只重新排队失败的结果验收 |
+| `POST /background/stop` | 停止该会话全部协调、任务和排队需求 |
+| `GET /demands` | 持久需求收件箱 |
+| `POST /demands/{demandID}/resume` | 显式恢复未开始的需求 |
+| `POST /demands/{demandID}/discard` | 忽略可丢弃的恢复记录 |
+
+`POST /input` 继续用于提交新需求。其他模式/会话的新选择不会重绑旧 worker；旧会话的排队协调在返回其 Super Agent 模式后处理。`waiting_dependencies` 不占执行槽位；`blocked` 表示上游没有成功，未执行下游。

@@ -361,6 +361,12 @@ func (r *Runtime) recordMetrics(event Event) {
 }
 
 func (r *Runtime) CurrentRun() (RunSnapshot, bool) {
+	r.mu.Lock()
+	id := r.currentRun
+	r.mu.Unlock()
+	if id != "" {
+		return r.LookupRun(id)
+	}
 	return r.runs.Current()
 }
 

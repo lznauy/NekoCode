@@ -20,7 +20,10 @@ export interface SubAgent {
 
 export interface TodoItem {
   content: string
-  status: 'pending' | 'in_progress' | 'completed'
+  id?: string
+  result?: string
+  reason?: string
+  status: 'pending' | 'in_progress' | 'completed' | 'blocked' | 'cancelled'
 }
 
 // 运行时图片引用：从 session 加载后，转为小写字段方便组件使用。
@@ -141,6 +144,8 @@ export interface SystemEvent {
 }
 
 export interface InputAcceptedEvent {
+  queued?: boolean
+  content?: string
   source: { kind: string }
   images?: Array<{ label: string; path: string }>
 }
@@ -159,6 +164,7 @@ export interface StatusEvent {
 }
 
 export interface ConfirmEvent {
+  subAgentID?: string
   id: string
   toolName: string
   args: Record<string, unknown>
@@ -200,6 +206,7 @@ export interface QuestionItem {
 }
 
 export interface QuestionEvent {
+  subAgentID?: string
   id: string
   questions: QuestionItem[]
 }

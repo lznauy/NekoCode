@@ -27,10 +27,12 @@ export const TasksList = memo(function TasksList({ todos }: TasksListProps) {
       </div>
       <ul className="flex flex-col gap-0.5">
         {todos.map((t, i) => (
-          <li key={i} className="flex items-start gap-2 text-[12.5px]">
+          <li key={t.id ?? i} className="flex items-start gap-2 text-[12.5px]">
             <span className="mt-px w-3 leading-none">{statusGlyph(t.status)}</span>
-            <span className={textClass(t.status)}>
-              <span className="truncate">{t.content || '(empty)'}</span>
+            <span className="min-w-0">
+              <span className={`block truncate ${textClass(t.status)}`}>{t.content || '(empty)'}</span>
+              {t.reason && <span className="block text-xs text-text-3">{t.status === 'blocked' ? '受阻' : t.status === 'cancelled' ? '已取消' : '说明'}：{t.reason}</span>}
+              {t.result && <span className="block text-xs text-text-3">{t.result}</span>}
             </span>
           </li>
         ))}
@@ -44,6 +46,8 @@ function statusGlyph(s: TodoItem['status']): string {
     case 'completed':   return '✓'
     case 'in_progress': return '◐'
     case 'pending':     return '○'
+    case 'blocked': return '!'
+    case 'cancelled': return '–'
   }
 }
 
@@ -52,5 +56,7 @@ function textClass(s: TodoItem['status']): string {
     case 'completed':   return 'text-text-3 line-through'
     case 'in_progress': return 'text-primary font-medium'
     case 'pending':     return 'text-text-2'
+    case 'blocked': return 'text-warning'
+    case 'cancelled': return 'text-text-3'
   }
 }

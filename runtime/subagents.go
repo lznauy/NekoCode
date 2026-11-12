@@ -11,27 +11,30 @@ import (
 
 // SubagentSummary is a bounded task projection shared by all UI adapters.
 type SubagentSummary struct {
-	Isolation     string                  `json:"isolation,omitempty"`
-	Recorded      bool                    `json:"recorded"`
-	Title         string                  `json:"title,omitempty"`
-	ID            string                  `json:"id"`
-	SessionID     string                  `json:"session_id"`
-	Profile       string                  `json:"profile"`
-	Skills        []string                `json:"skills,omitempty"`
-	Prompt        string                  `json:"prompt"`
-	Status        string                  `json:"status"`
-	Phase         string                  `json:"phase,omitempty"`
-	Result        string                  `json:"result,omitempty"`
-	Error         string                  `json:"error,omitempty"`
-	RunCount      int                     `json:"run_count"`
-	TranscriptSeq int                     `json:"transcript_seq"`
-	CreatedAt     time.Time               `json:"created_at"`
-	UpdatedAt     time.Time               `json:"updated_at"`
-	LatestAttempt *SubagentAttemptSummary `json:"latest_attempt,omitempty"`
+	QueueReason    string                  `json:"queue_reason,omitempty"`
+	SchedulingNote string                  `json:"scheduling_note,omitempty"`
+	WorkspaceKind  string                  `json:"workspace_kind,omitempty"`
+	Isolation      string                  `json:"isolation,omitempty"`
+	Recorded       bool                    `json:"recorded"`
+	Title          string                  `json:"title,omitempty"`
+	ID             string                  `json:"id"`
+	SessionID      string                  `json:"session_id"`
+	Profile        string                  `json:"profile"`
+	Skills         []string                `json:"skills,omitempty"`
+	Prompt         string                  `json:"prompt"`
+	Status         string                  `json:"status"`
+	Phase          string                  `json:"phase,omitempty"`
+	Result         string                  `json:"result,omitempty"`
+	Error          string                  `json:"error,omitempty"`
+	RunCount       int                     `json:"run_count"`
+	TranscriptSeq  int                     `json:"transcript_seq"`
+	CreatedAt      time.Time               `json:"created_at"`
+	UpdatedAt      time.Time               `json:"updated_at"`
+	LatestAttempt  *SubagentAttemptSummary `json:"latest_attempt,omitempty"`
 }
 
 type SubagentAttemptSummary struct {
-	Summary         protocol.RunSummary `json:"summary,omitzero"`
+	Summary         protocol.RunSummary `json:"summary"`
 	ID              string              `json:"id"`
 	Seq             int                 `json:"seq"`
 	Prompt          string              `json:"prompt"`
@@ -61,6 +64,7 @@ type SubagentAttemptPage struct {
 }
 
 type SubagentFilter struct {
+	AllSessions      bool   `json:"all_sessions,omitempty"`
 	PrioritizeActive bool   `json:"prioritize_active,omitempty"`
 	SessionID        string `json:"session_id,omitempty"`
 	Query            string `json:"query,omitempty"`
@@ -129,6 +133,9 @@ func committedSubagentStatus(status string) bool {
 }
 
 func (r *Runtime) Subagents(filter SubagentFilter) (SubagentPage, error) {
+	if filter.AllSessions {
+		return r.allSubagents(filter)
+	}
 	if filter.Offset < 0 || filter.Limit < 1 || filter.Limit > 1000 {
 		return SubagentPage{}, fmt.Errorf("invalid subagent offset or limit")
 	}
@@ -143,6 +150,9 @@ func (r *Runtime) Subagents(filter SubagentFilter) (SubagentPage, error) {
 	}
 	if filter.SessionID == "" {
 		filter.SessionID = r.CurrentSessionID()
+	}
+	if err := r.background.load(filter.SessionID); err != nil {
+		return SubagentPage{}, err
 	}
 	items, err := callback(filter.SessionID)
 	if err != nil {
@@ -161,6 +171,9 @@ func (r *Runtime) Subagents(filter SubagentFilter) (SubagentPage, error) {
 	latestLegacy := make(map[string]SubAgentView)
 	latestQueued := make(map[string]SubAgentView)
 	for _, live := range r.runs.Subagents(filter.SessionID) {
+		if deleted := r.services.Sessions.SubagentDeleted; deleted != nil && deleted(filter.SessionID, live.ID) {
+			continue
+		}
 		if live.Status == "not_started" {
 			continue
 		}
@@ -224,19 +237,67 @@ func (r *Runtime) Subagents(filter SubagentFilter) (SubagentPage, error) {
 		if items[i].LatestAttempt != nil || items[i].UpdatedAt.After(live.UpdatedAt) {
 			continue
 		}
-		if live.Active || live.Status == "failed" || items[i].Status == "running" || items[i].Status == "interrupted" {
+		if live.Active || live.Status == "failed" || live.Status == "interrupted" || items[i].Status == "running" || items[i].Status == "interrupted" {
 			items[i].Status = live.Status
 			items[i].Phase = live.Phase
 			items[i].UpdatedAt = live.UpdatedAt
 		}
 	}
 	for id, live := range latestQueued {
+		if terminal, ok := latestLegacy[id]; ok && !terminal.Active && !live.UpdatedAt.After(terminal.UpdatedAt) {
+			continue
+		}
 		if actual, ok := latestAttempts[id]; ok && (actual.Active || !live.UpdatedAt.After(actual.UpdatedAt)) {
 			continue
 		}
 		i := ensure(live, false)
 		items[i].Status, items[i].Phase, items[i].UpdatedAt = live.Status, live.Phase, live.UpdatedAt
+		if live.Prompt != "" {
+			items[i].Prompt = live.Prompt
+		}
 	}
+	// An accepted execution may be cancelled before creating a new attempt.
+	// Its terminal admission overrides queued events without rewriting an older
+	// persisted attempt, and remains visible after event history is evicted.
+	limit, foregroundWriter := r.backgroundScheduling()
+	r.background.mu.Lock()
+	for _, entry := range r.background.entries {
+		if entry.SessionID != filter.SessionID {
+			continue
+		}
+		if i, exists := byID[entry.ID]; exists {
+			items[i].QueueReason = r.background.queueReasonLocked(entry, limit, foregroundWriter)
+			items[i].SchedulingNote = entry.SchedulingNote
+			if entry.Isolation != "" {
+				items[i].Isolation = entry.Isolation
+			}
+		}
+		if deleted := r.services.Sessions.SubagentDeleted; deleted != nil && deleted(filter.SessionID, entry.ID) {
+			continue
+		}
+		if entry.SessionID != filter.SessionID || (entry.Status != "interrupted" && entry.Status != "queued" && entry.Status != "waiting_dependencies" && entry.Status != "blocked") || entry.AttemptID != "" || entry.cancel != nil {
+			continue
+		}
+		i, exists := byID[entry.ID]
+		if !exists {
+			i = len(items)
+			byID[entry.ID] = i
+			items = append(items, SubagentSummary{ID: entry.ID, SessionID: entry.SessionID, Profile: entry.Profile, Title: entry.Title, Prompt: entry.Prompt})
+		}
+		items[i].Status, items[i].Phase, items[i].Error = entry.Status, "", entry.Error
+		items[i].QueueReason = r.background.queueReasonLocked(entry, limit, foregroundWriter)
+		items[i].SchedulingNote = entry.SchedulingNote
+		if entry.Isolation != "" {
+			items[i].Isolation = entry.Isolation
+		}
+		if entry.Prompt != "" {
+			items[i].Prompt = entry.Prompt
+		}
+		if entry.Title != "" {
+			items[i].Title = entry.Title
+		}
+	}
+	r.background.mu.Unlock()
 	query := strings.ToLower(strings.TrimSpace(filter.Query))
 	selected := make([]SubagentSummary, 0, len(items))
 	for _, item := range items {

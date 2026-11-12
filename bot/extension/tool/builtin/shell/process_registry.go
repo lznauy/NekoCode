@@ -30,6 +30,7 @@ const (
 // run. A returned managed process therefore survives an interrupted turn and
 // is stopped only explicitly, by a hard timeout, or when the registry closes.
 type taskRegistry struct {
+	launchMu  sync.Mutex // Serialize launch/reuse decisions, never the observation wait.
 	mu        sync.Mutex
 	tasks     map[string]*shellTask
 	reserved  map[string]struct{}
@@ -64,9 +65,82 @@ func (r *taskRegistry) start(ctx context.Context, req startRequest) (processResu
 	if err := ctx.Err(); err != nil {
 		return processResult{}, err
 	}
-	name, err := r.reserveIdentity(req.owner, req.name)
+	t, reused, err := r.startOrReuse(ctx, req)
 	if err != nil {
 		return processResult{}, err
+	}
+	if reused {
+		t.mu.Lock()
+		t.managed = true
+		result := t.resultLocked("reused_running", tailCopy(t.logs, logsReturnBytes), true)
+		t.mu.Unlock()
+		return result, nil
+	}
+	proc := t.proc
+	if err := waitStartup(ctx, t, req.sampleWait); err != nil {
+		r.launchMu.Lock()
+		t.mu.Lock()
+		adopted := t.managed
+		t.mu.Unlock()
+		if adopted {
+			r.launchMu.Unlock()
+			return processResult{}, err
+		}
+		t.cancel()
+		_ = proc.Terminate(2 * time.Second)
+		r.launchMu.Unlock()
+		if waitForDone(t, 3*time.Second) {
+			r.remove(t)
+		} else {
+			t.completeObservation(logsReturnBytes)
+			return processResult{}, fmt.Errorf("%w; process %q could not be confirmed stopped", err, t.name)
+		}
+		return processResult{}, err
+	}
+	if !t.isRunning() {
+		waitTaskDrained(t, 500*time.Millisecond)
+	}
+	observed := t.completeObservation(logsReturnBytes)
+	if !observed.info.managed {
+		r.remove(t)
+	}
+	return observed, nil
+}
+
+// Start decisions are atomic, including requests racing before registration.
+// Explicit names intentionally opt out of anonymous launch coalescing.
+func (r *taskRegistry) startOrReuse(ctx context.Context, req startRequest) (*shellTask, bool, error) {
+	r.launchMu.Lock()
+	defer r.launchMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	if err := r.lifecycle.Err(); err != nil {
+		return nil, false, fmt.Errorf("process registry is closed: %w", err)
+	}
+	launchKey := req.identity()
+	if strings.TrimSpace(req.name) == "" {
+		r.mu.Lock()
+		for _, t := range r.tasks {
+			if t.launchKey != launchKey {
+				continue
+			}
+			t.mu.Lock()
+			running := t.status == taskRunning
+			if running {
+				t.managed = true
+			}
+			t.mu.Unlock()
+			if running {
+				r.mu.Unlock()
+				return t, true, nil
+			}
+		}
+		r.mu.Unlock()
+	}
+	name, err := r.reserveIdentity(req.owner, req.name)
+	if err != nil {
+		return nil, false, err
 	}
 
 	procCtx, cancel := context.WithCancel(r.lifecycle)
@@ -79,12 +153,12 @@ func (r *taskRegistry) start(ctx context.Context, req startRequest) (processResu
 	if err != nil {
 		cancel()
 		r.releaseReservation(req.owner, name)
-		return processResult{}, err
+		return nil, false, err
 	}
 
 	t := &shellTask{
-		name: name, owner: req.owner, cmd: req.command,
-		startedAt: time.Now(), status: taskRunning, proc: proc,
+		name: name, owner: req.owner, cmd: req.command, launchKey: launchKey,
+		startedAt: time.Now(), status: taskRunning, proc: proc, cancel: cancel,
 		done: make(chan struct{}), changed: make(chan struct{}, 1),
 		drained: make(chan struct{}),
 	}
@@ -102,25 +176,7 @@ func (r *taskRegistry) start(ctx context.Context, req startRequest) (processResu
 		go r.enforceHardTimeout(t, req.timeout)
 	}
 
-	if err := waitStartup(ctx, t, req.sampleWait); err != nil {
-		cancel()
-		_ = proc.Terminate(2 * time.Second)
-		if waitForDone(t, 3*time.Second) {
-			r.remove(t)
-		} else {
-			t.completeObservation(logsReturnBytes)
-			return processResult{}, fmt.Errorf("%w; process %q could not be confirmed stopped", err, name)
-		}
-		return processResult{}, err
-	}
-	if !t.isRunning() {
-		waitTaskDrained(t, 500*time.Millisecond)
-	}
-	observed := t.completeObservation(logsReturnBytes)
-	if !observed.info.managed {
-		r.remove(t)
-	}
-	return observed, nil
+	return t, false, nil
 }
 
 func (r *taskRegistry) reserveIdentity(owner, requested string) (string, error) {
@@ -287,8 +343,12 @@ func (r *taskRegistry) watch(ctx context.Context, owner, ref, event string, max 
 	}
 	defer t.endMonitor()
 
-	timer := time.NewTimer(max)
-	defer timer.Stop()
+	var timeout <-chan time.Time
+	if max > 0 {
+		timer := time.NewTimer(max)
+		defer timer.Stop()
+		timeout = timer.C
+	}
 	for {
 		if output, ok := t.takeNewOutput(logsReturnBytes); ok {
 			return output, nil
@@ -303,7 +363,7 @@ func (r *taskRegistry) watch(ctx context.Context, owner, ref, event string, max 
 		select {
 		case <-t.changed:
 		case <-t.done:
-		case <-timer.C:
+		case <-timeout:
 			return t.result("wait_timeout"), nil
 		case <-ctx.Done():
 			return processResult{}, ctx.Err()
@@ -312,12 +372,16 @@ func (r *taskRegistry) watch(ctx context.Context, owner, ref, event string, max 
 }
 
 func waitForEvent(ctx context.Context, done <-chan struct{}, max time.Duration) (string, error) {
-	timer := time.NewTimer(max)
-	defer timer.Stop()
+	var timeout <-chan time.Time
+	if max > 0 {
+		timer := time.NewTimer(max)
+		defer timer.Stop()
+		timeout = timer.C
+	}
 	select {
 	case <-done:
 		return "exit", nil
-	case <-timer.C:
+	case <-timeout:
 		return "wait_timeout", nil
 	case <-ctx.Done():
 		return "", ctx.Err()

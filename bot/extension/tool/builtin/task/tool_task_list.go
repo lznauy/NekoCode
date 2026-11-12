@@ -25,7 +25,7 @@ func (t *TaskListTool) Wire(list taskbridge.TaskLister) { t.list = list }
 func (t *TaskListTool) Name() string { return "task_list" }
 
 func (t *TaskListTool) Description() string {
-	return "List delegated tasks in the current parent session. Use items[].id as task.resume_id; never use latest_attempt.id, which identifies one execution attempt; recorded=true means saved context exists. Returns bounded summaries with profile, status, and latest attempt; does not scan other parent sessions."
+	return "List delegated tasks in the current parent session. Use items[].id as task.resume_id (task_submit.resume_id in Super Agent mode); never use latest_attempt.id, which identifies one execution attempt; recorded=true means saved context exists, including for interrupted tasks. When the user asks to continue the same work, resume that recorded task rather than starting a duplicate; interrupted does not mean unresumable. Returns bounded summaries with profile, status, and latest attempt; does not scan other parent sessions. Results here are previews only; use task_result for complete paginated results, pinned to an exact attempt."
 }
 
 func (t *TaskListTool) Parameters() []core.Parameter {

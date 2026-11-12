@@ -44,7 +44,7 @@ func (m *Model) loadTaskOutput(offset int64) tea.Cmd {
 	out.loading = true
 	out.resume = false
 	out.requestedOffset = offset
-	generation, request, parent, id, key, sequence := s.generation, out.request, s.sessionID, d.id, d.inspectedKey, out.sequence
+	generation, request, parent, id, key, sequence := s.generation, out.request, m.taskParentSession(), d.id, d.inspectedKey, out.sequence
 	return func() tea.Msg {
 		page, err := reader.SubagentToolOutput(parent, id, sequence, offset)
 		return taskOutputMsg{generation, request, id, key, page, err}
@@ -84,7 +84,7 @@ func (m *Model) handleTaskOutputMessage(msg tea.Msg) (bool, tea.Cmd) {
 	out.loaded = true
 	out.page = response.page
 	m.renderTaskInspector()
-	if response.page.Offset < previous {
+	if response.page.Offset < previous || d.inspectorFollow {
 		d.inspector.ScrollToBottom()
 	}
 	return true, nil
@@ -133,6 +133,14 @@ func (m *Model) refreshTaskInspector() tea.Cmd {
 		call, result := taskToolSnapshot(d, *old.call)
 		next.call, next.result = &call, result
 	}
+	if d.process != nil {
+		for _, call := range d.process.calls {
+			if call.entry.key == d.inspectedKey {
+				next = call.entry
+				break
+			}
+		}
+	}
 	for _, entry := range d.entries {
 		if entry.key == d.inspectedKey {
 			next = entry
@@ -140,10 +148,15 @@ func (m *Model) refreshTaskInspector() tea.Cmd {
 		}
 	}
 	if old.result.Content != next.result.Content || old.result.IsError != next.result.IsError || old.result.OutputPath != next.result.OutputPath || old.result.Sequence != next.result.Sequence || old.call.Arguments != next.call.Arguments {
+		follow := d.inspectorFollow && d.inspector.AtBottom()
 		index, line := d.inspector.ViewportAnchor()
 		d.inspectedEntry = &next
 		m.renderTaskInspector()
-		d.inspector.RestoreViewportAnchor(index, line)
+		if follow {
+			d.inspector.ScrollToBottom()
+		} else {
+			d.inspector.RestoreViewportAnchor(index, line)
+		}
 	}
 	if next.result.OutputPath != "" && next.result.Sequence > 0 {
 		if _, ok := m.Runtime.(controlruntime.SubagentOutputReader); ok {

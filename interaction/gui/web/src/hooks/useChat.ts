@@ -77,8 +77,15 @@ export function useChat(): UseChatReturn {
 
   const sidRef = useRef<string | null>(null)
   const userSidRef = useRef<string | null>(null)
+  // Local placeholders have no run identity until input acceptance. An automatic
+  // coordinator may win admission first, so these IDs must survive independently
+  // of the active assistant buffers until replaced or accepted.
+  const optimisticTurnRef = useRef<{ userSid: string; sid: string; awaitsAdmission: boolean; replySettled?: boolean } | null>(null)
   const sendingRef = useRef(false)
   const startupRef = useRef<Promise<void> | null>(null)
+  // RPC ownership survives an automatic review replacing the active reply.
+  const submissionRef = useRef<{ sid: string; pending: boolean } | null>(null)
+  const abortedRef = useRef(false)
   const cancellationRef = useRef<{ terminal: boolean; acknowledged: boolean } | null>(null)
   const finishCancellation = useCallback(() => {
     const cancellation = cancellationRef.current
@@ -86,9 +93,9 @@ export function useChat(): UseChatReturn {
     cancellationRef.current = null
     sendingRef.current = false
     setStopping(false)
-    setBusy(false)
+    // A queued demand may already own the UI before the old Abort RPC returns.
+    if (abortedRef.current) setBusy(false)
   }, [])
-  const abortedRef = useRef(false)
   const textBufferRef = useRef('')
   const responseTextRef = useRef({ sid: '', length: 0 })
   const reasoningBufferRef = useRef('')
@@ -453,10 +460,21 @@ export function useChat(): UseChatReturn {
       if (failure) next.push(failure)
       return next
     })
+    // Until acceptance, this local user turn belongs to the pending RPC, not
+    // to whichever older run just emitted Done. Its assistant placeholder may
+    // now contain that older reply; retain it when replacing the local turn.
+    // Control commands may finish without an InputAccepted event.
+    const optimistic = optimisticTurnRef.current?.awaitsAdmission ? optimisticTurnRef.current : null
+    if (!optimistic) optimisticTurnRef.current = null
+    if (optimistic?.sid === sid) optimistic.replySettled = true
     sidRef.current = null
     userSidRef.current = null
-    sendingRef.current = false
-	settlePendingSubmission(true)
+    const submission = submissionRef.current
+    sendingRef.current = !!submission?.pending && (!!optimistic || submission.sid !== sid)
+    if (!optimistic && (!submission || submission.sid === sid || !submission.pending)) {
+      submissionRef.current = null
+      settlePendingSubmission(true)
+    }
   }, [flushBuffers, settlePendingSubmission])
 
   const onStatus = useCallback((e: { status: string }) => {
@@ -471,7 +489,38 @@ export function useChat(): UseChatReturn {
   }, [finishCancellation])
 
   const onInputAccepted = useCallback((e: InputAcceptedEvent) => {
+    if (e.queued || e.source?.kind === 'task_completion' || e.source?.kind === 'gui_queue') {
+      const replacesLocal = e.source?.kind === 'gui' || e.source?.kind === 'gui_queue' || e.source?.kind === 'task_completion'
+      const optimistic = replacesLocal ? optimisticTurnRef.current : null
+      if (replacesLocal) optimisticTurnRef.current = null
+      // Replace unaccepted local placeholders with the admitted turn. This also
+      // removes them when an automatic review runs before the queued local input.
+      if (optimistic) {
+        setMsgs(prev => prev.filter(message => message.id !== optimistic.userSid && (optimistic.replySettled || message.id !== optimistic.sid)))
+      }
+      const sid = genId()
+      if (e.source?.kind === 'gui' || e.source?.kind === 'gui_queue') {
+        if (submissionRef.current) submissionRef.current.sid = sid
+        const pending = pendingSubmissionRef.current
+        for (const image of e.images ?? []) pending?.acceptedImagePaths.add(image.path)
+      }
+      sidRef.current = sid
+      userSidRef.current = null
+      abortedRef.current = false
+      setBusy(true)
+      textBufferRef.current = ''
+      reasoningBufferRef.current = ''
+      responseTextRef.current = { sid, length: 0 }
+      hasStreamTextRef.current = false
+      streamBreakPendingRef.current = false
+      textDoneRef.current = false
+      reasoningDoneRef.current = false
+      setMsgs(prev => [...prev, ...(e.queued || e.source?.kind === 'gui_queue' ? [{ id: genId(), role: 'user' as const, text: e.content ?? '', streaming: false }] : []), emptyRunMsg(sid)])
+      return
+    }
+
 	if (e.source?.kind !== 'gui') return
+    optimisticTurnRef.current = null
 	const pending = pendingSubmissionRef.current
 	if (!pending) return
 	for (const image of e.images ?? []) pending.acceptedImagePaths.add(image.path)
@@ -554,45 +603,56 @@ export function useChat(): UseChatReturn {
 	nextImageIDRef.current = 0
     const sid = genId()
     sidRef.current = sid
+    const optimisticTurn = { userSid, sid, awaitsAdmission: !t.startsWith('/'), replySettled: false }
+    optimisticTurnRef.current = optimisticTurn
     setMsgs((prev) => [...prev, emptyRunMsg(sid)])
 
+    const submission = { sid, pending: true }
+    submissionRef.current = submission
     const startup = safeSendMessage(t, sendImages)
     startupRef.current = startup
-	void startup.catch((err: unknown) => {
-      // A stopped or replaced submission no longer owns this run or draft.
-      // stop/setMessages already settled its unaccepted attachments.
-      if (sidRef.current !== sid || userSidRef.current !== userSid) return
-
+    void startup.then(() => {
+      submission.pending = false
+      if (submissionRef.current === submission) {
+        submissionRef.current = null
+        sendingRef.current = false
+        // Image acceptance/ownership settles with the admitted turn. RPC
+        // acknowledgment alone does not prove that every attachment was used.
+        if (sidRef.current === null && !optimisticTurnRef.current) settlePendingSubmission(true)
+      }
+    }, (err: unknown) => {
+      if (submissionRef.current !== submission) return
+      submissionRef.current = null
+      const ownsReply = sidRef.current === sid
+      const optimistic = optimisticTurnRef.current
+      const retainsOlderReply = optimisticTurn.replySettled
+      if (optimistic?.sid === sid) optimisticTurnRef.current = null
       const errStr = String(err)
-	  setError(errStr)
-	  if (draftGeneration !== draftGenerationRef.current) {
-		for (const image of draftImages) deleteClipboardImage(image.path)
-		setMsgs((prev) => [
-		  ...prev.filter((message) => message.id !== userSid && message.id !== sid),
-		  { id: genId(), role: 'assistant' as const, text: 'Error: ' + errStr, streaming: false },
-		])
-		setBusy(false)
-		sidRef.current = null
-		userSidRef.current = null
-		sendingRef.current = false
-		pendingSubmissionRef.current = null
-		return
-	  }
-	  setMsgs((prev) => [
-		...prev.filter((message) => message.id !== userSid && message.id !== sid),
-		{ id: genId(), role: 'assistant' as const, text: 'Error: ' + errStr, streaming: false },
-	  ])
-	  setTextState((current) => current === '' ? draftText : current)
-	  setImageAttachments((current) => current.length === 0 ? draftImages : current)
-	  pendingSubmissionRef.current = null
-      setBusy(false)
-      sidRef.current = null
-      userSidRef.current = null
-      sendingRef.current = false
+      setError(errStr)
+      if (draftGeneration !== draftGenerationRef.current) {
+        for (const image of draftImages) deleteClipboardImage(image.path)
+      } else {
+        setTextState((current) => current === '' ? (draftText || t) : current)
+        setImageAttachments((current) => current.length === 0 ? draftImages : current)
+      }
+      pendingSubmissionRef.current = null
+      setMsgs((prev) => [
+        ...prev.filter((message) => message.id !== userSid && (retainsOlderReply || message.id !== sid)),
+        { id: genId(), role: 'assistant' as const, text: 'Error: ' + errStr, streaming: false },
+      ])
+      // Leave an admitted automatic review's buffers and busy state intact.
+      if (ownsReply || sidRef.current === null) {
+        setBusy(false)
+        sidRef.current = null
+        userSidRef.current = null
+        sendingRef.current = false
+      }
     })
-	}, [text, busy, imageAttachments, deleteClipboardImage])
+	}, [text, busy, imageAttachments, deleteClipboardImage, settlePendingSubmission])
 
   const stop = useCallback(() => {
+    submissionRef.current = null
+    optimisticTurnRef.current = null
 	settlePendingSubmission(true)
 	draftGenerationRef.current += 1
     abortedRef.current = true
@@ -602,7 +662,7 @@ export function useChat(): UseChatReturn {
     const startup = startupRef.current
     const cancellation = { terminal: cancellationRef.current?.terminal ?? false, acknowledged: false }
     cancellationRef.current = cancellation
-    const stillCancelling = () => abortedRef.current && cancellationRef.current === cancellation
+    const stillCancelling = () => cancellationRef.current === cancellation
     // StartRun and CancelRun are separate RPCs. Await startup so cancellation
     // cannot overtake it; a failed startup has no terminal event to wait for.
     void (async () => {
@@ -654,6 +714,8 @@ export function useChat(): UseChatReturn {
   }, [])
 
   const setMessages = useCallback((next: Msg[]) => {
+    submissionRef.current = null
+    optimisticTurnRef.current = null
     startupRef.current = null
 	settlePendingSubmission(false)
 	draftGenerationRef.current += 1

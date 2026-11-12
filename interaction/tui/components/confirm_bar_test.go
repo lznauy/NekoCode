@@ -1,6 +1,9 @@
 package components
 
 import (
+	"charm.land/lipgloss/v2"
+	"fmt"
+	"github.com/charmbracelet/x/ansi"
 	"strings"
 	"testing"
 
@@ -466,5 +469,51 @@ func TestSessionOnlyButtonSendsRemember(t *testing.T) {
 	}
 	if cb.View(100, 40) != "" {
 		t.Fatal("card should clear after submitting")
+	}
+}
+
+func TestConfirmCardSeparatesContentAndFitsTerminal(t *testing.T) {
+	for _, size := range [][2]int{{180, 48}, {80, 24}, {40, 40}} {
+		t.Run(fmt.Sprintf("%dx%d", size[0], size[1]), func(t *testing.T) {
+			sty := styles.DefaultStyles()
+			cb := NewConfirmBar(&sty)
+			cb.SetRequest(&controlruntime.ConfirmRequest{ToolName: "shell", Args: map[string]any{"command": `cd /home/lznauy/precode/NekoCode && git status --porcelain=v1 && git diff --stat && git log --oneline -5`}, Kind: controlruntime.ConfirmKindPermission, Approval: &controlruntime.ApprovalContext{Combined: true, Risk: "dynamic shell execution", Scope: controlruntime.ApprovalScopeProject, RememberRules: []protocol.ApprovalRememberRule{{Tool: "shell", Literal: "git status && git diff", Lifetime: "session"}}}}, nil)
+			view := cb.View(size[0], size[1])
+			plain := ansi.Strip(view)
+			if !strings.HasPrefix(plain, "\n") || !strings.HasSuffix(plain, "\n") {
+				t.Fatal("card touches surrounding conversation")
+			}
+			for _, line := range strings.Split(view, "\n") {
+				if lipgloss.Width(line) > size[0] {
+					t.Fatalf("card exceeds terminal width: %d > %d", lipgloss.Width(line), size[0])
+				}
+			}
+			if lipgloss.Height(view) > size[1]-6 {
+				t.Fatalf("card crowds out input: %d rows in %d-row terminal\n%s", lipgloss.Height(view), size[1], plain)
+			}
+			for _, want := range []string{"执行确认", "$ ", "原因:", "本次会话允许", "Esc"} {
+				if !strings.Contains(plain, want) {
+					t.Fatalf("missing %q\n%s", want, plain)
+				}
+			}
+			if size[0] > 110 && lipgloss.Width(view) > 110 {
+				t.Fatal("card stretches across wide terminal")
+			}
+		})
+	}
+}
+
+func TestDestructiveOptionCarriesExplicitDanger(t *testing.T) {
+	sty := styles.DefaultStyles()
+	cb := NewConfirmBar(&sty)
+	cb.SetDestructive("删除", "记录", "删除", nil)
+	opts := cb.options()
+	if len(opts) != 2 || opts[0].Danger || !opts[1].Danger {
+		t.Fatal("danger is not attached to the destructive action")
+	}
+	// Reordering must carry the semantic danger flag with the action.
+	opts[0], opts[1] = opts[1], opts[0]
+	if !opts[0].Danger || opts[1].Danger {
+		t.Fatal("danger depends on position")
 	}
 }

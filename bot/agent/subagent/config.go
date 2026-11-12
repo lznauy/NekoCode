@@ -56,6 +56,8 @@ type OutputEvent struct {
 // profiles or selected skills during a run. References may check the live skill
 // version on inspect, without changing the selected workflow or tool ceiling.
 type RunConfig struct {
+	// PendingUpdates is read only between model turns, never during a tool call.
+	PendingUpdates func(func([]protocol.BackgroundUpdate) error) error
 	// ResumeContext restores a task; persistence remains owned by the assembly layer.
 	ResumeContext *ctxmgr.ManagerSnapshot
 	// References supplies only this task's durable source; Run owns the live tail and actor binding.

@@ -47,6 +47,17 @@ func NewRunStore(limit int) *RunStore {
 	}
 }
 
+// PrepareRun makes an admitted run queryable before attachment preparation and
+// its first event. This does not fabricate an event or accept the input text.
+func (s *RunStore) PrepareRun(id core.RunID, source core.SourceRef) {
+	if id == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.record(id).snapshot.Source = source
+}
+
 func (s *RunStore) Record(ev core.Event) {
 	if ev.RunID == "" {
 		return

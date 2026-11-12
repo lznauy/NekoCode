@@ -7,17 +7,21 @@ import (
 )
 
 type ManagerSnapshot struct {
-	SystemPrompt   string
-	Skills         string
-	Archive        string
-	Memory         string
-	Hints          string
-	Messages       []types.Message
-	Transcript     []types.Message
-	TranscriptBase int
-	TranscriptLazy bool
-	Budget         int
-	Tracker        token.State
+	Todos              []protocol.TodoItem
+	TodoGroup          string
+	TodoPlans          TodoPlans
+	TaskUpdateSequence uint64
+	SystemPrompt       string
+	Skills             string
+	Archive            string
+	Memory             string
+	Hints              string
+	Messages           []types.Message
+	Transcript         []types.Message
+	TranscriptBase     int
+	TranscriptLazy     bool
+	Budget             int
+	Tracker            token.State
 	// PrefixBaseline identifies the last request's cache-relevant head so a
 	// resumed session reports why the first call missed instead of a bare
 	// cold-start.
@@ -39,21 +43,25 @@ func (m *Manager) Snapshot() ManagerSnapshot {
 	copy(msgs, m.state.ctx.Messages)
 	transcript := cloneTranscript(m.state.transcript)
 	return ManagerSnapshot{
-		SystemPrompt:   m.state.ctx.SystemPrompt,
-		Skills:         m.state.ctx.Skills,
-		Archive:        m.state.ctx.Archive,
-		Memory:         m.state.ctx.Memory,
-		Hints:          m.state.ctx.Hints,
-		Messages:       msgs,
-		Transcript:     transcript,
-		TranscriptBase: m.state.transcriptBase,
-		TranscriptLazy: m.state.transcriptLazy,
-		Budget:         m.state.contextWindow,
-		Tracker:        m.state.tracker.Snapshot(),
-		PrefixBaseline: m.state.prefix.Baseline(),
-		PrefixTurn:     m.turnToPersistLocked(),
-		CompactCount:   m.state.compactCount,
-		TrimCount:      m.state.trimCount,
+		Todos:              append([]protocol.TodoItem(nil), m.state.ctx.TodoItems...),
+		TodoGroup:          m.state.ctx.TodoGroup,
+		TodoPlans:          m.state.ctx.TodoPlans.Clone(),
+		TaskUpdateSequence: m.state.taskUpdateSequence,
+		SystemPrompt:       m.state.ctx.SystemPrompt,
+		Skills:             m.state.ctx.Skills,
+		Archive:            m.state.ctx.Archive,
+		Memory:             m.state.ctx.Memory,
+		Hints:              m.state.ctx.Hints,
+		Messages:           msgs,
+		Transcript:         transcript,
+		TranscriptBase:     m.state.transcriptBase,
+		TranscriptLazy:     m.state.transcriptLazy,
+		Budget:             m.state.contextWindow,
+		Tracker:            m.state.tracker.Snapshot(),
+		PrefixBaseline:     m.state.prefix.Baseline(),
+		PrefixTurn:         m.turnToPersistLocked(),
+		CompactCount:       m.state.compactCount,
+		TrimCount:          m.state.trimCount,
 	}
 }
 
@@ -72,16 +80,25 @@ func (m *Manager) turnToPersistLocked() *PrefixTurnStats {
 }
 
 func (m *Manager) Restore(snap ManagerSnapshot) {
+	m.todoWriteMu.Lock()
+	defer m.todoWriteMu.Unlock()
 	m.state.mu.Lock()
 	defer m.state.mu.Unlock()
+	m.state.ctx.TodoItems = append([]protocol.TodoItem(nil), snap.Todos...)
+	m.state.ctx.TodoGroup = snap.TodoGroup
+	m.state.ctx.TodoPlans = snap.TodoPlans.Clone()
 	m.state.ctx.SystemPrompt = snap.SystemPrompt
 	m.state.ctx.Skills = snap.Skills
 	m.state.ctx.Archive = snap.Archive
 	m.state.ctx.Memory = snap.Memory
 	m.state.ctx.Hints = snap.Hints
 	m.state.runtimePolicy = ""
+	m.state.taskUpdateSequence = snap.TaskUpdateSequence
 	m.state.ctx.Messages = make([]types.Message, 0, len(snap.Messages))
 	for _, msg := range snap.Messages {
+		if msg.Role == "user" && msg.TaskUpdateSequence > m.state.taskUpdateSequence {
+			m.state.taskUpdateSequence = msg.TaskUpdateSequence
+		}
 		// A recovered uncommitted transcript tail can contain admission-only
 		// events. Keep them in history, never turn them into empty model messages.
 		if msg.Role == "user" && msg.Source == types.MessageSourceRuntimeEvent && msg.Content == "" && msg.SkillDelivery.Schema != 0 {

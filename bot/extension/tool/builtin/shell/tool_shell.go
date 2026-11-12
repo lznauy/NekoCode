@@ -74,7 +74,7 @@ func (t *ShellTool) ExecutionMode(map[string]any) core.ExecutionMode {
 func (t *ShellTool) Description() string {
 	return "Execute a shell command in a permission-managed sandbox. " +
 		"Commands that finish quickly return their output directly; commands still running after a short runtime-controlled observation return a task name and continue under process management. " +
-		"Use the process tool only when you need to wait for, watch, list, or stop such a task. " +
+		"Use the process tool to wait, watch, list or stop that task; a wait timeout does not mean the command failed. Anonymous identical live launches in the same execution environment reuse the existing process, without starting another. Use distinct explicit names for intentional parallel copies. " +
 		"A non-zero exit is reported as status: failed with exit_code; judge verification by that status, not by trailing success text. Pipelines use normal shell semantics, so preserve upstream failures with pipefail or separate commands when they matter. " +
 		"Network, extra writable roots, and host execution require the corresponding minimal permission request. " +
 		"If a command fails because of a likely sandbox restriction, inspect the error and retry shell with the minimal required outbound_domains, network, writable_roots, or sandbox_mode request so the runtime can obtain approval; do not stop at reporting the restriction. Check partial side effects before retrying, respect explicit denials and configured domain restrictions, and do not assume every permission or network error requires host execution. " +
@@ -180,6 +180,9 @@ func (t *ShellTool) run(ctx context.Context, args map[string]any, grant core.Per
 		}
 		return core.ToolOutput{}, fmt.Errorf("failed to start shell command: %w", err)
 	}
+	if initial.reason == "reused_running" {
+		return processToolOutput(initial), nil
+	}
 	info := initial.info
 	if info.managed {
 		return core.ToolOutput{Text: formatManagedShellRun(info.name, initial.output), Process: initial.observation}, nil
@@ -236,6 +239,7 @@ func optionalDurationArg(args map[string]any, key string) (time.Duration, error)
 func formatManagedShellRun(task, output string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "task: %s\n", task)
+	fmt.Fprintf(&b, "next_call: {\"action\":\"wait\",\"task\":%q}\n", task)
 	appendProcessOutput(&b, output)
 	return b.String()
 }

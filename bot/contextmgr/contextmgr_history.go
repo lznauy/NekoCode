@@ -27,6 +27,18 @@ func (m *Manager) Add(role, content string, source ...string) {
 	m.addMessageLocked(types.Message{Role: role, Content: content, Source: s})
 }
 
+// AddTaskUpdate atomically records user text and its task-local receipt.
+// Receipts survive compaction and restore; duplicate deliveries add no message.
+func (m *Manager) AddTaskUpdate(sequence uint64, text string) {
+	m.state.mu.Lock()
+	defer m.state.mu.Unlock()
+	if sequence == 0 || sequence <= m.state.taskUpdateSequence {
+		return
+	}
+	m.addMessageLocked(types.Message{Role: "user", Content: text, TaskUpdateSequence: sequence})
+	m.state.taskUpdateSequence = sequence
+}
+
 func (m *Manager) addMessageLocked(message types.Message) {
 	m.state.ctx.Messages = append(m.state.ctx.Messages, message)
 	m.state.transcript = append(m.state.transcript, message)
@@ -230,6 +242,8 @@ func capTranscriptContent(content string) string {
 
 // Reset clears both active history and its compaction archive.
 func (m *Manager) Reset() {
+	m.todoWriteMu.Lock()
+	defer m.todoWriteMu.Unlock()
 	m.state.mu.Lock()
 	defer m.state.mu.Unlock()
 	m.clearLocked()
@@ -244,6 +258,7 @@ func (m *Manager) Reset() {
 	m.resetRuntimeContextLocked()
 	m.state.compactCount = 0
 	m.state.trimCount = 0
+	m.state.taskUpdateSequence = 0
 	m.state.revision++
 }
 
@@ -279,4 +294,6 @@ func (m *Manager) RemoveMessages(startIdx, endIdx int) {
 func (m *Manager) clearLocked() {
 	m.state.ctx.Messages = make([]types.Message, 0)
 	m.state.ctx.TodoItems = nil
+	m.state.ctx.TodoGroup = ""
+	m.state.ctx.TodoPlans = nil
 }

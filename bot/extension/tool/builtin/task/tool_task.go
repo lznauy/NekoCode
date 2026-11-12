@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"nekocode/mode"
 	"nekocode/protocol"
 	"strings"
 	"unicode/utf8"
@@ -26,7 +27,7 @@ func (t *TaskTool) Wire(run taskbridge.TaskRunner) {
 
 func (t *TaskTool) Name() string { return "task" }
 func (t *TaskTool) Description() string {
-	return "Delegate independent, multi-step work to an isolated general-purpose sub-agent. Give the task a short title; the prompt is detailed instructions, not its display name. Choose a capability profile, then compose task-scoped skills: coder may modify the workspace; explore is strictly read-only. Custom plugin profiles are also accepted. Skills define workflow only and cannot expand the profile's tools. Include the exact goal, scope, relevant paths, constraints, and expected evidence. Use direct tools for simple or tightly coupled work, and verify returned claims before relying on them. Sub-agents cannot delegate further tasks: when parallel fan-out is needed, invoke multiple task tools directly from the parent agent instead of asking one sub-agent to dispatch child tasks."
+	return "Delegate independent, multi-step work to an isolated general-purpose sub-agent. Give the task a short title; the prompt is detailed instructions, not its display name. Choose a capability profile, then compose task-scoped skills: coder may modify the workspace; explore is strictly read-only. Custom plugin profiles are also accepted. Skills define workflow only and cannot expand the profile's tools. Include the exact goal, scope, relevant paths, constraints, and expected evidence. Follow the active work mode when choosing delegation or direct execution, and verify returned claims before relying on them. Sub-agents cannot delegate further tasks: when parallel fan-out is needed, invoke multiple task tools directly from the parent agent instead of asking one sub-agent to dispatch child tasks."
 }
 
 func (t *TaskTool) Parameters() []core.Parameter {
@@ -44,7 +45,10 @@ func (t *TaskTool) Parameters() []core.Parameter {
 	}
 }
 
-func (t *TaskTool) Execute(ctx context.Context, args map[string]any) (output core.ToolOutput, runErr error) {
+func (t *TaskTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
+	return t.execute(ctx, args, false, nil)
+}
+func (t *TaskTool) execute(ctx context.Context, args map[string]any, readOnly bool, inputRefs []string) (output core.ToolOutput, runErr error) {
 	var callback taskbridge.TaskCallbackFn
 	switch cb := args["_sub_callback"].(type) {
 	case taskbridge.TaskCallback:
@@ -103,6 +107,10 @@ func (t *TaskTool) Execute(ctx context.Context, args map[string]any) (output cor
 	if err != nil {
 		return core.ToolOutput{}, err
 	}
+	requiredTools, err := stringSliceArg(args, "required_tools")
+	if err != nil {
+		return core.ToolOutput{}, err
+	}
 	resumeID := ""
 	if raw, exists := args["resume_id"]; exists {
 		var ok bool
@@ -123,7 +131,8 @@ func (t *TaskTool) Execute(ctx context.Context, args map[string]any) (output cor
 	isolation := toolutil.OptStringArg(args, "isolation", "")
 	if raw, ok := args["isolation"]; ok {
 		v, valid := raw.(string)
-		if !valid || (v != "shared" && v != "worktree") {
+		snapshot, super := mode.FromContext(ctx)
+		if !valid || (v != "shared" && v != "worktree" && !(v == "snapshot" && super && snapshot.ID == mode.SuperAgent)) {
 			return core.ToolOutput{}, fmt.Errorf("isolation must be shared or worktree")
 		}
 	}
@@ -138,7 +147,14 @@ func (t *TaskTool) Execute(ctx context.Context, args map[string]any) (output cor
 		delete(args, "_sub_callback")
 	}
 
-	result, err := t.run(subCtx, taskbridge.TaskSpec{
+	after, err := stringSliceArg(args, "after")
+	if err != nil {
+		return core.ToolOutput{}, err
+	}
+	if len(after) > 8 {
+		return core.ToolOutput{}, fmt.Errorf("at most 8 dependencies")
+	}
+	result, err := t.run(subCtx, taskbridge.TaskSpec{RequiredTools: requiredTools, After: after, InputRefs: inputRefs, ReadOnly: readOnly,
 		Isolation: isolation, Title: title, Prompt: prompt, Profile: profile, Skills: skills, ResumeID: resumeID,
 	})
 	if result != nil {
@@ -156,6 +172,8 @@ func (t *TaskTool) Execute(ctx context.Context, args map[string]any) (output cor
 		output.Text = "[Subagent ID: " + result.ID + "]\n" + output.Text
 	}
 	switch result.Status {
+	case taskbridge.TaskStatusAccepted:
+		return output, nil
 	case taskbridge.TaskStatusCompleted:
 		if err != nil {
 			return output, fmt.Errorf("subagent reported completion with an error: %w", err)

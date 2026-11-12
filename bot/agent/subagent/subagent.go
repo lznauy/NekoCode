@@ -297,6 +297,19 @@ func (r *engineRun) stepOnce() bool {
 		return true
 	}
 
+	if r.cfg.PendingUpdates != nil && !r.finalizing {
+		err := r.cfg.PendingUpdates(func(updates []protocol.BackgroundUpdate) error {
+			for _, update := range updates {
+				r.ctxMgr.AddTaskUpdate(update.Sequence, update.Text)
+			}
+			return r.checkpoint("running", "")
+		})
+		if err != nil {
+			r.err = fmt.Errorf("apply task updates: %w", err)
+			return true
+		}
+	}
+
 	profile := r.cfg.Profile
 	allowedTools := profile.Tools
 	if r.finalizing {
@@ -384,6 +397,9 @@ func submittedResult(calls []core.ToolCallItem) (handoff Handoff, submitted bool
 		}
 		if parseErr == nil {
 			handoff.Verification, parseErr = requiredResultString(call.Args, "verification")
+		}
+		if parseErr == nil {
+			handoff.VerificationChecks, parseErr = optionalVerificationChecks(call.Args)
 		}
 		if parseErr == nil {
 			handoff.Unfinished, parseErr = requiredResultStrings(call.Args, "unfinished")
@@ -509,13 +525,14 @@ type Result struct {
 }
 
 type Handoff struct {
-	Summary      string
-	Evidence     []string
-	EvidenceIDs  []string
-	Files        []string
-	Verification string
-	Unfinished   []string
-	Risks        []string
+	VerificationChecks []VerificationCheck
+	Summary            string
+	Evidence           []string
+	EvidenceIDs        []string
+	Files              []string
+	Verification       string
+	Unfinished         []string
+	Risks              []string
 }
 
 type runMeta struct {
@@ -549,6 +566,10 @@ func buildResult(rawOutput string, meta runMeta) *Result {
 func buildHandoffResult(handoff Handoff, meta runMeta) *Result {
 	result := newResult(StatusCompleted, formatHandoff(handoff), meta)
 	copy := handoff
+	copy.VerificationChecks = append([]VerificationCheck(nil), handoff.VerificationChecks...)
+	for i := range copy.VerificationChecks {
+		copy.VerificationChecks[i].Limitations = append([]string(nil), handoff.VerificationChecks[i].Limitations...)
+	}
 	copy.Evidence = append([]string(nil), handoff.Evidence...)
 	copy.EvidenceIDs = append([]string(nil), handoff.EvidenceIDs...)
 	copy.Files = append([]string(nil), handoff.Files...)
@@ -561,6 +582,7 @@ func buildHandoffResult(handoff Handoff, meta runMeta) *Result {
 func formatHandoff(handoff Handoff) string {
 	var out strings.Builder
 	out.WriteString(handoff.Summary)
+	writeVerificationChecks(&out, handoff.VerificationChecks)
 	writeHandoffList(&out, "Evidence", handoff.Evidence)
 	writeHandoffList(&out, "Execution evidence IDs", handoff.EvidenceIDs)
 	writeHandoffList(&out, "Files", handoff.Files)

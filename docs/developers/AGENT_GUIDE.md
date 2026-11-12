@@ -17,6 +17,8 @@
 
 Agent 的 `tools` 是执行范围上限。Skill 是工作流说明，不能扩大这个上限，也不会绕过审批、沙箱或写前读要求。
 
+Super Agent 只派发宿主解析的专用 `executor`，不会调用此处的 explore/coder 或自定义 Profile。task_submit 不接受 profile 参数，可用 read_only=true 对同一执行者收窄只读工具范围。`executor` 用于通用执行和配置好的媒体、MCP 能力。它仅允许协调者委派，不是插件可继承的 `base`；不默认开启 FULL。其工具范围在派发时捕获，恢复时只能收窄。Standard 不能通过 `task(profile="executor")` 或恢复任务 ID 使用它。详见 [模式原理](INTERACTION_MODES.md#通用执行者-executor)。
+
 ## 二、创建只读审查员
 
 ### 1. 准备插件目录
@@ -134,9 +136,9 @@ TUI 中用 `/tasks` 或 `Ctrl+G` 查看当前父会话的子任务。达到步�
 
 ### 独立工作副本
 
-给 Profile 加 `isolation: worktree`，或委托时使用 `task(profile="coder", isolation="worktree", prompt="…")`。未设置时沿用共享工作区。`agent_profiles` 展示 Profile 的配置；`task_list` 的已保存任务展示实际 isolation。
+给 Profile 加 `isolation: worktree`，或委托时使用 `task(profile="coder", isolation="worktree", prompt="…")`。Standard 模式未设置时沿用共享工作区。Super 模式的新 general executor 在未指定 isolation 时，会对干净且已有提交的 Git 工作区自动使用 worktree；普通未提交改动会自动使用私有快照，显式 isolation=snapshot 也可选择快照；Git 状态不可用、子模块、未解决冲突、skip-worktree/assume-unchanged 索引标记或 required_tools 包含 MCP 时保留 shared。当前 cwd 未包含在提交树中时也保留 shared。带 after/inputs 的新任务必须显式指定 isolation，避免将纯报告交接误认为代码交接；验收上游副本代码应 resume_id 原任务。task_result 同步返回来源 isolation。启动前再次检查工作区，状态变化则明确失败，避免审查旧 HEAD。read_tools_only 和恢复任务不自动切换隔离方式。后台调度读取 max_concurrent_subagents（默认 8）；同一共享目录的写任务仍串行。BackgroundTasks 与 task_list 提供 queue_reason 和 scheduling_note，TUI 显示对应等待原因。`agent_profiles` 展示 Profile 的配置；`task_list` 的已保存任务展示实际 isolation。
 
-新副本从当前 Git HEAD 创建，不带主目录未提交、暂存或未跟踪的内容。项目必须已有 Git 提交；父级工作目录在 HEAD 中也必须存在。副本位于 `~/.nekocode/worktrees/<父会话>/<任务 ID>/tree`，保留父级相对仓库根的工作目录位置。每次执行独立创建 Shell、进程管理、LSP 和索引实例，文件缓存及内容快照独立，不能把子任务写入父会话的 rewind 记录。审批模式仍实时继承父级，`$WORKSPACE` 权限锚点指向子目录。
+显式 worktree 副本从当前 Git HEAD 创建，不带主目录未提交、暂存或未跟踪的内容。Super 的 snapshot 副本使用私有索引捕获当前文件，包含暂存、未暂存及非忽略未跟踪内容，保留原 index 的 staged/unstaged 与 intent-to-add 语义；原分支、文件和 index 不变。私有 refs/nekocode/snapshots/<session>/<task> 固定快照基线，防止 GC 清理；Info.Base 使用该基线，SourceHead 保留原提交，因此 diff/apply 只包含后续 worker 增量。快照时两次扫描工作树并复核源索引与 HEAD，检测到变化则明确失败。项目必须已有 Git 提交；父级工作目录在 HEAD 中也必须存在。副本位于 `~/.nekocode/worktrees/<父会话>/<任务 ID>/tree`，保留父级相对仓库根的工作目录位置。每次执行独立创建 Shell、进程管理、LSP 和索引实例，文件缓存及内容快照独立，不能把子任务写入父会话的 rewind 记录。审批模式仍实时继承父级，`$WORKSPACE` 权限锚点指向子目录。
 
 首版支持内置工具。会捕获父级运行状态的扩展工具（包括 capability/MCP）不能直接复用，Profile 含这类工具时明确报错；可通过预加载的 `skills` 使用工作流说明。Git 管理操作禁用 hooks、文件过滤器、外部 diff、自动取回对象和远程协议；Git LFS 等过滤器生成的文件不会自动物化，子模块也不自动初始化。
 
@@ -166,7 +168,7 @@ skills: [change-review]
 
 默认技能由宿主预先提供给子 Agent，不要求给它额外的 `skill` 工具。技能中写了“运行测试”也不能让只读 Agent 获得 Shell。
 
-要使用 MCP，须使用宿主已注册的 `capability` 工具，并同时列出精确目标，如 `mcp__documents__lookup`。`base: explore` 不包含这些能力，不能在该基线上直接增加。自定义 MCP Profile 可不声明 base，再显式填写需要的能力；目标在调用时检查可用性，不支持通配授权。
+要使用 MCP，须使用宿主已注册的 `capability` 工具，并同时列出精确目标，如 `mcp__documents__lookup`。`base: explore` 不包含这些能力，不能在该基线上直接增加。自定义 MCP Profile 可不声明 base，再显式填写需要的能力；目标在调用时检查可用性，不支持通配授权。Super Agent 的后台执行会捕获这些精确目标和原 MCP 连接，服务替换后旧任务不能自动调用新连接。worktree 仍不支持 MCP 绑定。
 
 ## 五、更新与排查
 

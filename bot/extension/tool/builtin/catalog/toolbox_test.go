@@ -7,6 +7,7 @@ import (
 	"nekocode/bot/extension/tool/runtime/runner"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -208,5 +209,30 @@ func TestNavigationRemainsLazyAndIndexExecutesInPlanMode(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "forbidden.go")); !os.IsNotExist(err) {
 		t.Fatal("plan wrote a source file")
+	}
+}
+
+func TestExecutorCapabilitiesRequireTrustedRegistration(t *testing.T) {
+	box := NewToolboxWithConfig(ToolboxConfig{ImageGenModels: []config.ImageGenConfig{{Name: "image"}}, ImageUnderstandModels: []config.ImageUnderstandConfig{{Name: "vision"}}})
+	defer box.Close()
+	allowed := box.Registry.DelegatableNames()
+	for _, name := range []string{"shell", "process", "read", "edit", "write", "web_search", "image_gen", "image_understand"} {
+		if !slices.Contains(allowed, name) {
+			t.Fatalf("missing executor capability %q in %v", name, allowed)
+		}
+	}
+	for _, name := range []string{"task", "task_submit", "task_cancel", "task_list", "question", "todo_write"} {
+		if slices.Contains(allowed, name) {
+			t.Fatalf("executor inherited control tool %q", name)
+		}
+	}
+	// A replacement needs its own explicit declaration.
+	old, err := box.Registry.Get("read")
+	if err != nil {
+		t.Fatal(err)
+	}
+	box.Registry.Register(old)
+	if slices.Contains(box.Registry.DelegatableNames(), "read") {
+		t.Fatal("replacement retained delegation capability")
 	}
 }

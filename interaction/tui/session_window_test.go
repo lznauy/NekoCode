@@ -484,3 +484,100 @@ func TestTransientAnswerAtStartOfPageKeepsPersistedInput(t *testing.T) {
 		t.Fatalf("page-start input lost its transient answer: %+v", history)
 	}
 }
+
+// Coordinator notifications occupy a raw transcript sequence but are hidden
+// from visible session history. This matches the standard runtime projection.
+type coordinatorHistoryRuntime struct {
+	completedTurnWindowRuntime
+	rawTotal int
+}
+
+func (b *coordinatorHistoryRuntime) SessionHistoryWindow(before, limit int) (controlruntime.SessionHistoryWindow, error) {
+	return controlruntime.SessionHistoryWindow{Messages: b.history, Before: 1, End: b.rawTotal, Total: b.rawTotal}, nil
+}
+
+func TestCoordinatorCompletionReconcilesHiddenInputWithoutDuplicate(t *testing.T) {
+	for _, persisted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("persisted=%v", persisted), func(t *testing.T) {
+			b := &coordinatorHistoryRuntime{completedTurnWindowRuntime: completedTurnWindowRuntime{history: []controlruntime.DisplayMessage{
+				{Role: "user", Content: "check background work", Sequence: 1},
+				{Role: "assistant", Content: "previous response", Sequence: 2},
+			}}, rawTotal: 2}
+			m, err := NewModel(b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
+			m.applySessionLoaded(sessionLoadResult(t, m.loadSessionMessages()))
+			m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunStarted})
+			m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventInputAccepted, Payload: controlruntime.MessagePayload{Content: "后台任务已返回结果，正在验收。", Source: controlruntime.SourceRef{Kind: "task_completion"}}})
+			const reply = "前端回归检查已返回。核心结论：验收结果仅显示一次。"
+			m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventAssistantDelta, Payload: controlruntime.DeltaPayload{Delta: reply}})
+			b.rawTotal = 3 // the hidden runtime notification
+			if persisted {
+				b.history = append(b.history, controlruntime.DisplayMessage{Role: "assistant", Content: reply, Sequence: 4})
+				b.rawTotal = 4
+			}
+			cmd := m.handleDone(doneMsg{content: reply, metrics: controlruntime.MetricsSnapshot{TurnInput: 185200, TurnOutput: 366}})
+			m.applySessionLoaded(sessionLoadResult(t, cmd))
+			assertOnce := func() {
+				t.Helper()
+				var text strings.Builder
+				for _, item := range m.Messages.Items() {
+					text.WriteString(ansi.Strip(item.Render(100)))
+				}
+				if got := strings.Count(text.String(), reply); got != 1 {
+					t.Fatalf("coordinator reply rendered %d times: %s", got, text.String())
+				}
+				if got := strings.Count(text.String(), "185.6k tok"); got != 1 {
+					t.Fatalf("coordinator usage footer rendered %d times: %s", got, text.String())
+				}
+			}
+			assertOnce()
+			if !persisted {
+				b.history = append(b.history, controlruntime.DisplayMessage{Role: "assistant", Content: reply, Sequence: 4})
+				b.rawTotal = 4
+			}
+			m.applySessionLoaded(sessionLoadResult(t, m.loadSessionWindow(0, 0)))
+			assertOnce()
+			if len(m.transientTurns) != 0 {
+				t.Fatal("committed coordinator reply remained in transient history")
+			}
+		})
+	}
+}
+
+func TestRepeatedCoordinatorRepliesRemainSeparateTurns(t *testing.T) {
+	const reply = "Still reviewing background work."
+	b := &coordinatorHistoryRuntime{completedTurnWindowRuntime: completedTurnWindowRuntime{history: []controlruntime.DisplayMessage{
+		{Role: "user", Content: "review", Sequence: 1}, {Role: "assistant", Content: reply, Sequence: 2},
+	}}, rawTotal: 2}
+	m, err := NewModel(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
+	m.applySessionLoaded(sessionLoadResult(t, m.loadSessionMessages()))
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunStarted})
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventInputAccepted, Payload: controlruntime.MessagePayload{Content: "后台任务已返回结果，正在验收。", Source: controlruntime.SourceRef{Kind: "task_completion"}}})
+	b.rawTotal = 3
+	cmd := m.handleDone(doneMsg{content: reply, metrics: controlruntime.MetricsSnapshot{TurnInput: 1000, TurnOutput: 12}})
+	m.applySessionLoaded(sessionLoadResult(t, cmd))
+	var text strings.Builder
+	for _, item := range m.Messages.Items() {
+		text.WriteString(ansi.Strip(item.Render(100)))
+	}
+	if got := strings.Count(text.String(), reply); got != 2 {
+		t.Fatalf("separate identical replies collapsed: count=%d %s", got, text.String())
+	}
+	b.history = append(b.history, controlruntime.DisplayMessage{Role: "assistant", Content: reply, Sequence: 4})
+	b.rawTotal = 4
+	m.applySessionLoaded(sessionLoadResult(t, m.loadSessionWindow(0, 0)))
+	text.Reset()
+	for _, item := range m.Messages.Items() {
+		text.WriteString(ansi.Strip(item.Render(100)))
+	}
+	if got := strings.Count(text.String(), reply); got != 2 || len(m.transientTurns) != 0 {
+		t.Fatalf("separate committed turns were duplicated or lost: count=%d transient=%d %s", got, len(m.transientTurns), text.String())
+	}
+}

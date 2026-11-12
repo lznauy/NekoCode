@@ -14,13 +14,17 @@ type Strategy string
 type ToolPolicy string
 
 const (
-	Standard      ID         = "standard"
-	Plan          ID         = "plan"
-	General       Role       = "general"
-	Planner       Role       = "planner"
-	Direct        Strategy   = "direct"
-	AllTools      ToolPolicy = "all"
-	ReadOnlyTools ToolPolicy = "read_only"
+	Standard          ID         = "standard"
+	Plan              ID         = "plan"
+	SuperAgent        ID         = "super-agent"
+	Coordinator       Role       = "coordinator"
+	Delegated         Strategy   = "delegated"
+	CoordinationTools ToolPolicy = "coordination"
+	General           Role       = "general"
+	Planner           Role       = "planner"
+	Direct            Strategy   = "direct"
+	AllTools          ToolPolicy = "all"
+	ReadOnlyTools     ToolPolicy = "read_only"
 )
 
 // Snapshot is a value captured for one run. It never follows later selections.
@@ -76,9 +80,13 @@ func (r *Registry) Resolve(id ID) (Definition, error) {
 //go:embed plan.md
 var planPrompt string
 
+//go:embed super_agent.md
+var superAgentPrompt string
+
 var builtin = mustRegistry(
 	Definition{Snapshot: Snapshot{ID: Standard, Version: 1, Role: General, Strategy: Direct, ToolPolicy: AllTools}, Label: "Standard", Description: "Analyze and execute tasks under the current permissions"},
 	Definition{Snapshot: Snapshot{ID: Plan, Version: 1, Role: Planner, Strategy: Direct, ToolPolicy: ReadOnlyTools}, Label: "Plan", Description: "Read-only exploration and planning; no shell, changes or delegation", Prompt: strings.TrimSpace(planPrompt)},
+	Definition{Snapshot: Snapshot{ID: SuperAgent, Version: 1, Role: Coordinator, Strategy: Delegated, ToolPolicy: CoordinationTools}, Label: "Super", Description: "Coordinate tasks; delegate all execution to subagents", Prompt: strings.TrimSpace(superAgentPrompt)},
 )
 
 func mustRegistry(definitions ...Definition) *Registry {

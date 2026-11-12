@@ -44,15 +44,14 @@ func (m *Manager) PrepareRequest(ctx context.Context, request ModelRequest) ([]t
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	for attempt := 0; attempt < 2; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		messages, shape := m.projectRequest(request, false)
-		m.state.mu.RLock()
-		budget, err := estimateRequestBudget(messages, request.Tools, m.state.contextWindow, request.OutputTokens, m.state.reasoning, m.state.vision, m.state.tracker.PromptEstimate())
-		autoCompact := attempt == 0 && m.state.compressor != nil && m.state.compressor.shouldAutoCompact(m.state.contextWindow, m.estimatedTokens())
-		m.state.mu.RUnlock()
+		messages, shape, budget, autoCompact, err := m.budgetedProjection(request)
 		if err != nil {
 			return nil, err
 		}
@@ -61,6 +60,15 @@ func (m *Manager) PrepareRequest(ctx context.Context, request ModelRequest) ([]t
 				return nil, fmt.Errorf("%w; %s", budget, core.DeferredOutput)
 			}
 		}
+		// A deterministic artifact checkpoint uses the same pressure boundary as
+		// compaction. Never invalidate a warm prefix merely to shorten a request.
+		if attempt == 0 && (autoCompact || budget.Total() > budget.Window) && budget.Tools+budget.Output+budget.Safety <= budget.Window && m.checkpointWorkingSet() {
+			messages, shape, budget, autoCompact, err = m.budgetedProjection(request)
+			if err != nil {
+				return nil, err
+			}
+		}
+
 		// Automatic threshold and final request admission share one attempt.
 		// The accepted request is always rebuilt after a history replacement.
 		if attempt == 0 && (autoCompact || budget.Total() > budget.Window) && budget.Tools+budget.Output+budget.Safety <= budget.Window {
@@ -87,6 +95,15 @@ func (m *Manager) PrepareRequest(ctx context.Context, request ModelRequest) ([]t
 		return messages, nil
 	}
 	panic("unreachable request preparation state")
+}
+
+func (m *Manager) budgetedProjection(request ModelRequest) ([]types.Message, prefixShape, *RequestBudgetError, bool, error) {
+	messages, shape := m.projectRequest(request, false)
+	m.state.mu.RLock()
+	defer m.state.mu.RUnlock()
+	budget, err := estimateRequestBudget(messages, request.Tools, m.state.contextWindow, request.OutputTokens, m.state.reasoning, m.state.vision, m.state.tracker.PromptEstimate())
+	autoCompact := m.state.compressor != nil && m.state.compressor.shouldAutoCompact(m.state.contextWindow, m.estimatedTokens())
+	return messages, shape, budget, autoCompact, err
 }
 
 func estimateRequestBudget(messages []types.Message, tools []types.ToolDef, window, output int, reasoning types.ReasoningSettings, vision bool, calibrated int) (*RequestBudgetError, error) {

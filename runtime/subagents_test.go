@@ -36,6 +36,36 @@ func TestNewerPersistedAttemptWinsOverOldRuntimeTerminal(t *testing.T) {
 	}
 }
 
+// A live row that never reached a terminal state must not pin the list to a
+// stale running status once the persisted task reports its own terminal one.
+func TestLiveUnsettledRowYieldsToNewerPersistedTerminal(t *testing.T) {
+	for _, persisted := range []string{"completed", "interrupted"} {
+		t.Run(persisted, func(t *testing.T) {
+			bot := &testBot{}
+			services := testBotServices(bot)
+			now := time.Now()
+			services.Sessions.Subagents = func(string) ([]SubagentSummary, error) {
+				return []SubagentSummary{{ID: "saved", Status: persisted, UpdatedAt: now.Add(time.Hour)}}, nil
+			}
+			rt := New(bot, services)
+			defer rt.Close()
+			bot.run = func(_ string, host RunHost) (string, error) {
+				host.Step(protocol.StepEvent{Action: protocol.StepActionSubAgentStart, SubAgentID: "saved"})
+				return "done", nil
+			}
+			id, err := rt.StartRun(context.Background(), Input{Text: "work"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitForRun(t, rt, id)
+			page, err := rt.Subagents(SubagentFilter{Limit: 10})
+			if err != nil || len(page.Items) != 1 || page.Items[0].Status != persisted {
+				t.Fatalf("stale running row masked persisted %s: %+v err=%v", persisted, page, err)
+			}
+		})
+	}
+}
+
 func TestAttemptIdentityArbitratesInsteadOfTimestamps(t *testing.T) {
 	bot := &testBot{}
 	services := testBotServices(bot)

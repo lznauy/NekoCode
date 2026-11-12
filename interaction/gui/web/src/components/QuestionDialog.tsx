@@ -1,19 +1,22 @@
+import { PendingPrompts } from './PendingPrompts'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { safeReplyQuestion } from '../lib/wails'
 import type { QuestionEvent } from '../types/events'
 
 export interface QuestionEntry extends QuestionEvent {}
 
-function QuestionDialog(props: { entry: QuestionEntry; onDone: () => void }) {
+function QuestionDialog(props: { entry: QuestionEntry; onDone: () => void; pendingCount?: number; pendingPreview?: string[] }) {
   return <QuestionDialogRequest key={props.entry.id} {...props} />
 }
 
 function QuestionDialogRequest({
   entry,
   onDone,
+  pendingCount = 0,
+  pendingPreview = [],
 }: {
   entry: QuestionEntry
-  onDone: () => void
+  onDone: () => void; pendingCount?: number; pendingPreview?: string[]
 }) {
   const initial = useMemo(
     () => entry.questions.map((q) => (q.options?.[0]?.label ? [q.options[0].label] : [])),
@@ -70,6 +73,8 @@ function QuestionDialogRequest({
         className="flex max-h-[calc(100dvh-32px)] w-full max-w-2xl flex-col overflow-hidden card-radius border border-border/70 bg-surface-2 surface-shadow"
       >
         <header className="shrink-0 border-b border-border/45 px-4 py-3">
+          <PendingPrompts count={pendingCount} previews={pendingPreview} />
+          {entry.subAgentID && <p className="mb-2 break-all text-xs text-text-3">子任务：{entry.subAgentID}</p>}
           <div className="mb-1 font-mono text-[11px] text-primary">question</div>
           <h2 id="question-title" className="text-[14px] font-semibold text-text">
             需要你补充信息

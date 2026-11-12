@@ -45,6 +45,7 @@ func New(rt Runtime) *Server {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	s.taskRoutes(mux)
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /status", s.handleStatus)
 	mux.HandleFunc("GET /capabilities", s.handleCapabilities)

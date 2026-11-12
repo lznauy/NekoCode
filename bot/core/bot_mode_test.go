@@ -195,3 +195,14 @@ func TestModeSaveFailureRollsBackWithinSameSession(t *testing.T) {
 		})
 	}
 }
+
+func TestInteractionStrategiesFailClosed(t *testing.T) {
+	for _, d := range mode.Definitions() {
+		if run, err := interactionStrategy(d.Strategy); err != nil || run == nil {
+			t.Fatalf("unbound mode %s: %v", d.ID, err)
+		}
+	}
+	if run, err := interactionStrategy("future"); err == nil || run != nil {
+		t.Fatal("unknown strategy fell through to direct execution")
+	}
+}

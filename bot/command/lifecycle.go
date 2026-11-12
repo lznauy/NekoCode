@@ -52,7 +52,11 @@ func registerAll(p *Parser, deps Deps, st *skillState) {
 			return "Interaction modes are unavailable.", true
 		}
 		if len(cmd.Args) != 1 {
-			return "Usage: /mode <standard|plan>", true
+			ids := make([]string, 0, len(mode.Definitions()))
+			for _, d := range mode.Definitions() {
+				ids = append(ids, string(d.ID))
+			}
+			return "Usage: /mode <" + strings.Join(ids, "|") + ">", true
 		}
 		if err := deps.SetInteractionMode(mode.ID(cmd.Args[0])); err != nil {
 			return "Mode unchanged: " + err.Error(), true

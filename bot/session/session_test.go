@@ -1,6 +1,7 @@
 package session
 
 import (
+	"nekocode/protocol"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -280,5 +281,42 @@ func TestSavePreservingDraftKeepsIdentityWithoutListingEmptyHistory(t *testing.T
 	saved, err := m.Load(draft.ID)
 	if err != nil || saved.InteractionMode != "plan" {
 		t.Fatalf("draft did not become a saved conversation: %+v %v", saved, err)
+	}
+}
+
+func TestTodoPlanSurvivesSessionSaveLoad(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s := newSnapshot("/workspace")
+	s.CaptureContext(ctxmgr.ManagerSnapshot{
+		Todos:     []protocol.TodoItem{{Content: "inspect", Status: "completed"}, {Content: "verify", Status: "pending"}},
+		TodoGroup: "A",
+		TodoPlans: ctxmgr.TodoPlans{"A": {{Content: "verify", Status: "pending"}}, "B": {{Content: "B work", Status: "in_progress"}}},
+	}, 0, 0, nil)
+	if err := s.save(); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := load(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := restored.ContextSnapshot().Todos
+	if len(plan) != 2 || plan[1].Content != "verify" || plan[1].Status != "pending" {
+		t.Fatalf("todo plan lost on disk: %+v", plan)
+	}
+	if restored.TodoGroup != "A" || len(restored.TodoPlans) != 2 || restored.TodoPlans["B"][0].Content != "B work" {
+		t.Fatalf("demand plans lost on disk: %+v", restored.TodoPlans)
+	}
+	copy := restored.Clone()
+	copy.TodoPlans["B"][0].Status = "completed"
+	if restored.TodoPlans["B"][0].Status != "in_progress" {
+		t.Fatal("cloned session aliases another demand plan")
+	}
+	copy.Todos[1].Status = "completed"
+	if restored.Todos[1].Status != "pending" {
+		t.Fatal("cloned session aliases plan")
+	}
+	plan[1].Content = "changed"
+	if restored.Todos[1].Content != "verify" {
+		t.Fatal("context projection aliases saved plan")
 	}
 }

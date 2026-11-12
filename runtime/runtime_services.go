@@ -43,6 +43,10 @@ func (r *Runtime) mutation(op string, supported bool, fn func() error) error {
 		r.mu.Unlock()
 		return protocolError(ErrorBusy, op, fmt.Sprintf("run %s is %s", r.currentRun, r.status))
 	}
+	if !backgroundSnapshotMutation(op) && r.background.busy() {
+		r.mu.Unlock()
+		return protocolError(ErrorBusy, op, "background tasks are active; finish or cancel them before changing execution resources")
+	}
 	r.mutating = true
 	r.mu.Unlock()
 	defer func() {
@@ -50,8 +54,21 @@ func (r *Runtime) mutation(op string, supported bool, fn func() error) error {
 		r.mu.Lock()
 		r.mutating = false
 		r.mu.Unlock()
+		if op != "resume_session" && op != "new_session" {
+			r.background.signal()
+		}
 	}()
 	return fn()
+}
+
+// These operations replace foreground selections only. Destructive resource
+// mutations retain their barrier while any captured execution holds a lease.
+func backgroundSnapshotMutation(op string) bool {
+	switch op {
+	case "set_full_access", "resume_session", "new_session", "set_interaction_mode", "switch_model", "switch_session_model", "set_reasoning_effort", "set_session_reasoning", "apply_session_settings", "select_skill", "clear_selected_skill":
+		return true
+	}
+	return false
 }
 
 func (r *Runtime) SwitchModel(name string) (selection ModelSelection, err error) {
@@ -151,6 +168,7 @@ func (r *Runtime) ResumeSession(id string) error {
 	})
 	if err == nil || mutationCommitted(err) {
 		r.publishSessionChanged("resume", id, true)
+		r.background.signal()
 	}
 	return err
 }
@@ -162,6 +180,7 @@ func (r *Runtime) NewSession() (session SessionMeta, err error) {
 	})
 	if err == nil || mutationCommitted(err) {
 		r.publishSessionChanged("new", session.ID, true)
+		r.background.signal()
 	}
 	return session, err
 }

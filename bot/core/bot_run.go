@@ -34,7 +34,11 @@ func (b *Bot) Run(ctx context.Context, input string, images []types.MessageImage
 		return "", errors.New("bot: another operation is running")
 	}
 	defer b.operationMu.Unlock()
+	b.flushPendingProjectReload()
 	b.ensureSessionIdentity()
+	if submitter, ok := host.(protocol.BackgroundSubmitter); ok {
+		ctx = protocol.WithBackgroundSubmitter(ctx, submitter)
+	}
 	release := b.bindHost(host)
 	defer release()
 
@@ -58,10 +62,11 @@ func (b *Bot) runAgent(ctx context.Context, input string, images []types.Message
 	if err != nil {
 		return "", err
 	}
-	// The strategy boundary is explicit: future delegated hosts enter here,
-	// without changing UI selection, session storage or permission semantics.
-	if definition.Strategy != mode.Direct {
-		return "", errors.New("bot: unsupported execution strategy")
+	// Direct and delegated strategies share the agent loop. The captured policy
+	// selects direct execution or coordination-only dispatch into task workers.
+	run, err := interactionStrategy(definition.Strategy)
+	if err != nil {
+		return "", err
 	}
 	ctx = mode.WithSnapshot(ctx, snapshot)
 	sessionID := b.sess.CurrentID()
@@ -79,7 +84,7 @@ func (b *Bot) runAgent(ctx context.Context, input string, images []types.Message
 			return "", err
 		}
 	}
-	result := ag.RunContext(ctx, input, images, onStep)
+	result := run(ag, ctx, input, images, onStep)
 	var checkpointErr error
 	if b.checkpoints != nil {
 		checkpointErr = b.checkpoints.Finish(sessionID)

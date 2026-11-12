@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"nekocode/bot/config"
 	ctxmgr "nekocode/bot/contextmgr"
@@ -240,5 +241,84 @@ func TestSessionWithoutCWDHasExplicitDiagnostic(t *testing.T) {
 	}
 	if b.CurrentSessionID() != before {
 		t.Fatal("invalid session mutated active identity")
+	}
+}
+
+func TestSessionSwitchDefersProjectReloadWhileWorkerUsesServices(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	b := newPersistTestBot(t)
+	path := b.project.InstructionsPath()
+	writeWorkspaceFile(t, path, "original project rules")
+	b.reloadProject()
+	if !strings.Contains(b.project.Instructions, "original project rules") {
+		t.Fatal("fixture did not load")
+	}
+	b.backgroundLeases.Add(1)
+	writeWorkspaceFile(t, path, "changed project rules")
+	if _, err := b.NewSession(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.project.Instructions, "original project rules") {
+		t.Fatal("session switch reloaded leased project services")
+	}
+	b.backgroundLeases.Add(-1)
+	b.reloadProject()
+	if !strings.Contains(b.project.Instructions, "changed project rules") {
+		t.Fatal("project did not refresh after release")
+	}
+}
+
+func TestLastWorkerReleaseRefreshesDeferredProjectAtIdleBoundary(t *testing.T) {
+	t.Chdir(t.TempDir())
+	b := newPersistTestBot(t)
+	path := b.project.InstructionsPath()
+	writeWorkspaceFile(t, path, "original rules")
+	b.reloadProject()
+	b.backgroundLeases.Add(1)
+	writeWorkspaceFile(t, path, "updated rules")
+	b.reloadProject()
+	if !b.projectReloadPending.Load() {
+		t.Fatal("leased reload was forgotten")
+	}
+	// A running foreground operation prevents asynchronous mutation of its services.
+	b.operationMu.Lock()
+	b.releaseBackgroundLease()
+	b.mu.Lock()
+	original := b.project.Instructions
+	b.mu.Unlock()
+	if !strings.Contains(original, "original rules") {
+		b.operationMu.Unlock()
+		t.Fatal("release reloaded active services")
+	}
+	b.operationMu.Unlock()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		b.mu.Lock()
+		instructions := b.project.Instructions
+		b.mu.Unlock()
+		if strings.Contains(instructions, "updated rules") && !b.projectReloadPending.Load() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("deferred project reload not applied after final worker release")
+}
+
+func TestDeferredProjectReloadDoesNotReopenClosedBot(t *testing.T) {
+	t.Chdir(t.TempDir())
+	b := newPersistTestBot(t)
+	b.backgroundLeases.Add(1)
+	b.reloadProject()
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b.operationMu.Lock()
+	b.releaseBackgroundLease()
+	b.operationMu.Unlock()
+	// The same boundary used by the delayed release must ignore shutdown.
+	b.flushPendingProjectReload()
+	if !b.closed.Load() || !b.projectReloadPending.Load() {
+		t.Fatal("shutdown consumed a deferred reload")
 	}
 }

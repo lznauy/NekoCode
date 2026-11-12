@@ -22,10 +22,12 @@ type QuestionBroker struct {
 }
 
 type questionRecord struct {
+	ownerID            core.RunID
 	view               core.QuestionView
 	reply              chan protocol.QuestionReply
 	runID              core.RunID
 	requestedPublished bool
+	resolvedReply      protocol.QuestionReply
 }
 
 func NewQuestionBroker(eventBus *eventbus.EventBus, source core.SourceRef, runID func() core.RunID) *QuestionBroker {
@@ -47,10 +49,20 @@ func (b *QuestionBroker) Request(req protocol.QuestionRequest) protocol.Question
 
 // Register publishes a question and returns its blocking wait function.
 func (b *QuestionBroker) Register(req protocol.QuestionRequest) func() protocol.QuestionReply {
+	return b.RegisterForRun(b.currentRunID(), req)
+}
+
+func (b *QuestionBroker) RegisterForRun(runID core.RunID, req protocol.QuestionRequest) func() protocol.QuestionReply {
+	return b.RegisterScoped(runID, runID, req)
+}
+
+// RegisterScoped separates cancellation ownership from the public event run ID.
+func (b *QuestionBroker) RegisterScoped(ownerID, runID core.RunID, req protocol.QuestionRequest) func() protocol.QuestionReply {
 	id := fmt.Sprintf("q_%d", atomic.AddUint64(&b.nextID, 1))
 	rec := &questionRecord{
-		reply: make(chan protocol.QuestionReply, 1),
-		runID: b.currentRunID(),
+		ownerID: ownerID,
+		reply:   make(chan protocol.QuestionReply, 1),
+		runID:   runID,
 		view: core.QuestionView{
 			ID:         id,
 			SubAgentID: req.SubAgentID,
@@ -71,17 +83,14 @@ func (b *QuestionBroker) Register(req protocol.QuestionRequest) func() protocol.
 	b.mu.Unlock()
 
 	b.publish(rec.runID, core.EventQuestionRequested, viewCopy)
-	// A resolver may commit while this notification invokes synchronous
-	// observers. Defer its terminal event until every requested observer returns.
+	// Resolutions during requested callbacks are published after every requested
+	// observer returns. Only one side owns terminal publication and the reply.
 	b.mu.Lock()
 	rec.requestedPublished = true
 	resolved := rec.view.Status != core.QuestionPending
-	if resolved {
-		viewCopy = cloneQuestionView(rec.view)
-	}
 	b.mu.Unlock()
 	if resolved {
-		b.publish(rec.runID, core.EventQuestionResolved, viewCopy)
+		b.publishResolved([]*questionRecord{rec})
 	}
 
 	return func() protocol.QuestionReply {
@@ -108,14 +117,12 @@ func (b *QuestionBroker) Answer(id string, reply protocol.QuestionReply) error {
 		rec.view.Status = core.QuestionAnswered
 	}
 	delete(b.pending, id)
-	viewCopy := cloneQuestionView(rec.view)
+	rec.resolvedReply = cloneQuestionReply(reply)
 	publishResolved := rec.requestedPublished
 	b.mu.Unlock()
 
-	// Replies are available before synchronous observers can reenter or wait.
-	rec.reply <- cloneQuestionReply(reply)
 	if publishResolved {
-		b.publish(rec.runID, core.EventQuestionResolved, viewCopy)
+		b.publishResolved([]*questionRecord{rec})
 	}
 	return nil
 }
@@ -131,25 +138,27 @@ func (b *QuestionBroker) Pending() []core.QuestionView {
 }
 
 func (b *QuestionBroker) RejectAll() {
-	b.rejectAll(false)
+	b.rejectAll(false, "")
 }
 
 func (b *QuestionBroker) Close() {
-	b.rejectAll(true)
+	b.rejectAll(true, "")
 }
 
-func (b *QuestionBroker) rejectAll(closeBroker bool) {
+func (b *QuestionBroker) rejectAll(closeBroker bool, onlyRun core.RunID) {
 	b.mu.Lock()
 	if closeBroker {
 		b.closed = true
 	}
-	records := make([]*questionRecord, 0, len(b.pending))
 	var publishedRecords []*questionRecord
 	for id, rec := range b.pending {
+		if onlyRun != "" && rec.ownerID != onlyRun {
+			continue
+		}
 		resolvedAt := time.Now()
 		rec.view.ResolvedAt = &resolvedAt
 		rec.view.Status = core.QuestionRejected
-		records = append(records, rec)
+		rec.resolvedReply = protocol.QuestionReply{Rejected: true}
 		if rec.requestedPublished {
 			publishedRecords = append(publishedRecords, rec)
 		}
@@ -157,12 +166,21 @@ func (b *QuestionBroker) rejectAll(closeBroker bool) {
 	}
 	b.mu.Unlock()
 
+	b.publishResolved(publishedRecords)
+}
+
+// Commit every terminal projection before releasing any worker, then allow
+// ordinary observers to reenter the broker and consume the committed replies.
+func (b *QuestionBroker) publishResolved(records []*questionRecord) {
+	events := make([]core.Event, 0, len(records))
 	for _, rec := range records {
-		rec.reply <- protocol.QuestionReply{Rejected: true}
+		events = append(events, core.Event{RunID: rec.runID, Type: core.EventQuestionResolved, Source: b.source, Payload: cloneQuestionView(rec.view)})
 	}
-	for _, rec := range publishedRecords {
-		b.publish(rec.runID, core.EventQuestionResolved, cloneQuestionView(rec.view))
-	}
+	b.eventBus.PublishCommitted(events, func() {
+		for _, rec := range records {
+			rec.reply <- rec.resolvedReply
+		}
+	})
 }
 
 func (b *QuestionBroker) publish(runID core.RunID, typ core.EventType, payload any) {
@@ -195,4 +213,11 @@ func cloneQuestionReply(reply protocol.QuestionReply) protocol.QuestionReply {
 		reply.Answers[i] = append([]string(nil), reply.Answers[i]...)
 	}
 	return reply
+}
+
+// RejectRun leaves other executions and background interactions untouched.
+func (b *QuestionBroker) RejectRun(runID core.RunID) {
+	if runID != "" {
+		b.rejectAll(false, runID)
+	}
 }

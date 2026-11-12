@@ -70,6 +70,7 @@ func (loop Loop) stepLimitReached() bool {
 type Lifecycle struct {
 	mu        sync.Mutex
 	parentCtx context.Context
+	values    context.Context
 	curCtx    context.Context
 	cancelFn  context.CancelFunc
 	steering  chan string
@@ -94,6 +95,9 @@ func NewLifecycle(parent context.Context, steeringBuf int) *Lifecycle {
 func (l *Lifecycle) Context() context.Context {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.values != nil {
+		return contextValues{Context: l.curCtx, values: l.values}
+	}
 	return l.curCtx
 }
 
@@ -171,4 +175,24 @@ func (l *Lifecycle) Finished() *atomic.Bool {
 // loop drains them.
 func (l *Lifecycle) Steering() chan string {
 	return l.steering
+}
+
+// SetValues binds per-run metadata without replacing the revivable cancellation
+// context. Steering may replace curCtx while the run's authority stays fixed.
+func (l *Lifecycle) SetValues(values context.Context) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.values = values
+}
+
+type contextValues struct {
+	context.Context
+	values context.Context
+}
+
+func (c contextValues) Value(key any) any {
+	if value := c.values.Value(key); value != nil {
+		return value
+	}
+	return c.Context.Value(key)
 }

@@ -116,3 +116,47 @@ func TestShellReturnsNonzeroProcessFactDespiteNilToolError(t *testing.T) {
 		t.Fatal("unstarted command invented process facts")
 	}
 }
+
+func TestWaitObservationsTrackOutputAndConsecutiveQuietWaits(t *testing.T) {
+	task := observedTask(taskRunning, 0, "initial", false)
+	task.name = "long-build"
+	task.completeObservation(logsReturnBytes)
+	for i := 1; i <= 3; i++ {
+		sample := task.snapshotAndAcknowledge(logsReturnBytes, "wait_timeout")
+		if sample.observation.NewOutputBytes != 0 || sample.observation.UnchangedWaits != i || sample.observation.State != "running" {
+			t.Fatalf("incorrect quiet wait: %+v", sample.observation)
+		}
+		text := formatProcessResult(sample)
+		if i >= 2 && !strings.Contains(text, "does not prove the process is stuck") {
+			t.Fatal("quiet wait did not request careful diagnosis")
+		}
+		if i >= 2 && strings.Contains(text, "next_call:") {
+			t.Fatal("diagnostic boundary still suggests blind repeated waiting")
+		}
+	}
+	task.appendLogs([]byte("new progress"))
+	sample := task.snapshotAndAcknowledge(logsReturnBytes, "wait_timeout")
+	if sample.observation.NewOutputBytes != uint64(len("new progress")) || sample.observation.UnchangedWaits != 0 {
+		t.Fatalf("progress did not reset quiet waits: %+v", sample.observation)
+	}
+	task.snapshotAndAcknowledge(logsReturnBytes, "wait_timeout")
+	reuse := task.result("reused_running")
+	if reuse.observation.UnchangedWaits != 1 {
+		t.Fatal("reuse reset the wait history")
+	}
+	task.appendLogs([]byte("completion"))
+	task.status = taskExited
+	sample = task.snapshotAndAcknowledge(logsReturnBytes, "exit")
+	if sample.observation.UnchangedWaits != 0 || sample.observation.State != "exited" {
+		t.Fatal("terminal state retained quiet wait warning")
+	}
+}
+
+func TestHardTimeoutFeedbackDoesNotSuggestWaitingOnLiveProcess(t *testing.T) {
+	task := observedTask(taskTimeout, -1, "deadline reached", true)
+	task.managed = true
+	text := formatProcessResult(task.result("exit"))
+	if !strings.Contains(text, "hard lifetime was reached and this process has exited") || strings.Contains(text, "next_call:") || strings.Contains(text, "process is still running") {
+		t.Fatalf("hard timeout confused with soft wait: %s", text)
+	}
+}

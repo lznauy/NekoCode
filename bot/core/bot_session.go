@@ -107,6 +107,7 @@ func (b *Bot) saveSession() error {
 	snapshot := b.sess.Current()
 	if snapshot == nil {
 		snapshot = b.sess.StartNew()
+		b.bindPermissionSession()
 		b.bindSessionResources()
 	}
 	promptTokens, completionTokens := 0, 0
@@ -186,6 +187,7 @@ func (b *Bot) resumeSessionLocked(id string) (*session.Snapshot, error) {
 	if err := b.sess.Activate(snapshot); err != nil {
 		return nil, err
 	}
+	b.bindPermissionSession()
 	b.storeInteractionMode(snapshot.InteractionMode)
 	b.ctxMgr.Restore(snapshot.ContextSnapshot())
 	if b.checkpoints != nil {
@@ -252,6 +254,7 @@ func (b *Bot) resetConversation() (string, error) {
 	b.reloadProject()
 	b.clearConversationState()
 	newSession := b.sess.StartNew()
+	b.bindPermissionSession()
 	if b.checkpoints != nil {
 		b.checkpoints.Activate(newSession.ID, nil, 0)
 	}
@@ -289,6 +292,7 @@ func (b *Bot) ensureSessionIdentity() {
 			b.checkpoints.Activate(newSession.ID, nil, 0)
 		}
 	}
+	b.bindPermissionSession()
 	b.bindSessionResources()
 }
 
@@ -312,6 +316,7 @@ func (b *Bot) DeleteSession(id string) error {
 		b.sess.ClearCurrent()
 		b.bindSessionResources()
 	}
+	b.forgetPermissionSession(id)
 	var cleanupErrors []error
 	if err := attachmentDelete.Commit(); err != nil {
 		cleanupErrors = append(cleanupErrors, err)

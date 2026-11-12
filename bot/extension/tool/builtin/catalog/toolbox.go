@@ -26,7 +26,10 @@ type Toolbox struct {
 	lsp        *lsp.LSPTool
 	index      *index.IndexTool
 	task       *task.TaskTool
+	taskSubmit *task.SubmitTool
+	taskCancel *task.CancelTool
 	taskList   *task.TaskListTool
+	taskResult *task.ResultTool
 	references *contextrefs.Tool
 	evidence   *contextrefs.Tool
 	question   *question.Tool
@@ -85,6 +88,15 @@ func (e *Toolbox) RebuildRegistryWithConfig(cfg ToolboxConfig) {
 	if e.task == nil {
 		e.task = task.NewTaskTool()
 	}
+	if e.taskSubmit == nil {
+		e.taskSubmit = task.NewSubmitTool()
+	}
+	if e.taskCancel == nil {
+		e.taskCancel = &task.CancelTool{}
+	}
+	if e.taskResult == nil {
+		e.taskResult = task.NewResultTool()
+	}
 	if e.taskList == nil {
 		e.taskList = task.NewTaskListTool()
 	}
@@ -106,6 +118,9 @@ func (e *Toolbox) RebuildRegistryWithConfig(cfg ToolboxConfig) {
 	e.Registry = tools.New()
 	e.Registry.SetWorkspace(e.workspace)
 	registerAll(e.Registry, cfg.ImageGenModels, cfg.ImageUnderstandModels, e.shell, e.lsp, e.index, e.task, e.taskList, e.question, e.todo, e.references, e.evidence)
+	e.Registry.RegisterWithOptions(e.taskSubmit, tools.RegistrationOptions{CoordinatorAllowed: true, CoordinatorOnly: true})
+	e.Registry.RegisterWithOptions(e.taskCancel, tools.RegistrationOptions{CoordinatorAllowed: true, CoordinatorOnly: true})
+	e.Registry.RegisterWithOptions(e.taskResult, tools.RegistrationOptions{CoordinatorAllowed: true, PlanAllowed: true})
 	for _, t := range cfg.ExtraTools {
 		e.Registry.Register(t)
 	}
@@ -192,6 +207,7 @@ func (e *Toolbox) SetSandboxEngine(engine *permission.Engine) {
 func (e *Toolbox) WireTaskRunner(run taskbridge.TaskRunner) {
 	if e.task != nil {
 		e.task.Wire(run)
+		e.taskSubmit.Wire(run)
 	}
 }
 
@@ -201,14 +217,18 @@ func (e *Toolbox) WireTaskLister(list taskbridge.TaskLister) {
 	}
 }
 
+// WireTaskResultReader binds a parent-scoped result reader. Child toolboxes
+// remain unbound unless the host explicitly grants a narrower result scope.
+func (e *Toolbox) WireTaskResultReader(read taskbridge.ResultReader) { e.taskResult.Wire(read) }
+
 // WireInteraction binds application callbacks to the concrete builtin tools
 // owned by this toolbox.
-func (e *Toolbox) WireInteraction(ask protocol.QuestionFunc, todos protocol.TodoFunc) {
+func (e *Toolbox) WireInteraction(ask protocol.QuestionFunc, todos protocol.TodoUpdateFunc) {
 	if e.question != nil {
 		e.question.SetQuestionFunc(ask)
 	}
 	if e.todo != nil {
-		e.todo.SetUpdateFn(todos)
+		e.todo.SetApplyFn(todos)
 	}
 }
 

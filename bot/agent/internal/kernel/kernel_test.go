@@ -218,3 +218,21 @@ func TestLifecycleConcurrentTiming(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestRunValuesSurviveContextReplacementAndClear(t *testing.T) {
+	type key struct{}
+	lifecycle := NewLifecycle(context.Background(), 1)
+	lifecycle.SetValues(context.WithValue(context.Background(), key{}, "run-authority"))
+	if lifecycle.Context().Value(key{}) != "run-authority" {
+		t.Fatal("run values lost")
+	}
+	old := lifecycle.Context()
+	lifecycle.ReplaceContext()
+	if old.Err() == nil || lifecycle.Context().Err() != nil || lifecycle.Context().Value(key{}) != "run-authority" {
+		t.Fatal("steering replaced run values or lost cancellation")
+	}
+	lifecycle.SetValues(nil)
+	if lifecycle.Context().Value(key{}) != nil {
+		t.Fatal("run metadata leaked after cleanup")
+	}
+}

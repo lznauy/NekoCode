@@ -149,3 +149,65 @@ func TestRunStartedPreservesOpenPrompt(t *testing.T) {
 		})
 	}
 }
+
+func TestForegroundCompletionKeepsBackgroundApproval(t *testing.T) {
+	m, err := NewModel(&statusFakeBot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.state = stateProcessing
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventApprovalRequested, Payload: controlruntime.ApprovalView{ID: "background", SubAgentID: "worker", ToolName: "shell"}})
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunDone, Payload: controlruntime.RunResult{Output: "dispatched"}})
+	if m.state != stateConfirming || len(m.runtimePrompts) != 1 || !strings.Contains(m.ConfirmBar.View(80, 24), "shell") {
+		t.Fatal("foreground completion dismissed a background approval")
+	}
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventApprovalResolved, Payload: controlruntime.ApprovalView{ID: "background"}})
+	if m.state != stateReady {
+		t.Fatalf("background approval restored completed foreground run: %v", m.state)
+	}
+}
+
+func TestForegroundTerminalPreservesWorkerQuestionDraft(t *testing.T) {
+	for _, terminal := range []controlruntime.EventType{controlruntime.EventRunDone, controlruntime.EventRunFailed, controlruntime.EventRunCancelled} {
+		t.Run(string(terminal), func(t *testing.T) {
+			m, err := NewModel(&statusFakeBot{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.state = stateProcessing
+			m.enqueueRuntimePrompt(runtimePrompt{question: &controlruntime.QuestionView{
+				ID: "worker-question", SubAgentID: "worker", Questions: []controlruntime.QuestionItem{{Question: "Your answer?", Custom: true}},
+			}})
+			m.QuestionBar.Type("draft-answer")
+			if !strings.Contains(m.QuestionBar.View(100, 40), "draft-answer") {
+				t.Fatal("draft setup failed")
+			}
+			m.handleRuntimeEvent(controlruntime.Event{Type: terminal, Payload: controlruntime.RunResult{}})
+			if m.state != stateQuestioning || !m.runtimePromptActive || !strings.Contains(m.QuestionBar.View(100, 40), "draft-answer") {
+				t.Fatal("foreground completion erased worker answer")
+			}
+			m.resolveRuntimePrompt("worker-question", false)
+			if m.state != stateReady {
+				t.Fatal("worker answer restored finished foreground run")
+			}
+		})
+	}
+}
+func TestForegroundTerminalPreservesWorkerApprovalSelection(t *testing.T) {
+	m, err := NewModel(&statusFakeBot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.state = stateProcessing
+	m.enqueueRuntimePrompt(runtimePrompt{approval: &controlruntime.ApprovalView{ID: "worker-approval", SubAgentID: "worker", ToolName: "shell"}})
+	m.ConfirmBar.Move(1)
+	selected := m.ConfirmBar.Selected()
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunDone, Payload: controlruntime.RunResult{}})
+	if m.state != stateConfirming || !m.runtimePromptActive || m.ConfirmBar.Selected() != selected {
+		t.Fatal("foreground completion reset worker approval")
+	}
+	m.resolveRuntimePrompt("worker-approval", true)
+	if m.state != stateReady {
+		t.Fatal("approval restored finished foreground run")
+	}
+}

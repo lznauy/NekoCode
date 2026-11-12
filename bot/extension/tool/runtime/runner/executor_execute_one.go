@@ -12,7 +12,6 @@ import (
 	"nekocode/bot/extension/tool/runtime/permission"
 	"nekocode/bot/extension/tool/runtime/workspace"
 	"nekocode/logger"
-	"nekocode/mode"
 	"nekocode/protocol"
 	textutil "nekocode/util/text"
 )
@@ -80,14 +79,14 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 	tool := entry.Tool
 	tc = e.applySandboxProfile(tc)
 
-	phaseFn, confirmFn, planMode := e.callbacks()
+	phaseFn, confirmFn := e.callbacks()
 	confirmFn = e.observeConfirm(ctx, confirmFn)
 	if phaseFn != nil {
 		phaseFn(protocol.PhaseRunning + " " + resultName)
 	}
-	stage = "plan"
-	if planMode && !e.planAllows(tc.Name, entry.PlanAllowed) {
-		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: "plan mode: blocked"}
+	stage = "mode"
+	if err := e.checkToolPolicy(tc.Name, entry); err != nil {
+		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: err.Error()}
 	}
 
 	tc = e.normalizeFilePolicyPath(tc)
@@ -697,11 +696,11 @@ func urlHostForRemember(raw string) string {
 	return raw
 }
 
-func (e *Executor) callbacks() (protocol.PhaseFunc, protocol.ConfirmFunc, bool) {
+func (e *Executor) callbacks() (protocol.PhaseFunc, protocol.ConfirmFunc) {
 	e.fnMu.RLock()
-	phase, plan := e.phaseFn, e.interactionMode.ToolPolicy == mode.ReadOnlyTools
+	phase := e.phaseFn
 	e.fnMu.RUnlock()
-	return phase, e.ConfirmFn(), plan
+	return phase, e.ConfirmFn()
 }
 
 func (e *Executor) toolContext(ctx context.Context) context.Context {

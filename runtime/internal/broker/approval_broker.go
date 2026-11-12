@@ -25,10 +25,12 @@ type ApprovalBroker struct {
 }
 
 type approvalRecord struct {
+	ownerID            core.RunID
 	view               core.ApprovalView
 	reply              chan protocol.ConfirmReply
 	runID              core.RunID
 	requestedPublished bool
+	resolvedReply      protocol.ConfirmReply
 }
 
 type approvalHashInput struct {
@@ -57,12 +59,22 @@ func (b *ApprovalBroker) Request(req protocol.ConfirmRequest) protocol.ConfirmRe
 
 // Register publishes an approval and returns its blocking wait function.
 func (b *ApprovalBroker) Register(req protocol.ConfirmRequest) func() protocol.ConfirmReply {
+	return b.RegisterForRun(b.currentRunID(), req)
+}
+
+func (b *ApprovalBroker) RegisterForRun(runID core.RunID, req protocol.ConfirmRequest) func() protocol.ConfirmReply {
+	return b.RegisterScoped(runID, runID, req)
+}
+
+// RegisterScoped separates cancellation ownership from the public event run ID.
+func (b *ApprovalBroker) RegisterScoped(ownerID, runID core.RunID, req protocol.ConfirmRequest) func() protocol.ConfirmReply {
 	id := fmt.Sprintf("apr_%d", atomic.AddUint64(&b.nextID, 1))
 	now := time.Now()
 	argsHash := stableHash(protocol.ToolInputArgs(req.Args))
 	rec := &approvalRecord{
-		reply: make(chan protocol.ConfirmReply, 1),
-		runID: b.currentRunID(),
+		ownerID: ownerID,
+		reply:   make(chan protocol.ConfirmReply, 1),
+		runID:   runID,
 		view: core.ApprovalView{
 			ID:           id,
 			ToolName:     req.ToolName,
@@ -89,17 +101,14 @@ func (b *ApprovalBroker) Register(req protocol.ConfirmRequest) func() protocol.C
 	b.mu.Unlock()
 
 	b.publish(rec.runID, core.EventApprovalRequested, viewCopy)
-	// A resolver may commit while this notification invokes synchronous
-	// observers. Defer its terminal event until every requested observer returns.
+	// Resolutions during requested callbacks are published after every requested
+	// observer returns. Only one side owns terminal publication and the reply.
 	b.mu.Lock()
 	rec.requestedPublished = true
 	resolved := rec.view.Status != core.ApprovalPending
-	if resolved {
-		viewCopy = cloneApprovalView(rec.view)
-	}
 	b.mu.Unlock()
 	if resolved {
-		b.publish(rec.runID, core.EventApprovalResolved, viewCopy)
+		b.publishResolved([]*approvalRecord{rec})
 	}
 
 	return func() protocol.ConfirmReply {
@@ -134,15 +143,12 @@ func (b *ApprovalBroker) Decide(id string, decision core.ApprovalDecision) error
 		rec.view.Status = core.ApprovalRejected
 	}
 	delete(b.pending, id)
-	viewCopy := cloneApprovalView(rec.view)
+	rec.resolvedReply = decision.ConfirmReply()
 	publishResolved := rec.requestedPublished
 	b.mu.Unlock()
 
-	// Commit the reply before invoking synchronous observers: an observer may
-	// wait for this request or reenter the broker to start another one.
-	rec.reply <- decision.ConfirmReply()
 	if publishResolved {
-		b.publish(rec.runID, core.EventApprovalResolved, viewCopy)
+		b.publishResolved([]*approvalRecord{rec})
 	}
 	return nil
 }
@@ -158,25 +164,27 @@ func (b *ApprovalBroker) Pending() []core.ApprovalView {
 }
 
 func (b *ApprovalBroker) RejectAll() {
-	b.rejectAll(false)
+	b.rejectAll(false, "")
 }
 
 func (b *ApprovalBroker) Close() {
-	b.rejectAll(true)
+	b.rejectAll(true, "")
 }
 
-func (b *ApprovalBroker) rejectAll(closeBroker bool) {
+func (b *ApprovalBroker) rejectAll(closeBroker bool, onlyRun core.RunID) {
 	b.mu.Lock()
 	if closeBroker {
 		b.closed = true
 	}
-	records := make([]*approvalRecord, 0, len(b.pending))
 	var publishedRecords []*approvalRecord
 	for id, rec := range b.pending {
+		if onlyRun != "" && rec.ownerID != onlyRun {
+			continue
+		}
 		resolvedAt := time.Now()
 		rec.view.ResolvedAt = &resolvedAt
 		rec.view.Status = core.ApprovalRejected
-		records = append(records, rec)
+		rec.resolvedReply = protocol.ConfirmReply{Cancelled: true}
 		if rec.requestedPublished {
 			publishedRecords = append(publishedRecords, rec)
 		}
@@ -184,12 +192,7 @@ func (b *ApprovalBroker) rejectAll(closeBroker bool) {
 	}
 	b.mu.Unlock()
 
-	for _, rec := range records {
-		rec.reply <- protocol.ConfirmReply{Cancelled: true}
-	}
-	for _, rec := range publishedRecords {
-		b.publish(rec.runID, core.EventApprovalResolved, cloneApprovalView(rec.view))
-	}
+	b.publishResolved(publishedRecords)
 }
 
 func cloneApprovalView(view core.ApprovalView) core.ApprovalView {
@@ -197,6 +200,20 @@ func cloneApprovalView(view core.ApprovalView) core.ApprovalView {
 	view.Metadata = cloneMap(view.Metadata)
 	view.Approval = view.Approval.Clone()
 	return view
+}
+
+// Commit every terminal projection before releasing any worker, then allow
+// ordinary observers to reenter the broker and consume the committed replies.
+func (b *ApprovalBroker) publishResolved(records []*approvalRecord) {
+	events := make([]core.Event, 0, len(records))
+	for _, rec := range records {
+		events = append(events, core.Event{RunID: rec.runID, Type: core.EventApprovalResolved, Source: b.source, Payload: cloneApprovalView(rec.view)})
+	}
+	b.eventBus.PublishCommitted(events, func() {
+		for _, rec := range records {
+			rec.reply <- rec.resolvedReply
+		}
+	})
 }
 
 func (b *ApprovalBroker) publish(runID core.RunID, typ core.EventType, payload any) {
@@ -225,4 +242,11 @@ func stableHash(v any) string {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+// RejectRun leaves other executions and background interactions untouched.
+func (b *ApprovalBroker) RejectRun(runID core.RunID) {
+	if runID != "" {
+		b.rejectAll(false, runID)
+	}
 }

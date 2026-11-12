@@ -1,6 +1,7 @@
 package contextmgr
 
 import (
+	"nekocode/protocol"
 	"testing"
 
 	"nekocode/bot/contextmgr/token"
@@ -50,5 +51,64 @@ func TestSnapshotRestore(t *testing.T) {
 	// report an archive that no compaction produced.
 	if got := second.Report(); got.CompactCount != 2 || got.Archived != 40 {
 		t.Errorf("restored compaction counters = %d compactions / %d trimmed, want 2/40", got.CompactCount, got.Archived)
+	}
+}
+
+func TestTaskUpdateReceiptSurvivesArchivedContext(t *testing.T) {
+	manager := New(Config{})
+	// The message containing sequence 9 has already been compacted into archive.
+	manager.Restore(ManagerSnapshot{Archive: "prior user instructions", TaskUpdateSequence: 9})
+	manager.AddTaskUpdate(9, "do not repeat the archived instruction")
+	if len(manager.Snapshot().Messages) != 0 {
+		t.Fatal("archived update reinserted")
+	}
+	manager.AddTaskUpdate(10, "new instruction")
+	snap := manager.Snapshot()
+	if snap.TaskUpdateSequence != 10 || len(snap.Messages) != 1 || snap.Messages[0].Content != "new instruction" {
+		t.Fatalf("wrong receipt: %+v", snap)
+	}
+}
+
+func TestTodoSnapshotRestoresWithoutAliasingOrSessionLeak(t *testing.T) {
+	first := New(Config{})
+	first.SetTodos([]protocol.TodoItem{{Content: "verify", Status: "pending"}})
+	snap := first.Snapshot()
+	snap.Todos[0].Content = "copy"
+	if first.Todos()[0].Content != "verify" {
+		t.Fatal("snapshot aliases live plan")
+	}
+	second := New(Config{})
+	second.Restore(snap)
+	snap.Todos[0].Content = "changed"
+	if second.Todos()[0].Content != "copy" || second.Status().TasksDone {
+		t.Fatal("restored plan lost or aliased")
+	}
+	second.Restore(ManagerSnapshot{})
+	if second.Status().HasTasks {
+		t.Fatal("previous session plan leaked")
+	}
+}
+
+func TestInterleavedDemandPlansSurviveRestore(t *testing.T) {
+	m := New(Config{})
+	m.SelectTodoGroup("A")
+	m.SetTodos([]protocol.TodoItem{{Content: "A fix", Status: "pending"}})
+	m.SelectTodoGroup("B")
+	m.SetTodos([]protocol.TodoItem{{Content: "B verification", Status: "in_progress"}})
+	snap := m.Snapshot()
+	restored := New(Config{})
+	restored.Restore(snap)
+	restored.SelectTodoGroup("A")
+	if got := restored.Todos(); len(got) != 1 || got[0].Content != "A fix" {
+		t.Fatalf("A plan replaced by B: %+v", got)
+	}
+	restored.SetTodos([]protocol.TodoItem{{Content: "A fix", Status: "completed"}})
+	restored.SelectTodoGroup("B")
+	if got := restored.Todos(); len(got) != 1 || got[0].Status != "in_progress" {
+		t.Fatalf("A completion changed B: %+v", got)
+	}
+	restored.SelectTodoGroup("new")
+	if restored.Status().HasTasks {
+		t.Fatal("new demand inherited an unrelated plan")
 	}
 }

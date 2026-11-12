@@ -2,6 +2,7 @@ package extension
 
 import (
 	"encoding/json"
+	"nekocode/mode"
 	"os"
 	"path/filepath"
 	"strings"
@@ -242,7 +243,30 @@ func TestFailedAgentInstallRollsBackCatalog(t *testing.T) {
 	if out := m.install(t.Context(), dir); !strings.Contains(out, "Install cancelled") {
 		t.Fatalf("install: %s", out)
 	}
-	if state := m.Snapshot(); len(state.AgentErrors) != 0 || len(state.Plugins) != 0 || len(state.Agents) != 2 {
+	if state := m.Snapshot(); len(state.AgentErrors) != 0 || len(state.Plugins) != 0 || len(state.Agents) != 3 {
 		t.Fatalf("rollback left runtime state: %+v", state)
+	}
+}
+
+func TestExecutorDiscoveryIsScopedToCoordinator(t *testing.T) {
+	m := newAgentManager()
+	defer m.Close()
+	entry, err := m.tools.Lookup("agent_profiles")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []mode.ID{mode.Standard, mode.Plan, mode.SuperAgent} {
+		d, _ := mode.Resolve(id)
+		output, err := entry.Tool.Execute(mode.WithSnapshot(t.Context(), d.Snapshot), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if id == mode.SuperAgent && (strings.Contains(output.Text, `"id":"explore"`) || strings.Contains(output.Text, `"id":"coder"`)) {
+			t.Fatalf("coordinator discovered legacy worker choices: %s", output.Text)
+		}
+		found := strings.Contains(output.Text, `"id":"executor"`)
+		if found != (id == mode.SuperAgent) {
+			t.Fatalf("%s discovery executor=%v", id, found)
+		}
 	}
 }

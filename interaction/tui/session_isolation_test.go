@@ -123,3 +123,21 @@ func TestRunTerminalStillClearsRuntimePrompt(t *testing.T) {
 		t.Fatal("terminal preserved runtime prompt instead of just local confirmation")
 	}
 }
+
+func TestSessionSwitchCancelsLocalDestructiveConfirmation(t *testing.T) {
+	m, err := NewModel(&statusFakeBot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replied, allowed := false, true
+	m.preConfirmState = stateReady
+	m.state = stateConfirming
+	m.ConfirmBar.SetDestructive("delete", "old task", "delete", func(ok bool) { replied = true; allowed = ok })
+	m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventSessionChanged, Payload: controlruntime.SessionPayload{ID: "new", Reason: "resume"}})
+	if !replied || allowed || m.state == stateConfirming {
+		t.Fatal("old destructive confirmation survived session switch")
+	}
+	if len(m.sessionLoadNotices) != 1 {
+		t.Fatal("cancellation notice missing")
+	}
+}

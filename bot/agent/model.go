@@ -19,7 +19,7 @@ import (
 	"nekocode/protocol"
 )
 
-const synthesizePrompt = "Based on the information collected above, provide a final answer. Do NOT call any more tools. Output your conclusion directly."
+const synthesizePrompt = "Based on the information collected above, provide a final answer. Do NOT call any more tools. Output your conclusion directly. Explicitly report unfinished todo steps and blockers; a limit is not task completion."
 
 const fallbackSynthesize = "Unable to produce a final summary — the model is currently unavailable. The task's tool operations may have completed, but the results could not be synthesized. Please try again or check the conversation log for details."
 
@@ -60,7 +60,7 @@ func (r *modelRunner) reason(input string) *reasoningResult {
 
 func (r *modelRunner) callLLMForTool() (*llmstream.LLMCallResult, error) {
 	a := r.agent
-	toolDefs := core.ToToolDefs(a.deps.toolRegistry.Descriptors())
+	toolDefs := core.ToToolDefs(a.deps.toolExecutor.ToolDescriptors())
 	ctx := a.getCtx()
 	policyHints, err := r.preModelHints(ctx)
 	if err != nil {
@@ -165,6 +165,7 @@ func (r *modelRunner) synthesize() string {
 			}
 		}
 	}
+	text += a.turnRunner.todoDispositionSummary(true)
 	if usable {
 		a.deps.ctxMgr.AddAssistant(types.Message{Role: "assistant", Content: text})
 		a.run.finalText = text

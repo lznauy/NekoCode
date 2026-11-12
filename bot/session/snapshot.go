@@ -16,14 +16,19 @@ import (
 	"nekocode/bot/contextmgr/token"
 	"nekocode/bot/policy/ledger"
 	"nekocode/bot/provider/types"
+	"nekocode/protocol"
 	"nekocode/util/fs"
 )
 
 type Snapshot struct {
-	InteractionMode string            `json:"interaction_mode,omitempty"`
-	Subagent        *SubagentMetadata `json:"subagent,omitempty"`
-	ForkedFrom      string            `json:"forked_from,omitempty"`
-	ForkedAtSeq     int               `json:"forked_at_seq,omitempty"`
+	TodoGroup          string              `json:"todo_group,omitempty"`
+	TodoPlans          ctxmgr.TodoPlans    `json:"todo_plans,omitempty"`
+	Todos              []protocol.TodoItem `json:"todos,omitempty"`
+	TaskUpdateSequence uint64              `json:"task_update_sequence,omitempty"`
+	InteractionMode    string              `json:"interaction_mode,omitempty"`
+	Subagent           *SubagentMetadata   `json:"subagent,omitempty"`
+	ForkedFrom         string              `json:"forked_from,omitempty"`
+	ForkedAtSeq        int                 `json:"forked_at_seq,omitempty"`
 
 	FormatVersion int    `json:"format_version"`
 	ID            string `json:"id"`
@@ -478,6 +483,10 @@ func (s *Snapshot) CaptureContext(snap ctxmgr.ManagerSnapshot, promptTokens, com
 	if s == nil {
 		return
 	}
+	s.Todos = append([]protocol.TodoItem(nil), snap.Todos...)
+	s.TodoGroup = snap.TodoGroup
+	s.TodoPlans = snap.TodoPlans.Clone()
+	s.TaskUpdateSequence = snap.TaskUpdateSequence
 	s.SystemPrompt = snap.SystemPrompt
 	s.Skills = snap.Skills
 	s.Memory = snap.Memory
@@ -519,15 +528,19 @@ func (s *Snapshot) ContextSnapshot() ctxmgr.ManagerSnapshot {
 		messages = messages[s.CompactBoundary:]
 	}
 	return ctxmgr.ManagerSnapshot{
-		SystemPrompt:   s.SystemPrompt,
-		Skills:         s.Skills,
-		Archive:        s.Archive,
-		Memory:         s.Memory,
-		Messages:       append([]types.Message(nil), messages...),
-		Transcript:     append([]types.Message(nil), s.Transcript...),
-		TranscriptBase: s.TranscriptBase,
-		TranscriptLazy: s.TranscriptLazy,
-		Budget:         s.ContextWindow,
+		Todos:              append([]protocol.TodoItem(nil), s.Todos...),
+		TodoGroup:          s.TodoGroup,
+		TodoPlans:          s.TodoPlans.Clone(),
+		TaskUpdateSequence: s.TaskUpdateSequence,
+		SystemPrompt:       s.SystemPrompt,
+		Skills:             s.Skills,
+		Archive:            s.Archive,
+		Memory:             s.Memory,
+		Messages:           append([]types.Message(nil), messages...),
+		Transcript:         append([]types.Message(nil), s.Transcript...),
+		TranscriptBase:     s.TranscriptBase,
+		TranscriptLazy:     s.TranscriptLazy,
+		Budget:             s.ContextWindow,
 		Tracker: token.State{
 			LastPromptTokens: s.TrackerPrompt,
 			NewMessageTokens: s.TrackerNewTokens,

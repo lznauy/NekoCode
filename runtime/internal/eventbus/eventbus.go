@@ -270,81 +270,100 @@ func isCompactionDelta(ev core.Event) bool {
 }
 
 func (b *EventBus) Publish(ev core.Event) core.Event {
-	if b == nil {
-		return ev
-	}
-	// Allocate the replay cursor in delivery order. Parallel publishers must
-	// not enqueue a lower sequence after a subscriber has observed a higher one.
-	b.publishMu.Lock()
-	b.mu.Lock()
-	if ev.Sequence == 0 {
-		ev.Sequence = atomic.AddUint64(&b.nextEventID, 1)
-	}
-	if ev.ID == "" {
-		ev.ID = fmt.Sprintf("evt_%d", ev.Sequence)
-	}
-	if ev.Version == "" {
-		ev.Version = core.ProtocolVersion
-	}
-	if ev.Time.IsZero() {
-		ev.Time = time.Now()
-	}
+	return b.PublishCommitted([]core.Event{ev}, nil)[0]
+}
 
-	if b.closed {
-		b.mu.Unlock()
-		b.publishMu.Unlock()
-		return ev
+// PublishCommitted commits a batch before releasing its execution replies and
+// invoking ordinary observers. The callback must not block. It runs even when
+// the bus is nil or closed. Ordered observers retain their non-reentrant contract.
+func (b *EventBus) PublishCommitted(events []core.Event, committed func()) []core.Event {
+	if b == nil {
+		if committed != nil {
+			committed()
+		}
+		return events
 	}
-	record := b.recordingSink
-	observers := append([]func(core.Event){}, b.observers...)
-	ordered := append([]func(core.Event){}, b.orderedObservers...)
-	b.observerWG.Add(len(observers) + len(ordered))
-	if record != nil {
-		b.observerWG.Add(1)
+	type notification struct {
+		event     core.Event
+		observers []func(core.Event)
+		ordered   []func(core.Event)
 	}
-	b.mu.Unlock()
-	func() {
-		defer b.publishMu.Unlock()
+	notifications := make([]notification, 0, len(events))
+	// One publication lock covers the entire batch, including ordered sinks.
+	b.publishMu.Lock()
+	for i, ev := range events {
+		b.mu.Lock()
+		if ev.Sequence == 0 {
+			ev.Sequence = atomic.AddUint64(&b.nextEventID, 1)
+		}
+		if ev.ID == "" {
+			ev.ID = fmt.Sprintf("evt_%d", ev.Sequence)
+		}
+		if ev.Version == "" {
+			ev.Version = core.ProtocolVersion
+		}
+		if ev.Time.IsZero() {
+			ev.Time = time.Now()
+		}
+		if b.closed {
+			b.mu.Unlock()
+			events[i] = ev
+			continue
+		}
+		record := b.recordingSink
+		observers := append([]func(core.Event){}, b.observers...)
+		ordered := append([]func(core.Event){}, b.orderedObservers...)
+		b.observerWG.Add(len(observers) + len(ordered))
 		if record != nil {
-			defer b.observerWG.Done()
-			if err := record(cloneEvidence(ev)); err != nil && ev.IsRunTerminal() {
-				if result, ok := ev.Payload.(core.RunResult); ok {
-					result.EvidenceIncomplete = true
-					ev.Payload = result
+			b.observerWG.Add(1)
+		}
+		b.mu.Unlock()
+		if record != nil {
+			func() {
+				defer b.observerWG.Done()
+				if err := record(cloneEvidence(ev)); err != nil && ev.IsRunTerminal() {
+					if result, ok := ev.Payload.(core.RunResult); ok {
+						result.EvidenceIncomplete = true
+						ev.Payload = result
+					}
 				}
-			}
+			}()
 		}
 		b.mu.Lock()
-		// Deltas stay out of history; terminal summaries carry their full content.
 		if !isCompactionDelta(ev) {
 			b.appendHistoryLocked(ev)
 		}
 		b.mu.Unlock()
-		for _, observer := range ordered {
-			func() {
-				defer b.observerWG.Done()
-				observer(cloneEvidence(ev))
-			}()
+		events[i] = ev
+		notifications = append(notifications, notification{event: ev, observers: observers, ordered: ordered})
+	}
+	for _, n := range notifications {
+		for _, observer := range n.ordered {
+			func() { defer b.observerWG.Done(); observer(cloneEvidence(n.event)) }()
 		}
-		// Consumers may query the projections as soon as they receive an event.
-		// New subscriptions share publishMu and cannot replay this event while
-		// these sinks are pending, or receive it once from each delivery path.
 		b.mu.Lock()
 		for _, sub := range b.subscribers {
-			if eventMatches(sub.filter, ev) {
-				sub.enqueue(ev)
+			if eventMatches(sub.filter, n.event) {
+				sub.enqueue(n.event)
 			}
 		}
 		b.mu.Unlock()
-	}()
-
-	for _, observer := range observers {
-		func() {
-			defer b.observerWG.Done()
-			observer(cloneEvidence(ev))
-		}()
 	}
-	return ev
+	// Committed runs after the batch is durable, in history, and projected by
+	// every ordered observer, but before ordinary observers and under the
+	// publication lock. Replies released here therefore resume execution only
+	// after the state they depend on is visible, while the lock keeps a
+	// concurrent publisher from interleaving ahead of that state.
+	if committed != nil {
+		committed()
+	}
+	b.publishMu.Unlock()
+	for _, n := range notifications {
+		for _, observer := range n.observers {
+			func() { defer b.observerWG.Done(); observer(cloneEvidence(n.event)) }()
+		}
+	}
+	return events
 }
 
 func (b *EventBus) History(filter core.EventFilter) []core.Event {

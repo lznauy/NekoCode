@@ -130,6 +130,14 @@ func (m *Manager) compact(ctx context.Context, force bool, outputTokens int) (ap
 	if !force && !compressor.shouldAutoCompact(snap.budget, snap.estimate) {
 		return false, nil
 	}
+	// Reuse existing complete artifacts before paying for a model summary.
+	// The pressure check above already establishes the cache checkpoint.
+	if !force && m.checkpointWorkingSet() {
+		snap, compressor = m.compactionInput()
+		if compressor == nil || !compressor.shouldAutoCompact(snap.budget, snap.estimate) {
+			return true, nil
+		}
+	}
 	started := false
 	start := time.Now()
 	ev := protocol.CompactionEvent{ID: uuid.NewString(), Trigger: protocol.CompactionAuto, BeforeTokens: snap.estimate, BeforeMessages: len(snap.history)}

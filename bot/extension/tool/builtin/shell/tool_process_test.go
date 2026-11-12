@@ -107,3 +107,46 @@ func TestProcessListAndRuntimeSummary(t *testing.T) {
 		t.Fatalf("unexpected runtime summary: %q", summary)
 	}
 }
+
+func TestDefaultProcessWaitAndWatchHaveNoPeriodicWakeup(t *testing.T) {
+	for _, event := range []string{"exit", "output"} {
+		t.Run(event, func(t *testing.T) {
+			tool := testShellTool()
+			cleanupShellTool(t, tool)
+			process := NewProcessTool(tool)
+			if process.waitDuration() != 0 {
+				t.Fatal("default process monitoring still samples on a periodic deadline")
+			}
+			_, err := tool.ExecuteWithPermission(t.Context(), map[string]any{"command": "sleep 5", "name": "quiet"}, permReq())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
+			defer cancel()
+			_, err = process.Execute(ctx, map[string]any{"action": "watch", "task": "quiet", "event": event})
+			if err != context.DeadlineExceeded {
+				t.Fatalf("wait returned a synthetic result instead of awaiting cancellation: %v", err)
+			}
+			task, err := tool.registryOnce().task(tool.CurrentSessionID(), "quiet")
+			if err != nil || !task.isRunning() {
+				t.Fatal("cancelled observation killed the process")
+			}
+		})
+	}
+}
+
+func TestUnboundedProcessWaitReturnsOnlyAtRealExit(t *testing.T) {
+	tool := testShellTool()
+	cleanupShellTool(t, tool)
+	process := NewProcessTool(tool)
+	_, err := tool.ExecuteWithPermission(t.Context(), map[string]any{"command": "sleep 0.25; printf finished", "name": "finishes"}, permReq())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	result, err := process.Execute(ctx, map[string]any{"action": "wait", "task": "finishes"})
+	if err != nil || result.Process.State != "exited" || !strings.Contains(result.Text, "finished") {
+		t.Fatalf("wait did not return final outcome: %+v %v", result, err)
+	}
+}

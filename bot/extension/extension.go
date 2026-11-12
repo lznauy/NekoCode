@@ -116,7 +116,7 @@ func New(config Config) *Manager {
 	// once here — adding/removing servers never changes the tool list, which
 	// keeps the provider's cached prompt prefix stable.
 	if config.Tools != nil {
-		config.Tools.Register(&agentCatalogTool{manager: m})
+		config.Tools.RegisterWithOptions(&agentCatalogTool{manager: m}, tools.RegistrationOptions{CoordinatorAllowed: true})
 		config.Tools.RegisterWithOptions(capability.New(m.mcp), tools.RegistrationOptions{
 			ResolveTarget: capability.ResolveTarget,
 		})

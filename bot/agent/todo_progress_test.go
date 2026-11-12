@@ -116,12 +116,12 @@ func TestTodoUpdateNotifiesHostAndResetsReminder(t *testing.T) {
 			defer restore()
 			tool := &todo.TodoWriteTool{}
 			_, update := a.ToolInteraction()
-			tool.SetUpdateFn(update)
+			tool.SetApplyFn(update)
 			a.deps.toolRegistry.Register(tool)
 			a.deps.ctxMgr.SetTodos([]protocol.TodoItem{{Content: "work", Status: "pending"}})
 			a.run.todoBatches = 5
 			a.toolRunner.executeAndFeedback([]core.ToolCallItem{{ID: "update", Name: "todo_write", Args: map[string]any{
-				"todos": []any{map[string]any{"content": "work", "status": status}},
+				"todos": []any{map[string]any{"content": "work", "status": status, "result": "fixture completed"}},
 			}}}, "", func(event protocol.StepEvent) {
 				if event.Action == protocol.StepActionExecuteTool && (!notified || event.IsError) {
 					t.Fatal("todo update was not delivered before tool completion")

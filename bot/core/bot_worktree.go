@@ -41,6 +41,9 @@ func (b *Bot) registerWorktreeCommands(p *command.Parser) {
 			var out strings.Builder
 			for _, i := range items {
 				fmt.Fprintf(&out, "%s  %s  base=%s\n", i.TaskID, i.Path, i.Base)
+				if i.Removing {
+					fmt.Fprintf(&out, "  Cleanup pending: retry /worktree remove %s\n", i.TaskID)
+				}
 			}
 			return out.String(), true
 		}
@@ -57,7 +60,7 @@ func (b *Bot) registerWorktreeCommands(p *command.Parser) {
 			return err.Error(), true
 		}
 		defer lease.Close()
-		if discard {
+		if action == "remove" {
 			_, err = lease.LoadForRemoval(ctx, b.cwd, id)
 		} else {
 			_, err = lease.Load(ctx, b.cwd, id)

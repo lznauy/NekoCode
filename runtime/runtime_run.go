@@ -289,6 +289,12 @@ func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runL
 			return
 		}
 		ctx = mode.WithSnapshot(ctx, snapshot)
+		if snapshot.ID == mode.SuperAgent {
+			if err := r.background.load(r.CurrentSessionID()); err != nil {
+				r.finishRun(runID, "", err, false)
+				return
+			}
+		}
 	}
 	if !lease.guard(func() { r.publishAcceptedInput(ctx, runID, input) }) {
 		return
@@ -310,7 +316,7 @@ func (r *Runtime) publishAcceptedInput(ctx context.Context, runID RunID, input I
 		RunID: runID, Type: EventInputAccepted, Source: input.Source,
 		Payload: MessagePayload{
 			InteractionMode: snapshot,
-			Role:            "user", Content: RedactInputText(input.Text),
+			Role:            "user", Content: acceptedInputContent(ctx, input.Text),
 			Source: input.Source, Sender: input.Sender,
 			Images: ValidImageAttachments(input.Text, input.Images),
 		},
@@ -318,6 +324,18 @@ func (r *Runtime) publishAcceptedInput(ctx context.Context, runID RunID, input I
 }
 
 func (r *Runtime) handleBotCommand(ctx context.Context, runID RunID, input string, host runHost) (string, bool) {
+	if r.background.busy() && strings.HasPrefix(strings.TrimSpace(input), "/") {
+		fields := strings.Fields(input)
+		safe := false
+		switch fields[0] {
+		case "/help", "/tasks", "/sessions", "/new", "/mode", "/model", "/reasoning":
+			safe = true
+		}
+		if !safe {
+			r.finishRun(runID, "", fmt.Errorf("background tasks are active; finish or cancel them before control commands"), false)
+			return "", false
+		}
+	}
 	if r.services.Commands.ExecuteCommand == nil {
 		return input, true
 	}
@@ -437,8 +455,8 @@ func (r *Runtime) finishRun(runID RunID, output string, err error, withMetrics b
 		cancel()
 	}
 	_ = lease.wait(context.Background())
-	r.approvals.RejectAll()
-	r.questions.RejectAll()
+	r.approvals.RejectRun(runID)
+	r.questions.RejectRun(runID)
 	if withMetrics {
 		r.invalidateContext()
 		r.publishContext(runID)
@@ -449,6 +467,7 @@ func (r *Runtime) finishRun(runID RunID, output string, err error, withMetrics b
 }
 
 func (r *Runtime) endRun(runID RunID) {
+	defer r.background.signal()
 	r.mu.Lock()
 	if r.currentRun != runID {
 		r.mu.Unlock()
@@ -481,6 +500,10 @@ func (r *Runtime) endRun(runID RunID) {
 }
 
 func (r *Runtime) publishStep(runID RunID, step protocol.StepEvent) {
+	r.publishStepForSession(runID, step, r.CurrentSessionID())
+}
+
+func (r *Runtime) publishStepForSession(runID RunID, step protocol.StepEvent, sessionID string) {
 	if step.Action == protocol.StepActionCompaction && step.Compaction != nil {
 		r.events.Publish(Event{RunID: runID, Type: EventCompaction, Source: SourceRef{Kind: "bot"}, Payload: *step.Compaction})
 		return
@@ -536,13 +559,15 @@ func (r *Runtime) publishStep(runID RunID, step protocol.StepEvent) {
 		r.events.Publish(Event{
 			RunID: runID, Type: EventSubAgentStarted, Source: SourceRef{Kind: "bot"},
 			Payload: SubAgentPayload{
-				ID: step.SubAgentID, Type: step.SubAgentType, Profile: step.SubAgentProfile, SessionID: r.CurrentSessionID(),
+				ID: step.SubAgentID, Type: step.SubAgentType, Profile: step.SubAgentProfile, SessionID: sessionID,
 				Skills: append([]string(nil), step.SubAgentSkills...), Color: step.SubAgentColor,
 				Status: step.SubAgentStatus, Prompt: step.SubAgentPrompt,
 				AttemptID: step.SubAgentAttemptID, AttemptSeq: step.SubAgentAttemptSeq,
 			},
 		})
-		r.publishMetrics(runID)
+		if !strings.HasPrefix(string(runID), "task_") {
+			r.publishMetrics(runID)
+		}
 		return
 	case protocol.StepActionSubAgentUpdate:
 		r.events.Publish(Event{RunID: runID, Type: EventSubAgentUpdated, Source: SourceRef{Kind: "bot"}, Payload: SubAgentPayload{ID: step.SubAgentID, Status: step.SubAgentStatus, Phase: step.SubAgentPhase, AttemptID: step.SubAgentAttemptID, AttemptSeq: step.SubAgentAttemptSeq}})
@@ -556,13 +581,17 @@ func (r *Runtime) publishStep(runID RunID, step protocol.StepEvent) {
 			RunID: runID, Type: EventSubAgentEnded, Source: SourceRef{Kind: "bot"},
 			Payload: SubAgentPayload{ID: step.SubAgentID, Status: step.SubAgentStatus, AttemptID: step.SubAgentAttemptID, AttemptSeq: step.SubAgentAttemptSeq, Summary: summary},
 		})
-		r.publishMetrics(runID)
+		if !strings.HasPrefix(string(runID), "task_") {
+			r.publishMetrics(runID)
+		}
 		return
 	default:
 		return
 	}
 	r.events.Publish(Event{RunID: runID, Type: eventType, Source: SourceRef{Kind: "bot"}, Payload: payload})
-	r.publishMetrics(runID)
+	if !strings.HasPrefix(string(runID), "task_") {
+		r.publishMetrics(runID)
+	}
 }
 
 // Cancellation waits for settlement before reading final persistence facts.
@@ -573,4 +602,11 @@ func (e *runExecution) incompleteEvidence() bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.evidenceIncomplete
+}
+
+func acceptedInputContent(ctx context.Context, text string) string {
+	if protocol.CoordinationFromContext(ctx).Notification {
+		return "后台任务已返回结果，正在验收。"
+	}
+	return RedactInputText(text)
 }

@@ -184,9 +184,24 @@ type CommandMenuItem struct {
 }
 
 type TodoItem struct {
+	ID      string `json:"id,omitempty"`
+	Result  string `json:"result,omitempty"`
+	Reason  string `json:"reason,omitempty"`
 	Content string `json:"content"`
 	Status  string `json:"status"`
 }
+
+// TodoUpdate selects a saved plan or replaces its complete list.
+type TodoUpdate struct {
+	PlanID     string
+	Items      []TodoItem
+	SelectOnly bool
+}
+type TodoPlan struct {
+	ID    string     `json:"plan_id"`
+	Items []TodoItem `json:"todos"`
+}
+type TodoUpdateFunc func(TodoUpdate) (TodoPlan, error)
 
 type TodoFunc func([]TodoItem)
 

@@ -320,6 +320,22 @@ func (r *Runtime) EnableEventRecording(baseDir string) error {
 	r.recorder = recorder
 	r.mu.Unlock()
 	r.events.SetRecordingSink(func(ev Event) error {
+		if strings.HasPrefix(string(ev.RunID), "task_") && !strings.HasPrefix(string(ev.RunID), "task_scope_") {
+			id := strings.TrimPrefix(string(ev.RunID), "task_")
+			r.background.mu.Lock()
+			if e := r.background.entries[id]; e != nil && e.interactionID != "" && e.recording {
+				ev.RunID = e.interactionID
+				if err := recorder.BeginRun(ev.RunID, e.SessionID); err != nil {
+					r.background.mu.Unlock()
+					return err
+				}
+			}
+			r.background.mu.Unlock()
+			// Admission-only receipts have no execution archive or resource lease.
+			if !strings.HasPrefix(string(ev.RunID), "task_scope_") {
+				return nil
+			}
+		}
 		err := recorder.RecordRunEvent(ev)
 		if err != nil {
 			logger.Log("runtime: event recorder: %v", err)

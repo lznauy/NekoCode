@@ -20,6 +20,7 @@ import (
 	"nekocode/bot/provider"
 	"nekocode/bot/session"
 	"nekocode/bot/worktree"
+	interactionmode "nekocode/mode"
 	"nekocode/protocol"
 	"time"
 )
@@ -32,6 +33,9 @@ func (b *Bot) WireTaskLister(list taskbridge.TaskLister) {
 }
 
 func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provider.LLM, ag *agentcore.Agent) {
+	b.toolbox.WireTaskResultReader(func(ctx context.Context, q taskbridge.ResultQuery) (taskbridge.ResultPage, error) {
+		return session.ReadSubagentResult(ctx, b.sess.CurrentID(), q)
+	})
 	registry := b.toolbox.Registry
 	ctxMgr := b.ctxMgr
 	modelConfig := b.cfg.Clone()
@@ -39,6 +43,14 @@ func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provi
 	autoCompactPercent := b.cfg.EffectiveAutoCompactPercent()
 
 	b.toolbox.WireTaskRunner(func(ctx context.Context, spec taskbridge.TaskSpec) (taskResult *taskbridge.TaskResult, runErr error) {
+		if snapshot, ok := interactionmode.FromContext(ctx); ok && snapshot.ID == interactionmode.SuperAgent {
+			return b.submitBackgroundTask(ctx, spec, parentModel, modelConfig, compactionModel, ag)
+		}
+		// Worker execution uses its profile ceiling, not the coordinator's
+		// tool view. Permission inheritance is configured independently below.
+		origin := ctx
+		workerMode, _ := interactionmode.Resolve(interactionmode.Standard)
+		ctx = interactionmode.WithSnapshot(ctx, workerMode.Snapshot)
 		parentID := b.sess.CurrentID()
 		id := taskbridge.TaskIDFromCtx(ctx)
 		savedProfile := ""
@@ -63,6 +75,9 @@ func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provi
 		}
 		profile, err := b.ext.AgentProfile(spec.Profile)
 		if err != nil {
+			return nil, err
+		}
+		if err := profile.CheckSource(origin); err != nil {
 			return nil, err
 		}
 		if spec.ResumeID != "" && savedProfile != profile.Name {
@@ -166,6 +181,12 @@ func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provi
 		cfg := buildSubagentRunConfig(ctx, spec, profile, skillContents, effectiveModelWindow(selectedModel), autoCompactPercent, ag, parentID, b.environment, attempt.ID, attempt.Seq)
 		cfg.SkillNames = skillNames
 		if isolated != nil {
+			if err := child.SetWorkspaceKind("head"); err != nil {
+				return nil, err
+			}
+			if err := child.SetWorkspaceBaseline(workInfo.Base, workInfo.SourceHead); err != nil {
+				return nil, err
+			}
 			cfg.IsolatedWorkspace = true
 			home, _ := os.UserHomeDir()
 			cfg.ConfigurePermissions = func(executor *runner.Executor) {

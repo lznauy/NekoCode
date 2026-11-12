@@ -12,6 +12,7 @@ import (
 	"nekocode/interaction/tui/components/processing"
 	controlruntime "nekocode/runtime"
 
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -21,6 +22,7 @@ const taskActiveResyncInterval = 5 * time.Second
 const taskIdleResyncInterval = 30 * time.Second
 
 type taskOverlay struct {
+	allSessions                       bool
 	open                              bool
 	background                        string
 	renderedView                      string
@@ -81,6 +83,8 @@ type taskDetail struct {
 	attemptsErr         string
 	attemptsRetryBefore int
 	showProcess         bool
+	process             *taskProcessPage
+	inspectorFollow     bool
 	liveOrder           []string
 	newAttempt          bool
 	seenTranscriptSeq   int
@@ -100,11 +104,18 @@ type liveTaskTool struct {
 }
 
 type taskTickMsg struct{ generation uint64 }
+type taskAnimationMsg struct{ generation uint64 }
 type taskListMsg struct {
 	generation, request uint64
 	page                controlruntime.SubagentPage
 	err                 error
 }
+type taskPromptMsg struct {
+	generation, request uint64
+	id, prompt          string
+	err                 error
+}
+
 type taskHistoryViewport struct {
 	index, line int
 }
@@ -168,7 +179,7 @@ func (m *Model) toggleTasks() tea.Cmd {
 	s.generation++
 	s.listLoading = false
 	m.resizeTasks()
-	cmds := []tea.Cmd{m.loadTasks(), taskTick(s.generation)}
+	cmds := []tea.Cmd{m.loadTasks(), taskTick(s.generation), taskAnimationTick(s.generation)}
 	if s.detail != nil {
 		cmds = append(cmds, m.subscribeTask(), m.loadTaskHistory(s.detail.currentCursor()), m.loadTaskAttempts())
 		if out := s.detail.output; out != nil && out.resume {
@@ -205,6 +216,10 @@ func (m *Model) closeTasks() {
 	}
 }
 
+func taskAnimationTick(generation uint64) tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg { return taskAnimationMsg{generation} })
+}
+
 func taskTick(generation uint64) tea.Cmd {
 	return tea.Tick(taskPollInterval, func(time.Time) tea.Msg { return taskTickMsg{generation} })
 }
@@ -216,7 +231,7 @@ func (m *Model) loadTasks() tea.Cmd {
 	s.listRequest++
 	s.listLoading = true
 	generation, request := s.generation, s.listRequest
-	filter := controlruntime.SubagentFilter{SessionID: s.sessionID, Query: s.query, Offset: s.listOffset, Limit: 1000}
+	filter := controlruntime.SubagentFilter{AllSessions: s.allSessions, SessionID: s.sessionID, Query: s.query, Offset: s.listOffset, Limit: 1000}
 	reader := m.Runtime.(controlruntime.SubagentReader)
 	return func() tea.Msg {
 		page, err := reader.Subagents(filter)
@@ -251,7 +266,7 @@ func cloneTaskAttempt(attempt *controlruntime.SubagentAttemptSummary) *controlru
 
 func (d *taskDetail) isLatestAttempt() bool {
 	if d.attempt == nil {
-		return d.info.LatestAttempt == nil
+		return d.info.LatestAttempt == nil || d.info.Status == "queued"
 	}
 	return d.info.LatestAttempt != nil && d.info.LatestAttempt.ID == d.attempt.ID
 }
@@ -302,7 +317,7 @@ func (m *Model) loadTaskAttemptsBefore(before int) tea.Cmd {
 	d.attemptRequest++
 	d.attemptsLoading = true
 	d.attemptsErr = ""
-	generation, request, parent, id := s.generation, d.attemptRequest, s.sessionID, d.id
+	generation, request, parent, id := s.generation, d.attemptRequest, m.taskParentSession(), d.id
 	return func() tea.Msg {
 		page, err := reader.SubagentAttempts(parent, id, before, 100)
 		return taskAttemptsMsg{generation: generation, request: request, id: id, before: before, page: page, err: err}
@@ -311,14 +326,29 @@ func (m *Model) loadTaskAttemptsBefore(before int) tea.Cmd {
 
 func (m *Model) loadTaskHistory(before int) tea.Cmd {
 	s, d := m.tasks, m.tasks.detail
-	if d == nil || !d.info.Recorded {
+	if d == nil {
 		return nil
+	}
+	if !d.info.Recorded || d.attempt == nil && d.info.Status == "queued" {
+		reader, ok := m.Runtime.(interface {
+			BackgroundTaskPrompt(string, string) (string, error)
+		})
+		if !ok || d.fullPromptLoaded {
+			return nil
+		}
+		d.request++
+		d.loading = true
+		generation, request, parent, id := s.generation, d.request, m.taskParentSession(), d.id
+		return func() tea.Msg {
+			prompt, err := reader.BackgroundTaskPrompt(parent, id)
+			return taskPromptMsg{generation: generation, request: request, id: id, prompt: prompt, err: err}
+		}
 	}
 	if before == 0 {
 		before = taskAttemptCursor(d.attempt)
 	}
 	if d.attempt != nil && d.attempt.TranscriptStart > d.attempt.TranscriptEnd {
-		d.page = controlruntime.SubagentHistoryPage{SessionID: s.sessionID, SubagentID: d.id}
+		d.page = controlruntime.SubagentHistoryPage{SessionID: m.taskParentSession(), SubagentID: d.id}
 		d.historyLoaded = true
 		m.rebuildTaskDetail()
 		return nil
@@ -328,7 +358,7 @@ func (m *Model) loadTaskHistory(before int) tea.Cmd {
 	if !d.showProcess && !d.historyLoaded {
 		m.rebuildTaskDetail()
 	}
-	generation, request, parent, id := s.generation, d.request, s.sessionID, d.id
+	generation, request, parent, id := s.generation, d.request, m.taskParentSession(), d.id
 	following := d.follow
 	var viewport *taskHistoryViewport
 	if len(d.page.Records) > 0 {
@@ -395,6 +425,13 @@ func (m *Model) subscribeTask() tea.Cmd {
 		s.streamCancel()
 	}
 	s.stream = nil
+	// Cross-session archives are read-only and refresh from their persisted
+	// parent-scoped pages. The live event filter has only a task ID, which is
+	// not sufficient to distinguish imported IDs reused by another session.
+	if parent, ok := m.Runtime.(interface{ CurrentSessionID() string }); ok && m.taskParentSession() != parent.CurrentSessionID() {
+		s.streamCancel = nil
+		return nil
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.streamCancel = cancel
 	s.streamRequest++
@@ -434,13 +471,29 @@ func (m *Model) handleTaskMessage(msg tea.Msg) (bool, tea.Cmd) {
 		return true, cmd
 	}
 	switch msg := msg.(type) {
+	case taskAnimationMsg:
+		if !s.open || msg.generation != s.generation {
+			return true, nil
+		}
+		// The foreground clock may stop at any time; the overlay owns its own
+		// generation-scoped clock. Reuse cached output when nothing animates.
+		s.reuseView = true
+		if d := s.detail; d != nil && d.processing != nil && d.active() && m.state != stateProcessing && m.state != stateConfirming && m.state != stateQuestioning {
+			m.Spinner, _ = m.Spinner.Update(spinner.TickMsg{})
+			d.processing.SetSpinnerView(m.Spinner.View())
+			if d.list != nil {
+				d.list.InvalidateItem(d.list.Len() - 1)
+			}
+			s.reuseView = false
+		}
+		return true, taskAnimationTick(s.generation)
 	case taskFrameMsg:
 		d := s.detail
 		if !s.open || msg.generation != s.generation || msg.request != s.streamRequest || d == nil || msg.id != d.id {
 			return true, nil
 		}
 		d.framePending = false
-		if d.dirty && (!d.info.Recorded || d.historyLoaded) && (d.follow || d.inspector != nil) && d.atLatestTail() {
+		if d.dirty && (!d.info.Recorded || d.historyLoaded) && (d.follow || d.inspector != nil || d.process != nil) && (d.atLatestTail() || d.process != nil) {
 			m.rebuildTaskDetail()
 			d.dirty = false
 			return true, m.refreshTaskInspector()
@@ -459,12 +512,12 @@ func (m *Model) handleTaskMessage(msg tea.Msg) (bool, tea.Cmd) {
 			if s.stream == nil && !s.subscribeRetryAt.IsZero() && !now.Before(s.subscribeRetryAt) {
 				cmds = append(cmds, m.subscribeTask())
 			}
-			if d.dirty && (!d.info.Recorded || d.historyLoaded) && (d.follow || d.inspector != nil) && d.atLatestTail() {
+			if d.dirty && (!d.info.Recorded || d.historyLoaded) && (d.follow || d.inspector != nil || d.process != nil) && (d.atLatestTail() || d.process != nil) {
 				m.rebuildTaskDetail()
 				cmds = append(cmds, m.refreshTaskInspector())
 				d.dirty = false
 			}
-			if !d.loading && d.err == "" && d.info.Recorded && (!d.historyLoaded || (d.follow && d.isLatestAttempt() && d.info.TranscriptSeq > d.page.Total)) {
+			if !d.loading && d.err == "" && d.info.Recorded && (!d.historyLoaded || ((d.follow || d.process != nil) && d.isLatestAttempt() && d.info.TranscriptSeq > d.page.Total)) {
 				cmds = append(cmds, m.loadTaskHistory(d.currentCursor()))
 			}
 		}
@@ -481,7 +534,9 @@ func (m *Model) handleTaskMessage(msg tea.Msg) (bool, tea.Cmd) {
 			return true, nil
 		}
 		s.listError = ""
-		s.sessionID = msg.page.SessionID
+		if !s.allSessions {
+			s.sessionID = msg.page.SessionID
+		}
 		selectLast := s.appliedQuery == s.query && s.listOffset < s.appliedOffset
 		resetOrder := s.appliedQuery != s.query || s.appliedOffset != s.listOffset
 		s.items = mergeTaskRows(s.items, msg.page.Items, resetOrder)
@@ -491,32 +546,36 @@ func (m *Model) handleTaskMessage(msg tea.Msg) (bool, tea.Cmd) {
 		found := false
 		var detailCmd tea.Cmd
 		for _, item := range s.items {
-			if item.ID == s.selected {
+			if s.selectionKey(item) == s.selected {
 				found = true
 			}
-			if s.detail != nil && item.ID == s.detail.id {
+			if s.detail != nil && sameTask(item, s.detail.info) {
 				d := s.detail
-				followLatest := d.isLatestAttempt() && d.follow && !d.showAttempts && d.inspector == nil
-				if d.attempt == nil && !d.info.Recorded && item.LatestAttempt != nil {
-					d.attempt = cloneTaskAttempt(item.LatestAttempt)
+				currentAttempt := item.LatestAttempt
+				if item.Status == "queued" {
+					currentAttempt = nil
+				}
+				followLatest := d.isLatestAttempt() && d.follow && d.process == nil && !d.showAttempts && d.inspector == nil
+				if d.attempt == nil && !d.info.Recorded && currentAttempt != nil {
+					d.attempt = cloneTaskAttempt(currentAttempt)
 					d.cursors = []int{taskAttemptCursor(d.attempt)}
 					d.historyLoaded = false
 				}
-				sameAttempt := d.attempt == nil && item.LatestAttempt == nil || d.attempt != nil && item.LatestAttempt != nil && d.attempt.ID == item.LatestAttempt.ID
+				sameAttempt := d.attempt == nil && (currentAttempt == nil || item.Status == "queued") || d.attempt != nil && currentAttempt != nil && d.attempt.ID == currentAttempt.ID
 				if sameAttempt {
-					d.attempt = cloneTaskAttempt(item.LatestAttempt)
-				} else if item.LatestAttempt != nil {
+					d.attempt = cloneTaskAttempt(currentAttempt)
+				} else if currentAttempt != nil {
 					d.newAttempt = true
 				}
 				d.info = item
-				if !sameAttempt && item.LatestAttempt != nil && followLatest {
-					detailCmd = m.selectTaskAttempt(item.LatestAttempt)
+				if !sameAttempt && currentAttempt != nil && followLatest {
+					detailCmd = m.selectTaskAttempt(currentAttempt)
 					continue
 				}
 				if d.isLatestAttempt() {
 					d.newRecords = max(0, item.TranscriptSeq-d.seenTranscriptSeq)
 				}
-				if sameAttempt && d.follow {
+				if sameAttempt && (d.follow || d.process != nil) {
 					m.rebuildTaskDetail()
 				}
 			}
@@ -526,7 +585,7 @@ func (m *Model) handleTaskMessage(msg tea.Msg) (bool, tea.Cmd) {
 			if selectLast {
 				index = len(s.items) - 1
 			}
-			s.selected = s.items[index].ID
+			s.selected = s.selectionKey(s.items[index])
 		}
 		if s.listDirty {
 			return true, tea.Batch(detailCmd, m.loadTasks())
@@ -552,6 +611,21 @@ func (m *Model) handleTaskMessage(msg tea.Msg) (bool, tea.Cmd) {
 			d.attempts = msg.page
 		}
 		return true, nil
+	case taskPromptMsg:
+		d := s.detail
+		if !s.open || d == nil || msg.generation != s.generation || msg.request != d.request || msg.id != d.id {
+			return true, nil
+		}
+		d.loading = false
+		if msg.err != nil {
+			d.err = msg.err.Error()
+			return true, nil
+		}
+		d.err = ""
+		d.fullPrompt, d.fullPromptLoaded = msg.prompt, msg.prompt != ""
+		d.historyLoaded = true
+		m.rebuildTaskDetail()
+		return true, nil
 	case taskHistoryMsg:
 		d := s.detail
 		if !s.open || msg.generation != s.generation || d == nil || msg.id != d.id || msg.request != d.request {
@@ -572,7 +646,7 @@ func (m *Model) handleTaskMessage(msg tea.Msg) (bool, tea.Cmd) {
 		index, line := d.list.ViewportAnchor()
 		readerMoved := msg.viewport != nil && (index != msg.viewport.index || line != msg.viewport.line)
 		tailRefresh := d.attempt != nil && d.isLatestAttempt() && len(d.cursors) == 1 && msg.before >= d.loadedCursor
-		if !d.follow && len(d.page.Records) > 0 && (readerMoved || msg.following || (msg.before == d.loadedCursor || tailRefresh) && msg.page.End > d.page.End) {
+		if d.process == nil && !d.follow && len(d.page.Records) > 0 && (readerMoved || msg.following || (msg.before == d.loadedCursor || tailRefresh) && msg.page.End > d.page.End) {
 			d.newRecords = max(d.newRecords, msg.page.Total-d.seenTranscriptSeq)
 			return true, nil
 		}
@@ -645,16 +719,27 @@ func (m *Model) handleTaskMessage(msg tea.Msg) (bool, tea.Cmd) {
 			}
 		}
 		d.liveOrder = liveOrder
-		if movingNewer && d.atLatestTail() {
+		if d.process == nil && movingNewer && d.atLatestTail() {
 			d.follow = true
 		}
 		m.rebuildTaskDetail()
-		if hadPage && previousCursor != msg.before {
+		if d.process == nil && hadPage && previousCursor != msg.before {
 			if d.follow || movingNewer {
 				d.list.ScrollToBottom()
 			} else {
 				d.list.ScrollToTop()
 			}
+		}
+		if p := d.process; p != nil && p.seekOldest {
+			if len(p.calls) > 0 {
+				p.selected = p.calls[0].entry.call.ID
+				m.renderTaskProcessRows()
+				p.list.ScrollToTop()
+			}
+			if d.historyHasMore() && !d.loading {
+				return true, tea.Batch(m.refreshTaskInspector(), m.loadTaskHistory(d.page.Before))
+			}
+			p.seekOldest = false
 		}
 		return true, m.refreshTaskInspector()
 	case taskSubscribedMsg:
@@ -682,9 +767,13 @@ func (m *Model) handleTaskMessage(msg tea.Msg) (bool, tea.Cmd) {
 		if msg.event.Sequence > 0 && msg.event.Sequence <= d.eventSeq {
 			return true, listenTaskEvent(s.stream, s.generation, s.streamRequest, d.id)
 		}
-		if p, ok := msg.event.Payload.(controlruntime.SubAgentPayload); ok && msg.event.Type == controlruntime.EventSubAgentStarted && p.AttemptID != "" && d.attempt == nil && !d.info.Recorded {
+		if p, ok := msg.event.Payload.(controlruntime.SubAgentPayload); ok && msg.event.Type == controlruntime.EventSubAgentStarted && p.AttemptID != "" && d.attempt == nil && (!d.info.Recorded || d.info.Status == "queued") &&
+			(d.info.LatestAttempt == nil || p.AttemptSeq > d.info.LatestAttempt.Seq && p.AttemptID != d.info.LatestAttempt.ID) {
 			d.attempt = &controlruntime.SubagentAttemptSummary{ID: p.AttemptID, Seq: p.AttemptSeq, Status: p.Status, Prompt: p.Prompt}
 			d.info.LatestAttempt = cloneTaskAttempt(d.attempt)
+			d.request++
+			d.loading = false
+			d.historyLoaded = false
 		}
 		if p, ok := msg.event.Payload.(controlruntime.SubAgentOutput); ok {
 			d.applyLiveOutput(msg.event, p)
@@ -699,6 +788,11 @@ func (m *Model) handleTaskMessage(msg tea.Msg) (bool, tea.Cmd) {
 					tool.payload.ToolName = p.ToolName
 				}
 				tool.payload.CallID = p.CallID
+				// Completion owns its execution receipts; later previews may omit
+				// evidence and must not erase it or share the publisher's slice.
+				if p.Evidence.Schema != 0 || len(p.Evidence.Executions) > 0 {
+					tool.payload.Evidence = p.Evidence.Clone()
+				}
 				if msg.event.Type == controlruntime.EventToolPreview {
 					tool.payload.Preview = p.Preview
 				}
@@ -714,7 +808,10 @@ func (m *Model) handleTaskMessage(msg tea.Msg) (bool, tea.Cmd) {
 				d.dirty = true
 			}
 		}
-		refreshAttempts := false
+		refreshAttempts := msg.event.Type == controlruntime.EventSubAgentEnded && func() bool {
+			p, ok := msg.event.Payload.(controlruntime.SubAgentPayload)
+			return ok && p.AttemptID == ""
+		}()
 		if p, ok := msg.event.Payload.(controlruntime.SubAgentPayload); ok && d.acceptsAttempt(p.AttemptID) &&
 			(msg.event.Time.IsZero() || d.info.UpdatedAt.IsZero() || msg.event.Time.After(d.info.UpdatedAt)) {
 			if p.Status != "" {
@@ -732,6 +829,9 @@ func (m *Model) handleTaskMessage(msg tea.Msg) (bool, tea.Cmd) {
 			refreshAttempts = msg.event.Type == controlruntime.EventSubAgentEnded
 		}
 		d.eventSeq = max(d.eventSeq, msg.event.Sequence)
+		if d.process != nil {
+			m.rebuildTaskProcess()
+		}
 		cmds := []tea.Cmd{listenTaskEvent(s.stream, s.generation, s.streamRequest, d.id)}
 		cmds = append(cmds, m.scheduleTaskFrame())
 		if refreshAttempts {
@@ -761,34 +861,44 @@ func (m *Model) shouldRefreshTaskList(now time.Time) bool {
 func (m *Model) openSelectedTask() tea.Cmd {
 	s := m.tasks
 	for _, item := range s.items {
-		if item.ID != s.selected {
+		if s.selectionKey(item) != s.selected {
 			continue
 		}
+		currentAttempt := item.LatestAttempt
+		if item.Status == "queued" {
+			currentAttempt = nil
+		}
 		restored := false
-		if s.detail == nil || s.detail.id != item.ID {
+		if s.detail == nil || !sameTask(s.detail.info, item) {
 			s.generation++
 			if s.listLoading {
 				s.listDirty = true
 			}
 			s.listLoading = false
-			if s.savedDetail != nil && s.savedDetail.id == item.ID {
+			if s.savedDetail != nil && sameTask(s.savedDetail.info, item) {
 				restored = true
 				s.detail = s.savedDetail
 				d := s.detail
-				sameAttempt := d.attempt == nil && item.LatestAttempt == nil || d.attempt != nil && item.LatestAttempt != nil && d.attempt.ID == item.LatestAttempt.ID
+				sameAttempt := d.attempt == nil && currentAttempt == nil || d.attempt != nil && currentAttempt != nil && d.attempt.ID == currentAttempt.ID
 				if sameAttempt {
-					d.attempt = cloneTaskAttempt(item.LatestAttempt)
+					d.attempt = cloneTaskAttempt(currentAttempt)
 				}
 				d.info = item
+				if item.Status == "queued" {
+					d.attempt = nil
+					d.fullPrompt = ""
+					d.fullPromptLoaded = false
+					d.historyLoaded = false
+				}
 				s.savedDetail = nil
-				if !sameAttempt && item.LatestAttempt != nil {
-					return tea.Batch(m.selectTaskAttempt(item.LatestAttempt), m.loadTaskAttempts(), taskTick(s.generation))
+				if !sameAttempt && currentAttempt != nil {
+					return tea.Batch(m.selectTaskAttempt(currentAttempt), m.loadTaskAttempts(), taskTick(s.generation), taskAnimationTick(s.generation))
 				}
 				if d.isLatestAttempt() {
 					d.newRecords = max(0, item.TranscriptSeq-d.seenTranscriptSeq)
 				}
 			} else {
-				s.detail = &taskDetail{id: item.ID, info: item, attempt: cloneTaskAttempt(item.LatestAttempt), follow: true, cursors: []int{taskAttemptCursor(item.LatestAttempt)}, seenTranscriptSeq: item.TranscriptSeq, tools: make(map[string]liveTaskTool), committedResults: make(map[string]controlruntime.SubagentRecord), list: components.NewList()}
+				s.detail = &taskDetail{id: item.ID, info: item, attempt: cloneTaskAttempt(currentAttempt), follow: true, cursors: []int{taskAttemptCursor(currentAttempt)}, seenTranscriptSeq: item.TranscriptSeq, tools: make(map[string]liveTaskTool), committedResults: make(map[string]controlruntime.SubagentRecord), list: components.NewList()}
 			}
 		}
 		m.resizeTasks()
@@ -796,7 +906,7 @@ func (m *Model) openSelectedTask() tea.Cmd {
 		if restored || s.detail.showProcess || historyCmd == nil {
 			m.rebuildTaskDetail()
 		}
-		return tea.Batch(m.subscribeTask(), historyCmd, m.loadTaskAttempts(), taskTick(s.generation))
+		return tea.Batch(m.subscribeTask(), historyCmd, m.loadTaskAttempts(), taskTick(s.generation), taskAnimationTick(s.generation))
 	}
 	return nil
 }
@@ -858,11 +968,14 @@ func (m *Model) selectTaskAttempt(attempt *controlruntime.SubagentAttemptSummary
 	d.fullPrompt, d.fullPromptLoaded = "", false
 	d.showAttempts = false
 	d.showProcess = false
+	d.process = nil
+	d.inspector = nil
+	d.output = nil
 	d.newAttempt = false
 	d.follow = true
 	d.newRecords = 0
 	d.seenTranscriptSeq = attempt.TranscriptEnd
-	d.page = controlruntime.SubagentHistoryPage{SessionID: m.tasks.sessionID, SubagentID: d.id}
+	d.page = controlruntime.SubagentHistoryPage{SessionID: m.taskParentSession(), SubagentID: d.id}
 	cursor := taskAttemptCursor(d.attempt)
 	d.cursors = []int{cursor}
 	d.loadedCursor = cursor
@@ -981,6 +1094,12 @@ func (m *Model) handleTaskKey(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		if d.inspector != nil {
+			switch msg.String() {
+			case "up", "pgup", "home":
+				d.inspectorFollow = false
+			case "end":
+				d.inspectorFollow = true
+			}
 			if msg.String() == "esc" {
 				d.inspector = nil
 				d.output = nil
@@ -989,6 +1108,9 @@ func (m *Model) handleTaskKey(msg tea.KeyPressMsg) tea.Cmd {
 				return nil
 			}
 			if output := d.output; output != nil && !output.loading {
+				if msg.String() == "end" && output.loaded && output.page.HasMore {
+					return m.loadTaskOutput(max(0, output.page.Total-(64<<10)))
+				}
 				if msg.String() == "r" {
 					if output.err != "" {
 						return m.loadTaskOutput(output.requestedOffset)
@@ -1003,7 +1125,13 @@ func (m *Model) handleTaskKey(msg tea.KeyPressMsg) tea.Cmd {
 				}
 			}
 			scrollTaskList(d.inspector, msg.String())
+			if msg.String() == "down" || msg.String() == "pgdown" {
+				d.inspectorFollow = d.inspector.AtBottom()
+			}
 			return nil
+		}
+		if d.process != nil {
+			return m.handleTaskProcessKey(msg.String())
 		}
 		switch msg.String() {
 		case "/":
@@ -1022,7 +1150,7 @@ func (m *Model) handleTaskKey(msg tea.KeyPressMsg) tea.Cmd {
 			d.request++
 			s.savedDetail = d
 			s.detail = nil
-			return taskTick(s.generation)
+			return tea.Batch(taskTick(s.generation), taskAnimationTick(s.generation))
 		case "enter":
 			return m.inspectVisibleTaskTool()
 		case "r":
@@ -1032,8 +1160,8 @@ func (m *Model) handleTaskKey(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			return tea.Batch(m.loadTaskHistory(cursor), m.loadTaskAttempts())
 		case "p":
-			d.showProcess = !d.showProcess
-			if !d.showProcess {
+			if d.showProcess {
+				d.showProcess = false
 				d.follow = true
 				cursor := taskAttemptCursor(d.attempt)
 				if d.currentCursor() != cursor {
@@ -1041,8 +1169,10 @@ func (m *Model) handleTaskKey(msg tea.KeyPressMsg) tea.Cmd {
 					m.rebuildTaskDetail()
 					return cmd
 				}
+				m.rebuildTaskDetail()
+				return nil
 			}
-			m.rebuildTaskDetail()
+			m.enterTaskProcess()
 			return nil
 		case "[":
 			return m.stepTaskAttempt(-1)
@@ -1070,6 +1200,14 @@ func (m *Model) handleTaskKey(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 	switch msg.String() {
+	case "a":
+		s.allSessions = !s.allSessions
+		s.listOffset = 0
+		s.selected = ""
+		s.items = nil
+		return m.loadTasks()
+	case "d":
+		return m.requestTaskDelete()
 	case "esc", "ctrl+c":
 		m.closeTasks()
 	case "/":
@@ -1081,7 +1219,7 @@ func (m *Model) handleTaskKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "up", "down", "pgup", "pgdown", "home", "end":
 		index := 0
 		for i, item := range s.items {
-			if item.ID == s.selected {
+			if s.selectionKey(item) == s.selected {
 				index = i
 				break
 			}
@@ -1109,7 +1247,7 @@ func (m *Model) handleTaskKey(msg tea.KeyPressMsg) tea.Cmd {
 			return m.loadTasks()
 		}
 		if len(s.items) > 0 {
-			s.selected = s.items[max(0, min(index, len(s.items)-1))].ID
+			s.selected = s.selectionKey(s.items[max(0, min(index, len(s.items)-1))])
 		}
 	}
 	return nil
@@ -1162,7 +1300,7 @@ func (m *Model) taskCommand(value string) (bool, tea.Cmd) {
 }
 
 func taskStatus(status string) string {
-	labels := map[string]string{"running": "● 运行中", "waiting_approval": "! 等待审批", "waiting_question": "? 等待回答", "completed": "✓ 完成", "partial": "◐ 部分完成", "failed": "× 失败", "interrupted": "■ 已中断", "unavailable": "× 记录不可用", "unknown": "· 已结束", "queued": "◷ 排队", "not_started": "■ 未启动"}
+	labels := map[string]string{"running": "● 运行中", "waiting_approval": "! 等待审批", "waiting_question": "? 等待回答", "completed": "✓ 完成", "partial": "◐ 部分完成", "failed": "× 失败", "interrupted": "■ 已中断", "unavailable": "× 记录不可用", "unknown": "· 已结束", "queued": "◷ 排队", "waiting_dependencies": "◷ 等待上游", "blocked": "■ 上游未成功", "not_started": "■ 未启动"}
 	if label := labels[status]; label != "" {
 		return label
 	}
@@ -1182,11 +1320,11 @@ func canObserveTasks(rt RuntimeClient) bool {
 func mergeTaskRows(previous, incoming []controlruntime.SubagentSummary, reset bool) []controlruntime.SubagentSummary {
 	rank := func(status string) int {
 		switch status {
-		case "waiting_approval", "waiting_question", "failed", "unavailable":
+		case "waiting_approval", "waiting_question", "failed", "unavailable", "blocked":
 			return 0
 		case "running":
 			return 1
-		case "queued":
+		case "queued", "waiting_dependencies":
 			return 2
 		}
 		return 3
@@ -1198,19 +1336,118 @@ func mergeTaskRows(previous, incoming []controlruntime.SubagentSummary, reset bo
 	}
 	byID := make(map[string]controlruntime.SubagentSummary, len(incoming))
 	for _, item := range incoming {
-		byID[item.ID] = item
+		byID[taskIdentity(item)] = item
 	}
 	rows := make([]controlruntime.SubagentSummary, 0, len(incoming))
 	for _, item := range previous {
-		if updated, ok := byID[item.ID]; ok {
+		if updated, ok := byID[taskIdentity(item)]; ok {
 			rows = append(rows, updated)
-			delete(byID, item.ID)
+			delete(byID, taskIdentity(item))
 		}
 	}
 	for _, item := range incoming {
-		if _, ok := byID[item.ID]; ok {
+		if _, ok := byID[taskIdentity(item)]; ok {
 			rows = append(rows, item)
 		}
 	}
 	return rows
+}
+
+func (m *Model) taskParentSession() string {
+	if m.tasks.detail != nil && m.tasks.detail.info.SessionID != "" {
+		return m.tasks.detail.info.SessionID
+	}
+	return m.tasks.sessionID
+}
+func (m *Model) requestTaskDelete() tea.Cmd {
+	rt, ok := m.Runtime.(interface {
+		DeleteSubagent(context.Context, string, string) error
+	})
+	if !ok {
+		return nil
+	}
+	s := m.tasks
+	if s == nil {
+		return nil
+	}
+	generation := s.generation
+	for _, item := range s.items {
+		if s.selectionKey(item) != s.selected {
+			continue
+		}
+		parent, id := item.SessionID, item.ID
+		m.preConfirmState = m.state
+		m.state = stateConfirming
+		m.ConfirmBar.SetDestructive("删除任务", fmt.Sprintf("删除 %s 的任务记录和专属输出？工作区修改及 worktree 会保留。", id), "删除", func(confirmed bool) {
+			if !confirmed || m.tasks != s || !s.open || s.generation != generation {
+				return
+			}
+			if err := rt.DeleteSubagent(context.Background(), parent, id); err != nil {
+				s.listError = err.Error()
+				return
+			}
+			deletedIndex, removed := 0, 0
+			kept := s.items[:0]
+			for index, row := range s.items {
+				if row.ID == id && row.SessionID == parent {
+					deletedIndex = index
+					removed++
+					continue
+				}
+				kept = append(kept, row)
+			}
+			s.items = kept
+			// Queries captured before deletion cannot restore the removed row.
+			s.listRequest++
+			s.listLoading = false
+			s.listDirty = true
+			s.listError = ""
+			s.listPage.Total = max(0, s.listPage.Total-removed)
+			if len(kept) == 0 && s.listOffset > 0 {
+				s.listOffset = max(0, s.listOffset-1000)
+			}
+			selectedExists := false
+			for _, row := range kept {
+				if s.selectionKey(row) == s.selected {
+					selectedExists = true
+					break
+				}
+			}
+			if !selectedExists {
+				s.selected = ""
+				if len(kept) > 0 {
+					s.selected = s.selectionKey(kept[min(deletedIndex, len(kept)-1)])
+				}
+			}
+			if s.savedDetail != nil && s.savedDetail.info.ID == id && s.savedDetail.info.SessionID == parent {
+				s.savedDetail = nil
+			}
+			if s.detail != nil && s.detail.info.ID == id && s.detail.info.SessionID == parent {
+				if s.streamCancel != nil {
+					s.streamCancel()
+					s.streamCancel = nil
+				}
+				s.stream = nil
+				s.streamRequest++
+				s.detail.request++
+				s.detail = nil
+			}
+		})
+		m.resizeMessages()
+		return nil
+	}
+	return nil
+}
+
+func taskIdentity(item controlruntime.SubagentSummary) string {
+	return item.SessionID + "\x00" + item.ID
+}
+func sameTask(left, right controlruntime.SubagentSummary) bool {
+	return left.ID == right.ID && left.SessionID == right.SessionID
+}
+func (s *taskOverlay) selectionKey(item controlruntime.SubagentSummary) string {
+	if s.allSessions {
+		return taskIdentity(item)
+	}
+	return item.ID
 }

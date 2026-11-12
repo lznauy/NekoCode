@@ -48,7 +48,6 @@ type inputDraft struct {
 type Input struct {
 	modeLabel       string
 	modeOneShot     bool
-	modeAvailable   bool
 	taskObserver    bool
 	textarea        textarea.Model
 	width           int
@@ -270,8 +269,8 @@ func (i *Input) SetSending(sending bool) {
 	i.textarea.SetPromptFunc(promptCols, func(info textarea.PromptInfo) string { return text })
 }
 
-func (i *Input) SetInteractionMode(label string, oneShot, available bool) {
-	i.modeLabel, i.modeOneShot, i.modeAvailable = label, oneShot, available
+func (i *Input) SetInteractionMode(label string, oneShot, _ bool) {
+	i.modeLabel, i.modeOneShot = label, oneShot
 }
 
 func (i *Input) modeControl(compact bool) string {
@@ -282,23 +281,15 @@ func (i *Input) modeControl(compact bool) string {
 	if i.modeOneShot {
 		label += "*"
 	}
-	if i.modeAvailable && !i.sending {
-		label += " ▾"
-	}
 	prefix := "Mode: "
 	if compact {
 		prefix = "M:"
 	}
 	style := styles.TealStyle
-	if label != "Standard" && label != "Standard ▾" {
+	if label != "Standard" {
 		style = styles.YellowStyle.Bold(true)
 	}
 	return styles.SubtleStyle.Render(prefix) + style.Render(label)
-}
-
-// ModeControlWidth shares rendering with hit testing, including compact widths.
-func (i *Input) ModeControlWidth() int {
-	return min(lipgloss.Width(i.modeControl(i.compactFooter())), max(0, i.width-3))
 }
 
 func (i *Input) compactFooter() bool {

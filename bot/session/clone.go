@@ -7,6 +7,7 @@ import (
 
 	"nekocode/bot/policy/ledger"
 	"nekocode/bot/provider/types"
+	"nekocode/protocol"
 )
 
 // Clone separates all mutable session data, including the transcript omitted
@@ -16,9 +17,13 @@ func (s *Snapshot) Clone() *Snapshot {
 		return nil
 	}
 	out := *s
+	out.Todos = append([]protocol.TodoItem(nil), s.Todos...)
+	out.TodoPlans = s.TodoPlans.Clone()
 	if s.Subagent != nil {
 		metadata := *s.Subagent
 		metadata.Skills = slices.Clone(s.Subagent.Skills)
+		metadata.ResultInputs = slices.Clone(s.Subagent.ResultInputs)
+		metadata.ToolCeiling = slices.Clone(s.Subagent.ToolCeiling)
 		metadata.Attempts = slices.Clone(s.Subagent.Attempts)
 		out.Subagent = &metadata
 	}

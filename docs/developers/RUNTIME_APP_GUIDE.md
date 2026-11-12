@@ -683,4 +683,10 @@ TUI 已接入上述接口：浮层关闭时不轮询，打开后只订阅所选�
 
 TUI 主窗口按任务 ID 汇总当前父 run 的状态，成功的 `task` 调用不单独展开，失败结果仍显示。浮层列表根据生命周期和审批/问题事件标记更新，最多每 500 ms 合并查询一次；无事件时运行中每 5 秒、空闲时每 30 秒兜底同步。详情只在未读过历史或摘要水位前进时读取，不因摘要暂时落后、空历史或读取失败而每次 tick 重试；失败后可按 `r` 重试。
 
-任务摘要中的 `Title` 是独立显示名称，prompt 仅作为委派内容。可选的 `SubagentAttemptReader.SubagentAttempts(sessionID, id, before, limit)` 按 attempt 序号分页读取单任务轮次摘要，主列表的 `LatestAttempt` 不携带完整历史。attempt 摘要同时携带本轮缓存 token、工具调用次数、上下文 token 和窗口，供列表展示指标。摘要中的 Result 是有界预览，完整最终结果应从对应 attempt 的 transcript 中 `nekocode_submit_result` 调用读取，不能把预览当作完整回复。可选的 `SubagentOutputReader.SubagentToolOutput(sessionID, id, sequence, offset)` 按已提交工具结果的序号读取原始输出，每页最多 64 KiB，不接受文件路径。`SubagentObservationAvailable()` 可判断 Runtime 是否配置了列表和历史服务。这些接口尚未添加新的 HTTP 路由。
+任务摘要中的 `Title` 是独立显示名称，prompt 仅作为委派内容。可选的 `SubagentAttemptReader.SubagentAttempts(sessionID, id, before, limit)` 按 attempt 序号分页读取单任务轮次摘要，主列表的 `LatestAttempt` 不携带完整历史。attempt 摘要同时携带本轮缓存 token、工具调用次数、上下文 token 和窗口，供列表展示指标。摘要中的 Result 是有界预览，完整最终结果应从对应 attempt 的 transcript 中 `nekocode_submit_result` 调用读取，不能把预览当作完整回复。可选的 `SubagentOutputReader.SubagentToolOutput(sessionID, id, sequence, offset)` 按已提交工具结果的序号读取原始输出，每页最多 64 KiB，不接受文件路径。`SubagentObservationAvailable()` 可判断 Runtime 是否配置了列表和历史服务。这些接口及任务管理能力已通过 HTTP 和 Wails 暴露，见 [HTTP 任务接口](RUNTIME_HTTP_API.md#任务与后台管理)。
+
+### 后台任务与跨会话管理
+
+Runtime 支持 `Subagents(SubagentFilter{AllSessions:true,...})`、`DeleteSubagent(ctx,parent,id)`、`SearchSubagentOutputs(ctx,parent,id,query,after,limit)` 和 `ExportSubagentOutputs(ctx,parent,id,writer)`。跨会话视图按父会话分组；删除与恢复不得依赖 UI 的状态缓存。`BackgroundTasks` 提供状态与验收诊断，`BackgroundUsage` 提供含已删除任务的父会话汇总；`RetryBackgroundNotification` 只重试验收，不重新执行操作。TUI/GUI 及 HTTP 共享这些 Runtime DTO。
+
+前台空闲可切换会话、模式和模型。旧 worker 的执行资源、结果、用量与归档保持原归属；未开始的协调轮次绑定原会话和 Super Agent 模式，切走后等待返回。共享工作区写入仍串行，破坏性资源重配置须等持有资源的后台任务结束。

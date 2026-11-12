@@ -55,7 +55,10 @@ func (r *toolRunner) executeAndFeedback(calls []core.ToolCallItem, textContent s
 	}
 	nonExecution := make(map[int]protocol.ToolNonExecution, len(filtered.Blocked))
 	for i, reason := range filtered.Blocked {
-		stage := "governance"
+		stage := filtered.BlockStages[i]
+		if stage == "" {
+			stage = "governance"
+		}
 		if _, denied := deniedSubagents[i]; denied {
 			stage = "task_admission"
 		}
@@ -63,6 +66,7 @@ func (r *toolRunner) executeAndFeedback(calls []core.ToolCallItem, textContent s
 	}
 	emitStartCallbacks(calls, filtered.Blocked, nonExecution, callback)
 
+	dispatchPlan := r.agent.deps.ctxMgr.ActiveTodoPlanID()
 	execResults := r.executeAllowedTools(filtered.Allowed, callback)
 	results := mergeResults(calls, filtered.Blocked, execResults)
 	for i, record := range nonExecution {
@@ -72,6 +76,25 @@ func (r *toolRunner) executeAndFeedback(calls []core.ToolCallItem, textContent s
 
 	msgs := emitResultCallbacks(calls, filtered.Blocked, results, callback)
 	r.addToolResultsAndHints(calls, msgs, filtered.PreToolHints)
+	for _, result := range results {
+		if result.Name == "todo_write" {
+			var err error
+			if result.Error != "" {
+				err = fmt.Errorf("%s", result.Error)
+			}
+			r.agent.recordTodoUpdate(err)
+		}
+		if result.Error != "" {
+			continue
+		}
+		if result.Name == "todo_write" {
+			r.agent.run.todoTouched = true
+		}
+		if result.Name == "task_submit" {
+			r.agent.run.todoDispatched = true
+			r.agent.run.todoDispatchPlan = dispatchPlan
+		}
+	}
 	r.agent.observeTodoProgress(execResults)
 
 	if filtered.Terminated {
@@ -90,7 +113,7 @@ const todoReminderBatches = 6
 // Receipts establish tool activity, never completion of a deliverable.
 func (a *Agent) observeTodoProgress(results []core.ToolCallResult) {
 	status := a.deps.ctxMgr.Status()
-	if !status.HasTasks || status.TasksDone {
+	if !status.HasTasks || !status.TasksActionable {
 		a.run.todoBatches = 0
 		return
 	}
@@ -137,15 +160,25 @@ type filteredCalls struct {
 	Allowed      []core.ToolCallItem
 	AllowedIdx   []int // original index in the caller's calls slice, parallel to Allowed
 	Blocked      map[int]string
+	BlockStages  map[int]string
 	PreToolHints []*policy.Hint
 }
 
 func (r *toolRunner) filterToolCalls(calls []core.ToolCallItem) filteredCalls {
 	out := filteredCalls{
-		Allowed: make([]core.ToolCallItem, 0, len(calls)),
-		Blocked: make(map[int]string),
+		Allowed:     make([]core.ToolCallItem, 0, len(calls)),
+		Blocked:     make(map[int]string),
+		BlockStages: make(map[int]string),
 	}
 	for i, c := range calls {
+		if err := r.agent.deps.toolExecutor.CheckToolPolicy(c.Name); err != nil {
+			out.Blocked[i] = err.Error()
+			out.BlockStages[i] = "mode"
+			if _, lookupErr := r.agent.deps.toolRegistry.Lookup(c.Name); lookupErr != nil {
+				out.BlockStages[i] = "dispatch"
+			}
+			continue
+		}
 		decision := toolpolicy.Check(r.agent.deps.gov, effectiveToolCall(c), r.agent.getCtx())
 		for j := range decision.Hints {
 			hint := decision.Hints[j]
@@ -153,6 +186,7 @@ func (r *toolRunner) filterToolCalls(calls []core.ToolCallItem) filteredCalls {
 		}
 		if decision.Terminated {
 			out.Terminated = true
+			clear(out.BlockStages)
 			r.agent.run.stopReason = decision.StopReason
 			r.agent.run.err = fmt.Errorf("tool execution stopped by hook: %s", decision.BlockReason)
 			r.agent.clearFinalState()
@@ -248,7 +282,7 @@ func (r *toolRunner) executeAllowedTools(allowed []core.ToolCallItem, callback R
 	}
 	for _, call := range allowed {
 		name, _ := call.Effective()
-		if name == "task" || name == "task_list" {
+		if name == "task" || name == "task_submit" || name == "task_cancel" || name == "task_list" {
 			r.agent.run.taskReferences = nil
 			break
 		}

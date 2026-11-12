@@ -16,6 +16,7 @@ const (
 	TaskStatusCompleted TaskStatus = iota
 	TaskStatusFailed
 	TaskStatusPartial
+	TaskStatusAccepted
 )
 
 // TaskResult is returned by a delegated task runner.
@@ -30,12 +31,16 @@ type TaskResult struct {
 // concrete sub-agent implementation. Profile defines the capability ceiling;
 // Skills supply task-scoped workflows and cannot grant additional tools.
 type TaskSpec struct {
-	Isolation string
-	ResumeID  string
-	Title     string
-	Prompt    string
-	Profile   string
-	Skills    []string
+	RequiredTools []string
+	After         []string
+	InputRefs     []string
+	ReadOnly      bool
+	Isolation     string
+	ResumeID      string
+	Title         string
+	Prompt        string
+	Profile       string
+	Skills        []string
 }
 
 // TaskRunner executes a delegated task without exposing the concrete sub-agent
@@ -71,16 +76,19 @@ type TaskAttemptSummary struct {
 }
 
 type TaskSummary struct {
-	Isolation     string              `json:"isolation,omitempty"`
-	Recorded      bool                `json:"recorded"`
-	Title         string              `json:"title,omitempty"`
-	ID            string              `json:"id"`
-	Profile       string              `json:"profile"`
-	Status        string              `json:"status"`
-	Prompt        string              `json:"prompt"`
-	Result        string              `json:"result,omitempty"`
-	RunCount      int                 `json:"run_count"`
-	LatestAttempt *TaskAttemptSummary `json:"latest_attempt,omitempty"`
+	WorkspaceKind  string              `json:"workspace_kind,omitempty"`
+	QueueReason    string              `json:"queue_reason,omitempty"`
+	SchedulingNote string              `json:"scheduling_note,omitempty"`
+	Isolation      string              `json:"isolation,omitempty"`
+	Recorded       bool                `json:"recorded"`
+	Title          string              `json:"title,omitempty"`
+	ID             string              `json:"id"`
+	Profile        string              `json:"profile"`
+	Status         string              `json:"status"`
+	Prompt         string              `json:"prompt"`
+	Result         string              `json:"result,omitempty"`
+	RunCount       int                 `json:"run_count"`
+	LatestAttempt  *TaskAttemptSummary `json:"latest_attempt,omitempty"`
 }
 
 type TaskPage struct {

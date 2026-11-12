@@ -26,6 +26,8 @@ var SharedHTTPStreamClient = &nethttp.Client{
 }
 
 type Message struct {
+	// TaskUpdateSequence is a local delivery receipt, omitted from provider wire types.
+	TaskUpdateSequence uint64 `json:"task_update_sequence,omitempty"`
 	// ReadID links a local read result to its executor's in-memory evidence.
 	// Restores/compaction invalidate it; providers and session JSON omit it.
 	ReadID             string     `json:"-"`

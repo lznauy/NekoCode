@@ -101,6 +101,12 @@ func (r *turnRunner) handleText(reasoning *reasoningResult, callback RunCallback
 		return finished
 	}
 
+	if recordable && r.continueFailedTodoUpdate() {
+		return false
+	}
+	if recordable && a.run.todoUpdateError == "" && r.continueUnfinishedPlan() {
+		return a.run.err != nil
+	}
 	r.completeWithText(reasoning, recordable, callback)
 	return true
 }
@@ -117,6 +123,9 @@ func (r *turnRunner) completeWithText(reasoning *reasoningResult, recordable boo
 	a := r.agent
 	a.run.stopReason = policy.StopCompleted
 	a.run.step++
+	if recordable {
+		reasoning.ActionInput += r.todoDispositionSummary(false)
+	}
 	r.recordReasoningText(reasoning, recordable)
 	if callback != nil {
 		callback(protocol.StepEvent{Action: stepActionForReasoning(reasoning.Action), Output: reasoning.ActionInput})
@@ -180,11 +189,20 @@ func (r *turnRunner) applyStopHint(reasoning *reasoningResult, hint *policy.Hint
 	a := r.agent
 	a.run.consecutiveHints++
 	if a.run.consecutiveHints >= maxConsecutiveHints {
+		if recordable && r.continueFailedTodoUpdate() {
+			return false
+		}
+		if recordable && a.run.todoUpdateError == "" && r.continueUnfinishedPlan() {
+			return a.run.err != nil
+		}
 		a.run.step++
 		a.run.stopReason = policy.StopCompleted
 		if reasoning.IsError || reasoning.GarbledToolCall {
 			a.clearFinalState()
 		} else {
+			if recordable {
+				reasoning.ActionInput += r.todoDispositionSummary(false)
+			}
 			r.recordReasoningText(reasoning, recordable)
 		}
 		return true
@@ -251,6 +269,9 @@ func (r *turnRunner) applyStopOutcome(out policy.Outcome, reasoning *reasoningRe
 			a.run.err = fmt.Errorf("hook stopped run: %s", out.Reason)
 			a.clearFinalState()
 		} else {
+			if recordable {
+				reasoning.ActionInput += r.todoDispositionSummary(true)
+			}
 			r.recordReasoningText(reasoning, recordable)
 		}
 		return true, true

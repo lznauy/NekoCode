@@ -9,21 +9,25 @@ import (
 	"strings"
 
 	"nekocode/bot/extension/agentprofile"
+	"nekocode/bot/extension/mcp"
+	"nekocode/bot/extension/tool/builtin/capability"
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/toolutil"
+	"nekocode/mode"
 )
 
 // AgentInfo exposes resolved capabilities without publishing system prompts.
 type AgentInfo struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Plugin      string   `json:"plugin,omitempty"`
-	Description string   `json:"description"`
-	Tools       []string `json:"tools"`
-	Skills      []string `json:"skills,omitempty"`
-	MaxSteps    int      `json:"max_steps"`
-	Model       string   `json:"model,omitempty"`
-	Isolation   string   `json:"isolation,omitempty"`
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Plugin       string    `json:"plugin,omitempty"`
+	Description  string    `json:"description"`
+	RequiredRole mode.Role `json:"required_role,omitempty"`
+	Tools        []string  `json:"tools"`
+	Skills       []string  `json:"skills,omitempty"`
+	MaxSteps     int       `json:"max_steps"`
+	Model        string    `json:"model,omitempty"`
+	Isolation    string    `json:"isolation,omitempty"`
 }
 
 // AgentProfile resolves exact IDs first, then unique short names. Builtin short
@@ -58,7 +62,7 @@ func (m *Manager) AgentProfile(name string) (agentprofile.Profile, error) {
 }
 
 func (m *Manager) agentProfilesLocked() []agentprofile.Profile {
-	profiles := agentprofile.Builtins()
+	profiles := append(agentprofile.Builtins(), m.executorProfileLocked())
 	for owner, state := range m.active {
 		for _, p := range state.agents {
 			p = agentprofile.Clone(p)
@@ -73,7 +77,7 @@ func (m *Manager) agentProfilesLocked() []agentprofile.Profile {
 func (m *Manager) agentInfosLocked() []AgentInfo {
 	var out []AgentInfo
 	for _, p := range m.agentProfilesLocked() {
-		info := AgentInfo{ID: p.Name, Name: p.Name, Description: p.Description, Tools: p.Tools, Skills: p.Skills, MaxSteps: p.MaxSteps, Model: p.Model, Isolation: p.Isolation}
+		info := AgentInfo{RequiredRole: p.RequiredRole, ID: p.Name, Name: p.Name, Description: p.Description, Tools: p.Tools, Skills: p.Skills, MaxSteps: p.MaxSteps, Model: p.Model, Isolation: p.Isolation}
 		if owner, short, ok := strings.Cut(p.Name, "/"); ok {
 			info.Plugin, info.Name = owner, short
 		}
@@ -106,7 +110,7 @@ type agentCatalogTool struct {
 
 func (*agentCatalogTool) Name() string { return "agent_profiles" }
 func (*agentCatalogTool) Description() string {
-	return "List available sub-agent profile IDs, descriptions, exact tool ceilings, default skills, model overrides, step limits and plugin load errors. Consult this catalog before choosing a custom profile for task."
+	return "List available sub-agent profile IDs, descriptions, exact tool ceilings, default skills, model overrides, step limits and plugin load errors. executor is visible only to Super Agent coordinators. Standard task may choose a profile; Super Agent always uses the dedicated executor and this catalog shows only its capabilities."
 }
 func (*agentCatalogTool) Parameters() []core.Parameter { return nil }
 func (t *agentCatalogTool) Execute(ctx context.Context, _ map[string]any) (core.ToolOutput, error) {
@@ -115,9 +119,40 @@ func (t *agentCatalogTool) Execute(ctx context.Context, _ map[string]any) (core.
 	}
 	t.manager.mu.Lock()
 	defer t.manager.mu.Unlock()
+	profiles := t.manager.agentInfosLocked()
+	visible := profiles[:0]
+	for _, info := range profiles {
+		if snapshot, ok := mode.FromContext(ctx); ok && snapshot.ID == mode.SuperAgent && info.ID != "executor" {
+			continue
+		}
+		p := agentprofile.Profile{Name: info.ID, RequiredRole: info.RequiredRole}
+		if p.CheckSource(ctx) == nil {
+			visible = append(visible, info)
+		}
+	}
 	data, err := json.Marshal(struct {
 		Profiles []AgentInfo       `json:"profiles"`
 		Errors   map[string]string `json:"errors,omitempty"`
-	}{t.manager.agentInfosLocked(), t.manager.agentErrorsLocked()})
+	}{visible, t.manager.agentErrorsLocked()})
 	return core.ToolOutput{Text: string(data)}, err
 }
+
+func (m *Manager) executorProfileLocked() agentprofile.Profile {
+	names := []string{}
+	if m.tools != nil {
+		names = m.tools.DelegatableNames()
+	}
+	snapshot := m.mcp.CaptureTools()
+	for _, identity := range snapshot.Identities() {
+		names = append(names, capability.TargetName(identity.Server, identity.Tool))
+	}
+	if len(snapshot.Identities()) > 0 {
+		names = append(names, capability.ToolName)
+	}
+	sort.Strings(names)
+	return agentprofile.Executor(names)
+}
+
+// CaptureDelegatedMCP binds the service inventory without retaining mutable
+// parent conversation callbacks. Runtime pins the extension lifecycle.
+func (m *Manager) CaptureDelegatedMCP() *mcp.ToolSnapshot { return m.mcp.CaptureTools() }

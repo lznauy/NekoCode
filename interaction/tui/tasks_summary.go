@@ -10,6 +10,18 @@ import (
 )
 
 func (m *Model) observeTaskLifecycle(ev controlruntime.Event) {
+	if strings.HasPrefix(string(ev.RunID), "task_") {
+		switch ev.Type {
+		case controlruntime.EventSubAgentStarted, controlruntime.EventSubAgentUpdated, controlruntime.EventSubAgentEnded,
+			controlruntime.EventApprovalRequested, controlruntime.EventApprovalResolved,
+			controlruntime.EventQuestionRequested, controlruntime.EventQuestionResolved:
+			if m.tasks != nil && m.tasks.open {
+				m.tasks.listDirty = true
+			}
+		}
+		return
+	}
+
 	if !canObserveTasks(m.Runtime) {
 		return
 	}

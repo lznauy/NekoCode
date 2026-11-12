@@ -145,9 +145,22 @@ func (e *Executor) SetShellExecutedHook(fn func(command string)) {
 	e.fnMu.Unlock()
 }
 
-// ConfigureChildPermissions installs the parent's permission policy on a fresh
-// delegated executor. Callbacks are copied under lock; the child owns its engine.
-// Mode changes remain live so switching to manual also revokes delegated auto/full.
+// ConfigureChildPermissionMode binds a live permission source without copying
+// tool callbacks. The host owns its session scope and keeps it across rebuilds.
+func (e *Executor) ConfigureChildPermissionMode(child *Executor) {
+	e.fnMu.RLock()
+	source := e.modeSource
+	if source == nil {
+		source = e.localPermissionModeState
+	}
+	e.fnMu.RUnlock()
+	child.fnMu.Lock()
+	child.modeSource = source
+	child.fnMu.Unlock()
+}
+
+// ConfigureChildPermissions installs the parent's policy on a fresh executor.
+// Epoch changes invalidate stale approvals without freezing the child's mode.
 func (e *Executor) ConfigureChildPermissions(child *Executor) {
 	e.fnMu.RLock()
 	shell, web, hook := e.bashAutoJudge, e.webAutoJudge, e.shellExecutedHook
@@ -240,6 +253,9 @@ func (e *Executor) SetFullAccess(on bool) {
 		e.setPermissionModeLocked(permission.ModeManual)
 	}
 }
+
+// PermissionMode reads the current live authority without exposing its epoch.
+func (e *Executor) PermissionMode() permission.Mode { return e.permissionMode() }
 
 // FullAccess reports whether the full-takeover permission mode is active.
 func (e *Executor) FullAccess() bool {

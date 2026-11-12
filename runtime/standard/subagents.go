@@ -24,7 +24,8 @@ func (a *adapter) wireTaskLister(rt *controlruntime.Runtime) {
 		}
 		out := taskbridge.TaskPage{SessionID: page.SessionID, Total: page.Total, NextOffset: page.NextOffset, HasMore: page.HasMore, Items: make([]taskbridge.TaskSummary, 0, len(page.Items))}
 		for _, item := range page.Items {
-			summary := taskbridge.TaskSummary{Isolation: item.Isolation, Recorded: item.Recorded, ID: item.ID, Title: item.Title, Profile: item.Profile, Status: item.Status, Prompt: item.Prompt, Result: item.Result, RunCount: item.RunCount}
+			summary := taskbridge.TaskSummary{WorkspaceKind: item.WorkspaceKind, Isolation: item.Isolation, Recorded: item.Recorded, ID: item.ID, Title: item.Title, Profile: item.Profile, Status: item.Status, Prompt: item.Prompt, Result: item.Result, RunCount: item.RunCount}
+			summary.QueueReason, summary.SchedulingNote = item.QueueReason, item.SchedulingNote
 			if attempt := item.LatestAttempt; attempt != nil {
 				summary.LatestAttempt = &taskbridge.TaskAttemptSummary{Summary: attempt.Summary, ID: attempt.ID, Seq: attempt.Seq, Status: attempt.Status, Prompt: attempt.Prompt, Result: attempt.Result, TranscriptStart: attempt.TranscriptStart, TranscriptEnd: attempt.TranscriptEnd, TotalTokens: attempt.TotalTokens, CacheHitTokens: attempt.CacheHitTokens, CacheMissTokens: attempt.CacheMissTokens, ToolUseCount: attempt.ToolUseCount, ContextTokens: attempt.ContextTokens, ContextWindow: attempt.ContextWindow}
 			}
@@ -52,7 +53,7 @@ func (a *adapter) Subagents(parentID string) ([]controlruntime.SubagentSummary, 
 			converted := convertSubagentAttempt(*info.LatestAttempt)
 			latest = &converted
 		}
-		out = append(out, controlruntime.SubagentSummary{Isolation: info.Isolation, Recorded: info.Status != "unavailable", ID: info.ID, SessionID: info.ParentSessionID, Title: info.Title, Profile: info.Profile, Skills: info.Skills, Prompt: info.Prompt, Status: info.Status, RunCount: info.RunCount, Result: info.Result, Error: info.Error, TranscriptSeq: info.TranscriptSeq, CreatedAt: time.Unix(info.CreatedAt, 0), UpdatedAt: updated, LatestAttempt: latest})
+		out = append(out, controlruntime.SubagentSummary{WorkspaceKind: info.WorkspaceKind, Isolation: info.Isolation, Recorded: info.Status != "unavailable", ID: info.ID, SessionID: info.ParentSessionID, Title: info.Title, Profile: info.Profile, Skills: info.Skills, Prompt: info.Prompt, Status: info.Status, RunCount: info.RunCount, Result: info.Result, Error: info.Error, TranscriptSeq: info.TranscriptSeq, CreatedAt: time.Unix(info.CreatedAt, 0), UpdatedAt: updated, LatestAttempt: latest})
 	}
 	return out, nil
 }
@@ -113,4 +114,41 @@ func (a *adapter) SubagentToolOutput(parentID, id string, sequence int, offset i
 		return controlruntime.SubagentOutputPage{}, err
 	}
 	return controlruntime.SubagentOutputPage{Content: page.Content, Offset: page.Offset, NextOffset: page.NextOffset, Total: page.Total, HasMore: page.HasMore, Incomplete: page.Incomplete}, nil
+}
+
+func (a *adapter) SearchSubagentOutputs(ctx context.Context, parent, id, query string, after, limit int) (controlruntime.TaskSearchPage, error) {
+	page, err := session.SearchSubagentOutputs(ctx, parent, id, query, after, limit)
+	if err != nil {
+		return controlruntime.TaskSearchPage{}, err
+	}
+	out := controlruntime.TaskSearchPage{Next: page.Next, HasMore: page.HasMore, Total: page.Total, Hits: []controlruntime.TaskSearchHit{}}
+	for _, hit := range page.Hits {
+		out.Hits = append(out.Hits, controlruntime.TaskSearchHit{Sequence: hit.Sequence, Preview: hit.Preview})
+	}
+	return out, err
+}
+
+func (a *adapter) SubagentUsage(parent, id string) (controlruntime.BackgroundUsage, error) {
+	page, err := session.SubagentAttempts(parent, id, 0, 1000)
+	if err != nil {
+		return controlruntime.BackgroundUsage{}, err
+	}
+	var total controlruntime.BackgroundUsage
+	for {
+		for _, u := range page.Attempts {
+			total.TotalTokens += u.TotalTokens
+			total.CacheHitTokens += u.CacheHitTokens
+			total.CacheMissTokens += u.CacheMissTokens
+			total.ToolUseCount += u.ToolUseCount
+			total.DurationMs += u.DurationMs
+		}
+		if !page.HasMore {
+			break
+		}
+		page, err = session.SubagentAttempts(parent, id, page.Before, 1000)
+		if err != nil {
+			return controlruntime.BackgroundUsage{}, err
+		}
+	}
+	return total, nil
 }

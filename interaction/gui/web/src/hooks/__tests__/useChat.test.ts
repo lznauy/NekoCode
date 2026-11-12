@@ -24,6 +24,116 @@ function emit(event: string, data: unknown): void {
 })
 
 describe('useChat', () => {
+  it.each(['edit', 'replace', 'stop'])('keeps submission ownership after automatic review and %s', async (action) => {
+    let rejectSend!: (error: Error) => void
+    ;(window as unknown as { go: unknown }).go = { main: { App: {
+      SendMessage: () => new Promise<void>((_, reject) => { rejectSend = reject }),
+      Abort: vi.fn().mockResolvedValue(undefined),
+    } } }
+    const { result } = renderHook(() => useChat())
+    act(() => result.current.send('/compact retry'))
+    act(() => emit('agent:input_accepted', { source: { kind: 'task_completion' } }))
+    act(() => {
+      if (action === 'replace') result.current.clearMessages()
+      if (action === 'stop') result.current.stop()
+      result.current.setText('new draft')
+    })
+    await act(async () => rejectSend(new Error('old Busy')))
+    expect(result.current.text).toBe('new draft')
+    if (action === 'edit') expect(result.current.error).toContain('old Busy')
+    else if (action === 'replace') expect(result.current.error).toBeNull()
+    else expect(result.current.msgs.some(message => message.text?.includes('old Busy'))).toBe(false)
+  })
+
+  it('restores image ownership when a command fails after an automatic review', async () => {
+    let rejectSend!: (error: Error) => void
+    const remove = vi.fn().mockResolvedValue(undefined)
+    ;(window as unknown as { go: unknown }).go = { main: { App: {
+      SendMessage: () => new Promise<void>((_, reject) => { rejectSend = reject }),
+      SaveClipboardImage: vi.fn().mockResolvedValue('/tmp/review-draft.png'),
+      DeleteClipboardImage: remove,
+    } } }
+    const { result } = renderHook(() => useChat())
+    await act(async () => result.current.pasteImages([new File(['png'], 'shot.png', { type: 'image/png' })], 0, 0))
+    act(() => result.current.send('/compact'))
+    act(() => {
+      emit('agent:input_accepted', { source: { kind: 'task_completion' } })
+      emit('agent:done', { output: 'review', error: '' })
+    })
+    await act(async () => rejectSend(new Error('Busy')))
+    expect(result.current.text).toBe('[Image #1]')
+    expect(result.current.imageAttachments).toEqual([{ label: '[Image #1]', path: '/tmp/review-draft.png' }])
+    expect(remove).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])('restores a rejected command across automatic review (done first: %s)', async (doneFirst) => {
+    let rejectSend!: (error: Error) => void
+    ;(window as unknown as { go: unknown }).go = { main: { App: { SendMessage: () => new Promise<void>((_, reject) => { rejectSend = reject }) } } }
+    const { result } = renderHook(() => useChat())
+    act(() => result.current.setText('/compact retry'))
+    act(() => result.current.send())
+    act(() => {
+      emit('agent:input_accepted', { source: { kind: 'task_completion' } })
+      if (doneFirst) emit('agent:done', { output: 'review', error: '' })
+    })
+    await act(async () => rejectSend(new Error('Busy')))
+    expect(result.current.text).toBe('/compact retry')
+    expect(result.current.error).toContain('Busy')
+    if (!doneFirst) {
+      expect(result.current.busy).toBe(true)
+      act(() => emit('agent:done', { output: 'review', error: '' }))
+    }
+    expect(result.current.msgs.some(message => message.text === 'review')).toBe(true)
+    expect(result.current.msgs.some(message => message.text?.includes('Error: Error: Busy'))).toBe(true)
+  })
+
+  it.each([false, true])('settles a local send queued behind a coordinator (review first: %s)', (reviewFirst) => {
+    const { result } = renderHook(() => useChat())
+    act(() => result.current.send('queued local demand'))
+    if (reviewFirst) {
+      act(() => {
+        emit('agent:input_accepted', { source: { kind: 'task_completion' } })
+        emit('agent:done', { output: 'background review', error: '' })
+      })
+    }
+    act(() => {
+      emit('agent:input_accepted', { source: { kind: 'gui' }, queued: true, content: 'queued local demand' })
+      emit('agent:done', { output: 'local reply', error: '' })
+    })
+    expect(result.current.msgs.filter(message => message.role === 'user').map(message => message.text)).toEqual(['queued local demand'])
+    expect(result.current.msgs.filter(message => message.streaming)).toHaveLength(0)
+    expect(result.current.msgs.filter(message => message.role === 'assistant').map(message => message.text)).toEqual(reviewFirst ? ['background review', 'local reply'] : ['local reply'])
+  })
+
+  it('creates a queued demand turn only on admission, preserving the preceding reply', () => {
+    const { result } = renderHook(() => useChat())
+    act(() => result.current.send('first demand'))
+    act(() => {
+      emit('agent:delta', { id: 1, delta: 'first reply', done: false })
+      emit('agent:done', { output: 'first reply', error: '' })
+      emit('agent:status', { status: 'idle' })
+      emit('agent:status', { status: 'running' })
+      emit('agent:input_accepted', { source: { kind: 'tui' }, queued: true, content: 'queued demand' })
+      emit('agent:delta', { id: 2, delta: 'queued reply', done: false })
+      emit('agent:done', { output: 'queued reply', error: '' })
+    })
+    expect(result.current.msgs.filter(message => message.role === 'user').map(message => message.text)).toEqual(['first demand', 'queued demand'])
+    expect(result.current.msgs.filter(message => message.role === 'assistant').map(message => message.text)).toEqual(['first reply', 'queued reply'])
+  })
+
+  it('renders an automatic task review as a new assistant response', async () => {
+    const { result } = renderHook(() => useChat())
+    act(() => {
+      emit('agent:status', { status: 'running' })
+      emit('agent:input_accepted', { source: { kind: 'task_completion' } })
+      emit('agent:delta', { id: 1, delta: 'Verified background result', done: false })
+      emit('agent:done', { output: 'Verified background result', error: '' })
+      emit('agent:status', { status: 'idle' })
+    })
+    expect(result.current.msgs.filter(message => message.role === 'assistant').map(message => message.text)).toEqual(['Verified background result'])
+    expect(result.current.msgs.filter(message => message.role === 'user')).toHaveLength(0)
+  })
+
   it('does not cancel until the pending start has been acknowledged', async () => {
     let finishStart!: () => void
     const abort = vi.fn().mockResolvedValue(undefined)
@@ -953,4 +1063,146 @@ describe('useChat', () => {
     expect(result.current.msgs[2].role).toBe('assistant')
     expect(result.current.msgs[2].text).toContain('something went wrong')
   })
+  it.each(['stop', 'replace'])('settles image ownership before a delayed startup resolves after %s', async (action) => {
+    let resolveSend!: () => void
+    const remove = vi.fn().mockResolvedValue(undefined)
+    const abort = vi.fn().mockResolvedValue(undefined)
+    ;(window as unknown as { go: unknown }).go = { main: { App: {
+      SendMessage: () => new Promise<void>(resolve => { resolveSend = resolve }),
+      SaveClipboardImage: vi.fn().mockResolvedValue('/tmp/delayed-image.png'),
+      DeleteClipboardImage: remove,
+      Abort: abort,
+    } } }
+    const { result } = renderHook(() => useChat())
+    await act(async () => result.current.pasteImages([new File(['png'], 'shot.png', { type: 'image/png' })], 0, 0))
+    act(() => result.current.send())
+    act(() => {
+      if (action === 'stop') result.current.stop()
+      else result.current.clearMessages()
+    })
+    if (action === 'stop') {
+      expect(result.current.imageAttachments).toHaveLength(1)
+      expect(result.current.text).toBe('[Image #1]')
+      expect(remove).not.toHaveBeenCalled()
+    } else {
+      expect(result.current.imageAttachments).toHaveLength(0)
+      expect(remove).toHaveBeenCalledTimes(1)
+      act(() => result.current.setText('new session draft'))
+    }
+    await act(async () => resolveSend())
+    if (action === 'stop') {
+      expect(abort).toHaveBeenCalledTimes(1)
+      act(() => emit('agent:status', { status: 'idle' }))
+      expect(result.current.imageAttachments).toHaveLength(1)
+      expect(result.current.text).toBe('[Image #1]')
+      expect(remove).not.toHaveBeenCalled()
+    } else {
+      expect(result.current.text).toBe('new session draft')
+      expect(result.current.imageAttachments).toHaveLength(0)
+      expect(remove).toHaveBeenCalledTimes(1)
+    }
+    expect(result.current.error).toBeNull()
+  })
+
+})
+
+it.each([false, true])('settles old cancellation after a queued run starts (new run finished: %s)', async (finished) => {
+  let acknowledge!: () => void
+  ;(window as unknown as { go: unknown }).go = { main: { App: {
+    SendMessage: vi.fn().mockResolvedValue(undefined),
+    Abort: () => new Promise<void>(resolve => { acknowledge = resolve }),
+  } } }
+  const { result } = renderHook(() => useChat())
+  act(() => result.current.send('old demand'))
+  act(() => result.current.stop())
+  await act(async () => { await Promise.resolve() })
+  act(() => {
+    emit('agent:done', { output: '', error: 'cancelled' })
+    emit('agent:status', { status: 'idle' })
+    emit('agent:status', { status: 'running' })
+    emit('agent:input_accepted', { queued: true, source: { kind: 'gui_queue' }, content: 'new demand' })
+  })
+  if (finished) act(() => {
+    emit('agent:done', { output: 'new answer', error: '' })
+    emit('agent:status', { status: 'idle' })
+  })
+  await act(async () => acknowledge())
+  expect(result.current.stopping).toBe(false)
+  expect(result.current.busy).toBe(!finished)
+  expect(result.current.msgs.some(message => message.text === 'new demand')).toBe(true)
+})
+
+it.each([['gui', false], ['gui', true], ['gui_queue', true]] as const)('releases submission ownership after %s admission (queued: %s) and RPC acknowledgment', async (kind, queued) => {
+  let acknowledge!: () => void
+  const send = vi.fn(() => new Promise<void>(resolve => { acknowledge = resolve }))
+  ;(window as unknown as { go: unknown }).go = { main: { App: { SendMessage: send } } }
+  const { result } = renderHook(() => useChat())
+  act(() => result.current.send('first'))
+  act(() => emit('agent:input_accepted', { queued, source: { kind }, content: 'first' }))
+  await act(async () => acknowledge())
+  expect(result.current.busy).toBe(true)
+  act(() => result.current.send('still running'))
+  expect(send).toHaveBeenCalledTimes(1)
+  act(() => emit('agent:status', { status: 'idle' }))
+  act(() => result.current.send('second'))
+  expect(send).toHaveBeenCalledTimes(2)
+})
+
+it.each([false, true])('replaces an unadmitted local turn after an older run finishes (RPC first: %s)', async (rpcFirst) => {
+  let acknowledge!: () => void
+  ;(window as unknown as { go: unknown }).go = { main: { App: {
+    SendMessage: () => new Promise<void>(resolve => { acknowledge = resolve }),
+  } } }
+  const { result } = renderHook(() => useChat())
+  act(() => result.current.send('queued local demand'))
+  if (rpcFirst) await act(async () => acknowledge())
+  act(() => {
+    emit('agent:delta', { id: 1, delta: 'older coordinator reply', done: false })
+    emit('agent:done', { output: 'older coordinator reply', error: '' })
+    emit('agent:status', { status: 'idle' })
+    emit('agent:status', { status: 'running' })
+    emit('agent:input_accepted', { source: { kind: 'gui' }, queued: true, content: 'queued local demand' })
+    emit('agent:done', { output: 'local reply', error: '' })
+  })
+  if (!rpcFirst) await act(async () => acknowledge())
+  expect(result.current.msgs.map(message => [message.role, message.text])).toEqual([
+    ['assistant', 'older coordinator reply'], ['user', 'queued local demand'], ['assistant', 'local reply'],
+  ])
+  expect(result.current.msgs.some(message => message.streaming)).toBe(false)
+})
+
+it('retains the older reply when the unadmitted local RPC later rejects', async () => {
+  let rejectSend!: (error: Error) => void
+  ;(window as unknown as { go: unknown }).go = { main: { App: {
+    SendMessage: () => new Promise<void>((_, reject) => { rejectSend = reject }),
+  } } }
+  const { result } = renderHook(() => useChat())
+  act(() => result.current.send('not accepted'))
+  act(() => emit('agent:done', { output: 'older coordinator reply', error: '' }))
+  await act(async () => rejectSend(new Error('queue rejected')))
+  expect(result.current.msgs.some(message => message.role === 'user')).toBe(false)
+  expect(result.current.msgs.filter(message => message.role === 'assistant').map(message => message.text)).toEqual([
+    'older coordinator reply', 'Error: Error: queue rejected',
+  ])
+  expect(result.current.text).toBe('not accepted')
+  expect(result.current.busy).toBe(false)
+})
+
+it('keeps an older reply when the local RPC rejects after queued admission', async () => {
+  let rejectSend!: (error: Error) => void
+  ;(window as unknown as { go: unknown }).go = { main: { App: {
+    SendMessage: () => new Promise<void>((_, reject) => { rejectSend = reject }),
+  } } }
+  const { result } = renderHook(() => useChat())
+  act(() => result.current.send('queued demand'))
+  act(() => {
+    emit('agent:done', { output: 'older coordinator reply', error: '' })
+    emit('agent:input_accepted', { source: { kind: 'gui_queue' }, queued: true, content: 'queued demand' })
+  })
+  await act(async () => rejectSend(new Error('late RPC failure')))
+  expect(result.current.msgs.some(message => message.text === 'older coordinator reply')).toBe(true)
+  expect(result.current.msgs.filter(message => message.role === 'user').map(message => message.text)).toEqual(['queued demand'])
+  expect(result.current.busy).toBe(true)
+  act(() => emit('agent:done', { output: 'local reply', error: '' }))
+  expect(result.current.msgs.some(message => message.text === 'local reply')).toBe(true)
 })

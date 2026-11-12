@@ -2,7 +2,6 @@ package core
 
 import (
 	"errors"
-	"fmt"
 
 	"nekocode/mode"
 )
@@ -53,8 +52,8 @@ func (b *Bot) ResolveInteractionMode(input string) (mode.Snapshot, error) {
 	if err != nil {
 		return mode.Snapshot{}, err
 	}
-	if d.Strategy != mode.Direct {
-		return mode.Snapshot{}, fmt.Errorf("execution strategy %q is unavailable", d.Strategy)
+	if _, err := interactionStrategy(d.Strategy); err != nil {
+		return mode.Snapshot{}, err
 	}
 	return d.Snapshot, nil
 }

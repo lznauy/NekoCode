@@ -14,6 +14,7 @@ import (
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/permission"
 	"nekocode/bot/policy"
+	"nekocode/mode"
 	"nekocode/protocol"
 )
 
@@ -497,5 +498,49 @@ func TestCompletionEvidenceObserverCannotChangeTranscriptReceipt(t *testing.T) {
 	}
 	if messages[0].ToolEvidence.Executions[0].ID != "physical" || evidence.Executions[0].ID != "physical" {
 		t.Fatal("observer modified authoritative receipt")
+	}
+}
+
+func TestCoordinatorBlocksBeforeToolHooksAndPreviews(t *testing.T) {
+	a := newTestAgent()
+	a.deps.toolExecutor.SetFullAccess(true)
+	d, _ := mode.Resolve(mode.SuperAgent)
+	if err := a.deps.toolExecutor.SetInteractionMode(d.Snapshot); err != nil {
+		t.Fatal(err)
+	}
+	previews, hooks := 0, 0
+	a.deps.toolRegistry.RegisterWithOptions(&previewIsolationTool{name: "forbidden"}, tools.RegistrationOptions{
+		Preview: func(context.Context, map[string]any) string { previews++; return "private content" },
+	})
+	for _, point := range []policy.HookPoint{policy.PreToolUse, policy.PostToolUse} {
+		a.deps.gov.Register(policy.Hook{Name: string(point), Point: point, On: func(policy.State) *policy.Result { hooks++; return nil }})
+	}
+	blocked := false
+	a.toolRunner.executeAndFeedback([]core.ToolCallItem{{ID: "forbidden", Name: "forbidden"}}, "", func(ev protocol.StepEvent) {
+		if ev.Action == protocol.StepActionToolBlocked {
+			blocked = true
+			if ev.NonExecution.Stage != "mode" {
+				t.Errorf("mode block mislabeled %q", ev.NonExecution.Stage)
+			}
+		}
+	})
+	if previews != 0 || hooks != 0 || !blocked {
+		t.Fatalf("blocked tool triggered front-end operations: previews=%d hooks=%d blocked=%v", previews, hooks, blocked)
+	}
+}
+
+func TestUnknownToolIsNotReportedAsModeRestriction(t *testing.T) {
+	for _, id := range []mode.ID{mode.Plan, mode.SuperAgent} {
+		t.Run(string(id), func(t *testing.T) {
+			a := newTestAgent()
+			definition, _ := mode.Resolve(id)
+			if err := a.deps.toolExecutor.SetInteractionMode(definition.Snapshot); err != nil {
+				t.Fatal(err)
+			}
+			filtered := a.toolRunner.filterToolCalls([]core.ToolCallItem{{ID: "unknown", Name: "does_not_exist"}})
+			if filtered.BlockStages[0] != "dispatch" || filtered.Blocked[0] == "" {
+				t.Fatalf("unknown tool misclassified: %+v", filtered)
+			}
+		})
 	}
 }

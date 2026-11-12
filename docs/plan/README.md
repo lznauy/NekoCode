@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | [对比补齐方向](COMPARISON_GAPS.md) | 相对 Claude Code、Codex、Pi、CodeBuddy 的能力短板与补齐顺序 | 未开始 |
 | [Headless 协议剩余差距](STREAM_JSON_GAPS.md) | `nekocode-headless/2` 尚未暴露的能力与暂缓项 | 未开始 |
-| [子任务后续](SUBAGENT_NEXT.md) | 全局任务列表、删除、输出搜索导出、多端接入 | 未开始 |
+| [后台资源热替换](SUPER_AGENT_ASYNC.md) | 扩展/MCP 等破坏性变更的细粒度资源租约 | 未开始 |
 | [通用运行预算](RUN_BUDGET.md) | 主 Agent/sub-agent 步数与累计 token 预算、逐轮提醒和耗尽收尾 | 未开始 |
 
 “状态”只区分“未开始 / 进行中”。已完成的条目不在本目录保留：先写进对应现状文档，再从这里删除。

@@ -36,10 +36,13 @@ func TestModeAPIValidatesAndRespectsRunBoundary(t *testing.T) {
 	if rec := request(http.MethodGet, ""); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"selected":"standard"`) {
 		t.Fatalf("GET: %d %s", rec.Code, rec.Body.String())
 	}
+	if rec := request(http.MethodPost, `{"mode":"super-agent"}`); rec.Code != 200 || selected != mode.SuperAgent {
+		t.Fatalf("Super Agent POST: %d %s", rec.Code, rec.Body.String())
+	}
 	if rec := request(http.MethodPost, `{"mode":"plan"}`); rec.Code != 200 || selected != mode.Plan {
 		t.Fatalf("POST: %d %s", rec.Code, rec.Body.String())
 	}
-	for _, body := range []string{`{}`, `{"mode":"super-agent"}`, `{"mode":"plan"} {}`} {
+	for _, body := range []string{`{}`, `{"mode":"unknown-mode"}`, `{"mode":"plan"} {}`} {
 		if rec := request(http.MethodPost, body); rec.Code != 400 || selected != mode.Plan {
 			t.Fatalf("invalid %s: %d %s", body, rec.Code, rec.Body.String())
 		}

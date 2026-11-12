@@ -3,6 +3,8 @@ import { SessionSidebar } from './components/session'
 import { TopBar } from './components/TopBar'
 import { MessageList } from './components/MessageList'
 import { EmptyState } from './components/EmptyState'
+import { BackgroundTasks } from './components/BackgroundTasks'
+import { TaskLibrary } from './components/TaskLibrary'
 import { InputBar } from './components/InputBar'
 import { ContextPanel } from './components/ContextPanel'
 import ConfirmDialog from './components/ConfirmDialog'
@@ -38,6 +40,8 @@ import type { protocol } from '../wailsjs/go/models'
 type ContextSnapshot = protocol.ContextSnapshot
 import type { SkillView } from './types/skills'
 
+type RuntimePrompt = { kind: 'confirm'; entry: ConfirmEntry } | { kind: 'question'; entry: QuestionEntry }
+
 export default function App() {
   const { msgs, text, setText, busy, stopping, error: chatError, send, stop, toggleStep, setMessages, clearMessages, imageAttachments, pasteImages } = useChat()
   const [modelRefreshKey, setModelRefreshKey] = useState(0)
@@ -59,8 +63,9 @@ export default function App() {
   const { theme, toggle: toggleTheme } = useTheme()
 
   // 确认弹窗
-  const [confirmEntry, setConfirmEntry] = useState<ConfirmEntry | null>(null)
-  const [questionEntry, setQuestionEntry] = useState<QuestionEntry | null>(null)
+  const [prompts, setPrompts] = useState<RuntimePrompt[]>([])
+  const confirmEntry = prompts[0]?.kind === 'confirm' ? prompts[0].entry : null
+  const questionEntry = prompts[0]?.kind === 'question' ? prompts[0].entry : null
   const [configOpen, setConfigOpen] = useState(false)
   const [configInitialTab, setConfigInitialTab] = useState<ConfigTab>('overview')
   const [skillsOpen, setSkillsOpen] = useState(false)
@@ -304,19 +309,16 @@ export default function App() {
     const offRequested = safeEventsOn('agent:confirm', (e: unknown) => {
       const ce = e as ConfirmEvent
       if (ce?.id && ce?.toolName) {
-        setConfirmEntry({
-          id: ce.id,
-          toolName: ce.toolName,
-          args: ce.args ?? {},
-          preview: ce.preview ?? '',
-          kind: ce.kind ?? 'permission',
-          approval: ce.approval,
-        })
+        const entry: ConfirmEntry = {
+          id: ce.id, toolName: ce.toolName, args: ce.args ?? {}, preview: ce.preview ?? '',
+          kind: ce.kind ?? 'permission', approval: ce.approval, subAgentID: ce.subAgentID,
+        }
+        setPrompts(current => current.some(item => item.kind === 'confirm' && item.entry.id === entry.id) ? current : [...current, {kind: 'confirm', entry}])
       }
     })
     const offResolved = safeEventsOn('agent:confirm_resolved', (e: unknown) => {
       const resolved = e as { id?: string }
-      if (resolved?.id) setConfirmEntry((current) => current?.id === resolved.id ? null : current)
+      if (resolved?.id) setPrompts(current => current.filter(item => item.kind !== 'confirm' || item.entry.id !== resolved.id))
     })
     return () => { offRequested(); offResolved() }
   }, [])
@@ -325,15 +327,13 @@ export default function App() {
     const offRequested = safeEventsOn('agent:question', (e: unknown) => {
       const qe = e as QuestionEvent
       if (qe?.id && Array.isArray(qe.questions)) {
-        setQuestionEntry({
-          id: qe.id,
-          questions: qe.questions,
-        })
+        const entry: QuestionEntry = { id: qe.id, questions: qe.questions, subAgentID: qe.subAgentID }
+        setPrompts(current => current.some(item => item.kind === 'question' && item.entry.id === entry.id) ? current : [...current, {kind: 'question', entry}])
       }
     })
     const offResolved = safeEventsOn('agent:question_resolved', (event: unknown) => {
       const resolved = event as { id?: string }
-      if (resolved?.id) setQuestionEntry(current => current?.id === resolved.id ? null : current)
+      if (resolved?.id) setPrompts(current => current.filter(item => item.kind !== 'question' || item.entry.id !== resolved.id))
     })
     return () => { offRequested(); offResolved() }
   }, [])
@@ -397,6 +397,8 @@ export default function App() {
         )}
         <div className="min-w-0">
           {(controlError || chatError || sessionError) && <div role="alert" className="max-h-24 overflow-y-auto break-words border-t border-danger/30 bg-danger/10 px-5 py-2 text-xs text-danger">{controlError || chatError || sessionError}</div>}
+        {interactionMode?.selected === 'super-agent' && <BackgroundTasks key={currentId ?? 'new'} sessionID={currentId ?? ''} busy={busy} />}
+        <div className="px-5 py-2 text-xs"><TaskLibrary key={currentId ?? 'new'} sessionID={currentId ?? ''} /></div>
         <InputBar
           text={text}
           busy={busy}
@@ -424,14 +426,24 @@ export default function App() {
 
       {confirmEntry && (
         <ConfirmDialog
+          pendingCount={prompts.length - 1}
+          pendingPreview={prompts.slice(1, 4).map(prompt => {
+            const label = prompt.kind === 'confirm' ? `审批 · ${prompt.entry.toolName}` : `提问 · ${prompt.entry.questions[0]?.question ?? '需要补充信息'}`
+            return `${prompt.entry.subAgentID ? `子任务 ${prompt.entry.subAgentID} · ` : ''}${label}`.slice(0, 120)
+          })}
           entry={confirmEntry}
-          onDone={() => setConfirmEntry(current => current?.id === confirmEntry.id ? null : current)}
+          onDone={() => setPrompts(current => current.filter(item => item.kind !== 'confirm' || item.entry.id !== confirmEntry.id))}
         />
       )}
       {questionEntry && (
         <QuestionDialog
+          pendingCount={prompts.length - 1}
+          pendingPreview={prompts.slice(1, 4).map(prompt => {
+            const label = prompt.kind === 'confirm' ? `审批 · ${prompt.entry.toolName}` : `提问 · ${prompt.entry.questions[0]?.question ?? '需要补充信息'}`
+            return `${prompt.entry.subAgentID ? `子任务 ${prompt.entry.subAgentID} · ` : ''}${label}`.slice(0, 120)
+          })}
           entry={questionEntry}
-          onDone={() => setQuestionEntry(current => current?.id === questionEntry.id ? null : current)}
+          onDone={() => setPrompts(current => current.filter(item => item.kind !== 'question' || item.entry.id !== questionEntry.id))}
         />
       )}
       <ConfigPanel

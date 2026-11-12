@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"nekocode/mode"
 	"nekocode/protocol"
 	"nekocode/runtime/internal/core"
 	"net/url"
@@ -54,6 +55,9 @@ func RedactInputText(input string) string {
 }
 
 func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if strings.TrimSpace(input.Text) == "" {
 		return "", protocolError(ErrorInvalidInput, "start_run", "empty input")
 	}
@@ -62,6 +66,14 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 	}
 	r.mutationMu.Lock()
 	defer r.mutationMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if sessionID, ok := ctx.Value(backgroundDemandKey{}).(string); ok {
+		if sessionID != r.CurrentSessionID() || r.services.Modes.Current == nil || r.services.Modes.Current() != mode.SuperAgent {
+			return "", protocolError(ErrorConflict, "submit_background_demand", "session or mode changed; keep the draft and retry")
+		}
+	}
 	if len(input.Images) > 0 && !r.ImageAttachmentsEnabled() {
 		return "", protocolError(ErrorUnsupported, "start_run", "image attachments require a configured image understanding model")
 	}
@@ -78,10 +90,25 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 		runID := r.currentRun
 		status := r.status
 		r.mu.Unlock()
+		if r.services.Modes.Current != nil && r.services.Modes.Current() == mode.SuperAgent && !protocol.CoordinationFromContext(ctx).Notification && ctx.Value(queuedRunKey{}) == nil {
+			return r.queueBackgroundInput(ctx, input)
+		}
 		return runID, protocolError(ErrorBusy, "start_run", fmt.Sprintf("run %s is %s", runID, status))
+	}
+	if r.services.Modes.Current != nil && r.services.Modes.Current() == mode.Standard && !strings.HasPrefix(strings.TrimSpace(input.Text), "/") {
+		r.background.mu.Lock()
+		writing := len(r.background.workspaces) > 0
+		r.background.mu.Unlock()
+		if writing {
+			r.mu.Unlock()
+			return "", protocolError(ErrorBusy, "start_run", "shared workspace writer is active; use Plan/Super Agent or wait for it to finish")
+		}
 	}
 	r.nextRun++
 	runID := RunID(fmt.Sprintf("run_%d_%s", r.nextRun, uuid.NewString()))
+	if queued, ok := ctx.Value(queuedRunKey{}).(RunID); ok {
+		runID = queued
+	}
 	r.mu.Unlock()
 	// Registration precedes Running: steering must not publish into the
 	// previous run's recording destination while this run is starting.
@@ -95,6 +122,8 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 		r.releaseRecordedRun(runID)
 		return "", protocolError(ErrorClosed, "start_run", "closed")
 	}
+	// Install the projection before exposing Running or starting preparation.
+	r.runs.PrepareRun(runID, input.Source)
 	r.currentRun = runID
 	r.status = RunRunning
 	delete(r.cancelled, runID)
@@ -114,6 +143,18 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 }
 
 func (r *Runtime) SteerRun(ctx context.Context, runID RunID, input Input) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !r.mutationMu.TryLock() {
+		return protocolError(ErrorBusy, "steer_run", "runtime operation in progress")
+	}
+	super := r.services.Modes.Current != nil && r.services.Modes.Current() == mode.SuperAgent
+	r.mutationMu.Unlock()
+	if super && !strings.HasPrefix(strings.TrimSpace(input.Text), "/") {
+		_, err := r.StartRun(ctx, input)
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -200,6 +241,9 @@ func (r *Runtime) CancelRun(ctx context.Context, runID RunID) error {
 	if err := r.ensureOpen(); err != nil {
 		return err
 	}
+	if handled, err := r.cancelQueuedInput(runID); handled {
+		return err
+	}
 	control, active, err := r.beginCancel(runID)
 	if err != nil {
 		return err
@@ -211,8 +255,8 @@ func (r *Runtime) CancelRun(ctx context.Context, runID RunID) error {
 	if control.cancel != nil {
 		control.cancel()
 	}
-	r.approvals.RejectAll()
-	r.questions.RejectAll()
+	r.approvals.RejectRun(control.runID)
+	r.questions.RejectRun(control.runID)
 	if err := control.lease.wait(ctx); err != nil {
 		go r.publishCancellation(control, "cancelled")
 		return err
@@ -227,8 +271,8 @@ func (r *Runtime) CancelRun(ctx context.Context, runID RunID) error {
 func (r *Runtime) publishCancellation(control cancelControl, message string) {
 	_ = control.lease.wait(context.Background())
 	control.execution.wait()
-	r.approvals.RejectAll()
-	r.questions.RejectAll()
+	r.approvals.RejectRun(control.runID)
+	r.questions.RejectRun(control.runID)
 	if control.execution.hasMetrics() {
 		r.publishMetrics(control.runID)
 	}
@@ -286,6 +330,8 @@ func (r *Runtime) Close() error {
 			r.cancelDone = cancelDone
 		}
 		r.mu.Unlock()
+
+		r.background.close()
 
 		// No new mutation can start after closed is set. Wait for an existing
 		// model/config/extension/session mutation before closing runner-owned

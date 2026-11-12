@@ -22,7 +22,7 @@ func git(ctx context.Context, cwd string, input []byte, extraEnv []string, args 
 		}
 	}
 	env = append(env, "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_NO_LAZY_FETCH=1", "GIT_NO_REPLACE_OBJECTS=1")
-	base := []string{"-c", "protocol.allow=never", "-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.sparseCheckout=false", "-c", "submodule.recurse=false", "-c", "core.untrackedCache=false"}
+	base := []string{"-c", "protocol.allow=never", "-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.sparseCheckout=false", "-c", "submodule.recurse=false", "-c", "core.untrackedCache=false", "-c", "commit.gpgSign=false"}
 	run := func(a []string, stdin []byte, extras []string) ([]byte, error) {
 		cmd := exec.CommandContext(ctx, "git", append(append([]string{"-C", cwd}, base...), a...)...)
 		cmd.Env = append(append([]string{}, env...), extras...)

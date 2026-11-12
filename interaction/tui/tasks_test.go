@@ -397,12 +397,15 @@ func TestTaskDetailDefaultsToResultAndExpandsProcess(t *testing.T) {
 		t.Fatalf("completed detail did not show only final result: %+v", d.entries)
 	}
 	m.handleTaskKey(tea.KeyPressMsg{Code: 'p', Text: "p"})
-	if !d.showProcess || len(d.entries) < 2 {
-		t.Fatal("process toggle did not expose committed records")
+	if !d.showProcess || d.process == nil || len(d.process.calls) < 2 {
+		t.Fatal("process page did not expose committed calls")
+	}
+	if len(d.entries) != 1 {
+		t.Fatal("process page replaced overview content")
 	}
 	foundRead := false
-	for _, entry := range d.entries {
-		foundRead = foundRead || entry.call != nil && entry.call.ID == "read-1"
+	for _, call := range d.process.calls {
+		foundRead = foundRead || call.entry.call.ID == "read-1"
 	}
 	if !foundRead {
 		t.Fatal("expanded process lost tool records")

@@ -59,8 +59,15 @@ func (m *Model) resizeTasks() {
 		inner, bodyHeight := taskContentSize(w, h)
 		// SetSize preserves the anchor and clamps it to the new viewport.
 		d.list.SetSize(inner, bodyHeight)
-		if d.follow {
+		if d.follow && d.process == nil {
 			d.list.ScrollToBottom()
+		}
+	}
+	if d.process != nil {
+		inner, bodyHeight := taskContentSize(w, h)
+		d.process.list.SetSize(inner, bodyHeight)
+		if d.process.follow {
+			d.process.list.ScrollToBottom()
 		}
 	}
 	if d.inspector != nil {
@@ -138,21 +145,38 @@ func (m *Model) taskPanelView(w, h int) string {
 	inner, bodyHeight := taskContentSize(w, h)
 	sty := styles.DefaultStyles()
 	title := "子任务"
-	status, footer, body := "", "↑↓ 选择 · Enter 查看 · / 搜索 · Esc 关闭", ""
+	status, footer, body := "", "↑↓ 选择 · Enter 查看 · a 范围 · d 删除 · / 搜索 · Esc 关闭", ""
 	if d := s.detail; d != nil {
 		title = "‹ 子任务 / " + taskLabel(d.info)
 		if d.attempt != nil {
 			title += fmt.Sprintf(" · 第 %d 轮", d.attempt.Seq)
 		}
 		status = taskStatus(d.detailStatus()) + " · " + d.info.Profile
+		if d.info.Isolation == "worktree" {
+			switch d.info.WorkspaceKind {
+			case "snapshot":
+				status += " · 工作区快照"
+			case "head":
+				status += " · HEAD 独立副本"
+			default:
+				status += " · 独立副本"
+			}
+		} else if d.info.Isolation == "shared" {
+			status += " · 共享工作区"
+		}
+		if d.isLatestAttempt() {
+			if reason := taskQueueReason(d.info.QueueReason); reason != "" {
+				status += " · " + reason
+			}
+		}
 		if d.isLatestAttempt() && d.info.Phase != "" {
 			status += " · " + d.info.Phase
 		}
-		footer = "↑↓ 滚动 · / 轮次 · p 过程 · Enter 详情 · Esc 返回"
-		if d.showProcess && d.currentCursor() > 0 {
+		footer = "↑↓ 滚动 · / 轮次 · p 执行过程 · Esc 返回"
+		if d.showProcess && d.process == nil && d.currentCursor() > 0 {
 			status += fmt.Sprintf(" · 记录 %d–%d / %d", d.page.Before, d.page.End, d.page.Total)
 		}
-		if !d.follow && d.newRecords > 0 {
+		if d.process == nil && !d.follow && d.newRecords > 0 {
 			status += fmt.Sprintf(" · 新增 %d 条", d.newRecords)
 		}
 		if d.newAttempt {
@@ -161,7 +185,7 @@ func (m *Model) taskPanelView(w, h int) string {
 		if !d.historyLoaded && (d.loading || d.attemptsLoading) {
 			status += " · 加载中"
 		}
-		if d.list != nil && !d.showAttempts && d.inspector == nil && (d.list.Height() != bodyHeight || d.list.Width() != inner) {
+		if d.list != nil && d.process == nil && !d.showAttempts && d.inspector == nil && (d.list.Height() != bodyHeight || d.list.Width() != inner) {
 			d.list.SetSize(inner, bodyHeight)
 			if d.follow {
 				d.list.ScrollToBottom()
@@ -177,8 +201,11 @@ func (m *Model) taskPanelView(w, h int) string {
 			footer = "↑↓ 选择 · Enter 查看 · / 收起 · Esc 返回"
 		} else if d.inspector != nil {
 			title = "‹ 子任务 / 工具详情"
+			if d.inspectedEntry != nil && d.inspectedEntry.call != nil {
+				title += " / " + d.inspectedEntry.call.Name
+			}
 			body = d.inspector.Render()
-			footer = "↑↓ 滚动 · PgUp/PgDn 翻页 · Esc 返回"
+			footer = "↑↓ 滚动 · PgUp/PgDn 翻页 · End 跟随 · Esc 返回"
 			if output := d.output; output != nil {
 				status = fmt.Sprintf("完整输出 · %d–%d / %d 字节", output.page.Offset, output.page.NextOffset, output.page.Total)
 				if output.loading {
@@ -194,6 +221,29 @@ func (m *Model) taskPanelView(w, h int) string {
 					status = "输出不可用：" + output.err + " · r 重试"
 				}
 			}
+		} else if d.process != nil {
+			p := d.process
+			if p.list.Width() != inner || p.list.Height() != bodyHeight {
+				p.list.SetSize(inner, bodyHeight)
+				if p.follow {
+					p.list.ScrollToBottom()
+				}
+			}
+			title = "‹ 子任务 / 执行过程 / " + taskLabel(d.info)
+			if d.attempt != nil {
+				title += fmt.Sprintf(" · 第 %d 轮", d.attempt.Seq)
+			}
+			status += fmt.Sprintf(" · 已载入 %d 次调用", len(p.calls))
+			if p.follow {
+				status += " · 跟随最新"
+			} else {
+				status += fmt.Sprintf(" · 查看历史 · 新增 %d 次调用 · End 回到现场", p.unread)
+			}
+			body = p.list.Render()
+			if len(p.calls) == 0 {
+				body = "尚无工具调用，执行记录会实时更新。"
+			}
+			footer = "↑↓ 选择 · PgUp/PgDn 翻页 · Enter 工具详情 · End 跟随 · Esc 概览"
 		} else if d.list != nil {
 			body = d.list.Render()
 		}
@@ -202,7 +252,11 @@ func (m *Model) taskPanelView(w, h int) string {
 		}
 		if body == "" {
 			if d.info.Status == "queued" && !d.info.Recorded {
-				body = "正在排队，执行名额空出后自动开始。\n" + d.info.Prompt
+				reason := taskQueueReason(d.info.QueueReason)
+				if reason == "" {
+					reason = "等待调度"
+				}
+				body = reason + "，满足条件后自动开始。\n" + d.info.Prompt
 			} else if d.info.Recorded {
 				body = "正在加载执行记录…"
 			} else {
@@ -213,7 +267,12 @@ func (m *Model) taskPanelView(w, h int) string {
 			}
 		}
 	} else {
-		status = fmt.Sprintf("%d 个任务 · Ctrl+G 关闭", s.listPage.Total)
+		scope := "当前会话"
+		if s.allSessions {
+			scope = "全部会话"
+			title = "子任务 / 全部会话"
+		}
+		status = fmt.Sprintf("%s · %d 个任务 · Ctrl+G 关闭", scope, s.listPage.Total)
 		if s.query != "" || s.searching {
 			status = "搜索：" + s.query
 			if s.searching {
@@ -228,6 +287,9 @@ func (m *Model) taskPanelView(w, h int) string {
 		}
 		if len(s.items) == 0 {
 			body = "当前会话还没有子任务。"
+			if s.allSessions {
+				body = "还没有已保存的子任务。"
+			}
 			if s.listLoading && !s.listLoaded {
 				body = "正在加载子任务…"
 			}
@@ -237,7 +299,7 @@ func (m *Model) taskPanelView(w, h int) string {
 		} else {
 			selected := 0
 			for i, item := range s.items {
-				if item.ID == s.selected {
+				if s.selectionKey(item) == s.selected {
 					selected = i
 					break
 				}
@@ -249,7 +311,7 @@ func (m *Model) taskPanelView(w, h int) string {
 			for i := start; i < end; i++ {
 				item := s.items[i]
 				prefix := "  "
-				if item.ID == s.selected {
+				if s.selectionKey(item) == s.selected {
 					prefix = "› "
 				}
 				status, label, statusWidth := taskStatus(item.Status), taskLabel(item), 12
@@ -258,7 +320,13 @@ func (m *Model) taskPanelView(w, h int) string {
 					statusWidth = 2
 					label = taskName(item)
 				}
+				if s.allSessions {
+					label = "[" + item.SessionID + "] " + label
+				}
 				line := prefix + lipgloss.NewStyle().Width(statusWidth).Render(status) + "  " + label
+				if reason := taskQueueReason(item.QueueReason); reason != "" && inner >= 45 {
+					line += " · " + reason
+				}
 				if inner >= 100 && item.Phase != "" {
 					line += " · " + item.Phase
 				}
@@ -274,7 +342,7 @@ func (m *Model) taskPanelView(w, h int) string {
 					}
 				}
 				line = ansi.Truncate(ansi.Strip(line), inner, "…")
-				if item.ID == s.selected {
+				if s.selectionKey(item) == s.selected {
 					line = lipgloss.NewStyle().Foreground(lipgloss.Color("#e0e0e0")).Background(lipgloss.Color("#303a3a")).Width(inner).Render(line)
 				}
 				rows = append(rows, line)
@@ -439,6 +507,10 @@ func (m *Model) rebuildTaskDetail() {
 	if d == nil {
 		return
 	}
+	if d.process != nil {
+		m.rebuildTaskProcess()
+		return
+	}
 	sty := styles.DefaultStyles()
 	anchor, line := d.list.ViewportAnchor()
 	anchorKey := ""
@@ -597,6 +669,12 @@ func (m *Model) rebuildTaskDetail() {
 		}
 		if prompt != "" {
 			addText("delegated-prompt", "user", prompt, "")
+		}
+		if note := taskSchedulingNote(d.info.SchedulingNote); note != "" {
+			if d.info.Isolation == "shared" {
+				note += "；具有写入能力的任务按顺序执行。"
+			}
+			addText("workspace-note", "system", note, "")
 		}
 		if !d.active() {
 			result := ""
@@ -821,12 +899,17 @@ func (m *Model) inspectVisibleTaskTool() tea.Cmd {
 
 func (m *Model) inspectTaskTool(entry taskEntry) tea.Cmd {
 	d := m.tasks.detail
+	if d.process != nil {
+		d.process.follow = false
+	}
 	d.inspectedEntry = &entry
 	d.inspectedKey = entry.key
 	d.output = nil
 	m.renderTaskInspector()
+	d.inspectorFollow = d.inspector.AtBottom()
 	if entry.result.OutputPath != "" && entry.result.Sequence > 0 {
 		if _, ok := m.Runtime.(controlruntime.SubagentOutputReader); ok {
+			d.inspectorFollow = false
 			d.output = &taskOutputWindow{sequence: entry.result.Sequence, offsets: []int64{0}}
 			return m.loadTaskOutput(0)
 		}

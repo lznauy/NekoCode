@@ -11,14 +11,9 @@ import (
 
 // Registry is a thread-safe tool registry backed by a generic registry.
 type Registry struct {
-	items           *registry.Registry[core.Tool]
-	mu              sync.RWMutex
-	workspace       *workspace.Manager
-	planTools       map[string]struct{}
-	targetResolvers map[string]TargetResolver
-	previewers      map[string]PreviewFunc
-	privileged      map[string]PrivilegedFunc
-	permissionPlans map[string]PermissionPlanFunc
+	items     *registry.Registry[Entry]
+	mu        sync.RWMutex
+	workspace *workspace.Manager
 }
 
 // CallTarget is the effective identity used by permission, audit, and UI
@@ -48,78 +43,54 @@ type PermissionPlanFunc func(args map[string]any, workspace string) *core.Permis
 
 // RegistrationOptions describes executor metadata attached to one tool.
 type RegistrationOptions struct {
-	ResolveTarget  TargetResolver
-	Preview        PreviewFunc
-	Privileged     PrivilegedFunc
-	PermissionPlan PermissionPlanFunc
-	PlanAllowed    bool
+	ResolveTarget      TargetResolver
+	Preview            PreviewFunc
+	Privileged         PrivilegedFunc
+	PermissionPlan     PermissionPlanFunc
+	PlanAllowed        bool
+	CoordinatorAllowed bool
+	CoordinatorOnly    bool // Hide and reject outside the coordination tool policy.
+	DelegationAllowed  bool
 }
 
 // Entry is one atomic registry snapshot used by the executor.
 type Entry struct {
-	Tool           core.Tool
-	ResolveTarget  TargetResolver
-	Preview        PreviewFunc
-	Privileged     PrivilegedFunc
-	PermissionPlan PermissionPlanFunc
-	PlanAllowed    bool
+	Tool               core.Tool
+	ResolveTarget      TargetResolver
+	Preview            PreviewFunc
+	Privileged         PrivilegedFunc
+	PermissionPlan     PermissionPlanFunc
+	PlanAllowed        bool
+	CoordinatorAllowed bool
+	CoordinatorOnly    bool
+	DelegationAllowed  bool
 }
 
 // New creates a registry containing the supplied tools.
 func New(items ...core.Tool) *Registry {
 	r := &Registry{
-		items:           registry.New[core.Tool](func(t core.Tool) string { return t.Name() }),
-		workspace:       workspace.New("", nil),
-		planTools:       make(map[string]struct{}),
-		targetResolvers: make(map[string]TargetResolver),
-		previewers:      make(map[string]PreviewFunc),
-		privileged:      make(map[string]PrivilegedFunc),
-		permissionPlans: make(map[string]PermissionPlanFunc),
+		items:     registry.New[Entry](func(entry Entry) string { return entry.Tool.Name() }),
+		workspace: workspace.New("", nil),
 	}
 	r.RegisterAll(items)
 	return r
 }
 
-// Register adds or replaces a tool and clears metadata left by an older
-// registration with the same name.
+// Register replaces the tool and clears all previous executor metadata.
 func (r *Registry) Register(item core.Tool) {
 	r.RegisterWithOptions(item, RegistrationOptions{})
 }
 
-// RegisterWithOptions adds or replaces a tool together with its executor
-// metadata.
+// RegisterWithOptions stores the tool and its metadata as one atomic entry.
 func (r *Registry) RegisterWithOptions(item core.Tool, options RegistrationOptions) {
 	if item == nil {
 		return
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.items.Register(item)
-	if options.ResolveTarget == nil {
-		delete(r.targetResolvers, item.Name())
-	} else {
-		r.targetResolvers[item.Name()] = options.ResolveTarget
-	}
-	if options.Preview == nil {
-		delete(r.previewers, item.Name())
-	} else {
-		r.previewers[item.Name()] = options.Preview
-	}
-	if options.Privileged == nil {
-		delete(r.privileged, item.Name())
-	} else {
-		r.privileged[item.Name()] = options.Privileged
-	}
-	if options.PermissionPlan == nil {
-		delete(r.permissionPlans, item.Name())
-	} else {
-		r.permissionPlans[item.Name()] = options.PermissionPlan
-	}
-	if options.PlanAllowed {
-		r.planTools[item.Name()] = struct{}{}
-	} else {
-		delete(r.planTools, item.Name())
-	}
+	r.items.Register(Entry{
+		Tool: item, ResolveTarget: options.ResolveTarget, Preview: options.Preview,
+		Privileged: options.Privileged, PermissionPlan: options.PermissionPlan,
+		PlanAllowed: options.PlanAllowed, CoordinatorAllowed: options.CoordinatorAllowed, CoordinatorOnly: options.CoordinatorOnly, DelegationAllowed: options.DelegationAllowed,
+	})
 }
 
 // RegisterAll adds tools without additional executor metadata.
@@ -130,53 +101,29 @@ func (r *Registry) RegisterAll(items []core.Tool) {
 }
 
 // Unregister removes a tool and all metadata attached to it.
-func (r *Registry) Unregister(name string) {
-	r.mu.Lock()
-	r.items.Unregister(name)
-	delete(r.targetResolvers, name)
-	delete(r.previewers, name)
-	delete(r.privileged, name)
-	delete(r.permissionPlans, name)
-	delete(r.planTools, name)
-	r.mu.Unlock()
-}
+func (r *Registry) Unregister(name string) { r.items.Unregister(name) }
 
-// Lookup returns the tool and all executor metadata from one registry
-// snapshot, preventing a replacement from mixing old metadata with a new tool.
+// Lookup returns one atomic tool and metadata snapshot.
 func (r *Registry) Lookup(name string) (Entry, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	t, err := r.items.GetOrError(name, "tool not found: %s")
-	if err != nil {
-		return Entry{}, err
-	}
-	_, planAllowed := r.planTools[name]
-	return Entry{
-		Tool: t, ResolveTarget: r.targetResolvers[name], Preview: r.previewers[name],
-		Privileged: r.privileged[name], PermissionPlan: r.permissionPlans[name], PlanAllowed: planAllowed,
-	}, nil
+	return r.items.GetOrError(name, "tool not found: %s")
 }
 
 // Preview renders the registered request-scoped preview for a tool.
 func (r *Registry) Preview(ctx context.Context, name string, args map[string]any) (string, bool) {
-	r.mu.RLock()
-	preview := r.previewers[name]
-	r.mu.RUnlock()
-	if preview == nil {
+	entry, err := r.Lookup(name)
+	if err != nil || entry.Preview == nil {
 		return "", false
 	}
-	return preview(ctx, args), true
+	return entry.Preview(ctx, args), true
 }
 
 // ResolveTarget returns the effective identity of a delegated call.
 func (r *Registry) ResolveTarget(name string, args map[string]any) (CallTarget, bool) {
-	r.mu.RLock()
-	resolver := r.targetResolvers[name]
-	r.mu.RUnlock()
-	if resolver == nil {
+	entry, err := r.Lookup(name)
+	if err != nil || entry.ResolveTarget == nil {
 		return CallTarget{}, false
 	}
-	return resolver(args)
+	return entry.ResolveTarget(args)
 }
 
 // EnrichCall attaches the delegated governance identity while preserving the
@@ -217,36 +164,48 @@ func (r *Registry) Get(name string) (core.Tool, error) {
 }
 
 // Has reports whether a tool is registered.
-func (r *Registry) Has(name string) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.items.Has(name)
-}
+func (r *Registry) Has(name string) bool { return r.items.Has(name) }
 
 // Names returns registered tool names in stable order.
-func (r *Registry) Names() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.items.Names()
-}
+func (r *Registry) Names() []string { return r.items.Names() }
 
 // List returns a stable tool snapshot sorted by name.
 func (r *Registry) List() []core.Tool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.items.List()
+	entries := r.items.List()
+	list := make([]core.Tool, len(entries))
+	for i, entry := range entries {
+		list[i] = entry.Tool
+	}
+	return list
 }
 
 // Descriptors returns tool descriptors for all registered tools, sorted by name.
 func (r *Registry) Descriptors() []core.Descriptor {
-	list := r.List()
-	descs := make([]core.Descriptor, len(list))
-	for i, t := range list {
-		descs[i] = core.Descriptor{
-			Name:        t.Name(),
-			Description: t.Description(),
-			Parameters:  t.Parameters(),
+	return r.DescriptorsMatching(nil)
+}
+
+// DescriptorsMatching filters each atomic entry before evaluating its schema.
+// Tool implementations are called outside registry locks.
+func (r *Registry) DescriptorsMatching(allow func(Entry) bool) []core.Descriptor {
+	entries := r.items.List()
+	descs := make([]core.Descriptor, 0, len(entries))
+	for _, entry := range entries {
+		if allow != nil && !allow(entry) {
+			continue
 		}
+		t := entry.Tool
+		descs = append(descs, core.Descriptor{Name: t.Name(), Description: t.Description(), Parameters: t.Parameters()})
 	}
 	return descs
+}
+
+// DelegatableNames returns only explicitly trusted worker capabilities.
+func (r *Registry) DelegatableNames() []string {
+	names := []string{}
+	for _, entry := range r.items.List() {
+		if entry.DelegationAllowed {
+			names = append(names, entry.Tool.Name())
+		}
+	}
+	return names
 }

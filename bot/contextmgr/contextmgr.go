@@ -20,7 +20,8 @@ import (
 )
 
 type Manager struct {
-	state *managerState
+	todoWriteMu sync.Mutex
+	state       *managerState
 
 	// compactionMu serializes slow summary operations without blocking normal
 	// context reads and writes for the duration of the model call.
@@ -41,7 +42,8 @@ type Manager struct {
 }
 
 type managerState struct {
-	mu sync.RWMutex
+	taskUpdateSequence uint64
+	mu                 sync.RWMutex
 
 	outputStore   *core.OutputStore
 	ctx           contextContent

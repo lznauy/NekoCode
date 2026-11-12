@@ -1,6 +1,10 @@
+import { BackgroundUsage } from "../../wailsjs/go/main/App"
+import { ListTasks, TaskHistory, TaskAttempts, TaskOutput, DeleteTask, SearchTaskOutputs, RetryTaskReview, ExportTaskOutputs } from "../../wailsjs/go/main/App"
 import { EventsOn, Quit } from '../../wailsjs/runtime/runtime'
 import {
   Abort,
+  BackgroundDemands, ResumeBackgroundDemand, DiscardBackgroundDemand,
+  BackgroundTasks, AppendBackgroundTask, CancelBackgroundTask, StopBackgroundTasks, SubmitBackgroundDemand,
   MCPAuthorizationAction,
   ClearSelectedSkill,
   CommandMenu,
@@ -194,7 +198,7 @@ export function safeNewSession(): Promise<SessionMeta | null> {
 
 export function safeLoadSession(id: string): Promise<DisplayMessage[] | null> {
   try {
-    return LoadSession(id).then((msgs) => msgs as unknown as DisplayMessage[])
+    return LoadSession(id)
   } catch {
     return Promise.resolve(null)
   }
@@ -254,4 +258,61 @@ export async function safeInteractionMode(): Promise<GUIInteractionMode | null> 
 export async function safeSetInteractionMode(id: string): Promise<GUIInteractionMode> {
   if (!isWailsEnvironment()) throw new Error('Interaction modes unavailable')
   return SetInteractionMode(id)
+}
+
+export type BackgroundTask = runtime.BackgroundTask
+export async function safeBackgroundTasks(): Promise<BackgroundTask[]> {
+  if (!isWailsEnvironment()) return []
+  return (await BackgroundTasks()) ?? []
+}
+export async function safeAppendBackgroundTask(sessionID: string, id: string, text: string): Promise<void> {
+  if (!isWailsEnvironment()) throw new Error('后台任务不可用')
+  return AppendBackgroundTask(sessionID, id, text)
+}
+export async function safeCancelBackgroundTask(sessionID: string, id: string): Promise<void> {
+  if (!isWailsEnvironment()) throw new Error('后台任务不可用')
+  return CancelBackgroundTask(sessionID, id)
+}
+export async function safeStopBackgroundTasks(sessionID: string): Promise<void> {
+  if (!isWailsEnvironment()) throw new Error('后台任务不可用')
+  return StopBackgroundTasks(sessionID)
+}
+export async function safeSubmitBackgroundDemand(sessionID: string, text: string): Promise<void> {
+  if (!isWailsEnvironment()) throw new Error('后台任务不可用')
+  return SubmitBackgroundDemand(sessionID, text)
+}
+
+export type BackgroundDemand = runtime.BackgroundDemand
+export async function safeBackgroundDemands(sessionID: string): Promise<BackgroundDemand[]> {
+  if (!isWailsEnvironment()) return []
+  return (await BackgroundDemands(sessionID)) ?? []
+}
+export async function safeResumeBackgroundDemand(sessionID: string, id: string): Promise<void> {
+  if (!isWailsEnvironment()) throw new Error('需求收件箱不可用')
+  return ResumeBackgroundDemand(sessionID, id)
+}
+export async function safeDiscardBackgroundDemand(sessionID: string, id: string): Promise<void> {
+  if (!isWailsEnvironment()) throw new Error('需求收件箱不可用')
+  return DiscardBackgroundDemand(sessionID, id)
+}
+
+export type TaskSummary = runtime.SubagentSummary
+export type TaskPage = runtime.SubagentPage
+export type TaskSearchPage = runtime.TaskSearchPage
+export type TaskHistoryPage = runtime.SubagentHistoryPage
+export type TaskAttemptsPage = runtime.SubagentAttemptPage
+export type TaskOutputPage = runtime.SubagentOutputPage
+export async function safeListTasks(sessionID: string, all: boolean, offset=0): Promise<TaskPage> { return await ListTasks(sessionID, all, offset, 50) }
+export async function safeTaskHistory(sessionID: string,id: string,before=0): Promise<TaskHistoryPage> { return await TaskHistory(sessionID,id,before,50) }
+export async function safeTaskAttempts(sessionID: string,id: string,before=0): Promise<TaskAttemptsPage> { return await TaskAttempts(sessionID,id,before,50) }
+export async function safeTaskOutput(sessionID: string,id: string,sequence: number,offset=0): Promise<TaskOutputPage> { return await TaskOutput(sessionID,id,sequence,offset) }
+export async function safeSearchTaskOutputs(sessionID: string,id: string,query: string,after=0): Promise<TaskSearchPage> { return await SearchTaskOutputs(sessionID,id,query,after,20) }
+export async function safeDeleteTask(sessionID: string,id: string): Promise<void> { return DeleteTask(sessionID,id) }
+export async function safeRetryTaskReview(sessionID: string,id: string): Promise<void> { return RetryTaskReview(sessionID,id) }
+export async function safeExportTaskOutputs(sessionID: string,id: string): Promise<string> { return ExportTaskOutputs(sessionID,id) }
+
+export type BackgroundUsageTotal = runtime.BackgroundUsage
+export async function safeBackgroundUsage(sessionID: string): Promise<BackgroundUsageTotal> {
+ if (!isWailsEnvironment()) return {total_tokens:0,cache_hit_tokens:0,cache_miss_tokens:0,tool_use_count:0,duration_ms:0}
+ return BackgroundUsage(sessionID)
 }

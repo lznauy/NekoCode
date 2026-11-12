@@ -20,6 +20,7 @@ import (
 	"nekocode/bot/extension/tool/builtin/catalog"
 	toolcore "nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/permission"
+	"nekocode/bot/extension/tool/runtime/runner"
 	"nekocode/bot/extension/tool/runtime/taskbridge"
 	"nekocode/bot/extension/tool/runtime/workspace"
 	"nekocode/bot/policy"
@@ -54,19 +55,22 @@ type RunHost interface {
 }
 
 type Bot struct {
-	cwd           string
-	home          string
-	cfg           *config.Config
-	promptBuilder *prompt.Builder
-	project       *project.Project
-	ctxMgr        *ctxmgr.Manager
-	policy        *policy.Policy
-	ag            *agent.Agent
-	toolbox       *catalog.Toolbox
-	taskLister    taskbridge.TaskLister
-	cmd           *command.Handler
-	ext           *extension.Manager
-	sessionOutput struct {
+	backgroundLeases     atomic.Int32
+	projectReloadPending atomic.Bool
+	closed               atomic.Bool
+	cwd                  string
+	home                 string
+	cfg                  *config.Config
+	promptBuilder        *prompt.Builder
+	project              *project.Project
+	ctxMgr               *ctxmgr.Manager
+	policy               *policy.Policy
+	ag                   *agent.Agent
+	toolbox              *catalog.Toolbox
+	taskLister           taskbridge.TaskLister
+	cmd                  *command.Handler
+	ext                  *extension.Manager
+	sessionOutput        struct {
 		id    string
 		store *toolcore.OutputStore
 	}
@@ -81,10 +85,13 @@ type Bot struct {
 	operationMu     sync.Mutex // A Bot owns one mutable agent and callback scope.
 	runHost         RunHost
 	// Lock-free snapshot for menu/status reads that already hold b.mu.
-	interactionMode atomic.Pointer[string]
-	permissionMode  atomic.Int32
-	jevAvailable    atomic.Bool
-	riskJudge       decision.RiskJudge
+	interactionMode       atomic.Pointer[string]
+	permissionMode        atomic.Int32
+	permissionAuthority   *runner.Executor
+	permissionAuthorities map[string]*runner.Executor
+	permissionSessionID   string
+	jevAvailable          atomic.Bool
+	riskJudge             decision.RiskJudge
 }
 
 // New assembles the standard bot and loads its persisted configuration,
@@ -124,6 +131,9 @@ func NewAt(cwd string) (*Bot, error) {
 // Close releases lifecycle resources held by the bot (currently the
 // stateful shell tool inside the toolbox).
 func (b *Bot) Close() error {
+	b.closed.Store(true)
+	b.projectReloadMu.Lock()
+	defer b.projectReloadMu.Unlock()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.policy != nil {
@@ -233,6 +243,11 @@ func (b *Bot) rebuildRuntime() {
 	b.initAgent()
 	// Full configuration rebuilds revoke full access; model-only rebuilds
 	// preserve it.
+	for _, authority := range b.permissionAuthorities {
+		if authority.FullAccess() {
+			authority.SetPermissionMode(permission.ModeManual)
+		}
+	}
 	if b.FullAccess() {
 		b.setPermissionModeLocked(permission.ModeManual)
 	}
@@ -331,6 +346,7 @@ func (b *Bot) initAgent() {
 		Checkpoints:            b.checkpoints,
 		SessionID:              b.sess.CurrentID,
 		TaskReferences:         b.taskReferences,
+		PersistTodos:           b.saveSession,
 		ContextReferences:      b.modelContextReferences,
 		Output: agent.Output{
 			Text:      b.stream,
@@ -347,7 +363,6 @@ func (b *Bot) initAgent() {
 			},
 			Ask: b.ask,
 			Todos: func(items []protocol.TodoItem) {
-				b.ctxMgr.SetTodos(items)
 				b.todos(items)
 			},
 		},
@@ -370,7 +385,7 @@ func (b *Bot) initAgent() {
 	// Restore the mode on the fresh executor. Full-takeover is restored on
 	// purpose: agent-only rebuilds (model/effort switch) must preserve it —
 	// only rebuildRuntime downgrades Full after a full configuration change.
-	b.ag.Executor().SetPermissionMode(permission.Mode(b.permissionMode.Load()))
+	b.bindPermissionSessionLocked()
 
 	// Inject the permission engine into the shell tool so builtin sandbox
 	// rules (e.g. pnpm dev → network) are applied.
@@ -431,8 +446,73 @@ func (b *Bot) SetBashAuto(on bool) {
 
 func (b *Bot) CanBashAuto() bool { return b.jevAvailable.Load() }
 
+// bindPermissionSessionLocked restores the selected session's live approval
+// source. Workers retain that source when the foreground selects another one.
+// Callers own b.mu (initial construction is single-threaded).
+func (b *Bot) bindPermissionSessionLocked() {
+	id := ""
+	if b.sess != nil {
+		id = b.sess.CurrentID()
+	}
+	if b.permissionAuthorities == nil {
+		b.permissionAuthorities = make(map[string]*runner.Executor)
+	}
+	authority := b.permissionAuthorities[id]
+	current := permission.Mode(b.permissionMode.Load())
+	if authority == nil {
+		// Promoting an unsaved draft must keep its selected approval mode/source.
+		if b.permissionAuthority != nil && b.permissionSessionID == "" && id != "" {
+			authority = b.permissionAuthority
+			delete(b.permissionAuthorities, "")
+		} else {
+			authority = runner.NewExecutor(nil)
+			authority.SetPermissionMode(current)
+		}
+		b.permissionAuthorities[id] = authority
+	} else if b.permissionSessionID != id {
+		current = authority.PermissionMode()
+	}
+	if current == permission.ModeAuto && !b.jevAvailable.Load() {
+		current = permission.ModeManual
+	}
+	authority.SetPermissionMode(current)
+	b.permissionAuthority = authority
+	b.permissionSessionID = id
+	b.permissionMode.Store(int32(current))
+	if b.ag != nil {
+		b.ag.Executor().SetPermissionMode(current)
+	}
+}
+
+// forgetPermissionSession revokes deleted-session workers and releases their
+// cached authority without affecting the selected policy of another session.
+func (b *Bot) forgetPermissionSession(id string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if authority := b.permissionAuthorities[id]; authority != nil {
+		authority.SetPermissionMode(permission.ModeManual)
+	}
+	delete(b.permissionAuthorities, id)
+	if b.permissionSessionID == id {
+		b.permissionAuthority = nil
+		b.permissionSessionID = ""
+		b.permissionMode.Store(int32(permission.ModeManual))
+		b.bindPermissionSessionLocked()
+	}
+}
+
+func (b *Bot) bindPermissionSession() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.bindPermissionSessionLocked()
+}
+
 func (b *Bot) setPermissionModeLocked(mode permission.Mode) {
+	b.bindPermissionSessionLocked()
 	b.ag.Executor().SetPermissionMode(mode)
+	if b.permissionAuthority != nil {
+		b.permissionAuthority.SetPermissionMode(mode)
+	}
 	b.permissionMode.Store(int32(mode))
 	logger.Log("permission mode changed: %d", mode)
 }

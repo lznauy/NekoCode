@@ -1,7 +1,9 @@
 package tui
 
 import (
+	tea "charm.land/bubbletea/v2"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -275,5 +277,86 @@ func TestTaskStatusRetainsOutputAcrossToolCallsAndEmptyStreamReset(t *testing.T)
 		if !strings.Contains(visible, "output") || !strings.Contains(visible, want) {
 			t.Fatalf("compact task hid intermediate output at %s: %s", kind, visible)
 		}
+	}
+}
+
+func TestTaskDetailOwnsAnimationClockWhenForegroundIsIdle(t *testing.T) {
+	m := openedTaskModel(t)
+	openTestDetail(m)
+	m.state = stateReady
+	d := m.tasks.detail
+	m.closeTasks()
+	command := m.toggleTasks()
+	batch, ok := command().(tea.BatchMsg)
+	if !ok {
+		t.Fatal("missing task commands")
+	}
+	var animation tea.Msg
+	for _, cmd := range batch {
+		msg := cmd()
+		if msg != nil && reflect.TypeOf(msg).Name() == "taskAnimationMsg" {
+			animation = msg
+			break
+		}
+	}
+	if animation == nil {
+		t.Fatal("task overlay has no independent animation clock")
+	}
+	d.processing.SetSpinnerView(m.Spinner.View())
+	m.taskPanelView(80, 24)
+	before := m.Spinner.View()
+	_, next := m.Update(animation)
+	if next == nil || m.Spinner.View() == before {
+		t.Fatal("idle foreground froze task animation")
+	}
+	after := d.list.Render()
+	if !strings.Contains(after, m.Spinner.View()) {
+		t.Fatal("task animation frame stayed in render cache")
+	}
+	m.closeTasks()
+	_, next = m.Update(animation)
+	if next != nil {
+		t.Fatal("closed overlay kept animation alive")
+	}
+}
+
+func TestTaskAnimationIgnoresOldGenerationAndAvoidsDoubleForegroundClock(t *testing.T) {
+	m := openedTaskModel(t)
+	openTestDetail(m)
+	generation := m.tasks.generation
+	m.state = stateProcessing
+	before := m.Spinner.View()
+	_, next := m.Update(taskAnimationMsg{generation: generation})
+	if next == nil || m.Spinner.View() != before {
+		t.Fatal("task clock duplicated foreground animation")
+	}
+	m.state = stateReady
+	_, next = m.Update(taskAnimationMsg{generation: generation - 1})
+	if next != nil || m.Spinner.View() != before {
+		t.Fatal("stale overlay animated current detail")
+	}
+}
+
+func TestEnteringTaskDetailRestartsAnimationAfterGenerationChange(t *testing.T) {
+	m := openedTaskModel(t)
+	generation := m.tasks.generation
+	command := m.openSelectedTask()
+	if m.tasks.generation == generation {
+		t.Fatal("test did not navigate to a new detail generation")
+	}
+	batch, ok := command().(tea.BatchMsg)
+	if !ok {
+		t.Fatal("missing detail commands")
+	}
+	found := false
+	for _, cmd := range batch {
+		message := cmd()
+		if message != nil && reflect.TypeOf(message).Name() == "taskAnimationMsg" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("entering detail invalidated animation without restarting it")
 	}
 }

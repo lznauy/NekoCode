@@ -22,35 +22,36 @@ import (
 )
 
 func registerAll(r *tools.Registry, imageGenModels []config.ImageGenConfig, imageUnderstandModels []config.ImageUnderstandConfig, shellTool *shell.ShellTool, lspTool *lsp.LSPTool, indexTool *index.IndexTool, taskTool *task.TaskTool, taskListTool *task.TaskListTool, questionTool *question.Tool, todoTool *todo.TodoWriteTool, referencesTool, evidenceTool *contextrefs.Tool) {
-	plan := tools.RegistrationOptions{PlanAllowed: true}
+	plan := tools.RegistrationOptions{PlanAllowed: true, DelegationAllowed: true}
 	r.RegisterWithOptions(shellTool, tools.RegistrationOptions{
-		Privileged:     shellTool.ExecuteWithPermission,
-		PermissionPlan: shellTool.PermissionPlan,
+		DelegationAllowed: true,
+		Privileged:        shellTool.ExecuteWithPermission,
+		PermissionPlan:    shellTool.PermissionPlan,
 	})
-	r.Register(shell.NewProcessTool(shellTool))
+	r.RegisterWithOptions(shell.NewProcessTool(shellTool), tools.RegistrationOptions{DelegationAllowed: true})
 	r.RegisterWithOptions(&read.ReadTool{}, plan)
 	writeTool := &write.WriteTool{}
-	r.RegisterWithOptions(writeTool, tools.RegistrationOptions{Preview: writeTool.PreviewContext})
+	r.RegisterWithOptions(writeTool, tools.RegistrationOptions{Preview: writeTool.PreviewContext, DelegationAllowed: true})
 	r.RegisterWithOptions(&list.ListTool{}, plan)
 	r.RegisterWithOptions(&tree.TreeTool{}, plan)
 	r.RegisterWithOptions(&search.GlobTool{}, plan)
 	editTool := &edit.EditTool{}
-	r.RegisterWithOptions(editTool, tools.RegistrationOptions{Preview: editTool.PreviewContext})
+	r.RegisterWithOptions(editTool, tools.RegistrationOptions{Preview: editTool.PreviewContext, DelegationAllowed: true})
 	r.RegisterWithOptions(&search.GrepTool{}, plan)
 	r.RegisterWithOptions(web.NewWebSearchTool(), plan)
 	r.RegisterWithOptions(web.NewWebFetchTool(), plan)
 	r.RegisterWithOptions(web.NewWebExtractTool(), plan)
-	r.Register(questionTool)
-	r.Register(todoTool)
+	r.RegisterWithOptions(questionTool, tools.RegistrationOptions{CoordinatorAllowed: true})
+	r.RegisterWithOptions(todoTool, tools.RegistrationOptions{CoordinatorAllowed: true, PlanAllowed: true})
 	r.Register(taskTool)
-	r.RegisterWithOptions(taskListTool, plan)
+	r.RegisterWithOptions(taskListTool, tools.RegistrationOptions{PlanAllowed: true, CoordinatorAllowed: true})
 	r.RegisterWithOptions(referencesTool, plan)
 	r.RegisterWithOptions(evidenceTool, plan)
 	diffTool := diff.NewTool()
-	r.RegisterWithOptions(diffTool, tools.RegistrationOptions{PlanAllowed: true, Preview: diffTool.PreviewContext})
+	r.RegisterWithOptions(diffTool, tools.RegistrationOptions{PlanAllowed: true, Preview: diffTool.PreviewContext, DelegationAllowed: true})
 	r.RegisterWithOptions(indexTool, plan)
 	for _, t := range lspTool.Tools() {
-		options := tools.RegistrationOptions{}
+		options := tools.RegistrationOptions{DelegationAllowed: true}
 		switch t.Name() {
 		case "lsp_definition", "lsp_references", "lsp_hover", "lsp_diagnostics":
 			options.PlanAllowed = true
@@ -59,12 +60,12 @@ func registerAll(r *tools.Registry, imageGenModels []config.ImageGenConfig, imag
 	}
 
 	if len(imageGenModels) > 0 {
-		r.Register(media.NewImageGenTool(imageGenModels))
+		r.RegisterWithOptions(media.NewImageGenTool(imageGenModels), tools.RegistrationOptions{DelegationAllowed: true})
 	}
 	if len(imageUnderstandModels) > 0 {
 		imageUnderstandTool := media.NewImageUnderstandTool(imageUnderstandModels)
 		r.RegisterWithOptions(imageUnderstandTool, tools.RegistrationOptions{
-			PermissionPlan: imageUnderstandTool.PermissionPlan,
+			PermissionPlan: imageUnderstandTool.PermissionPlan, DelegationAllowed: true,
 		})
 	}
 }

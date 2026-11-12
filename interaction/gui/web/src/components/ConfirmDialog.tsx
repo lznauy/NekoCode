@@ -1,3 +1,4 @@
+import { PendingPrompts } from './PendingPrompts'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { safeReplyConfirm } from '../lib/wails'
 import { isUnifiedDiffContent } from '../lib/diffFormat'
@@ -5,6 +6,7 @@ import { UnifiedDiff } from './run/UnifiedDiff'
 import type { ApprovalContext } from '../types/events'
 
 export interface ConfirmEntry {
+  subAgentID?: string
   id: string
   toolName: string
   args: Record<string, unknown>
@@ -13,16 +15,18 @@ export interface ConfirmEntry {
   approval?: ApprovalContext
 }
 
-function ConfirmDialog(props: { entry: ConfirmEntry; onDone: () => void }) {
+function ConfirmDialog(props: { entry: ConfirmEntry; onDone: () => void; pendingCount?: number; pendingPreview?: string[] }) {
   return <ConfirmDialogRequest key={props.entry.id} {...props} />
 }
 
 function ConfirmDialogRequest({
   entry,
   onDone,
+  pendingCount = 0,
+  pendingPreview = [],
 }: {
   entry: ConfirmEntry
-  onDone: () => void
+  onDone: () => void; pendingCount?: number; pendingPreview?: string[]
 }) {
   const isPermission = isPermissionConfirm(entry)
   const suppliedOptions = entry.approval?.options
@@ -116,6 +120,8 @@ function ConfirmDialogRequest({
         className="flex max-h-[calc(100dvh-32px)] w-full max-w-3xl flex-col overflow-hidden card-radius border border-border/70 bg-surface-2 surface-shadow sm:max-h-[min(760px,calc(100dvh-32px))]"
       >
         <header className="shrink-0 border-b border-border/45 px-4 py-3">
+          <PendingPrompts count={pendingCount} previews={pendingPreview} />
+          {entry.subAgentID && <p className="mb-2 break-all text-xs text-text-3">子任务：{entry.subAgentID}</p>}
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="mb-1 flex items-center gap-2">

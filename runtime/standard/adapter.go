@@ -10,6 +10,7 @@ import (
 	"nekocode/bot/core"
 	"nekocode/bot/extension/mcp"
 	"nekocode/bot/provider/types"
+	"nekocode/bot/session"
 	"nekocode/logger"
 	controlruntime "nekocode/runtime"
 	"nekocode/runtime/standard/internal/viewmodel"
@@ -260,18 +261,24 @@ func (a *adapter) services() controlruntime.ServiceGroups {
 			ApplyConfig:         a.ApplyConfig,
 		},
 		Sessions: controlruntime.SessionsServices{
-			Subagents:           a.Subagents,
-			SubagentAttempts:    a.SubagentAttempts,
-			SubagentHistory:     a.SubagentHistory,
-			SubagentToolOutput:  a.SubagentToolOutput,
-			CurrentSessionID:    a.bot.CurrentSessionID,
-			ListSessions:        a.ListSessions,
-			SessionMessages:     a.SessionMessages,
-			SessionMessagesPage: a.SessionMessagesPage,
-			HistoryWindow:       a.SessionHistoryWindow,
-			ResumeSession:       a.bot.ResumeSession,
-			NewSession:          a.NewSession,
-			DeleteSession:       a.bot.DeleteSession,
+			BackgroundStatePath:   a.bot.BackgroundStatePath,
+			SubagentUsage:         a.SubagentUsage,
+			DeleteSubagent:        session.DeleteSubagent,
+			SubagentDeleted:       session.SubagentDeleted,
+			SearchSubagentOutputs: a.SearchSubagentOutputs,
+			ExportSubagentOutputs: session.ExportSubagentOutputs,
+			Subagents:             a.Subagents,
+			SubagentAttempts:      a.SubagentAttempts,
+			SubagentHistory:       a.SubagentHistory,
+			SubagentToolOutput:    a.SubagentToolOutput,
+			CurrentSessionID:      a.bot.CurrentSessionID,
+			ListSessions:          a.ListSessions,
+			SessionMessages:       a.SessionMessages,
+			SessionMessagesPage:   a.SessionMessagesPage,
+			HistoryWindow:         a.SessionHistoryWindow,
+			ResumeSession:         a.bot.ResumeSession,
+			NewSession:            a.NewSession,
+			DeleteSession:         a.bot.DeleteSession,
 		},
 		Tools: controlruntime.ToolsServices{
 			Checkpoints: a.bot.Checkpoints,

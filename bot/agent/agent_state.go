@@ -42,7 +42,15 @@ type runState struct {
 	// turn's transient hints.
 	pendingHints []policy.Hint
 	// Actual tool batches since the last todo update or progress reminder.
-	todoBatches int
+	todoBatches          int
+	todoTouched          bool
+	todoUpdateError      string
+	todoUpdateChecks     int
+	todoDispatched       bool
+	todoDispatchPlan     string
+	todoCheckedPlan      string
+	todoCompletionChecks int
+	todoCompleted        int
 }
 
 func (s *runState) reset() {

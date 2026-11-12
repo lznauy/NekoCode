@@ -213,11 +213,6 @@ func (a *App) startMessage(input string, images []controlruntime.ImageAttachment
 	if a.attachmentsClosed {
 		return fmt.Errorf("application is shutting down")
 	}
-	a.mu.Lock()
-	a.runs++
-	a.start = time.Now()
-	a.mu.Unlock()
-
 	_, err := a.rt.StartRun(a.ctx, controlruntime.Input{
 		Source: controlruntime.SourceRef{Kind: "gui"},
 		Text:   input,
@@ -334,19 +329,34 @@ func (a *App) consumeAttachmentDraftSession(sessionID string) bool {
 }
 
 func (a *App) dispatchRuntimeEvent(ev controlruntime.Event) {
+	if strings.HasPrefix(string(ev.RunID), "task_") {
+		wailsruntime.EventsEmit(a.ctx, "background:changed", nil)
+		switch ev.Type {
+		case controlruntime.EventCompaction, controlruntime.EventMetricsUpdated, controlruntime.EventToolStarted, controlruntime.EventToolBlocked, controlruntime.EventToolPreview, controlruntime.EventToolCompleted, controlruntime.EventSubAgentStarted, controlruntime.EventSubAgentEnded:
+			return
+		}
+	}
+
 	switch ev.Type {
 	case controlruntime.EventInteractionModeChanged:
 		wailsruntime.EventsEmit(a.ctx, "mode:changed", a.InteractionMode())
 	case controlruntime.EventInputAccepted:
 		if p, ok := ev.Payload.(controlruntime.MessagePayload); ok {
 			a.commitAcceptedImages(p.Images)
-			wailsruntime.EventsEmit(a.ctx, "agent:input_accepted", p)
+			wailsruntime.EventsEmit(a.ctx, "agent:input_accepted", struct {
+				controlruntime.MessagePayload
+				Queued bool `json:"queued"`
+			}{MessagePayload: p, Queued: strings.HasPrefix(string(ev.RunID), "queued_")})
 		}
 	case controlruntime.EventCompaction:
 		if p, ok := ev.Payload.(controlruntime.CompactionPayload); ok {
 			wailsruntime.EventsEmit(a.ctx, "agent:compaction", p)
 		}
 	case controlruntime.EventRunStarted:
+		a.mu.Lock()
+		a.runs++
+		a.start = time.Now()
+		a.mu.Unlock()
 		wailsruntime.EventsEmit(a.ctx, "agent:status", map[string]string{"status": "running"})
 	case controlruntime.EventAssistantDelta:
 		if p, ok := ev.Payload.(controlruntime.DeltaPayload); ok {
@@ -426,12 +436,13 @@ func (a *App) dispatchRuntimeEvent(ev controlruntime.Event) {
 		if p, ok := ev.Payload.(controlruntime.ApprovalView); ok {
 			req := p.ToConfirmRequest()
 			wailsruntime.EventsEmit(a.ctx, "agent:confirm", map[string]any{
-				"id":       p.ID,
-				"toolName": req.ToolName,
-				"args":     compactConfirmArgs(req),
-				"preview":  confirmPreview(req),
-				"kind":     string(req.Kind),
-				"approval": req.Approval,
+				"id":         p.ID,
+				"toolName":   req.ToolName,
+				"subAgentID": req.SubAgentID,
+				"args":       compactConfirmArgs(req),
+				"preview":    confirmPreview(req),
+				"kind":       string(req.Kind),
+				"approval":   req.Approval,
 			})
 		}
 	case controlruntime.EventApprovalResolved:
@@ -441,8 +452,9 @@ func (a *App) dispatchRuntimeEvent(ev controlruntime.Event) {
 	case controlruntime.EventQuestionRequested:
 		if p, ok := ev.Payload.(controlruntime.QuestionView); ok {
 			wailsruntime.EventsEmit(a.ctx, "agent:question", map[string]any{
-				"id":        p.ID,
-				"questions": p.Questions,
+				"id":         p.ID,
+				"questions":  p.Questions,
+				"subAgentID": p.SubAgentID,
 			})
 		}
 	case controlruntime.EventQuestionResolved:

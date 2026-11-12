@@ -59,6 +59,9 @@ func (e *Executor) authorizedPreview(ctx context.Context, call core.ToolCallItem
 		if err != nil {
 			return "", false
 		}
+		if e.checkToolPolicy(call.Name, entry) != nil {
+			return "", false
+		}
 		if call.EffectiveName == "" && entry.ResolveTarget != nil {
 			if target, ok := entry.ResolveTarget(call.Args); ok {
 				call.EffectiveName = target.Name

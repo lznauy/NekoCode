@@ -84,6 +84,9 @@ func isCompactCommand(value string) bool {
 // task is in progress. The returned command runs after the message lands
 // (e.g. copying an emitted authorization link to the clipboard).
 func (m *Model) tryLocalCommand(value string) (bool, tea.Cmd) {
+	if handled, cmd := m.backgroundCommand(value); handled {
+		return true, cmd
+	}
 	if handled, cmd := m.taskCommand(value); handled {
 		return true, cmd
 	}

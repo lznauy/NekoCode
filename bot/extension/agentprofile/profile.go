@@ -2,7 +2,10 @@
 // on the execution engine. The extension manager owns their lifetime.
 package agentprofile
 
-import "slices"
+import (
+	"nekocode/mode"
+	"slices"
+)
 
 const (
 	DefaultMaxSteps = 150
@@ -12,6 +15,7 @@ const (
 // Profile is the resolved input to a run. Tools is an exact ceiling; Skills
 // supplies workflow only. Zero MaxSteps inherits the engine default.
 type Profile struct {
+	RequiredRole mode.Role
 	Name         string
 	Description  string
 	Model        string

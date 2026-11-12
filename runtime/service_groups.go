@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"io"
 	"nekocode/mode"
 )
 
@@ -72,6 +73,13 @@ type ConfigServices struct {
 
 // SessionsServices contains optional sessions callbacks supplied by the application.
 type SessionsServices struct {
+	SubagentUsage         func(string, string) (BackgroundUsage, error)
+	SubagentDeleted       func(string, string) bool
+	DeleteSubagent        func(string, string) error
+	SearchSubagentOutputs func(context.Context, string, string, string, int, int) (TaskSearchPage, error)
+	ExportSubagentOutputs func(context.Context, string, string, io.Writer) error
+	BackgroundStatePath   func(sessionID string) string
+
 	SubagentToolOutput func(sessionID, id string, sequence int, offset int64) (SubagentOutputPage, error)
 	Subagents          func(sessionID string) ([]SubagentSummary, error)
 	SubagentAttempts   func(sessionID, id string, before, limit int) (SubagentAttemptPage, error)

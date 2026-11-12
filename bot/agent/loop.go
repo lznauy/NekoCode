@@ -55,12 +55,10 @@ func (r *loopRunner) runContext(ctx context.Context, input string, images []type
 	}
 	a := r.agent
 	r.stepLimitHit = false
+	a.life.SetValues(ctx)
+	defer a.life.SetValues(nil)
 	beforeRun := a.deps.ctxMgr.Snapshot()
 	r.startRun(input, images)
-	a.run.identity = protocol.ExecutionFromContext(ctx)
-	if a.run.identity.RunID == "" {
-		a.run.identity.RunID = uuid.NewString()
-	}
 	defer a.life.StopTiming()
 	// Reset in startRun replaces canceled lifecycle contexts. Install the
 	// watcher afterwards so startup can never erase this run's cancellation.
@@ -200,10 +198,23 @@ func (r *loopRunner) runTurn(input string, callback RunCallback) (finished bool)
 func (r *loopRunner) startRun(input string, images []types.MessageImage) {
 	a := r.agent
 	a.Reset()
+	a.run.identity = protocol.ExecutionFromContext(a.life.Context())
+	if a.run.identity.RunID == "" {
+		a.run.identity.RunID = uuid.NewString()
+	}
+	group := protocol.CoordinationFromContext(a.getCtx()).GroupID
+	if group == "" {
+		group = a.run.identity.RunID
+	}
+	a.deps.ctxMgr.SelectTodoGroup(group)
 	a.deps.ctxMgr.BeginModelTurn()
 	// AddUser is exactly Add("user", input, "user") when images is empty,
 	// so the single path covers both.
-	a.deps.ctxMgr.AddUser(input, images)
+	if protocol.CoordinationFromContext(a.getCtx()).Notification {
+		a.deps.ctxMgr.Add("user", input, types.MessageSourceRuntimeEvent)
+	} else {
+		a.deps.ctxMgr.AddUser(input, images)
+	}
 }
 
 func (r *loopRunner) applyUserSubmitHooks() {

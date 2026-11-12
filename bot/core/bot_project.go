@@ -55,7 +55,24 @@ func (b *Bot) prepareReload() reloadStart {
 func (b *Bot) reloadProject() {
 	b.projectReloadMu.Lock()
 	defer b.projectReloadMu.Unlock()
+	if b.closed.Load() {
+		return
+	}
 
+	// Session switches can refresh conversation instructions while workers own
+	// captured services. Preserve live extension/MCP generations until the final
+	// accepted task releases its lease; explicit destructive mutations are also
+	// guarded by Runtime.
+	if b.backgroundLeases.Load() > 0 {
+		b.projectReloadPending.Store(true)
+		b.mu.Lock()
+		if b.ctxMgr != nil && b.promptBuilder != nil {
+			b.ctxMgr.SetSystemPrompt(b.promptBuilder.BuildStatic())
+		}
+		b.mu.Unlock()
+		return
+	}
+	b.projectReloadPending.Store(false)
 	start := b.prepareReload()
 	if start.ext != nil {
 		// Views serve the previous snapshot until publication below. Clear the
@@ -123,4 +140,22 @@ func (b *Bot) registerWorkspaceCommands(parser *command.Parser) {
 		}
 		return strings.TrimSpace(out.String()), true
 	})
+}
+
+// Worker release never refreshes services while holding Runtime queue locks.
+// Serialize the deferred refresh with foreground execution and shutdown.
+func (b *Bot) releaseBackgroundLease() {
+	if b.backgroundLeases.Add(-1) != 0 || !b.projectReloadPending.Load() {
+		return
+	}
+	go func() {
+		b.operationMu.Lock()
+		defer b.operationMu.Unlock()
+		b.flushPendingProjectReload()
+	}()
+}
+func (b *Bot) flushPendingProjectReload() {
+	if b.projectReloadPending.Load() && b.backgroundLeases.Load() == 0 && !b.closed.Load() {
+		b.reloadProject()
+	}
 }

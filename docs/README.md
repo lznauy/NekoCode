@@ -9,6 +9,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [用户使用指南](users/USER_GUIDE.md) | 安装、模型配置、日常使用、IM 和 MCP 接入 |
+| [工作模式教学](users/INTERACTION_MODES.md) | Standard、Plan、Super Agent 的选择、操作和完整使用流程 |
 | [故障排查指南](users/TROUBLESHOOTING.md) | 启动、模型、扩展、权限与运行异常的定位步骤 |
 | [会话恢复、回退与备份](users/SESSION_GUIDE.md) | 恢复会话、检查点、导出、备份和清理 |
 | [数据目录](users/DATA_DIRECTORY.md) | 本机数据位置、磁盘布局和清理影响 |
@@ -21,6 +22,7 @@
 
 | 文档 | 内容 |
 | --- | --- |
+| [工作模式框架原理](developers/INTERACTION_MODES.md) | 模式定义、运行快照、提示词、工具限制、子任务与扩展接入 |
 | [自定义 Agent](developers/AGENT_GUIDE.md) | 定义工具范围、安装和委托子 Agent |
 | [自定义 Skill](developers/SKILL_GUIDE.md) | 编写、调用和分享工作流 |
 | [自定义 Plugin](developers/PLUGIN_GUIDE.md) | 组合、安装、更新和分发扩展 |
@@ -55,7 +57,7 @@
 | --- | --- |
 | [对比补齐方向](plan/COMPARISON_GAPS.md) | 相对主流产品的短板与补齐顺序 |
 | [Headless 协议剩余差距](plan/STREAM_JSON_GAPS.md) | `nekocode-headless/2` 尚未暴露的能力与暂缓项 |
-| [子任务后续](plan/SUBAGENT_NEXT.md) | 全局列表、删除、输出搜索导出、多端接入 |
+| [后台资源热替换](plan/SUPER_AGENT_ASYNC.md) | 扩展/MCP 破坏性变更的细粒度租约 |
 | [通用运行预算](plan/RUN_BUDGET.md) | 主 Agent 与子任务的步数、累计 token 预算和耗尽后的收尾行为 |
 
 当前行为以对应现状文档为准：Headless 见 [STREAM_JSON.md](developers/STREAM_JSON.md)，子任务见 [用户指南](users/USER_GUIDE.md#查看子任务) 和 [数据目录](users/DATA_DIRECTORY.md#subagents--子任务会话)。

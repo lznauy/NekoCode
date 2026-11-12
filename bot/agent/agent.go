@@ -29,14 +29,17 @@ import (
 // Config contains the dependencies and optional behavior of an Agent.
 type Config struct {
 	MaxConcurrentSubagents int
-	Context                *ctxmgr.Manager
-	Model                  provider.LLM
-	Tools                  *tools.Registry
-	Policy                 *aggov.Policy
-	Output                 Output
-	Interaction            Interaction
-	Checkpoints            *checkpoint.Manager
-	SessionID              func() string
+	// PersistTodos saves the current snapshot while plan updates are serialized.
+	// The callback must not mutate todo state.
+	PersistTodos func() error
+	Context      *ctxmgr.Manager
+	Model        provider.LLM
+	Tools        *tools.Registry
+	Policy       *aggov.Policy
+	Output       Output
+	Interaction  Interaction
+	Checkpoints  *checkpoint.Manager
+	SessionID    func() string
 	// TaskReferences supplies request-only values scoped to the current parent session.
 	TaskReferences func(context.Context, string) ctxmgr.TaskReferences
 	// ContextReferences receives a host-selected kind: empty for skills/artifacts,
@@ -64,6 +67,7 @@ type Interaction struct {
 }
 
 type agentDeps struct {
+	persistTodos      func() error
 	ctxMgr            *ctxmgr.Manager
 	llmClient         provider.LLM
 	toolRegistry      *tools.Registry
@@ -111,6 +115,7 @@ func New(ctx context.Context, cfg Config) *Agent {
 		life: kernel.NewLifecycle(ctx, steeringChBuffer),
 		deps: agentDeps{
 			ctxMgr:            cfg.Context,
+			persistTodos:      cfg.PersistTodos,
 			llmClient:         cfg.Model,
 			toolRegistry:      cfg.Tools,
 			toolExecutor:      runner.NewExecutor(cfg.Tools),
@@ -216,7 +221,6 @@ func (a *Agent) Reset() {
 	if a.deps.gov != nil {
 		a.deps.gov.ResetRun()
 	}
-	a.deps.ctxMgr.SetTodos(nil)
 	a.deps.ctxMgr.SetHints("")
 	a.llmUsage.reset()
 }
@@ -359,7 +363,7 @@ func (a *Agent) ToolExecutionState() *execution.ExecutionState {
 
 // ToolInteraction returns the callbacks used by the concrete question and
 // todo tools owned by the application composition root.
-func (a *Agent) ToolInteraction() (protocol.QuestionFunc, protocol.TodoFunc) {
+func (a *Agent) ToolInteraction() (protocol.QuestionFunc, protocol.TodoUpdateFunc) {
 	return a.ask, a.updateTodos
 }
 
@@ -391,11 +395,24 @@ func (a *Agent) ask(req protocol.QuestionRequest) protocol.QuestionReply {
 	return fn(req)
 }
 
-func (a *Agent) updateTodos(items []protocol.TodoItem) {
+func (a *Agent) updateTodos(update protocol.TodoUpdate) (plan protocol.TodoPlan, err error) {
+	defer func() { a.recordTodoUpdate(err) }()
+	coordination := protocol.CoordinationFromContext(a.getCtx())
+	if coordination.Notification && update.PlanID != "" && update.PlanID != coordination.GroupID {
+		return protocol.TodoPlan{}, fmt.Errorf("a completion notification can only update its own plan")
+	}
+	if err := a.getCtx().Err(); err != nil {
+		return protocol.TodoPlan{}, err
+	}
+	plan, err = a.deps.ctxMgr.ApplyTodos(update, a.deps.persistTodos)
+	if err != nil {
+		return protocol.TodoPlan{}, err
+	}
 	a.interactionMu.RLock()
 	fn := a.interaction.Todos
 	a.interactionMu.RUnlock()
 	if fn != nil {
-		fn(items)
+		fn(append([]protocol.TodoItem(nil), plan.Items...))
 	}
+	return plan, nil
 }

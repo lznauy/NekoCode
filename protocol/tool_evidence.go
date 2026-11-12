@@ -6,6 +6,10 @@ import "slices"
 // Empty State means no observation. ExitCodeKnown is true only for a normal
 // exit. OutputComplete concerns captured bytes before text normalization.
 type ProcessObservation struct {
+	Task           string `json:"task,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+	NewOutputBytes uint64 `json:"new_output_bytes,omitempty"`
+	UnchangedWaits int    `json:"unchanged_waits,omitempty"`
 	State          string `json:"state,omitempty"`
 	ExitCode       int    `json:"exit_code,omitempty"`
 	ExitCodeKnown  bool   `json:"exit_code_known,omitempty"`

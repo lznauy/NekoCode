@@ -213,3 +213,17 @@ func TestSubagentMetadataUsesSnapshotNanosecondTime(t *testing.T) {
 		}
 	}
 }
+
+func TestObservationWorkspaceKindUsesSnakeCase(t *testing.T) {
+	raw, err := json.Marshal(SubagentInfo{WorkspaceKind: "snapshot"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err = json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if string(fields["workspace_kind"]) != `"snapshot"` || fields["WorkspaceKind"] != nil {
+		t.Fatalf("inconsistent observation JSON: %s", raw)
+	}
+}

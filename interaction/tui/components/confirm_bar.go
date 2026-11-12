@@ -10,6 +10,7 @@ import (
 	controlruntime "nekocode/runtime"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type ConfirmBar struct {
@@ -39,7 +40,7 @@ func (c *ConfirmBar) SetRequest(req *controlruntime.ConfirmRequest, respond func
 
 // SetDestructive asks for confirmation of a local destructive UI action.
 // Unlike permission requests, it deliberately offers only delete and cancel.
-// Options render horizontally with cancel first, so index 0 is the safe choice.
+// Cancel is selected by default; options use a row when space permits.
 func (c *ConfirmBar) SetDestructive(title, description, acceptLabel string, respond func(ok bool)) {
 	c.req = nil
 	c.action = &actionConfirmation{title: title, description: description, acceptLabel: acceptLabel}
@@ -119,7 +120,7 @@ func (c *ConfirmBar) options() []confirmOption {
 		// accept action renders last, in the danger palette.
 		return []confirmOption{
 			{Label: "取消", Action: func(c *ConfirmBar) { c.Respond(false, false) }},
-			{Label: acceptLabel, Action: func(c *ConfirmBar) { c.Respond(true, false) }},
+			{Label: acceptLabel, Danger: true, Action: func(c *ConfirmBar) { c.Respond(true, false) }},
 		}
 	}
 	if c.req == nil {
@@ -134,6 +135,7 @@ func (c *ConfirmBar) options() []confirmOption {
 
 type confirmOption struct {
 	Label  string
+	Danger bool
 	Action func(*ConfirmBar)
 }
 
@@ -149,121 +151,127 @@ func (c *ConfirmBar) Height(width, termHeight int) int {
 	if c.req == nil && c.action == nil {
 		return 0
 	}
-	contentW := max(40, width-6)
-	maxLines := confirmMaxLines(termHeight)
-	n := len(c.descLines(contentW))
-	if n > maxLines {
-		n = maxLines + 1
-	}
-	if c.action != nil {
-		// Destructive layout is compact: options share one horizontal line
-		// and there is no separate risk-tag row.
-		// title(1) + desc(n) + opts(1) + navSep(1) + navHint(1) + bottom(1)
-		return n + 5
-	}
-	opts := len(c.options())
-	// title(1) + desc(n) + sep(1) + levelTag(1) + opts + navSep(1) + navHint(1) + bottom(1)
-	return n + opts + 5
+	return lipgloss.Height(c.View(width, termHeight))
 }
 
 func (c *ConfirmBar) View(width, termHeight int) string {
 	if c.req == nil && c.action == nil {
 		return ""
 	}
-	barW := max(40, width-4)
-	contentW := max(40, width-6)
-	maxLines := confirmMaxLines(termHeight)
-
-	titleText := c.titleText()
-	// Destructive confirmations use a red title so the danger reads at a glance.
-	titleStyle := lipgloss.Style(c.sty.Primary.Bold(true))
+	inset := 2
+	if width < 16 {
+		inset = 0
+	}
+	barW := max(8, min(108, width-2*inset))
+	contentW := barW - 6
+	indent := strings.Repeat(" ", inset)
+	edge := c.sty.Border.Render(styles.Vertical)
+	row := func(text string) string {
+		text = ansi.Truncate(text, contentW, "…")
+		return indent + edge + "  " + text + strings.Repeat(" ", max(0, contentW-lipgloss.Width(text))) + "  " + edge
+	}
+	titleStyle := c.sty.Primary.Bold(true)
 	if c.action != nil {
 		titleStyle = c.sty.Red.Bold(true)
 	}
-	title := titleStyle.Render("  " + titleText)
-	prefix := "┌─  " + titleText + " "
-	rightLen := max(0, barW-lipgloss.Width(prefix)-1)
-	rightDash := c.sty.Border.Render(strings.Repeat(styles.Horizontal, rightLen) + "┐")
-	titleBar := c.sty.Border.Render("┌─") + title + " " + rightDash
-
-	desc := c.formatDesc()
-	rawLines := wrapText("  "+desc, contentW)
-	var descLines []string
-	for i, line := range rawLines {
-		if i == 0 {
-			descLines = append(descLines, line)
-		} else {
-			descLines = append(descLines, "  "+line)
-		}
+	title := ansi.Truncate(c.titleText(), max(1, barW-6), "…")
+	left, right, bottomLeft, bottomRight := "╭", "╮", "╰", "╯"
+	if styles.Horizontal == "-" {
+		left, right, bottomLeft, bottomRight = "+", "+", "+", "+"
 	}
-	truncated := len(descLines) > maxLines
-	if truncated {
-		descLines = descLines[:maxLines]
+	header := c.sty.Border.Render(left+styles.Horizontal+" ") + titleStyle.Render(title) + " "
+	header += c.sty.Border.Render(strings.Repeat(styles.Horizontal, max(0, barW-lipgloss.Width(header)-1)) + right)
+	lines := []string{indent + header}
+	if termHeight >= 32 {
+		lines = append(lines, row(""))
 	}
-
+	for _, line := range c.descriptionRows(contentW, confirmMaxLines(termHeight)) {
+		lines = append(lines, row(line))
+	}
+	lines = append(lines, row(""))
 	opts := c.options()
-
-	sep := c.sty.Border.Render("├" + strings.Repeat(styles.Horizontal, barW-2) + "┤")
-	bottomBorder := c.sty.Border.Render("└" + strings.Repeat(styles.Horizontal, barW-2) + "┘")
-	// Light separator between options and the nav hint so the hint reads as
-	// a footer, not another option.
-	navSep := c.sty.Border.Render("├" + strings.Repeat(styles.Horizontal, barW-2) + "┤")
-
-	padTo := func(line string) string {
-		return line + strings.Repeat(" ", max(0, barW-lipgloss.Width(line)))
-	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n", titleBar)
-	for _, line := range descLines {
-		fmt.Fprintf(&b, "%s\n", padTo(c.sty.Base.Render(line)))
-	}
-	if truncated {
-		fmt.Fprintf(&b, "%s\n", padTo(c.sty.Muted.Render("  ... (truncated)")))
-	}
-	if c.action != nil {
-		// Destructive confirmations render compactly: the options share one
-		// horizontal row right below the description, with no risk-tag row
-		// or separator (the red title already signals the danger).
-		fmt.Fprintf(&b, "%s\n", padTo(c.horizontalOptions(opts)))
+	if c.action != nil && lipgloss.Width(c.horizontalOptions(opts)) <= contentW {
+		lines = append(lines, row(c.horizontalOptions(opts)))
 	} else {
-		fmt.Fprintf(&b, "%s\n", sep)
-		// Risk level tag on its own line above the options.
-		fmt.Fprintf(&b, "%s\n", padTo("  "+c.levelText()))
-		// Options stacked vertically; the selected one is highlighted.
 		for i, opt := range opts {
-			var row string
-			if i == c.selected {
-				row = lipgloss.Style(c.sty.Primary).Bold(true).
-					Background(lipgloss.Color(styles.BtnYesBg)).
-					Padding(0, 2).
-					Render("▸ " + opt.Label)
-				row = "  " + row
-			} else {
-				row = c.sty.Muted.Render("    " + opt.Label)
+			for j, line := range wrapText(opt.Label, max(1, contentW-4)) {
+				prefix := "  "
+				if i == c.selected && j == 0 {
+					prefix = "▸ "
+				}
+				text := prefix + line
+				if i == c.selected {
+					bg := styles.BtnYesBg
+					style := c.sty.Primary.Bold(true)
+					if opt.Danger {
+						bg = styles.BtnNoBg
+						style = c.sty.Red.Bold(true)
+					}
+					text = ansi.Truncate(text, contentW, "…")
+					text = style.Background(lipgloss.Color(bg)).Render(text + strings.Repeat(" ", max(0, contentW-lipgloss.Width(text))))
+				} else {
+					text = c.sty.Muted.Render(text)
+				}
+				lines = append(lines, row(text))
 			}
-			fmt.Fprintf(&b, "%s\n", padTo(row))
 		}
 	}
-	// Nav hint footer, visually separated from the options.
-	fmt.Fprintf(&b, "%s\n", navSep)
-	navHint := "  ↑↓选择  Enter确认  Esc拒绝"
-	if c.action != nil {
-		navHint = "  ↑↓选择  Enter确认  Esc取消"
+	if termHeight >= 32 {
+		lines = append(lines, row(""))
 	}
-	fmt.Fprintf(&b, "%s\n", padTo(c.sty.Muted.Render(navHint)))
-	b.WriteString(bottomBorder)
-
-	return b.String()
+	hint := "↑↓ 选择   Enter 确认   Esc 拒绝"
+	if c.action != nil {
+		hint = "↑↓ 选择   Enter 确认   Esc 取消"
+	}
+	for _, line := range wrapText(hint, contentW) {
+		lines = append(lines, row(c.sty.Muted.Render(line)))
+	}
+	lines = append(lines, indent+c.sty.Border.Render(bottomLeft+strings.Repeat(styles.Horizontal, barW-2)+bottomRight))
+	// This spacing belongs to the card and is included in Height, so history
+	// keeps its distance without pushing the input beyond the terminal frame.
+	return "\n" + strings.Join(lines, "\n") + "\n"
 }
 
-// horizontalOptions renders the options inline on a single row. The last
-// option is the destructive accept action and keeps the danger palette
-// (dark-red background when selected, red text when idle).
+func (c *ConfirmBar) descriptionRows(width, maxLines int) []string {
+	var rows []string
+	if c.action == nil && c.isExecutionApproval() {
+		command, _ := c.req.Args["command"].(string)
+		metadata := wrapText(c.formatPermissionFields(false), width)
+		if command != "" {
+			commandLines := wrapText(formatCommandPreview(command, 600), max(1, width-2))
+			budget := max(2, maxLines-len(metadata)-1)
+			if len(commandLines) > budget {
+				commandLines = append(commandLines[:budget-1], "… 命令较长，预览已省略")
+			}
+			for i, line := range commandLines {
+				prefix := "  "
+				if i == 0 {
+					prefix = "$ "
+				}
+				rows = append(rows, c.sty.Base.Render(prefix+line))
+			}
+			rows = append(rows, "")
+		}
+		for _, line := range metadata {
+			rows = append(rows, c.sty.Muted.Render(line))
+		}
+	} else {
+		for _, line := range wrapText(c.formatDesc(), width) {
+			rows = append(rows, c.sty.Base.Render(line))
+		}
+	}
+	if len(rows) > maxLines {
+		rows = append(rows[:max(0, maxLines-1)], c.sty.Muted.Render("… 更多信息已省略"))
+	}
+	return rows
+}
+
+// horizontalOptions renders decisions inline. Danger follows the action flag,
+// independently of its position in the list.
 func (c *ConfirmBar) horizontalOptions(opts []confirmOption) string {
 	parts := make([]string, 0, len(opts))
 	for i, opt := range opts {
-		danger := i == len(opts)-1
+		danger := opt.Danger
 		switch {
 		case i == c.selected:
 			bg := styles.BtnYesBg
@@ -299,27 +307,6 @@ func (c *ConfirmBar) titleText() string {
 		return "安装确认"
 	}
 	return "Confirm"
-}
-
-func (c *ConfirmBar) levelText() string {
-	if c.isPermissionConfirm() {
-		if c.req.Approval != nil && c.req.Approval.Scope == controlruntime.ApprovalScopeOnce {
-			return c.sty.Yellow.Render("临时授权")
-		}
-		return c.sty.Yellow.Render("可记住")
-	}
-	if c.req.Kind == controlruntime.ConfirmKindInstall {
-		return c.sty.Yellow.Render("插件")
-	}
-	return c.sty.Yellow.Render("确认")
-}
-
-func (c *ConfirmBar) descLines(maxW int) []string {
-	desc := c.formatDesc()
-	if desc == "" {
-		return nil
-	}
-	return wrapText("  "+desc, maxW)
 }
 
 func (c *ConfirmBar) formatDesc() string {
@@ -371,6 +358,10 @@ func (c *ConfirmBar) isExecutionApproval() bool {
 // only through isPermissionConfirm, which guarantees a non-nil approval, so the
 // card always has at least one field to show.
 func (c *ConfirmBar) formatPermissionDesc() string {
+	return c.formatPermissionFields(true)
+}
+
+func (c *ConfirmBar) formatPermissionFields(includeCommand bool) string {
 	approval := c.req.Approval
 	// The title bar already says what kind of confirmation this is, so the
 	// body carries fields only, all in one shape: "标签: 值".
@@ -384,7 +375,7 @@ func (c *ConfirmBar) formatPermissionDesc() string {
 	} else if label := permissionReasonLabel(approvalReason); label != "" {
 		lines = append(lines, "原因: "+label)
 	}
-	if c.isExecutionApproval() {
+	if includeCommand && c.isExecutionApproval() {
 		if command, ok := c.req.Args["command"].(string); ok && command != "" {
 			lines = append(lines, formatCommandPreview(command, 600))
 		}

@@ -28,7 +28,7 @@ func TestRegistryIsImmutableAndRejectsAmbiguity(t *testing.T) {
 	if d, err := registry.Resolve("custom"); err != nil || d.Strategy != "delegated" {
 		t.Fatalf("extension lost: %+v %v", d, err)
 	}
-	if _, err := Resolve("super-agent"); err == nil {
+	if _, err := Resolve("unknown-mode"); err == nil {
 		t.Fatal("unimplemented mode exposed")
 	}
 }
@@ -65,5 +65,20 @@ func TestOneShotPlanSyntax(t *testing.T) {
 		if OneShot(input) {
 			t.Fatalf("misclassified %q", input)
 		}
+	}
+}
+
+func TestSuperAgentDefinitionIsExecutableAndConstrained(t *testing.T) {
+	d, err := Resolve(SuperAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Role != Coordinator || d.ToolPolicy != CoordinationTools || d.Strategy != Delegated || d.Prompt == "" {
+		t.Fatalf("incomplete coordinator: %+v", d)
+	}
+	modified := d.Snapshot
+	modified.ToolPolicy = AllTools
+	if _, err := Validate(modified); err == nil {
+		t.Fatal("coordinator capability ceiling relaxed")
 	}
 }

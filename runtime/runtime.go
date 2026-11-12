@@ -47,6 +47,7 @@ type Runtime struct {
 	runs            *runstore.RunStore
 	recorder        *recording.EventRecorder
 	runtimeCommands map[string]runtimeCommand
+	background      *backgroundTasks
 
 	mu            sync.Mutex
 	mutationMu    sync.Mutex
@@ -92,6 +93,7 @@ func New(runner Runner, services ServiceGroups) *Runtime {
 	}
 	events.AddOrderedObserver(rt.runs.Record)
 	events.AddOrderedObserver(rt.recordMetrics)
+	rt.background = newBackgroundTasks(rt)
 	rt.approvals = broker.NewApprovalBroker(events, SourceRef{Kind: "runtime"}, rt.currentRunID)
 	rt.questions = broker.NewQuestionBroker(events, SourceRef{Kind: "runtime"}, rt.currentRunID)
 	rt.connectors = connectors.NewManager(rt)

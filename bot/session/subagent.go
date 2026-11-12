@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,6 +41,12 @@ type SubagentAttempt struct {
 
 // SubagentMetadata belongs to a durable task, rather than an execution slot.
 type SubagentMetadata struct {
+	WorkspaceBase    string            `json:"workspace_base,omitempty"`
+	SourceHead       string            `json:"source_head,omitempty"`
+	GroupID          string            `json:"group_id,omitempty"`
+	ResultInputs     []string          `json:"result_inputs"`
+	ToolCeiling      []string          `json:"tool_ceiling"`
+	WorkspaceKind    string            `json:"workspace_kind,omitempty"`
 	Isolation        string            `json:"isolation,omitempty"`
 	ParentSessionID  string            `json:"parent_session_id"`
 	Title            string            `json:"title,omitempty"`
@@ -91,11 +98,25 @@ func OpenSubagent(parentID, id, cwd string, resume bool) (*SubagentSession, erro
 	if err := validateID(id); err != nil {
 		return nil, err
 	}
-	d := filepath.Join(root, id)
-	if err := os.MkdirAll(d, 0o700); err != nil {
+	guard, err := lockSubagentManagement(root)
+	if err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(d, ".active.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	defer guard.Close()
+	if SubagentDeleted(parentID, id) {
+		return nil, fmt.Errorf("task was deleted; create a new task")
+	}
+	sessionRoot, err := openTaskManagementRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer sessionRoot.Close()
+	relative := filepath.Join("subagents", id)
+	if err := taskManagementDirectory(sessionRoot, relative, true); err != nil {
+		return nil, err
+	}
+	d := filepath.Join(root, id)
+	f, err := openTaskLockFile(sessionRoot, filepath.Join(relative, ".active.lock"))
 	if err != nil {
 		return nil, err
 	}
@@ -181,6 +202,66 @@ func (s *SubagentSession) SetIsolation(mode string) error {
 	return nil
 }
 
+// SetWorkspaceKind records how the private workspace was constructed.
+func (s *SubagentSession) SetWorkspaceKind(kind string) error {
+	if s.lock == nil || s.snapshot == nil || s.snapshot.Subagent == nil {
+		return fmt.Errorf("subagent is not open")
+	}
+	meta := s.snapshot.Subagent
+	if kind != "shared" && kind != "head" && kind != "snapshot" {
+		return fmt.Errorf("invalid workspace kind")
+	}
+	if (meta.Isolation == "worktree") != (kind != "shared") {
+		return fmt.Errorf("workspace kind does not match isolation")
+	}
+	if meta.RunCount > 0 && meta.WorkspaceKind != "" && meta.WorkspaceKind != kind {
+		return fmt.Errorf("cannot change workspace kind on resume")
+	}
+	previous := meta.WorkspaceKind
+	meta.WorkspaceKind = kind
+	if err := s.snapshot.saveAt(s.root); err != nil {
+		meta.WorkspaceKind = previous
+		return err
+	}
+	return nil
+}
+
+// SetWorkspaceBaseline records immutable Git content identities, never file times.
+// These are observational references; they do not authorize worktree operations.
+func (s *SubagentSession) SetWorkspaceBaseline(base, head string) error {
+	if s.lock == nil || s.snapshot.Subagent == nil {
+		return fmt.Errorf("subagent is not open")
+	}
+	valid := func(id string) bool {
+		if len(id) != 40 && len(id) != 64 {
+			return false
+		}
+		for _, c := range id {
+			if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+				return false
+			}
+		}
+		return true
+	}
+	if !valid(base) || (head != "" && !valid(head)) || (s.snapshot.Subagent.WorkspaceKind == "snapshot" && head == "") {
+		return fmt.Errorf("invalid workspace baseline object ID")
+	}
+	meta := s.snapshot.Subagent
+	if meta.Isolation != "worktree" {
+		return fmt.Errorf("workspace baseline requires a worktree")
+	}
+	if meta.WorkspaceBase != "" && (meta.WorkspaceBase != base || meta.SourceHead != head) {
+		return fmt.Errorf("cannot change workspace baseline on resume")
+	}
+	oldBase, oldHead := meta.WorkspaceBase, meta.SourceHead
+	meta.WorkspaceBase, meta.SourceHead = base, head
+	if err := s.snapshot.saveAt(s.root); err != nil {
+		meta.WorkspaceBase, meta.SourceHead = oldBase, oldHead
+		return err
+	}
+	return nil
+}
+
 func (s *SubagentSession) Snapshot() *Snapshot { return s.snapshot.Clone() }
 
 func (s *SubagentSession) Begin(profile, prompt string, skills []string, title ...string) error {
@@ -210,7 +291,7 @@ func (s *SubagentSession) Begin(profile, prompt string, skills []string, title .
 // Checkpoint commits transcript and context using the same watermark protocol
 // as parent sessions. Callers acknowledge the transcript only after success.
 func (s *SubagentSession) Checkpoint(context ctxmgr.ManagerSnapshot, status, result string, usage ...SubagentAttemptUsage) error {
-	if s.lock == nil {
+	if s.lock == nil || s.snapshot.Subagent == nil {
 		return fmt.Errorf("subagent session is closed")
 	}
 	meta := s.snapshot.Subagent
@@ -257,7 +338,9 @@ func ReadSubagentMetadata(parentID, id string) (SubagentInfo, error) {
 	if err := validateID(id); err != nil {
 		return SubagentInfo{}, err
 	}
-	return readSubagentInfo(root, parentID, id)
+	// Resume authorization must read the canonical manifest, never the bounded
+	// UI observation cache which intentionally omits authority fields.
+	return readSubagentInfoSource(root, parentID, id, false)
 }
 
 func validateSubagentIdentity(path, parentID, id, cwd string) error {
@@ -276,6 +359,78 @@ func validateSubagentIdentity(path, parentID, id, cwd string) error {
 	}
 	if header.ID != id || header.Subagent == nil || header.Subagent.ParentSessionID != parentID || header.CWD != cwd {
 		return fmt.Errorf("subagent identity or workspace mismatch")
+	}
+	return nil
+}
+
+// SetGroupID commits a task's demand ownership before model execution. Once
+// recorded, another attempt cannot move the task into an unrelated plan.
+func (s *SubagentSession) SetGroupID(group string) error {
+	if s.lock == nil || s.snapshot.Subagent == nil {
+		return fmt.Errorf("subagent session is closed")
+	}
+	previous := s.snapshot.Subagent.GroupID
+	if group == "" || previous == group {
+		return nil
+	}
+	if previous != "" {
+		return fmt.Errorf("cannot change task demand ownership")
+	}
+	s.snapshot.Subagent.GroupID = group
+	if err := s.snapshot.saveAt(s.root); err != nil {
+		s.snapshot.Subagent.GroupID = previous
+		return err
+	}
+	return nil
+}
+
+// SetToolCeiling persists the resolved executor scope; later attempts may only
+// narrow it. Nil denotes legacy records without a captured scope.
+func (s *SubagentSession) SetToolCeiling(names []string) error {
+	if s.lock == nil || s.snapshot.Subagent == nil {
+		return fmt.Errorf("subagent is not open")
+	}
+	meta := s.snapshot.Subagent
+	if meta.ToolCeiling != nil {
+		allowed := map[string]bool{}
+		for _, name := range meta.ToolCeiling {
+			allowed[name] = true
+		}
+		for _, name := range names {
+			if !allowed[name] {
+				return fmt.Errorf("tool %q exceeds saved task ceiling", name)
+			}
+		}
+	}
+	previous := meta.ToolCeiling
+	meta.ToolCeiling = append([]string{}, names...)
+	if err := s.snapshot.saveAt(s.root); err != nil {
+		meta.ToolCeiling = previous
+		return err
+	}
+	return nil
+}
+
+// SetResultInputs records the explicit evidence scope. Restoring an execution
+// cannot silently add access to results that were not shared with the task.
+func (s *SubagentSession) SetResultInputs(refs []string) error {
+	if s.lock == nil || s.snapshot.Subagent == nil {
+		return fmt.Errorf("subagent is not open")
+	}
+	previous := s.snapshot.Subagent.ResultInputs
+	if previous != nil {
+		for _, ref := range refs {
+			if !slices.Contains(previous, ref) {
+				return fmt.Errorf("cannot expand result inputs on resume; create a new task")
+			}
+		}
+	} else if s.snapshot.Subagent.RunCount > 0 && len(refs) > 0 {
+		return fmt.Errorf("cannot add result inputs to a legacy task; create a new task")
+	}
+	s.snapshot.Subagent.ResultInputs = slices.Clone(refs)
+	if err := s.snapshot.saveAt(s.root); err != nil {
+		s.snapshot.Subagent.ResultInputs = previous
+		return err
 	}
 	return nil
 }

@@ -6,6 +6,26 @@ export function Abort() {
   return window['go']['main']['App']['Abort']();
 }
 
+export function AppendBackgroundTask(arg1, arg2, arg3) {
+  return window['go']['main']['App']['AppendBackgroundTask'](arg1, arg2, arg3);
+}
+
+export function BackgroundDemands(arg1) {
+  return window['go']['main']['App']['BackgroundDemands'](arg1);
+}
+
+export function BackgroundTasks() {
+  return window['go']['main']['App']['BackgroundTasks']();
+}
+
+export function BackgroundUsage(arg1) {
+  return window['go']['main']['App']['BackgroundUsage'](arg1);
+}
+
+export function CancelBackgroundTask(arg1, arg2) {
+  return window['go']['main']['App']['CancelBackgroundTask'](arg1, arg2);
+}
+
 export function ClearSelectedSkill() {
   return window['go']['main']['App']['ClearSelectedSkill']();
 }
@@ -30,6 +50,18 @@ export function DeleteSession(arg1) {
   return window['go']['main']['App']['DeleteSession'](arg1);
 }
 
+export function DeleteTask(arg1, arg2) {
+  return window['go']['main']['App']['DeleteTask'](arg1, arg2);
+}
+
+export function DiscardBackgroundDemand(arg1, arg2) {
+  return window['go']['main']['App']['DiscardBackgroundDemand'](arg1, arg2);
+}
+
+export function ExportTaskOutputs(arg1, arg2) {
+  return window['go']['main']['App']['ExportTaskOutputs'](arg1, arg2);
+}
+
 export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }
@@ -38,8 +70,16 @@ export function GetSkillManagement() {
   return window['go']['main']['App']['GetSkillManagement']();
 }
 
+export function InteractionMode() {
+  return window['go']['main']['App']['InteractionMode']();
+}
+
 export function ListSessions() {
   return window['go']['main']['App']['ListSessions']();
+}
+
+export function ListTasks(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ListTasks'](arg1, arg2, arg3, arg4);
 }
 
 export function LoadSession(arg1) {
@@ -48,6 +88,10 @@ export function LoadSession(arg1) {
 
 export function MCPAuthorizationAction(arg1, arg2) {
   return window['go']['main']['App']['MCPAuthorizationAction'](arg1, arg2);
+}
+
+export function MemoryView(arg1) {
+  return window['go']['main']['App']['MemoryView'](arg1);
 }
 
 export function NewSession() {
@@ -78,12 +122,24 @@ export function ResolveModelProfile(arg1) {
   return window['go']['main']['App']['ResolveModelProfile'](arg1);
 }
 
+export function ResumeBackgroundDemand(arg1, arg2) {
+  return window['go']['main']['App']['ResumeBackgroundDemand'](arg1, arg2);
+}
+
+export function RetryTaskReview(arg1, arg2) {
+  return window['go']['main']['App']['RetryTaskReview'](arg1, arg2);
+}
+
 export function SaveClipboardImage(arg1) {
   return window['go']['main']['App']['SaveClipboardImage'](arg1);
 }
 
 export function SaveConfig(arg1) {
   return window['go']['main']['App']['SaveConfig'](arg1);
+}
+
+export function SearchTaskOutputs(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['SearchTaskOutputs'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function SelectSkill(arg1) {
@@ -94,18 +150,34 @@ export function SendMessage(arg1, arg2) {
   return window['go']['main']['App']['SendMessage'](arg1, arg2);
 }
 
+export function SetInteractionMode(arg1) {
+  return window['go']['main']['App']['SetInteractionMode'](arg1);
+}
+
 export function SetPluginEnabled(arg1, arg2) {
   return window['go']['main']['App']['SetPluginEnabled'](arg1, arg2);
+}
+
+export function StopBackgroundTasks(arg1) {
+  return window['go']['main']['App']['StopBackgroundTasks'](arg1);
+}
+
+export function SubmitBackgroundDemand(arg1, arg2) {
+  return window['go']['main']['App']['SubmitBackgroundDemand'](arg1, arg2);
 }
 
 export function SwitchModel(arg1) {
   return window['go']['main']['App']['SwitchModel'](arg1);
 }
 
-export function InteractionMode() {
-  return window['go']['main']['App']['InteractionMode']();
+export function TaskAttempts(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['TaskAttempts'](arg1, arg2, arg3, arg4);
 }
 
-export function SetInteractionMode(arg1) {
-  return window['go']['main']['App']['SetInteractionMode'](arg1);
+export function TaskHistory(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['TaskHistory'](arg1, arg2, arg3, arg4);
+}
+
+export function TaskOutput(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['TaskOutput'](arg1, arg2, arg3, arg4);
 }

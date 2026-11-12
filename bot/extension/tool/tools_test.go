@@ -121,7 +121,7 @@ func TestRegistrationOptionsLifecycle(t *testing.T) {
 		PermissionPlan: func(map[string]any, string) *core.PermissionRequest {
 			return &core.PermissionRequest{Capabilities: []string{core.CapNetOutbound}}
 		},
-		PlanAllowed: true,
+		PlanAllowed: true, CoordinatorAllowed: true,
 	})
 
 	args := map[string]any{"preview": "ready"}
@@ -132,7 +132,7 @@ func TestRegistrationOptionsLifecycle(t *testing.T) {
 		t.Fatalf("preview = %q, %v", preview, ok)
 	}
 	entry, err := r.Lookup("proxy")
-	if err != nil || entry.Privileged == nil || entry.PermissionPlan == nil || !entry.PlanAllowed {
+	if err != nil || entry.Privileged == nil || entry.PermissionPlan == nil || !entry.PlanAllowed || !entry.CoordinatorAllowed {
 		t.Fatal("privileged registration metadata is missing")
 	}
 
@@ -145,7 +145,7 @@ func TestRegistrationOptionsLifecycle(t *testing.T) {
 		t.Fatal("preview survived plain replacement")
 	}
 	entry, err = r.Lookup("proxy")
-	if err != nil || entry.Privileged != nil || entry.PermissionPlan != nil || entry.PlanAllowed {
+	if err != nil || entry.Privileged != nil || entry.PermissionPlan != nil || entry.PlanAllowed || entry.CoordinatorAllowed {
 		t.Fatal("privileged metadata survived plain replacement")
 	}
 

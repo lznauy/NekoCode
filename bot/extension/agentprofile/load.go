@@ -120,7 +120,7 @@ func parse(content string, hasTool func(string) bool) (Profile, error) {
 		}
 	}
 	for _, name := range p.Tools {
-		if name == "task" || name == "agent_profiles" || name == "nekocode_submit_result" {
+		if name == "task" || name == "task_submit" || name == "task_cancel" || name == "agent_profiles" || name == "nekocode_submit_result" {
 			return Profile{}, fmt.Errorf("reserved agent tool %q", name)
 		}
 		if strings.HasPrefix(name, "mcp__") {

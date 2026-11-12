@@ -26,14 +26,15 @@ func (p Profile) ConfigurationHash() string {
 		steps = DefaultMaxSteps
 	}
 	data, _ := json.Marshal(struct {
-		Schema    int      `json:"schema"`
-		Name      string   `json:"name"`
-		Model     string   `json:"model"`
-		Isolation string   `json:"isolation"`
-		Tools     []string `json:"tools"`
-		Skills    []string `json:"skills"`
-		MaxSteps  int      `json:"max_steps"`
-	}{1, p.Name, p.Model, p.Isolation, tools, skills, steps})
+		RequiredRole string   `json:"required_role,omitempty"`
+		Schema       int      `json:"schema"`
+		Name         string   `json:"name"`
+		Model        string   `json:"model"`
+		Isolation    string   `json:"isolation"`
+		Tools        []string `json:"tools"`
+		Skills       []string `json:"skills"`
+		MaxSteps     int      `json:"max_steps"`
+	}{string(p.RequiredRole), 1, p.Name, p.Model, p.Isolation, tools, skills, steps})
 	digest := sha256.Sum256(data)
 	return "v1:" + hex.EncodeToString(digest[:])
 }

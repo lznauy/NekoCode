@@ -231,15 +231,14 @@ func TestInterruptedCreationCanBeDiscarded(t *testing.T) {
 	if _, e = l.Load(t.Context(), cwd, "orphan"); e == nil {
 		t.Fatal("resumed partial creation")
 	}
-	if _, e = l.LoadForRemoval(t.Context(), cwd, "orphan"); e != nil {
-		t.Fatal(e)
+	if _, e = os.Stat(filepath.Join(l.dir, "meta.json")); !errors.Is(e, os.ErrNotExist) {
+		t.Fatalf("failed creation manifest retained: %v", e)
 	}
-	if e = l.Remove(t.Context(), true); e != nil {
-		t.Fatal(e)
+	if _, e = os.Stat(filepath.Join(l.dir, "tree")); !errors.Is(e, os.ErrNotExist) {
+		t.Fatalf("failed creation tree retained: %v", e)
 	}
-	listed, e := List("parent")
-	if e != nil || len(listed) != 0 {
-		t.Fatalf("orphan not removed: %+v %v", listed, e)
+	if _, e = l.Open(t.Context(), root, "orphan", false); e != nil {
+		t.Fatalf("same task cannot retry creation: %v", e)
 	}
 	// Also cover a crash between manifest persistence and git worktree add.
 	p, e := Acquire("parent", "precreation")

@@ -128,9 +128,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.MouseMsg:
-		if click, ok := msg.(tea.MouseClickMsg); ok && click.Button == tea.MouseLeft && click.Y == m.modeControlY && click.X >= 2 && click.X < 2+m.Input.ModeControlWidth() && (m.tasks == nil || !m.tasks.open) {
-			return m, m.openModePicker()
-		}
 		if m.tasks != nil && m.tasks.open && m.state != stateConfirming && m.state != stateQuestioning {
 			key := ""
 			switch msg.Mouse().Button {
@@ -141,6 +138,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if key != "" {
 				if d := m.tasks.detail; !m.tasks.searching && d != nil && !d.showAttempts && d.inspector == nil {
+					if d.process != nil {
+						return m, m.handleTaskProcessKey(key)
+					}
 					lines := 3
 					if key == "up" {
 						lines = -3

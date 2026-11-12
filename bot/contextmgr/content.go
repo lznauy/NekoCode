@@ -51,6 +51,8 @@ type contextContent struct {
 	// Dynamic controller state. BuildRequest snapshots todos into runtime
 	// context and appends hints independently whenever their visible value changes.
 	TodoItems []protocol.TodoItem
+	TodoGroup string
+	TodoPlans TodoPlans
 	Hints     string // per-turn system hints (quota, exploration status, etc.)
 
 }
@@ -80,6 +82,15 @@ func (c *contextContent) AllTasksDone() bool {
 	return true
 }
 
+func (c *contextContent) HasActionableTasks() bool {
+	for _, item := range c.TodoItems {
+		if protocol.TodoActionable(item) {
+			return true
+		}
+	}
+	return false
+}
+
 // HasTasks returns true when there are any todo items (regardless of status).
 func (c *contextContent) HasTasks() bool {
 	return len(c.TodoItems) > 0
@@ -104,6 +115,15 @@ func formatTodoItems(items []protocol.TodoItem) string {
 			mark = "[>]"
 		}
 		fmt.Fprintf(&sb, "\n  %s %s: %s", mark, it.Status, it.Content)
+		if it.ID != "" {
+			fmt.Fprintf(&sb, "; id: %s", it.ID)
+		}
+		if it.Result != "" {
+			fmt.Fprintf(&sb, "; result: %s", it.Result)
+		}
+		if it.Reason != "" {
+			fmt.Fprintf(&sb, "; reason: %s", it.Reason)
+		}
 	}
 	return sb.String()
 }
