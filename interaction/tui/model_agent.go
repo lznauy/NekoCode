@@ -51,6 +51,8 @@ func (m *Model) startChat(value string, images []controlruntime.ImageAttachment)
 	}
 	// Text-only input can be cleared immediately. Image ownership transfers
 	// only after EventInputAccepted confirms that the agent received it.
+	// Invalidate pending paste results even while an image draft waits for ack.
+	m.clipboardGeneration++
 	if len(m.Input.ImageAttachments()) == 0 {
 		m.Input.Reset()
 	}

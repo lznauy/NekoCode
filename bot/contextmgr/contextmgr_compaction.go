@@ -279,6 +279,7 @@ func (m *Manager) compact(ctx context.Context, force bool, outputTokens int) (ap
 	m.restoreRuntimeContextLocked()
 	m.state.revision++
 	m.state.compactCount++
+	m.state.prefix.compacted = true
 	m.state.trimCount += trimmed
 	m.state.tracker.RecordPrompt(m.totalTokenEstimate())
 

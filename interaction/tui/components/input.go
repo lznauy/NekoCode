@@ -64,6 +64,7 @@ type Input struct {
 	nextPasteID     int
 	nextImageID     int
 	onImageRemoved  func(string)
+	draftGeneration uint64
 }
 
 func NewInput(width int) *Input {
@@ -98,6 +99,10 @@ func (i *Input) Width() int         { return i.width }
 
 func (i *Input) Value() string { return strings.TrimRight(i.expandedValue(), "\n\t\r ") }
 
+// DraftGeneration changes when a draft is replaced, cleared or submitted.
+// Ordinary edits and additional attachments retain its identity.
+func (i *Input) DraftGeneration() uint64 { return i.draftGeneration }
+
 func (i *Input) SetValue(v string) {
 	i.releaseDraftImages()
 	i.releaseSavedDraftImages()
@@ -108,6 +113,7 @@ func (i *Input) SetValue(v string) {
 }
 
 func (i *Input) setValue(v string) {
+	i.draftGeneration++
 	i.pastedBlocks = nil
 	i.nextPasteID = 0
 	i.nextImageID = 0
@@ -124,6 +130,7 @@ func (i *Input) Clear() {
 }
 
 func (i *Input) clear(deleteImages bool) {
+	i.draftGeneration++
 	if deleteImages {
 		i.releaseDraftImages()
 	}
@@ -565,6 +572,7 @@ func (i *Input) captureDraft() *inputDraft {
 }
 
 func (i *Input) restoreDraft(draft *inputDraft) {
+	i.draftGeneration++
 	i.releaseDraftImages()
 	if draft == nil {
 		i.setValue("")

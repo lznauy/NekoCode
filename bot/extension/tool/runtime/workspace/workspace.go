@@ -333,3 +333,6 @@ func (m *Manager) SessionRevision() uint64 {
 	defer m.mu.RUnlock()
 	return m.sessionRevision
 }
+
+// SessionID identifies the owning tool session for observational records only.
+func (m *Manager) SessionID() string { m.mu.RLock(); defer m.mu.RUnlock(); return m.sessionID }

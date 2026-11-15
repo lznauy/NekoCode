@@ -272,7 +272,7 @@ func (s *server) event(ctx context.Context, event rt.Event) error {
 		if err := s.backend.WaitRun(ctx, s.active.runID); err != nil {
 			return err
 		}
-		if err := s.rejectPending(ctx); err != nil {
+		if err := s.rejectRunPending(ctx, s.active.runID); err != nil {
 			return err
 		}
 		p, ok := event.Payload.(rt.RunResult)

@@ -12,7 +12,7 @@ import (
 )
 
 func (s *server) idle() error {
-	if s.active != nil || len(s.queue) != 0 {
+	if s.active != nil || len(s.pendingTurns) != 0 || len(s.queue) != 0 {
 		return errors.New("busy: wait for the active turn and input queue to settle")
 	}
 	if s.shuttingDown {
@@ -47,12 +47,14 @@ func (s *server) manage(ctx context.Context, f frame, method string) error {
 		}
 		cancelled := []string{}
 		if request.Mode == "cancel" {
-			if s.active != nil {
-				if err := s.backend.CancelRun(ctx, s.active.runID); err != nil {
-					return s.respond(f.RequestID, nil, err)
-				}
+			if _, err := s.backend.CancelRunWithResult(ctx, ""); err != nil {
+				return s.respond(f.RequestID, nil, err)
 			}
-			cancelled = s.clearQueue()
+			var err error
+			cancelled, err = s.cancelQueuedTurns(ctx)
+			if err != nil {
+				return s.respond(f.RequestID, nil, err)
+			}
 			s.cancelInteractions = true
 			if err := s.rejectPending(ctx); err != nil {
 				return err
@@ -75,6 +77,9 @@ func (s *server) manage(ctx context.Context, f frame, method string) error {
 	switch method {
 	case "context.snapshot":
 		body := map[string]any{"session_id": s.sessionID, "context": m.ContextSnapshot()}
+		if s.callBudget != nil {
+			body["execution_budget"] = s.callBudget.Snapshot()
+		}
 		if s.active != nil {
 			body["run_id"] = s.active.runID
 			body["user_message_uuid"] = s.active.input.id
@@ -167,8 +172,14 @@ func (s *server) manage(ctx context.Context, f frame, method string) error {
 				}
 			}
 		case "session.new":
+			if busy := s.backgroundSessionBusy(); busy != nil {
+				return s.respond(f.RequestID, nil, busy)
+			}
 			result, err = s.backend.NewSession()
 		case "session.resume":
+			if busy := s.backgroundSessionBusy(); busy != nil {
+				return s.respond(f.RequestID, nil, busy)
+			}
 			if request.SessionID == "" {
 				err = errors.New("session_id is required")
 			} else {

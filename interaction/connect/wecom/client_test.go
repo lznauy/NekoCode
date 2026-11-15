@@ -137,7 +137,7 @@ func TestSendMarkdownWaitsForServerAcknowledgement(t *testing.T) {
 	go func() {
 		done <- client.serve(ctx, func() {
 			go func() {
-				result <- client.sendMarkdown(ctx, "bad-chat", "result")
+				result <- client.sendMarkdownPart(ctx, "bad-chat", "result")
 				cancel()
 			}()
 		}, func(context.Context, wsFrame, callbackMessage) {})
@@ -161,7 +161,7 @@ func TestSendMarkdownRejectsUnauthenticatedSocket(t *testing.T) {
 	client := newWSClient("bot-1", "secret-1")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := client.sendMarkdown(ctx, "chat-1", "result"); err == nil || !strings.Contains(err.Error(), "not authenticated") {
+	if err := client.sendMarkdownPart(ctx, "chat-1", "result"); err == nil || !strings.Contains(err.Error(), "not authenticated") {
 		t.Fatalf("sendMarkdown error = %v", err)
 	}
 }

@@ -19,9 +19,9 @@ func TestQueuedBackgroundPromptIsVisibleAndDurable(t *testing.T) {
 	b.mu.Lock()
 	b.workspaces["occupied"] = true
 	b.mu.Unlock()
-	_, err := b.submit(t.Context(), protocol.BackgroundWork{ID: "queued-task", SessionID: "session", Workspace: "occupied", Profile: "executor", Prompt: prompt, Run: func(context.Context, protocol.BackgroundHost) (string, error) {
+	_, err := b.submit(t.Context(), protocol.BackgroundWork{ID: "queued-task", SessionID: "session", Workspace: "occupied", Profile: "executor", Prompt: prompt, Run: func(context.Context, protocol.BackgroundHost) (protocol.BackgroundResult, error) {
 		t.Error("queued task executed before slot available")
-		return "", nil
+		return protocol.BackgroundResult{Text: ""}, nil
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +61,9 @@ func TestQueuedResumeUsesNewPromptRatherThanPreviousAttempt(t *testing.T) {
 	rt.background.mu.Lock()
 	rt.background.workspaces["occupied"] = true
 	rt.background.mu.Unlock()
-	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "task", SessionID: "session", Workspace: "occupied", Prompt: "new queued instruction", Run: func(context.Context, protocol.BackgroundHost) (string, error) { return "", nil }})
+	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "task", SessionID: "session", Workspace: "occupied", Prompt: "new queued instruction", Run: func(context.Context, protocol.BackgroundHost) (protocol.BackgroundResult, error) {
+		return protocol.BackgroundResult{Text: ""}, nil
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,9 +82,9 @@ func TestInterruptedTaskReviewExplainsHowToContinueExistingTask(t *testing.T) {
 		return "reviewed", nil
 	}), backgroundServices(t.TempDir()))
 	defer rt.Close()
-	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "saved-executor", SessionID: "session", GroupID: "original-demand", Profile: "executor", Run: func(ctx context.Context, _ protocol.BackgroundHost) (string, error) {
+	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "saved-executor", SessionID: "session", GroupID: "original-demand", Profile: "executor", Run: func(ctx context.Context, _ protocol.BackgroundHost) (protocol.BackgroundResult, error) {
 		<-ctx.Done()
-		return "partial work", ctx.Err()
+		return protocol.BackgroundResult{Text: "partial work"}, ctx.Err()
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -121,13 +123,13 @@ func TestBackgroundReviewIncludesReportTailAndOutstandingSibling(t *testing.T) {
 		if id == "B" {
 			started, release = startedB, releaseB
 		}
-		_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: id, SessionID: "session", GroupID: "review-group", ReadOnly: true, Run: func(ctx context.Context, _ protocol.BackgroundHost) (string, error) {
+		_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: id, SessionID: "session", GroupID: "review-group", ReadOnly: true, Run: func(ctx context.Context, _ protocol.BackgroundHost) (protocol.BackgroundResult, error) {
 			close(started)
 			select {
 			case <-release:
-				return body, nil
+				return protocol.BackgroundResult{Text: body}, nil
 			case <-ctx.Done():
-				return "", ctx.Err()
+				return protocol.BackgroundResult{Text: ""}, ctx.Err()
 			}
 		}})
 		if err != nil {

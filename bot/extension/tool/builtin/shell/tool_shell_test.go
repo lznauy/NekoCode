@@ -85,7 +85,7 @@ func TestShellRunReturnsManagedTaskThenProcessWaits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if !strings.Contains(out.Render(), "task: download") || strings.Contains(out.Render(), "status:") || strings.Contains(out.Render(), "elapsed:") {
+	if !strings.Contains(out.Render(), "task: download") || !strings.Contains(out.Render(), "status: running") || strings.Contains(out.Render(), "elapsed:") {
 		t.Fatalf("expected managed task, got:\n%s", out.Render())
 	}
 
@@ -121,7 +121,7 @@ func TestShellHardTimeoutStopsTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if !strings.Contains(out.Render(), "task: bounded") || strings.Contains(out.Render(), "status:") || strings.Contains(out.Render(), "elapsed:") {
+	if !strings.Contains(out.Render(), "task: bounded") || !strings.Contains(out.Render(), "status: running") || strings.Contains(out.Render(), "elapsed:") {
 		t.Fatalf("expected managed task, got:\n%s", out.Render())
 	}
 

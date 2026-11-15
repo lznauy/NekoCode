@@ -8,6 +8,7 @@ import (
 )
 
 type RunSnapshot struct {
+	SessionID       string              `json:"session_id,omitempty"`
 	InteractionMode mode.Snapshot       `json:"interaction_mode,omitzero"`
 	ID              RunID               `json:"id"`
 	Status          RunStatus           `json:"status"`

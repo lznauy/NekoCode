@@ -14,13 +14,6 @@ func (r *Runtime) StopBackgroundTasks(ctx context.Context, sessionID string) err
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	r.mutationMu.Lock()
-	locked := true
-	defer func() {
-		if locked {
-			r.mutationMu.Unlock()
-		}
-	}()
 	if err := r.ensureOpen(); err != nil {
 		return err
 	}
@@ -29,6 +22,35 @@ func (r *Runtime) StopBackgroundTasks(ctx context.Context, sessionID string) err
 	}
 	b := r.background
 	if err := b.load(sessionID); err != nil {
+		return err
+	}
+	// Deliver cancellation before waiting for either admission or persistence.
+	// The serialized sweep below also captures work admitted during this gap.
+	b.mu.Lock()
+	if b.coordinatorSession == sessionID && b.coordinatorCancel != nil {
+		b.coordinatorCancel()
+	}
+	for _, e := range b.entries {
+		if e.SessionID == sessionID && !e.settling && e.cancel != nil {
+			e.cancel()
+		}
+	}
+	for _, in := range b.pending {
+		if in.sessionID == sessionID {
+			in.cancel()
+		}
+	}
+	b.mu.Unlock()
+	if err := r.mutationMu.LockContext(ctx); err != nil {
+		return err
+	}
+	locked := true
+	defer func() {
+		if locked {
+			r.mutationMu.Unlock()
+		}
+	}()
+	if err := r.ensureOpen(); err != nil {
 		return err
 	}
 	// Cancel admission before locking the task queue. An already admitted submit
@@ -48,42 +70,53 @@ func (r *Runtime) StopBackgroundTasks(ctx context.Context, sessionID string) err
 			}
 		}
 	}
-	b.mu.Lock()
+	b.lockMutation()
 	if b.coordinatorSession == sessionID && b.coordinatorCancel != nil {
 		b.coordinatorCancel()
 	}
 	owners := []RunID{}
 	queued := []string{}
-	suppressed := 0
-	stopped := 0
-	for _, e := range b.entries {
-		if e.SessionID != sessionID {
-			continue
-		}
-		switch e.Status {
-		case "queued", "running", "waiting_dependencies", "waiting_approval", "waiting_question":
+	suppressed, stopped := 0, 0
+	state := b.snapshotLocked(sessionID)
+	for i := range state.Tasks {
+		task := &state.Tasks[i]
+		if pendingBackgroundStatus(task.Status) {
 			stopped++
-		default:
-			if !e.Notified && e.Delivery != "delivered" && e.Delivery != "stopped" {
-				suppressed++
-			}
+		} else if !task.Notified && task.Delivery != "delivered" && task.Delivery != "stopped" {
+			suppressed++
 		}
-		e.Notified, e.Delivery = true, "stopped"
-		if e.cancel != nil {
+		task.Notified, task.Delivery = true, "stopped"
+		e := b.entries[task.ID]
+		if !e.settling && e.cancel != nil {
 			e.cancel()
 		}
-		if e.Status == "queued" || e.Status == "waiting_dependencies" {
-			queued = append(queued, e.ID)
-			e.Status, e.Error = "interrupted", "stopped before execution"
-			releaseBackgroundWork(e)
-			e.work.Run = nil
+		if task.Status == "queued" || task.Status == "waiting_dependencies" {
+			queued = append(queued, task.ID)
+			task.Status, task.Error = "interrupted", "stopped before execution"
 		}
 		owners = append(owners, e.interactionID)
 	}
-	for _, d := range b.demands {
-		if d.SessionID == sessionID && (d.Status == "queued" || d.Status == "claimed" || d.Status == "pending") {
+	for i := range state.Demands {
+		d := &state.Demands[i]
+		if d.Status == "queued" || d.Status == "claimed" || d.Status == "pending" {
 			d.Status = "cancelled"
 		}
+	}
+	err := b.saveStateLocked(sessionID, state)
+	// A stop remains effective even if its receipt cannot be saved. Return the
+	// storage error, but never restart work the user explicitly cancelled.
+	for _, task := range state.Tasks {
+		e := b.entries[task.ID]
+		e.Notified, e.Delivery = task.Notified, task.Delivery
+	}
+	for _, id := range queued {
+		e := b.entries[id]
+		e.Status, e.Error = "interrupted", "stopped before execution"
+		releaseBackgroundWork(e)
+		e.work.Run = nil
+	}
+	for _, d := range state.Demands {
+		*b.demands[d.ID] = d
 	}
 	retained := b.inputs[:0]
 	for _, in := range b.inputs {
@@ -102,8 +135,7 @@ func (r *Runtime) StopBackgroundTasks(ctx context.Context, sessionID string) err
 			delete(b.pending, id)
 		}
 	}
-	err := b.saveLocked(sessionID)
-	b.mu.Unlock()
+	b.unlockMutation()
 	r.mutationMu.Unlock()
 	locked = false
 	for _, id := range queued {

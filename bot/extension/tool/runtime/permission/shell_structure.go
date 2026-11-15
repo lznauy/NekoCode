@@ -16,6 +16,8 @@ const (
 	ShellCommandSubstitution ShellStructure = "command_substitution"
 	ShellProcessSubstitution ShellStructure = "process_substitution"
 	ShellDynamicCommand      ShellStructure = "dynamic_command"
+	ShellIndirectExecution   ShellStructure = "indirect_execution"
+	ShellUnsupportedIndirect ShellStructure = "unsupported_indirect_execution"
 	ShellEval                ShellStructure = "eval"
 	ShellSource              ShellStructure = "source"
 	ShellCommandString       ShellStructure = "shell_command_string"
@@ -113,6 +115,8 @@ func ClassifyShellStructure(command string) ShellStructureReport {
 		ShellCommandSubstitution,
 		ShellProcessSubstitution,
 		ShellDynamicCommand,
+		ShellIndirectExecution,
+		ShellUnsupportedIndirect,
 		ShellEval,
 		ShellSource,
 		ShellCommandString,
@@ -147,6 +151,13 @@ func classifyShellCall(call *syntax.CallExpr, add func(ShellStructure)) {
 	}
 	if !ok {
 		return
+	}
+	indirect, unsupported := classifyIndirectExecution(shellCallTokens(call))
+	if indirect {
+		add(ShellIndirectExecution)
+	}
+	if unsupported {
+		add(ShellUnsupportedIndirect)
 	}
 	switch name {
 	case "eval":
@@ -208,8 +219,9 @@ func effectiveShellCall(call *syntax.CallExpr, add func(ShellStructure)) (string
 }
 
 type shellInvocationToken struct {
-	value  string
-	static bool
+	value      string
+	static     bool
+	singleWord bool
 }
 
 // unwrapShellInvocation resolves command wrappers through one shared,

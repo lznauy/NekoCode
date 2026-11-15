@@ -112,6 +112,9 @@ func ForceCompact(ctx context.Context, ctxMgr *ctxmgr.Manager, force bool) (stri
 		return "", err
 	}
 	if !compacted {
+		if force {
+			return fmt.Sprintf("Unable to compact: no history could be safely summarized (%d messages, ~%d tokens). Check that a compaction model is configured; if the context is full, start a new session.", before.Messages, before.Tokens), nil
+		}
 		return fmt.Sprintf("Not needed: %d messages, ~%d tokens", before.Messages, before.Tokens), nil
 	}
 	after := ctxMgr.Status()
@@ -303,7 +306,9 @@ func formatPrefixMissParts(parts []string) string {
 		case "tools":
 			labels = append(labels, "tool definitions changed")
 		case "history":
-			labels = append(labels, "history rewritten (e.g. compaction)")
+			labels = append(labels, "history rewritten")
+		case "compaction":
+			labels = append(labels, "context compacted")
 		default:
 			labels = append(labels, part)
 		}

@@ -53,7 +53,7 @@ func parseShellApprovalUnits(command string) []shellApprovalUnit {
 	// approval for the effect alone must not authorize arbitrary new tails.
 	for _, s := range report.Structures {
 		switch s {
-		case ShellEnvironment, ShellEval, ShellSource, ShellDynamicCommand, ShellUnparseable:
+		case ShellEnvironment, ShellEval, ShellSource, ShellDynamicCommand, ShellIndirectExecution, ShellUnparseable:
 			return whole()
 		}
 	}
@@ -319,6 +319,9 @@ func assessShellUnits(command string, rules []Rule) CallAssessment {
 	}
 	if len(assessment.Signals) > 0 {
 		assessment.Reason = "dynamic shell execution"
+		if seen[ShellUnsupportedIndirect] {
+			assessment.Reason = "unsupported indirect shell syntax; rewrite as direct commands so hard deny rules can be checked"
+		}
 	}
 	return assessment
 }

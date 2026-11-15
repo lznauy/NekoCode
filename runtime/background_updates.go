@@ -27,8 +27,8 @@ func (r *Runtime) AppendBackgroundTask(ctx context.Context, sessionID, id, text 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.lockMutation()
+	defer b.unlockMutation()
 	e := b.entries[id]
 	if b.closed || e == nil || e.SessionID != sessionID {
 		return fmt.Errorf("background task not found in session")
@@ -39,22 +39,14 @@ func (r *Runtime) AppendBackgroundTask(ctx context.Context, sessionID, id, text 
 	if len(e.PendingUpdates) >= 16 {
 		return fmt.Errorf("task update queue is full")
 	}
-	previous := e.PendingUpdates
-	previousSequence := e.UpdateSequence
-	if e.UpdateSequence < uint64(len(previous)) {
-		e.UpdateSequence = uint64(len(previous))
-	}
-	if e.UpdateSequence == ^uint64(0) {
+	next := e.BackgroundTask
+	next.UpdateSequence = max(next.UpdateSequence, uint64(len(next.PendingUpdates)))
+	if next.UpdateSequence == ^uint64(0) {
 		return fmt.Errorf("task update sequence exhausted")
 	}
-	e.UpdateSequence++
-	e.PendingUpdates = append(append([]string(nil), previous...), text)
-	if err := b.saveLocked(sessionID); err != nil {
-		e.PendingUpdates = previous
-		e.UpdateSequence = previousSequence
-		return err
-	}
-	return nil
+	next.UpdateSequence++
+	next.PendingUpdates = append(append([]string(nil), next.PendingUpdates...), text)
+	return b.saveTaskLocked(e, next)
 }
 
 func backgroundActive(status string) bool {
@@ -65,14 +57,14 @@ func backgroundActive(status string) bool {
 // No runtime lock is held while calling the worker-owned checkpoint.
 func (h backgroundHost) ApplyUpdates(apply func([]protocol.BackgroundUpdate) error) error {
 	b := h.runtime.background
-	b.mu.Lock()
+	b.lockMutation()
 	if err := h.ctx.Err(); err != nil {
-		b.mu.Unlock()
+		b.unlockMutation()
 		return err
 	}
 	e := b.entries[h.id]
 	if !h.owns(e) || e.cancel == nil {
-		b.mu.Unlock()
+		b.unlockMutation()
 		return fmt.Errorf("task is no longer active")
 	}
 	if e.UpdateSequence < uint64(len(e.PendingUpdates)) {
@@ -82,23 +74,19 @@ func (h backgroundHost) ApplyUpdates(apply func([]protocol.BackgroundUpdate) err
 	for i, text := range e.PendingUpdates {
 		updates[i] = protocol.BackgroundUpdate{Sequence: e.UpdateSequence - uint64(len(e.PendingUpdates)) + uint64(i) + 1, Text: text}
 	}
-	b.mu.Unlock()
+	b.unlockMutation()
 	if len(updates) == 0 {
 		return nil
 	}
 	if err := apply(updates); err != nil {
 		return err
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.lockMutation()
+	defer b.unlockMutation()
 	if b.entries[h.id] != e {
 		return fmt.Errorf("task attempt changed")
 	}
-	previous := e.PendingUpdates
-	e.PendingUpdates = append([]string(nil), previous[len(updates):]...)
-	if err := b.saveLocked(h.sessionID); err != nil {
-		e.PendingUpdates = previous
-		return err
-	}
-	return nil
+	next := e.BackgroundTask
+	next.PendingUpdates = append([]string(nil), next.PendingUpdates[len(updates):]...)
+	return b.saveTaskLocked(e, next)
 }

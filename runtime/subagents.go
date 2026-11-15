@@ -13,6 +13,8 @@ import (
 type SubagentSummary struct {
 	QueueReason    string                  `json:"queue_reason,omitempty"`
 	SchedulingNote string                  `json:"scheduling_note,omitempty"`
+	Delivery       string                  `json:"delivery,omitempty"`
+	Notified       bool                    `json:"notified"`
 	WorkspaceKind  string                  `json:"workspace_kind,omitempty"`
 	Isolation      string                  `json:"isolation,omitempty"`
 	Recorded       bool                    `json:"recorded"`
@@ -268,6 +270,7 @@ func (r *Runtime) Subagents(filter SubagentFilter) (SubagentPage, error) {
 		if i, exists := byID[entry.ID]; exists {
 			items[i].QueueReason = r.background.queueReasonLocked(entry, limit, foregroundWriter)
 			items[i].SchedulingNote = entry.SchedulingNote
+			items[i].Delivery, items[i].Notified = entry.Delivery, entry.Notified
 			if entry.Isolation != "" {
 				items[i].Isolation = entry.Isolation
 			}

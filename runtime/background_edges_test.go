@@ -19,9 +19,9 @@ func TestBackgroundFullHistoryStillAllowsExistingTaskResume(t *testing.T) {
 		b.order = append(b.order, id)
 	}
 	b.mu.Unlock()
-	_, err := b.submit(t.Context(), protocol.BackgroundWork{ID: "task-0", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, _ protocol.BackgroundHost) (string, error) {
+	_, err := b.submit(t.Context(), protocol.BackgroundWork{ID: "task-0", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, _ protocol.BackgroundHost) (protocol.BackgroundResult, error) {
 		<-ctx.Done()
-		return "", ctx.Err()
+		return protocol.BackgroundResult{Text: ""}, ctx.Err()
 	}})
 	if err != nil {
 		t.Fatalf("resume does not add history and must remain possible: %v", err)
@@ -31,7 +31,9 @@ func TestBackgroundFullHistoryStillAllowsExistingTaskResume(t *testing.T) {
 		t.Error("resume lost history or unread instructions")
 	}
 	b.mu.Unlock()
-	if _, err := b.submit(t.Context(), protocol.BackgroundWork{ID: "brand-new", SessionID: "session", ReadOnly: true, Run: func(context.Context, protocol.BackgroundHost) (string, error) { return "", nil }}); err == nil {
+	if _, err := b.submit(t.Context(), protocol.BackgroundWork{ID: "brand-new", SessionID: "session", ReadOnly: true, Run: func(context.Context, protocol.BackgroundHost) (protocol.BackgroundResult, error) {
+		return protocol.BackgroundResult{Text: ""}, nil
+	}}); err == nil {
 		t.Fatal("new task bypassed full history bound")
 	}
 }
@@ -46,11 +48,11 @@ func TestBackgroundCancellationOverridesPartialHandoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := make(chan struct{})
-	_, err = rt.background.submit(ctx, protocol.BackgroundWork{ID: "task", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, host protocol.BackgroundHost) (string, error) {
+	_, err = rt.background.submit(ctx, protocol.BackgroundWork{ID: "task", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, host protocol.BackgroundHost) (protocol.BackgroundResult, error) {
 		host.Step(protocol.StepEvent{Action: protocol.StepActionSubAgentEnd, SubAgentStatus: "partial", SubAgentAttemptID: "attempt", SubAgentAttemptSeq: 1})
 		close(started)
 		<-ctx.Done()
-		return "partial handoff", nil
+		return protocol.BackgroundResult{Text: "partial handoff"}, nil
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -94,9 +96,9 @@ func TestBackgroundAdmissionPrunesEnoughLoadedTerminalHistory(t *testing.T) {
 		b.order = append(b.order, id)
 	}
 	b.mu.Unlock()
-	_, err := b.submit(t.Context(), protocol.BackgroundWork{ID: "new-task", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, _ protocol.BackgroundHost) (string, error) {
+	_, err := b.submit(t.Context(), protocol.BackgroundWork{ID: "new-task", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, _ protocol.BackgroundHost) (protocol.BackgroundResult, error) {
 		<-ctx.Done()
-		return "", ctx.Err()
+		return protocol.BackgroundResult{Text: ""}, ctx.Err()
 	}})
 	if err != nil {
 		t.Fatalf("eligible history required multiple failed retries: %v", err)

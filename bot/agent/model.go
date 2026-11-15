@@ -17,6 +17,7 @@ import (
 	"nekocode/bot/provider/types"
 	"nekocode/logger"
 	"nekocode/protocol"
+	"nekocode/util/modelbudget"
 )
 
 const synthesizePrompt = "Based on the information collected above, provide a final answer. Do NOT call any more tools. Output your conclusion directly. Explicitly report unfinished todo steps and blockers; a limit is not task completion."
@@ -44,7 +45,7 @@ func (r *modelRunner) reason(input string) *reasoningResult {
 	if err != nil {
 		a.stream.discardText()
 		var budgetErr *contextmgr.RequestBudgetError
-		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && errors.As(err, &budgetErr) {
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && (errors.As(err, &budgetErr) || errors.Is(err, modelbudget.ErrExhausted)) {
 			a.run.err = err
 		}
 		return fromLLM(nil, "", err)

@@ -12,6 +12,7 @@ import (
 	"nekocode/bot/provider"
 	"nekocode/bot/provider/types"
 	"nekocode/logger"
+	"nekocode/util/modelbudget"
 )
 
 // StreamCallbacks holds per-token callbacks for ConsumeStream.
@@ -72,6 +73,10 @@ var ansiRegex = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")
 // call — success or failure — leaves one structured record in the evidence
 // log (calllog.Write).
 func CallLLM(client provider.LLM, opts LLMCallOptions) (*LLMCallResult, error) {
+	if err := modelbudget.Admit(opts.Ctx); err != nil {
+		return nil, err
+	}
+
 	start := time.Now()
 	tokenCh, errCh := provider.ChatStream(client, opts.Ctx, opts.Messages, opts.ToolDefs, opts.Request)
 	if tokenCh == nil {
@@ -81,18 +86,21 @@ func CallLLM(client provider.LLM, opts LLMCallOptions) (*LLMCallResult, error) {
 			err = streamErr
 		default:
 		}
-		writeCallRecord(opts, &StreamResult{}, start, err)
+		writeCallRecord(opts, &StreamResult{}, start, err, "request")
 		return nil, err
 	}
 
 	stream := StreamResult{}
+	failureStage := "completion"
 	err := func() error {
 		if err := ConsumeStream(tokenCh, &stream, opts.Callbacks, opts.CheckDone); err != nil {
+			failureStage = "stream"
 			go func() { <-errCh }()
 			return err
 		}
 
 		if opts.CheckDone != nil && opts.CheckDone() {
+			failureStage = "cancelled"
 			go func() { <-errCh }()
 			return context.Canceled
 		}
@@ -109,7 +117,7 @@ func CallLLM(client provider.LLM, opts LLMCallOptions) (*LLMCallResult, error) {
 	if opts.Callbacks.OnUsage != nil && stream.Usage.HasTokens() {
 		opts.Callbacks.OnUsage(stream.Usage)
 	}
-	writeCallRecord(opts, &stream, start, err)
+	writeCallRecord(opts, &stream, start, err, failureStage)
 	return result, err
 }
 
@@ -117,9 +125,12 @@ func CallLLM(client provider.LLM, opts LLMCallOptions) (*LLMCallResult, error) {
 var writeRecord = calllog.Write
 
 // writeCallRecord assembles and appends one privacy-safe per-call usage record.
-func writeCallRecord(opts LLMCallOptions, stream *StreamResult, start time.Time, callErr error) {
+func writeCallRecord(opts LLMCallOptions, stream *StreamResult, start time.Time, callErr error, failureStage ...string) {
 	rec := calllog.NewRecord(opts.Ctx, opts.Source, opts.SessionID, start)
 	rec.SetOutcome(stream.Usage, stream.Request, callErr)
+	if callErr != nil && len(failureStage) > 0 {
+		rec.FailureStage = failureStage[0]
+	}
 	if !stream.FirstTokenAt.IsZero() {
 		rec.TTFTMs = stream.FirstTokenAt.Sub(start).Milliseconds()
 	}

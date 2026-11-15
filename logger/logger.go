@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"nekocode/util/fs"
+	"nekocode/util/secrets"
 )
 
 const (
@@ -56,7 +57,7 @@ func (l *Logger) Log(skip int, level, prefix, format string, args ...any) {
 		now = time.Now
 	}
 	ts := now().Format("15:04:05.000")
-	msg := fmt.Sprintf(format, args...)
+	msg := secrets.Redact(fmt.Sprintf(format, args...))
 	if _, err := fmt.Fprintf(lf, "%s %-3s %-36s | %s%s\n", ts, level, callerFileLine(skip), prefix, msg); err != nil {
 		_ = lf.Close()
 		l.file = nil

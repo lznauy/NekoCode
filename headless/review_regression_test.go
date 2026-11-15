@@ -360,6 +360,10 @@ func TestReviewCancelShutdownRejectsBufferedInteractions(t *testing.T) {
 
 type rejectingCancelBackend struct{ Backend }
 
+func (rejectingCancelBackend) CancelRunWithResult(context.Context, rt.RunID) (rt.RunCancellation, error) {
+	return rt.RunCancellation{}, errors.New("cancel rejected")
+}
+
 func (rejectingCancelBackend) CancelRun(context.Context, rt.RunID) error {
 	return errors.New("cancel rejected")
 }

@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 
 	"nekocode/interaction/tui/components"
 	"nekocode/interaction/tui/components/block"
@@ -114,7 +115,11 @@ func (m *Model) taskAttemptsView(width int) string {
 		if summary == "" {
 			summary = strings.Join(strings.Fields(ansi.Strip(attempt.Prompt)), " ")
 		}
-		line := fmt.Sprintf("%s%s 第 %d 轮 · %-12s · %s", prefix, current, attempt.Seq, taskStatus(attempt.Status), summary)
+		line := fmt.Sprintf("%s%s 第 %d 轮 · %-12s", prefix, current, attempt.Seq, taskStatus(attempt.Status))
+		if elapsed := taskAttemptElapsed(&attempt, time.Now()); elapsed != "" {
+			line += " · " + elapsed
+		}
+		line += " · " + summary
 		line = ansi.Truncate(ansi.Strip(line), width, "…")
 		if i == d.attemptIndex {
 			line = lipgloss.NewStyle().Foreground(lipgloss.Color("#e0e0e0")).Background(lipgloss.Color("#303a3a")).Width(width).Render(line)
@@ -152,6 +157,9 @@ func (m *Model) taskPanelView(w, h int) string {
 			title += fmt.Sprintf(" · 第 %d 轮", d.attempt.Seq)
 		}
 		status = taskStatus(d.detailStatus()) + " · " + d.info.Profile
+		if elapsed := taskAttemptElapsed(d.attempt, time.Now()); elapsed != "" {
+			status += " · " + elapsed
+		}
 		if d.info.Isolation == "worktree" {
 			switch d.info.WorkspaceKind {
 			case "snapshot":
@@ -474,6 +482,31 @@ func formatTaskTokens(count int) string {
 	return text + unit
 }
 
+// taskAttemptElapsed uses persisted usage when available and timestamps for live attempts.
+func taskAttemptElapsed(attempt *controlruntime.SubagentAttemptSummary, now time.Time) string {
+	if attempt == nil {
+		return ""
+	}
+	elapsed := time.Duration(attempt.DurationMs) * time.Millisecond
+	if elapsed <= 0 {
+		if attempt.StartedAt.IsZero() {
+			return ""
+		}
+		end := attempt.EndedAt
+		if end.IsZero() {
+			if attempt.Status != "running" {
+				return ""
+			}
+			end = now
+		}
+		elapsed = end.Sub(attempt.StartedAt)
+	}
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return "耗时 " + elapsed.Round(100*time.Millisecond).String()
+}
+
 func taskMetrics(info controlruntime.SubagentSummary) string { return taskListMetrics(info, 100) }
 
 func taskListMetrics(info controlruntime.SubagentSummary, width int) string {
@@ -499,6 +532,9 @@ func taskListMetrics(info controlruntime.SubagentSummary, width int) string {
 		}
 	}
 	parts = append(parts, fmt.Sprintf("工具 %d", attempt.ToolUseCount))
+	if elapsed := taskAttemptElapsed(attempt, time.Now()); elapsed != "" {
+		parts = append(parts, elapsed)
+	}
 	return strings.Join(parts, " · ")
 }
 

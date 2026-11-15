@@ -10,7 +10,12 @@ import (
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/execution"
 	"nekocode/bot/extension/tool/runtime/toolutil"
+	"nekocode/protocol"
 )
+
+// This limits echoes of model-authored content, independently of the shared
+// output budget that applies to every tool result.
+const writeEchoLimitBytes = 2048
 
 type WriteTool struct {
 	toolutil.WriteModeTool
@@ -20,7 +25,7 @@ func (t *WriteTool) Name() string { return "write" }
 
 func (t *WriteTool) Description() string {
 	return "Create or overwrite a file. Auto-creates parent dirs. " +
-		"For existing files, read the current version first. Read again after any modification or context compaction; if output is truncated, read smaller ranges. " +
+		"For existing files, read the current version first. A delivered successful write/edit receipt can be reused while that exact version is unchanged. Read again after external modification, receipt removal or context compaction; if output is truncated, read smaller ranges. " +
 		"For partial changes, prefer Edit with oldString/newString over Write — it produces minimal diffs; use /rewind to undo completed file changes. " +
 		"Content escaping: use \\n for newlines, \\\" for quotes, \\\\ for backslashes."
 }
@@ -107,17 +112,25 @@ func (t *WriteTool) Execute(ctx context.Context, args map[string]any) (core.Tool
 	tag := execution.RecordSnapshotInContext(ctx, safePath, content)
 
 	diffOutput := formatWriteDiff(safePath, existing, content)
-	if diffOutput == "" {
-		if tag != "" {
-			return core.ToolOutput{Text: fmt.Sprintf("[%s#%s] Written (%d chars)", safePath, tag, len(content))}, nil
-		}
-		return core.ToolOutput{Text: fmt.Sprintf("Written: %s (%d chars)", safePath, len(content))}, nil
-	}
-
+	confirmation := fmt.Sprintf("Written: %s (%d bytes).", safePath, len(content))
 	if tag != "" {
-		return core.ToolOutput{Text: fmt.Sprintf("[%s#%s]\n%s", safePath, tag, diffOutput)}, nil
+		confirmation = fmt.Sprintf("[%s#%s] Written (%d bytes).", safePath, tag, len(content))
 	}
-	return core.ToolOutput{Text: diffOutput}, nil
+	output := core.ToolOutput{Text: confirmation}
+	if diffOutput != "" {
+		output.Text = diffOutput
+		if tag != "" {
+			output.Text = fmt.Sprintf("[%s#%s]\n%s", safePath, tag, diffOutput)
+		}
+		// Preserve the full evidence before replacing an echo of model-authored
+		// content. On preservation failure retain the original inline diff.
+		if state := execution.ExecutionStateFromContext(ctx); state != nil && state.OutputStore != nil && len(output.Text) > writeEchoLimitBytes {
+			if artifact, err := state.OutputStore.PreserveOutput(output.Text); err == nil {
+				output = core.ToolOutput{Text: confirmation + " Full diff saved in the result artifact.", Artifact: protocol.ToolOutputArtifact{Path: artifact}}
+			}
+		}
+	}
+	return execution.MutationOutput(ctx, safePath, []byte(content), output), nil
 }
 
 func formatWriteDiff(path, existing, content string) string {

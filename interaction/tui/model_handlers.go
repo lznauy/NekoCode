@@ -248,8 +248,8 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 		return m.openModePicker()
 	case "ctrl+g":
 		return m.toggleTasks()
-	case "ctrl+v":
-		return readClipboardImage()
+	case "ctrl+v", "alt+v":
+		return m.readClipboardImage()
 	case "ctrl+c":
 		if m.Input.HasContent() {
 			m.Input.Clear()
@@ -512,9 +512,18 @@ type attachmentSessionRuntime interface {
 }
 
 func (m *Model) handleClipboardImage(msg clipboardImageMsg) tea.Cmd {
+	if msg.scope != m.clipboardScope() {
+		return nil
+	}
 	if msg.err != nil {
 		m.Messages.AddMessage(message.ChatMessage{Role: "error", Content: "读取剪贴板图片失败：" + msg.err.Error()})
 		return nil
+	}
+	if msg.text != "" {
+		input, cmd := m.Input.Update(tea.PasteMsg{Content: msg.text})
+		m.Input = input
+		m.refreshSuggestions()
+		return cmd
 	}
 	if len(msg.data) == 0 {
 		return nil

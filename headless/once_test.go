@@ -69,7 +69,7 @@ func TestOnceFinalOutput(t *testing.T) {
 }
 
 func TestOnceFailures(t *testing.T) {
-	for _, kind := range []string{"runner", "step_limit", "approval", "question", "cancelled", "backend_cancelled"} {
+	for _, kind := range []string{"runner", "step_limit", "incomplete", "approval", "question", "cancelled", "backend_cancelled"} {
 		t.Run(kind, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
@@ -81,6 +81,8 @@ func TestOnceFailures(t *testing.T) {
 					host.Step(protocol.StepEvent{Action: protocol.StepActionRunSummary, Summary: &protocol.RunSummary{StopReason: "cancelled"}})
 				case "step_limit":
 					host.Step(protocol.StepEvent{Action: protocol.StepActionRunSummary, Summary: &protocol.RunSummary{StepCount: 4, StopReason: "step_limit"}})
+				case "incomplete":
+					host.Step(protocol.StepEvent{Action: protocol.StepActionRunSummary, Summary: &protocol.RunSummary{StepCount: 4, StopReason: "incomplete"}})
 				case "approval":
 					if host.Confirm(rt.ConfirmRequest{ToolName: "shell"}).Allowed {
 						t.Error("approval unexpectedly allowed")
@@ -110,6 +112,9 @@ func TestOnceFailures(t *testing.T) {
 				var result map[string]any
 				if json.Unmarshal(out.Bytes(), &result) != nil || result["is_error"] != true {
 					t.Fatalf("missing failure JSON: %s", out.String())
+				}
+				if kind == "incomplete" && (result["subtype"] != "error_incomplete" || result["stop_reason"] != "incomplete" || result["result"] != "incomplete") {
+					t.Fatalf("partial report or completion status lost: %s", out.String())
 				}
 			}
 		})

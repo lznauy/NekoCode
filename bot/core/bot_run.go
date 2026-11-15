@@ -39,6 +39,9 @@ func (b *Bot) Run(ctx context.Context, input string, images []types.MessageImage
 	if submitter, ok := host.(protocol.BackgroundSubmitter); ok {
 		ctx = protocol.WithBackgroundSubmitter(ctx, submitter)
 	}
+	if reader, ok := host.(protocol.BackgroundResultReader); ok {
+		ctx = protocol.WithBackgroundResultReader(ctx, reader)
+	}
 	release := b.bindHost(host)
 	defer release()
 
@@ -239,6 +242,9 @@ func (b *Bot) ExecuteCommand(ctx context.Context, input string, host RunHost) (p
 		return protocol.CommandResult{}, errors.New("bot: another operation is running")
 	}
 	defer b.operationMu.Unlock()
+	if reader, ok := host.(protocol.BackgroundResultReader); ok {
+		ctx = protocol.WithBackgroundResultReader(ctx, reader)
+	}
 	release := b.bindHost(host)
 	defer release()
 

@@ -203,6 +203,9 @@ type StreamUsage struct {
 	ReasoningTokens  int `json:"reasoning_tokens,omitempty"`
 	CacheHitTokens   int
 	CacheMissTokens  int
+	// UsageReported distinguishes an explicit provider report of zero usage
+	// from a failed request that returned no usage event.
+	UsageReported bool `json:"-"`
 	// CacheUsageReported distinguishes a real zero-hit/full-miss report from
 	// providers that only return aggregate prompt tokens.
 	CacheUsageReported bool `json:"-"`
@@ -236,6 +239,7 @@ func (u *StreamUsage) Merge(next *StreamUsage) {
 	if next == nil {
 		return
 	}
+	u.UsageReported = true
 	if next.PromptTokens > 0 {
 		u.PromptTokens = next.PromptTokens
 	}

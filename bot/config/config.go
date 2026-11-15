@@ -170,6 +170,7 @@ func Load() (*Config, error) {
 	if err := Validate(&cfg); err != nil {
 		return nil, fmt.Errorf("config %s: %w", configPath, err)
 	}
+	cfg.registerCredentials()
 
 	return &cfg, nil
 }
@@ -340,7 +341,11 @@ func Save(cfg Config) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return err
+	}
+	cfg.registerCredentials()
+	return nil
 }
 
 func Validate(cfg *Config) error {

@@ -32,7 +32,7 @@ func TestClipboardImageIsRejectedWhileBrowsingHistory(t *testing.T) {
 	m.Input.SetHistory([]string{"older"})
 	m.Input.HistoryUp()
 
-	m.handleClipboardImage(clipboardImageMsg{data: []byte("image")})
+	m.handleClipboardImage(clipboardImageMsg{scope: m.clipboardScope(), data: []byte("image")})
 
 	if len(m.Messages.Items()) != 1 {
 		t.Fatalf("message count = %d, want history warning", len(m.Messages.Items()))

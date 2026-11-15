@@ -192,7 +192,7 @@ func TestRunSummaryDenialsAndSubagentOutput(t *testing.T) {
 }
 
 func TestSummaryTerminalPrecedence(t *testing.T) {
-	for _, reason := range []string{"completed", "step_limit", "cancelled", "execution_error"} {
+	for _, reason := range []string{"completed", "step_limit", "cancelled", "execution_error", "incomplete"} {
 		for _, failed := range []bool{false, true} {
 			t.Run(reason+fmt.Sprint(failed), func(t *testing.T) {
 				h := newHarness(t, func(_ context.Context, _ string, host rt.RunHost) (string, error) {

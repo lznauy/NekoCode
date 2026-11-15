@@ -19,7 +19,7 @@ import (
 // Opt-in A/B decision eval, not an Agent/runtime end-to-end test. Set
 // NEKOCODE_PROMPT_EVAL_MODEL, NEKOCODE_PROMPT_EVAL_BASE_URL and
 // NEKOCODE_PROMPT_EVAL_API_KEY explicitly, then run:
-// cd evals && go test -run TestPromptBehaviorEval -v -count=1 -timeout 30m
+// cd evals/prompt_evals && go test -run TestPromptBehaviorEval -v -count=1 -timeout 30m
 // BASE_REF optionally selects the old Git revision (default HEAD). REPEATS
 // optionally selects 1..5 trials per case/version (default 1). Both use the
 // NEKOCODE_PROMPT_EVAL_ prefix. This doubles calls compared with a single-version
@@ -175,7 +175,7 @@ func behaviorRepoRoot(t *testing.T) string {
 	t.Helper()
 	root := os.Getenv("NEKOCODE_PROMPT_EVAL_REPO")
 	if root == "" {
-		root = ".."
+		root = filepath.Join("..", "..")
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {

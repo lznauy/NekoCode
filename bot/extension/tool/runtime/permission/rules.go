@@ -236,6 +236,14 @@ type Decision struct {
 // DenyRule checks hard rules without running the judge or assessing approval.
 // Read-only previews use this same deny boundary as execution.
 func (e *Engine) DenyRule(toolName string, callInfo map[string]any) (Rule, bool) {
+	if strings.EqualFold(toolName, "shell") || strings.EqualFold(toolName, "bash") {
+		command, _ := callInfo["command"].(string)
+		for _, structure := range ClassifyShellStructure(command).Structures {
+			if structure == ShellUnsupportedIndirect {
+				return Rule{Tool: toolName, Effect: EffectDeny, Literal: command, Source: "builtin"}, true
+			}
+		}
+	}
 	for _, rule := range e.rules {
 		if rule.Effect == EffectDeny && e.ruleApplies(rule, toolName, callInfo) {
 			return rule, true

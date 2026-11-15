@@ -18,5 +18,10 @@ func protectAuthority(profile Profile) error {
 			return err
 		}
 	}
+	if profile.ScratchFile != nil {
+		if err := authority.CheckWritable(scratchAccessPath(profile)); err != nil {
+			return err
+		}
+	}
 	return nil
 }

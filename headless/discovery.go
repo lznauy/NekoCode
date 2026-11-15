@@ -56,6 +56,9 @@ func (s *server) capabilities() []string {
 
 func (s *server) metadata(ctx context.Context) map[string]any {
 	info := map[string]any{"protocol_version": ProtocolVersion, "capabilities": s.capabilities(), "cwd": s.cwd, "session_id": s.sessionID, "model": s.backend.CurrentModel(), "permission_mode": s.backend.PermissionMode()}
+	if s.callBudget != nil {
+		info["execution_budget"] = s.callBudget.Snapshot()
+	}
 	if m, ok := s.backend.(Management); ok {
 		c := m.Capabilities()
 		if c.ToolCatalog {

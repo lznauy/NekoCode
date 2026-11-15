@@ -403,3 +403,27 @@ func TestReadReceiptIsLocalAndRestoreInvalidates(t *testing.T) {
 		t.Fatal("restore revived receipt")
 	}
 }
+
+func TestMutationReceiptsFollowReadReceiptDeliveryAndRestoreRules(t *testing.T) {
+	for _, name := range []string{"write", "edit"} {
+		t.Run(name, func(t *testing.T) {
+			m := New(Config{ContextWindow: 10000})
+			m.AddToolResultsBatch([]ToolResultMsg{{ToolName: name, Message: types.Message{Content: "mutation confirmation", ToolCallID: "call", ReadID: "mutation-receipt"}}})
+			snapshot := m.Snapshot()
+			if len(snapshot.Messages) != 1 || snapshot.Messages[0].ReadID != "mutation-receipt" {
+				t.Fatal("delivered mutation lost its receipt")
+			}
+			_, transcript, _ := m.TranscriptTail()
+			for _, msg := range transcript {
+				if msg.ReadID != "" {
+					t.Fatal("mutation receipt persisted in transcript")
+				}
+			}
+			restored := New(Config{ContextWindow: 10000})
+			restored.Restore(snapshot)
+			if restored.Snapshot().Messages[0].ReadID != "" {
+				t.Fatal("restore revived mutation receipt")
+			}
+		})
+	}
+}

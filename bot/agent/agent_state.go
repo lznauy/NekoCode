@@ -22,9 +22,10 @@ type runState struct {
 	taskReferences *contextmgr.TaskReferences
 	hookStopped    bool
 	// Progress and termination.
-	step       int               // current iteration, capped by maxAgentSteps
-	stopReason policy.StopReason // why the run stopped; finishRun branches on it
-	err        error             // unrecoverable preparation failure
+	step                int               // current iteration, capped by maxAgentSteps
+	stopReason          policy.StopReason // why the run stopped; finishRun branches on it
+	err                 error             // unrecoverable preparation failure
+	todoPartialCloseout bool              // bounded checklist recovery ended with open work
 
 	// lastText is the latest model text. finalText holds an accepted final
 	// answer; rejected candidates are cleared. finalPersisted tracks whether

@@ -10,6 +10,7 @@ import (
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/provider"
 	"nekocode/bot/provider/types"
+	"nekocode/util/modelbudget"
 )
 
 // RequestBudgetError describes the final provider-visible request estimate.
@@ -47,6 +48,11 @@ func (m *Manager) PrepareRequest(ctx context.Context, request ModelRequest) ([]t
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// Budget observations belong inside the final request estimate and only
+	// in its transient tail, never appended after context admission.
+	if notice := modelbudget.Notice(ctx); notice != "" {
+		request.ExtraMessages = append(append([]types.Message(nil), request.ExtraMessages...), types.Message{Role: "user", Content: notice, Source: types.MessageSourceRuntimeEvent})
+	}
 	for attempt := 0; attempt < 2; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -62,22 +68,30 @@ func (m *Manager) PrepareRequest(ctx context.Context, request ModelRequest) ([]t
 		}
 		// A deterministic artifact checkpoint uses the same pressure boundary as
 		// compaction. Never invalidate a warm prefix merely to shorten a request.
-		if attempt == 0 && (autoCompact || budget.Total() > budget.Window) && budget.Tools+budget.Output+budget.Safety <= budget.Window && m.checkpointWorkingSet() {
+		if !request.HandoffOnly && attempt == 0 && (autoCompact || budget.Total() > budget.Window) && budget.Tools+budget.Output+budget.Safety <= budget.Window && m.checkpointWorkingSet() {
 			messages, shape, budget, autoCompact, err = m.budgetedProjection(request)
 			if err != nil {
 				return nil, err
 			}
 		}
 
+		// Preserve the coordinator reserve for synthesis when the current request
+		// already fits. Compaction may consume only ordinary work capacity.
+		shared := modelbudget.FromContext(ctx)
+		canCompact := shared == nil || shared.Snapshot().WorkRemaining > 0 || budget.Total() > budget.Window
 		// Automatic threshold and final request admission share one attempt.
 		// The accepted request is always rebuilt after a history replacement.
-		if attempt == 0 && (autoCompact || budget.Total() > budget.Window) && budget.Tools+budget.Output+budget.Safety <= budget.Window {
+		if !request.HandoffOnly && canCompact && attempt == 0 && (autoCompact || budget.Total() > budget.Window) && budget.Tools+budget.Output+budget.Safety <= budget.Window {
 			applied, err := m.compact(ctx, !autoCompact, request.OutputTokens)
 			if err != nil {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					return nil, err
 				}
-				return nil, fmt.Errorf("%w; compaction failed: %w", budget, err)
+				// A sibling may consume the last ordinary admission after our
+				// snapshot. Keep an already fitting request usable in that race.
+				if !errors.Is(err, modelbudget.ErrExhausted) || budget.Total() > budget.Window {
+					return nil, fmt.Errorf("%w; compaction failed: %w", budget, err)
+				}
 			}
 			if applied {
 				continue

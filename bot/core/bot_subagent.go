@@ -34,7 +34,7 @@ func (b *Bot) WireTaskLister(list taskbridge.TaskLister) {
 
 func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provider.LLM, ag *agentcore.Agent) {
 	b.toolbox.WireTaskResultReader(func(ctx context.Context, q taskbridge.ResultQuery) (taskbridge.ResultPage, error) {
-		return session.ReadSubagentResult(ctx, b.sess.CurrentID(), q)
+		return readTaskResult(ctx, b.sess.CurrentID(), q)
 	})
 	registry := b.toolbox.Registry
 	ctxMgr := b.ctxMgr
@@ -45,6 +45,9 @@ func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provi
 	b.toolbox.WireTaskRunner(func(ctx context.Context, spec taskbridge.TaskSpec) (taskResult *taskbridge.TaskResult, runErr error) {
 		if snapshot, ok := interactionmode.FromContext(ctx); ok && snapshot.ID == interactionmode.SuperAgent {
 			return b.submitBackgroundTask(ctx, spec, parentModel, modelConfig, compactionModel, ag)
+		}
+		if spec.ForkID != "" || spec.ReviewPolicy != "" {
+			return nil, fmt.Errorf("fork_from and review_policy are available only through task_submit in Super Agent mode")
 		}
 		// Worker execution uses its profile ceiling, not the coordinator's
 		// tool view. Permission inheritance is configured independently below.
@@ -74,6 +77,10 @@ func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provi
 			}
 		}
 		profile, err := b.ext.AgentProfile(spec.Profile)
+		if err != nil {
+			return nil, err
+		}
+		profile, err = resolveTaskStepBudget(profile, spec, 0)
 		if err != nil {
 			return nil, err
 		}

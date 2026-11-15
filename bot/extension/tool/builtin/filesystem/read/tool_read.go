@@ -15,7 +15,7 @@ type ReadTool struct {
 
 func (t *ReadTool) Name() string { return "read" }
 func (t *ReadTool) Description() string {
-	return "Read file contents (text, images, PDF). Absolute path required. Use startLine/endLine for range, max 500 lines. Text files are limited to 64 MiB. Text output includes [path#TAG] followed by lineNo:content lines. If output is truncated, read a smaller range before editing."
+	return "Read text file contents; images return metadata only, PDFs return metadata and extraction guidance. Image pixels are not delivered by read: use image_understand for visual inspection. Absolute path required. Use startLine/endLine for range, max 500 lines. Text files are limited to 64 MiB. Text output includes [path#TAG] followed by lineNo:content lines. If output is truncated, read a smaller range before editing."
 }
 
 func (t *ReadTool) Parameters() []core.Parameter {

@@ -5,25 +5,24 @@ import (
 	"strings"
 
 	"nekocode/bot/provider/types"
+	"nekocode/protocol"
 )
 
 const maxVerificationChecks = 32
 
 // VerificationCheck describes evidence coverage, not the task lifecycle or a
 // host-certified verdict. A passing probe may still model the wrong scope.
-type VerificationCheck struct {
-	Name, Status, Evidence, Entrypoint, Scope string
-	Limitations                               []string
-}
+type VerificationCheck = protocol.TaskReviewCheck
 
 func verificationChecksSchema() types.Property {
-	return types.Property{Type: "array", Description: "At most 32 scoped checks. blocked means environment prevented execution. A synthetic probe alone does not prove production reachability.", Items: &types.Property{Type: "object", Properties: map[string]types.Property{
+	return types.Property{Type: "array", Description: "At most 32 checks; synthetic probes do not prove production reachability.", Items: &types.Property{Type: "object", Properties: map[string]types.Property{
 		"name":        {Type: "string"},
-		"status":      {Type: "string", Enum: []string{"passed", "failed", "blocked", "not_run"}},
-		"evidence":    {Type: "string", Description: "Command/assertion and result; repair claims need failing-before/passing-after controls."},
-		"entrypoint":  {Type: "string", Description: "Actual entrypoint; identify helper/synthetic probes."},
-		"scope":       {Type: "string", Description: "Ownership, concurrency, branches reached, competing guards and applicability."},
-		"limitations": {Type: "array", Items: &types.Property{Type: "string"}, Description: "Unverified assumptions and missing coverage within scope."},
+		"method":      {Type: "string", Enum: []string{"executed", "static", "manual", "unspecified"}, Description: "How checked."},
+		"status":      {Type: "string", Enum: []string{"passed", "failed", "blocked", "not_run"}, Description: "Use not_run when no result was established."},
+		"evidence":    {Type: "string", Description: "Command/assertion and result."},
+		"entrypoint":  {Type: "string", Description: "Entrypoint; identify synthetic probes."},
+		"scope":       {Type: "string", Description: "Coverage and applicability."},
+		"limitations": {Type: "array", Items: &types.Property{Type: "string"}, Description: "Coverage limitations."},
 	}, Required: []string{"name", "status", "evidence", "entrypoint", "scope", "limitations"}}}
 }
 
@@ -58,10 +57,25 @@ func optionalVerificationChecks(args map[string]any) ([]VerificationCheck, error
 			*field.target = text
 			total += len(text)
 		}
+		if rawMethod, present := fields["method"]; present {
+			method, ok := rawMethod.(string)
+			if !ok {
+				return nil, fmt.Errorf("verification_checks.method must be a string")
+			}
+			switch method {
+			case "executed", "static", "manual", "unspecified":
+			default:
+				return nil, fmt.Errorf("invalid verification method %q", method)
+			}
+			check.Method = method
+			total += len(method)
+		} else {
+			check.Method = "unspecified"
+		}
 		switch check.Status {
 		case "passed", "failed", "blocked", "not_run":
 		default:
-			return nil, fmt.Errorf("invalid verification status %q", check.Status)
+			return nil, fmt.Errorf("invalid verification status %q; use passed/failed/blocked/not_run, and put static/executed/manual in method", check.Status)
 		}
 		var err error
 		check.Limitations, err = requiredResultStrings(fields, "limitations")
@@ -94,7 +108,7 @@ func writeVerificationChecks(out *strings.Builder, checks []VerificationCheck) {
 	}
 	fmt.Fprintf(out, "- passed=%d; failed=%d; blocked=%d; not_run=%d", counts["passed"], counts["failed"], counts["blocked"], counts["not_run"])
 	for _, check := range checks {
-		fmt.Fprintf(out, "\n- [%s] %s\n  Evidence: %s\n  Entrypoint: %s\n  Scope: %s", check.Status, check.Name, check.Evidence, check.Entrypoint, check.Scope)
+		fmt.Fprintf(out, "\n- [%s] %s (method: %s)\n  Evidence: %s\n  Entrypoint: %s\n  Scope: %s", check.Status, check.Name, check.Method, check.Evidence, check.Entrypoint, check.Scope)
 		for _, limit := range check.Limitations {
 			fmt.Fprintf(out, "\n  Limitation: %s", limit)
 		}

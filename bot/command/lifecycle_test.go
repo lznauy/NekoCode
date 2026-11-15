@@ -212,7 +212,8 @@ func TestFormatPrefixMissPartsExplainsStableTail(t *testing.T) {
 		"cold-start": "first request, no baseline yet",
 		"system":     "system prompt or skills changed",
 		"tools":      "tool definitions changed",
-		"history":    "history rewritten (e.g. compaction)",
+		"history":    "history rewritten",
+		"compaction": "context compacted",
 	} {
 		if got := formatPrefixMissParts([]string{part}); got != want {
 			t.Fatalf("%s label = %q, want %q", part, got, want)

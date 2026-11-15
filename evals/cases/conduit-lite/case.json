@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "id": "conduit-lite",
+  "version": 1,
+  "title": "Conduit Lite 修复与产品交付",
+  "tags": [
+    "debugging",
+    "product",
+    "http",
+    "state"
+  ],
+  "kind": "product",
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "combined_exact_filters",
+      "description": "combined exact filters",
+      "required": true
+    },
+    {
+      "id": "denied_write_preserves_state",
+      "description": "denied write preserves state",
+      "required": true
+    },
+    {
+      "id": "empty_page_preserves_total",
+      "description": "empty page preserves total",
+      "required": true
+    },
+    {
+      "id": "filter_before_pagination",
+      "description": "filter before pagination",
+      "required": true
+    },
+    {
+      "id": "owner_update_works",
+      "description": "owner update works",
+      "required": true
+    },
+    {
+      "id": "preserve_tags_and_state",
+      "description": "preserve tags and state",
+      "required": true
+    },
+    {
+      "id": "public_http_and_pagination_validation",
+      "description": "public http and pagination validation",
+      "required": true
+    },
+    {
+      "id": "total_before_pagination",
+      "description": "total before pagination",
+      "required": true
+    },
+    {
+      "id": "unauthenticated_update_preserves_state",
+      "description": "unauthenticated update preserves state",
+      "required": true
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 600,
+    "model_calls": 70,
+    "total_tokens": 2000000,
+    "verifier_seconds": 30
+  },
+  "source": "https://github.com/realworld-apps/realworld; local adaptation of the existing harness_demo"
+}

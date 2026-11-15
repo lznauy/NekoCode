@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"nekocode/bot/extension/tool/builtin/diff"
+	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/execution"
 	"nekocode/bot/extension/tool/runtime/toolutil"
 )
@@ -65,40 +66,40 @@ func (t *EditTool) previewEdit(ctx context.Context, args map[string]any) string 
 	return appendStructuredDiff(preview, plan.SafePath)
 }
 
-func (t *EditTool) executeEdit(ctx context.Context, args map[string]any) (string, error) {
+func (t *EditTool) executeEdit(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	req, err := parseEditRequest(args)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	safePath, err := toolutil.ValidatePathWritableContext(ctx, req.Path)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	unlock, err := execution.LockFile(ctx, safePath)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	defer unlock()
 	checked, err := toolutil.ValidatePathWritableContext(ctx, req.Path)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	if checked != safePath {
-		return "", fmt.Errorf("edit target changed while waiting; retry after reading it")
+		return core.ToolOutput{}, fmt.Errorf("edit target changed while waiting; retry after reading it")
 	}
 
 	args["path"] = safePath
 	plan, err := buildEditPlan(ctx, args)
 	if err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	reads := execution.FileReadsFromContext(ctx)
 	if err := reads.Check(plan.SafePath, plan.RawBefore); err != nil {
-		return "", err
+		return core.ToolOutput{}, err
 	}
 	finalText := toolutil.RestoreLineEndings(plan.NormalizedAfter, plan.LineEnding)
 	if err := writeEditFile(plan.SafePath, []byte(finalText), plan.OrigMode); err != nil {
-		return "", fmt.Errorf("failed to write file: %w", err)
+		return core.ToolOutput{}, fmt.Errorf("failed to write file: %w", err)
 	}
 	reads.Invalidate(plan.SafePath)
 	if cache := execution.FileCacheFromContext(ctx); cache != nil {
@@ -115,7 +116,7 @@ func (t *EditTool) executeEdit(ctx context.Context, args map[string]any) (string
 	if lint := lintFile(plan.SafePath); lint != "" {
 		msg += "\n" + lint
 	}
-	return msg, nil
+	return execution.MutationOutput(ctx, plan.SafePath, []byte(finalText), core.ToolOutput{Text: msg}), nil
 }
 
 func buildEditPlan(ctx context.Context, args map[string]any) (editPlan, error) {

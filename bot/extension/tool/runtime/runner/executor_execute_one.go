@@ -17,6 +17,7 @@ import (
 )
 
 func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result core.ToolCallResult) {
+	ctx = core.WithToolCallID(ctx, tc.ID)
 	evidence := protocol.ToolEvidence{Schema: 1}
 	stage := "lookup"
 	var invocationErr error

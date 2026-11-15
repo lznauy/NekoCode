@@ -13,10 +13,11 @@ import (
 
 type SubmitTool struct{ TaskTool }
 
-func NewSubmitTool() *SubmitTool { return &SubmitTool{} }
-func (*SubmitTool) Name() string { return "task_submit" }
+func NewSubmitTool() *SubmitTool                                    { return &SubmitTool{} }
+func (*SubmitTool) Name() string                                    { return "task_submit" }
+func (*SubmitTool) ExecutionMode(map[string]any) core.ExecutionMode { return core.ModeSequential }
 func (*SubmitTool) Description() string {
-	return "Submit independent work to a background subagent. Declare required_tools before dispatch; missing capabilities are rejected before a worker starts. For git commands, tests, or code review requiring commands, include shell and keep tool_scope=general, even when files must not be modified. Returns an acceptance receipt immediately, not a completion result. Runtime delivers the completed result in a later coordinator turn. The dedicated executor is fixed by the host; provide prompt and title, never a profile. When continuing the same unfinished work, use resume_id from task_list instead of creating a replacement. Interrupted executor tasks retain saved context; resume_id continues that task with its history in a new attempt. Do not poll or wait. Available only in Super Agent mode."
+	return "Submit independent work to background subagents. When multiple tasks are independent, submit them together in one tool-call batch; do not wait for one to finish before submitting its independent peers. Use after only for real dependencies. If all tasks need the same source discovery, submit one mapper first, then submit the independent reviews together with its exact task_result result_ref in inputs. For new tasks, declare required_tools; on resume, omit it to inherit the saved capability ceiling. Include shell for git/tests. Split work by distinct deliverables. A pending-delivery rejection applies only to that task; use task_result/task_list and resume it after its delivery settles. Other settled tasks can resume independently. The dedicated executor is fixed by the host; provide prompt and title, never a profile. Use resume_id to continue the same unfinished task; do not create a replacement or poll/wait. Available only in Super Agent mode."
 }
 func (t *SubmitTool) Parameters() []core.Parameter {
 	parameters := t.TaskTool.Parameters()
@@ -38,8 +39,11 @@ func (t *SubmitTool) Parameters() []core.Parameter {
 		result = append(result, p)
 	}
 	result = append(result, core.Parameter{Name: "tool_scope", Type: "string", Enum: []string{"general", "read_tools_only"}, Description: "Default general: normal executor tools, including shell, subject to approvals. Use general for read-only code reviews that need git or tests. read_tools_only removes shell, edits and MCP; choose it only for file reading/searching with no commands. This selects available tools, not whether the task should modify files."})
-	result = append(result, core.Parameter{Name: "required_tools", Type: "array", Required: true, Items: &core.Schema{Type: "string"}, Description: "Tool names essential to this task, checked before starting a worker. Include shell for git, tests, lint, builds or other commands; include read/grep as needed. Use [] only if no tools are required. These are requirements, not permission grants or a tool whitelist."})
+	result = append(result, core.Parameter{Name: "required_tools", Type: "array", Items: &core.Schema{Type: "string"}, Description: "Required for new tasks: essential tool names checked before a worker starts. Include shell for git, tests, lint, builds or other commands; use [] only if none are needed. On resume, omit to reuse the saved capability ceiling; supplying names can only narrow that ceiling. These are requirements, not permission grants."})
 	result = append(result, core.Parameter{Name: "inputs", Type: "array", Items: &core.Schema{Type: "string"}, Description: "Optional up to 8 exact result_ref values returned by task_result. Shares only these completed attempt results with this worker, not other tasks or session files. Omit on resume to reuse saved inputs; resumed inputs may only narrow. Upstream tasks must already have terminal results. New tasks with inputs must choose isolation explicitly; to verify upstream file changes, resume that task instead."})
+	result = append(result, core.Parameter{Name: "fork_from", Type: "string", Description: "Continue knowledge from a terminal executor task by full task ID, in a NEW task and explicitly chosen workspace (normally isolation=snapshot to test parent fixes). Captures its exact saved attempt result and a bounded handoff; does not copy its full tool history or import its worktree edits. The old task/workspace stays intact. Use resume_id instead when continuing in the same saved workspace. Cannot combine with resume_id or after. Execution tools cannot expand beyond the source ceiling; only explicitly shared results are readable."})
+	result = append(result, core.Parameter{Name: "max_steps", Type: "number", Description: "Optional positive integer, at most 150 and no higher than the configured profile limit. Caps worker loop steps in this attempt. At the limit ordinary tools stop; one final handoff call is allowed. Unfinished work or no valid handoff returns partial; a valid handoff with no unfinished work may complete. Prefer 30 for bounded regression/verification. Resume remaining work with a new bounded attempt when justified. Omit for 12 ordinary model turns, lowered by the profile ceiling."})
+	result = append(result, core.Parameter{Name: "review_policy", Type: "string", Enum: []string{"immediate", "batch"}, Description: "Default batch for new independent tasks; omission on resume preserves its policy. Explicit continue/complete outcomes allow grouped delivery after pending batch peers settle, independently of verification quality. Blocked/decision outcomes, host errors, cancellation and approval/question waits bypass batching. Reports without outcome are delivered immediately. UI progress and dependency scheduling remain immediate; choose immediate for incremental decisions."})
 	result = append(result, core.Parameter{Name: "after", Type: "array", Items: &core.Schema{Type: "string"}, Description: "Optional up to 8 already accepted task IDs in this parent session. Wait without occupying an execution slot; start only after every upstream completes successfully. Failed, partial or cancelled upstreams block execution. Their final reports are shared automatically, never workspace files. New tasks with after must choose isolation explicitly; to test upstream code, resume the source task instead. No forward references or cycles."})
 	return result
 }
@@ -53,12 +57,38 @@ func (t *SubmitTool) Execute(ctx context.Context, args map[string]any) (core.Too
 	if _, supplied := args["profile"]; supplied {
 		return core.ToolOutput{}, fmt.Errorf("task_submit uses the dedicated executor; profile selection is not supported")
 	}
+	if raw, supplied := args["review_policy"]; supplied {
+		value, valid := raw.(string)
+		if !valid || (value != "immediate" && value != "batch") {
+			return core.ToolOutput{}, fmt.Errorf("review_policy must be immediate or batch")
+		}
+	}
+	if raw, supplied := args["fork_from"]; supplied {
+		id, valid := raw.(string)
+		if !valid || strings.TrimSpace(id) == "" {
+			return core.ToolOutput{}, fmt.Errorf("fork_from must be a nonempty task ID")
+		}
+		if _, resume := args["resume_id"]; resume {
+			return core.ToolOutput{}, fmt.Errorf("fork_from and resume_id are mutually exclusive")
+		}
+		if isolation, _ := args["isolation"].(string); isolation == "" {
+			return core.ToolOutput{}, fmt.Errorf("fork_from requires explicit isolation for the new workspace")
+		}
+		if after, supplied := args["after"]; supplied && after != nil {
+			return core.ToolOutput{}, fmt.Errorf("fork_from cannot combine with after; pass completed inputs explicitly")
+		}
+	}
 	if raw, supplied := args["after"]; supplied && raw == nil {
 		return core.ToolOutput{}, fmt.Errorf("after must be an array of task IDs")
 	}
 	prepared := make(map[string]any, len(args)+1)
 	maps.Copy(prepared, args)
 	prepared["profile"] = "executor"
+	if _, supplied := args["review_policy"]; !supplied {
+		if id, _ := args["resume_id"].(string); id == "" {
+			prepared["review_policy"] = "batch"
+		}
+	}
 	if _, supplied := args["read_only"]; supplied {
 		return core.ToolOutput{}, fmt.Errorf("read_only is no longer supported: it removed shell even for read-only reviews. Omit it; use tool_scope=general and required_tools:[\"shell\"] for git/tests, with no-edit constraints in prompt. No task was started")
 	}
@@ -71,9 +101,13 @@ func (t *SubmitTool) Execute(ctx context.Context, args map[string]any) (core.Too
 		}
 	}
 	readOnly := scope == "read_tools_only"
-	rawRequired, supplied := args["required_tools"]
-	if !supplied || rawRequired == nil {
+	resumeID, _ := args["resume_id"].(string)
+	_, supplied := args["required_tools"]
+	if !supplied && strings.TrimSpace(resumeID) == "" {
 		return core.ToolOutput{}, fmt.Errorf("required_tools must be an array of essential tool names; include shell for git/tests, or [] when none are needed. No task was started")
+	}
+	if raw, exists := args["required_tools"]; exists && raw == nil {
+		return core.ToolOutput{}, fmt.Errorf("required_tools must be an array")
 	}
 	required, err := stringSliceArg(args, "required_tools")
 	if err != nil {

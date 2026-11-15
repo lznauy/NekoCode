@@ -68,6 +68,5 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) (core.ToolO
 		return core.ToolOutput{}, fmt.Errorf("path parameter is required")
 	}
 
-	toolText, toolErr := t.executeEdit(ctx, args)
-	return core.ToolOutput{Text: toolText}, toolErr
+	return t.executeEdit(ctx, args)
 }

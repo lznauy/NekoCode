@@ -11,6 +11,7 @@ import (
 
 	"nekocode/bot/agent/internal/kernel"
 	"nekocode/bot/agent/internal/toolpolicy"
+	"nekocode/bot/calllog"
 	"nekocode/bot/checkpoint"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/extension/tool"
@@ -183,7 +184,7 @@ func (a *Agent) RunWithCallbacks(ctx context.Context, input string, images []typ
 }
 
 func (a *Agent) getCtx() context.Context {
-	return protocol.WithExecutionIdentity(a.life.Context(), a.run.identity)
+	return calllog.WithSession(protocol.WithExecutionIdentity(a.life.Context(), a.run.identity), a.sessionID())
 }
 
 // Steer retains the original fire-and-forget API for downstream callers.

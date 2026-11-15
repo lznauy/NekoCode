@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "id": "grafana-anonymous-review",
+  "version": 2,
+  "title": "Grafana 匿名设备限制多 agent 审查",
+  "tags": [
+    "review",
+    "large-repository",
+    "multi-agent",
+    "concurrency",
+    "false-positive"
+  ],
+  "kind": "review",
+  "prompt": "prompt.md",
+  "fixture": null,
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "structured_report",
+      "description": "最终结构化发现与覆盖说明",
+      "required": true
+    },
+    {
+      "id": "source_unchanged",
+      "description": "源码、diff与初始工作区未修改",
+      "required": true
+    },
+    {
+      "id": "valid_locations",
+      "description": "发现引用冻结源码的有效行号",
+      "required": true
+    },
+    {
+      "id": "review_accuracy",
+      "description": "外部逐条核实准确率、召回与重复发现",
+      "required": false
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 900,
+    "model_calls": 100,
+    "total_tokens": 3000000,
+    "verifier_seconds": 90
+  },
+  "source": "Grafana PR #79265 first two commits; public Martian reference findings independently screened, no automatic semantic gold scoring",
+  "repository": {
+    "url": "https://github.com/grafana/grafana",
+    "base": "7ddcd0c9611882858701f4f876fb8e449fe73980",
+    "head": "566e0a8f24ce25fc770cf426900162c863a53666"
+  }
+}

@@ -36,25 +36,27 @@ func TestBackgroundTerminalIsPublishedOnceAfterWorkerSettles(t *testing.T) {
 				}
 			})
 			reported, release := make(chan struct{}), make(chan struct{})
-			_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "task", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, h protocol.BackgroundHost) (string, error) {
-				end := protocol.StepEvent{Action: protocol.StepActionSubAgentEnd, SubAgentStatus: tc.status, SubAgentAttemptID: "attempt", SubAgentAttemptSeq: 2, Summary: &protocol.RunSummary{StepCount: 7, StopReason: "worker-result"}}
+			var expectedAttempt string
+			_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "task", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, h protocol.BackgroundHost) (protocol.BackgroundResult, error) {
+				expectedAttempt = protocol.ExecutionFromContext(ctx).AttemptID
+				end := protocol.StepEvent{Action: protocol.StepActionSubAgentEnd, SubAgentStatus: tc.status, SubAgentAttemptID: expectedAttempt, SubAgentAttemptSeq: 2, Summary: &protocol.RunSummary{StepCount: 7, StopReason: "worker-result"}}
 				if tc.reportAfterCancel {
 					close(reported)
 					<-ctx.Done()
 					h.Step(end)
-					return "report", ctx.Err()
+					return protocol.BackgroundResult{Text: "report"}, ctx.Err()
 				}
 				h.Step(end)
 				close(reported)
 				select {
 				case <-release:
 				case <-ctx.Done():
-					return "report", ctx.Err()
+					return protocol.BackgroundResult{Text: "report"}, ctx.Err()
 				}
 				if tc.fail {
-					return "report", errors.New("execution failed")
+					return protocol.BackgroundResult{Text: "report"}, errors.New("execution failed")
 				}
-				return "report", nil
+				return protocol.BackgroundResult{Text: "report"}, nil
 			}})
 			if err != nil {
 				t.Fatal(err)
@@ -76,7 +78,7 @@ func TestBackgroundTerminalIsPublishedOnceAfterWorkerSettles(t *testing.T) {
 			}
 			select {
 			case end := <-ends:
-				if end.Status != tc.want || end.AttemptID != "attempt" || end.AttemptSeq != 2 || end.Summary.StepCount != 7 || end.Summary.StopReason != "worker-result" {
+				if end.Status != tc.want || end.AttemptID != expectedAttempt || end.AttemptSeq != 2 || end.Summary.StepCount != 7 || end.Summary.StopReason != "worker-result" {
 					t.Errorf("lost final status, identity or summary: %+v", end)
 				}
 			case <-time.After(5 * time.Second):

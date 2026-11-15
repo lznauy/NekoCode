@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"nekocode/bot/agent/internal/kernel"
+	"nekocode/bot/calllog"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/extension/agentprofile"
 	"nekocode/bot/extension/tool"
@@ -22,6 +23,7 @@ import (
 	providertypes "nekocode/bot/provider/types"
 	"nekocode/logger"
 	"nekocode/protocol"
+	"nekocode/util/modelbudget"
 )
 
 const (
@@ -103,7 +105,8 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (result *Result, runErr
 		identity.RunID = uuid.NewString()
 	}
 	identity.TaskID, identity.AttemptID = cfg.SubagentID, cfg.AttemptID
-	ctx = protocol.WithExecutionIdentity(ctx, identity)
+	ctx = calllog.WithSession(protocol.WithExecutionIdentity(ctx, identity), cfg.SessionID)
+	ctx = modelbudget.WithRole(ctx, modelbudget.Work, identity.TaskID+":"+identity.AttemptID)
 	if cfg.Profile.MaxSteps < 0 || cfg.Profile.MaxSteps > agentprofile.MaxSteps {
 		return nil, fmt.Errorf("max_steps must be between 0 and %d", agentprofile.MaxSteps)
 	}
@@ -250,6 +253,14 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (result *Result, runErr
 	return run.finish()
 }
 
+type handoffPhase uint8
+
+const (
+	handoffWorking handoffPhase = iota
+	handoffCorrecting
+	handoffFinalizing
+)
+
 type engineRun struct {
 	engine     *Engine
 	ctx        context.Context
@@ -261,10 +272,11 @@ type engineRun struct {
 	checkpoint func(string, string) error
 	log        func(string, ...any)
 
-	step       int
-	finalizing bool
-	result     *Result
-	err        error
+	step               int
+	handoffPhase       handoffPhase
+	finalizationReason string
+	result             *Result
+	err                error
 }
 
 func (r *engineRun) stepLimitReached() bool {
@@ -272,18 +284,21 @@ func (r *engineRun) stepLimitReached() bool {
 	if limit == 0 {
 		limit = maxSubAgentSteps
 	}
-	if r.step < limit {
+	reason := "step_limit"
+	budget := modelbudget.FromContext(r.ctx)
+	if budget != nil && budget.Snapshot().WorkRemaining == 0 {
+		reason = "shared_budget"
+	} else if r.step < limit {
 		return false
 	}
-	if !r.finalizing {
-		r.finalizing = true
-		r.ctxMgr.Add("user",
-			"[Sub-agent completion protocol]\nThe tool-use step limit has been reached. Do not call ordinary tools or continue investigation. Submit the work already completed by calling "+submitResultToolName+" as the only tool call with every required handoff field. List any remaining work in unfinished.",
-			providertypes.MessageSourceRuntimeEvent,
-		)
+	if r.handoffPhase != handoffFinalizing {
+		r.handoffPhase = handoffFinalizing
+		r.finalizationReason = reason
+		r.ctxMgr.Add("user", "[Sub-agent stage handoff] Reason: "+reason+". Ordinary investigation is paused at a tool-batch boundary. Do not call ordinary tools. Call "+submitResultToolName+" as the only tool call. Preserve findings and decisive evidence. Put only actionable work remaining inside the delegated scope in unfinished; put unverified assumptions, blocked checks, and out-of-scope validation in verification_gaps. Include a concrete next action and stop condition for unfinished work. Do not mark remaining scoped work complete just because this stage ended. The coordinator can resume this same task and workspace after reviewing the evidence.", providertypes.MessageSourceRuntimeEvent)
 		r.phase("Waiting")
 		return false
 	}
+
 	r.log("max steps reached: step=%d", r.step)
 	r.result = buildProtocolPartialResult(r.state.lastText, "sub-agent step limit reached before submit_result", r.state.meta(r.ctxMgr))
 	return true
@@ -297,7 +312,7 @@ func (r *engineRun) stepOnce() bool {
 		return true
 	}
 
-	if r.cfg.PendingUpdates != nil && !r.finalizing {
+	if r.cfg.PendingUpdates != nil && r.handoffPhase == handoffWorking {
 		err := r.cfg.PendingUpdates(func(updates []protocol.BackgroundUpdate) error {
 			for _, update := range updates {
 				r.ctxMgr.AddTaskUpdate(update.Sequence, update.Text)
@@ -312,18 +327,35 @@ func (r *engineRun) stepOnce() bool {
 
 	profile := r.cfg.Profile
 	allowedTools := profile.Tools
-	if r.finalizing {
+	handoffOnly := r.handoffPhase != handoffWorking
+	if handoffOnly {
 		allowedTools = nil
 	}
 	ctx := r.ctx
+	if r.handoffPhase == handoffFinalizing {
+		ctx = modelbudget.WithRole(ctx, modelbudget.Handoff, protocol.ExecutionFromContext(ctx).TaskID+":"+r.cfg.AttemptID)
+	}
 	if r.executor != nil {
 		ctx = execution.WithExecutionState(ctx, r.executor.ExecutionState())
 		ctx = core.WithOutputStore(ctx, r.executor.ExecutionState().OutputStore)
 		ctx = protocol.WithAccessObservation(ctx, r.executor.AccessObservation())
 	}
 	r.step++
-	calls, text, err := r.engine.reason(ctx, r.ctxMgr, allowedTools, buildSkillWorkflow(r.cfg), r.state.addTokens(r.cfg), r.cfg.RecordLLMUsage, r.cfg.SessionID, r.phase, r.cfg)
+	output := r.cfg
+	output.finalizing = handoffOnly
+	calls, text, err := r.engine.reason(ctx, r.ctxMgr, allowedTools, buildSkillWorkflow(r.cfg), r.state.addTokens(r.cfg), r.cfg.RecordLLMUsage, r.cfg.SessionID, r.phase, output)
 	r.ctxMgr.SetHints("")
+	if errors.Is(err, modelbudget.ErrExhausted) && r.handoffPhase != handoffFinalizing {
+		// Another in-flight sibling may consume the last ordinary admission after
+		// our boundary check. No request was sent; retry only the handoff boundary.
+		r.step--
+		return false
+	}
+	var requestBudgetError *ctxmgr.RequestBudgetError
+	if handoffOnly && errors.As(err, &requestBudgetError) {
+		r.result = buildProtocolPartialResult(r.state.lastText, "Final handoff context exceeds the model window. Full task history remains saved; no evidence was silently dropped. Resume this task with ordinary budget for compaction or narrower work.", r.state.meta(r.ctxMgr))
+		return true
+	}
 	if err != nil {
 		r.log("error: %v", err)
 		r.err = err
@@ -352,12 +384,19 @@ func (r *engineRun) stepOnce() bool {
 			return true
 		}
 		r.rejectToolBatch(calls, protocolErr.Error())
-		return r.retryCompletionProtocol(protocolErr.Error())
+		return r.retryRejectedHandoff()
 	}
 	if len(calls) == 0 {
+		if r.handoffPhase == handoffCorrecting {
+			return r.retryRejectedHandoff()
+		}
 		return r.retryCompletionProtocol("response ended without submit_result")
 	}
-	if r.finalizing {
+	if r.handoffPhase == handoffCorrecting {
+		r.rejectToolBatch(calls, "handoff correction permits only submit_result")
+		return r.retryRejectedHandoff()
+	}
+	if r.handoffPhase == handoffFinalizing {
 		const reason = "tool-use step limit reached; only submit_result is allowed"
 		r.rejectToolBatch(calls, reason)
 		r.result = buildProtocolPartialResult(r.state.lastText, reason, r.state.meta(r.ctxMgr))
@@ -387,6 +426,9 @@ func submittedResult(calls []core.ToolCallItem) (handoff Handoff, submitted bool
 		var parseErr error
 		handoff.Summary, parseErr = requiredResultString(call.Args, "summary")
 		if parseErr == nil {
+			handoff.Outcome, handoff.NextAction, parseErr = optionalHandoffOutcome(call.Args)
+		}
+		if parseErr == nil {
 			handoff.EvidenceIDs, parseErr = optionalEvidenceIDs(call.Args)
 		}
 		if parseErr == nil {
@@ -399,13 +441,19 @@ func submittedResult(calls []core.ToolCallItem) (handoff Handoff, submitted bool
 			handoff.Verification, parseErr = requiredResultString(call.Args, "verification")
 		}
 		if parseErr == nil {
-			handoff.VerificationChecks, parseErr = optionalVerificationChecks(call.Args)
+			handoff.Checks, parseErr = optionalVerificationChecks(call.Args)
+		}
+		if parseErr == nil {
+			handoff.VerificationGaps, parseErr = optionalResultStrings(call.Args, "verification_gaps")
 		}
 		if parseErr == nil {
 			handoff.Unfinished, parseErr = requiredResultStrings(call.Args, "unfinished")
 		}
 		if parseErr == nil {
 			handoff.Risks, parseErr = requiredResultStrings(call.Args, "risks")
+		}
+		if parseErr == nil {
+			parseErr = protocol.ValidateHandoff(handoff.Outcome, handoff.NextAction, handoff.Unfinished)
 		}
 		if parseErr != nil {
 			return Handoff{}, true, fmt.Errorf("%s: %w", submitResultToolName, parseErr)
@@ -439,6 +487,13 @@ func requiredResultStrings(args map[string]any, name string) ([]string, error) {
 		values = append(values, value)
 	}
 	return values, nil
+}
+
+func optionalResultStrings(args map[string]any, name string) ([]string, error) {
+	if _, ok := args[name]; !ok {
+		return nil, nil
+	}
+	return requiredResultStrings(args, name)
 }
 
 func (r *engineRun) rejectToolBatch(calls []core.ToolCallItem, reason string) {
@@ -475,6 +530,24 @@ func (r *engineRun) retryCompletionProtocol(reason string) bool {
 	return false
 }
 
+func (r *engineRun) retryRejectedHandoff() bool {
+	if r.handoffPhase == handoffWorking {
+		r.handoffPhase = handoffCorrecting
+	}
+	if r.state.completionRetries >= maxCompletionProtocolRetries {
+		r.result = buildProtocolPartialResult(r.state.lastText, "handoff schema was rejected after correction attempts", r.state.meta(r.ctxMgr))
+		r.phase("done")
+		return true
+	}
+	r.state.completionRetries++
+	r.ctxMgr.Add("user",
+		"[Sub-agent handoff correction]\nThe preceding tool result names the rejected field. Do not restart or extend the investigation and do not call ordinary tools. Correct only the handoff, then call nekocode_submit_result alone. Preserve the evidence. If a check has no established result, use status=not_run. For a non-complete outcome, provide a concrete next_action and at least one unfinished item. Provide risks as an array; use [] only when assessed and none remain.",
+		providertypes.MessageSourceRuntimeEvent,
+	)
+	r.phase("Waiting")
+	return false
+}
+
 func (r *engineRun) complete(handoff Handoff) {
 	r.phase("done")
 	r.result = buildHandoffResult(handoff, r.state.meta(r.ctxMgr))
@@ -491,8 +564,8 @@ func (r *engineRun) finish() (*Result, error) {
 	if r.result.Status != StatusCompleted {
 		reason = "incomplete"
 	}
-	if r.finalizing {
-		reason = "step_limit"
+	if r.handoffPhase == handoffFinalizing {
+		reason = r.finalizationReason
 	}
 	if r.err != nil {
 		reason = "execution_error"
@@ -524,16 +597,7 @@ type Result struct {
 	Handoff         *Handoff
 }
 
-type Handoff struct {
-	VerificationChecks []VerificationCheck
-	Summary            string
-	Evidence           []string
-	EvidenceIDs        []string
-	Files              []string
-	Verification       string
-	Unfinished         []string
-	Risks              []string
-}
+type Handoff = protocol.TaskReport
 
 type runMeta struct {
 	totalTokens     int
@@ -564,11 +628,16 @@ func buildResult(rawOutput string, meta runMeta) *Result {
 }
 
 func buildHandoffResult(handoff Handoff, meta runMeta) *Result {
-	result := newResult(StatusCompleted, formatHandoff(handoff), meta)
+	status := StatusCompleted
+	if protocol.HandoffIncomplete(handoff.Outcome, handoff.Unfinished) {
+		status = StatusPartial
+	}
+	result := newResult(status, formatHandoff(handoff), meta)
 	copy := handoff
-	copy.VerificationChecks = append([]VerificationCheck(nil), handoff.VerificationChecks...)
-	for i := range copy.VerificationChecks {
-		copy.VerificationChecks[i].Limitations = append([]string(nil), handoff.VerificationChecks[i].Limitations...)
+	copy.Checks = append([]VerificationCheck(nil), handoff.Checks...)
+	copy.VerificationGaps = append([]string(nil), handoff.VerificationGaps...)
+	for i := range copy.Checks {
+		copy.Checks[i].Limitations = append([]string(nil), handoff.Checks[i].Limitations...)
 	}
 	copy.Evidence = append([]string(nil), handoff.Evidence...)
 	copy.EvidenceIDs = append([]string(nil), handoff.EvidenceIDs...)
@@ -582,7 +651,11 @@ func buildHandoffResult(handoff Handoff, meta runMeta) *Result {
 func formatHandoff(handoff Handoff) string {
 	var out strings.Builder
 	out.WriteString(handoff.Summary)
-	writeVerificationChecks(&out, handoff.VerificationChecks)
+	if handoff.Outcome != "" {
+		fmt.Fprintf(&out, "\n\nHandoff outcome: %s\nNext action: %s", handoff.Outcome, handoff.NextAction)
+	}
+	writeVerificationChecks(&out, handoff.Checks)
+	writeHandoffList(&out, "Verification gaps", handoff.VerificationGaps)
 	writeHandoffList(&out, "Evidence", handoff.Evidence)
 	writeHandoffList(&out, "Execution evidence IDs", handoff.EvidenceIDs)
 	writeHandoffList(&out, "Files", handoff.Files)

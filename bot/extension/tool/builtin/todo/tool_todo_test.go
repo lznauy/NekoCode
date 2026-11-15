@@ -13,7 +13,7 @@ func TestTodoWriteTool(t *testing.T) {
 		return protocol.TodoPlan{ID: "fixture", Items: items}, err
 	})
 	params := tw.Parameters()
-	if len(params) != 2 || params[0].Type != "array" || params[0].Items == nil || params[0].Items.Properties["status"].Enum[1] != "in_progress" {
+	if len(params) != 3 || params[0].Type != "array" || params[0].Items == nil || params[0].Items.Properties["status"].Enum[1] != "in_progress" {
 		t.Fatalf("todo schema does not describe structured items: %+v", params)
 	}
 

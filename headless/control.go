@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"nekocode/util/modelbudget"
 )
 
 func (s *server) respond(id string, body any, err error) error {
@@ -59,22 +60,41 @@ func (s *server) control(ctx context.Context, f frame) error {
 				}
 			}
 		}
+		if raw, ok := fields["model_call_budget"]; ok {
+			var limit int
+			if json.Unmarshal(raw, &limit) != nil {
+				return s.respond(f.RequestID, nil, errors.New("model_call_budget must be an integer"))
+			}
+			budget, err := modelbudget.New(limit)
+			if err != nil {
+				return s.respond(f.RequestID, nil, err)
+			}
+			s.callBudget = budget
+		}
 		s.initialized = true
 		return s.respond(f.RequestID, map[string]any{"protocol_version": ProtocolVersion, "capabilities": s.capabilities(), "server": s.metadata(ctx)}, nil)
 	case "interrupt":
 		cancelled := []string{}
-		if s.active != nil {
-			if err := s.backend.CancelRun(ctx, s.active.runID); err != nil {
-				return s.respond(f.RequestID, nil, err)
-			}
-			if err := s.rejectPending(ctx); err != nil {
+		result, err := s.backend.CancelRunWithResult(ctx, "")
+		if err != nil {
+			return s.respond(f.RequestID, nil, err)
+		}
+		if result.RunID != "" {
+			if err := s.rejectRunPending(ctx, result.RunID); err != nil {
 				return err
 			}
 		}
 		if request.CancelQueued {
-			cancelled = s.clearQueue()
+			var err error
+			cancelled, err = s.cancelQueuedTurns(ctx)
+			if err != nil {
+				return s.respond(f.RequestID, nil, err)
+			}
 		}
 		queued := []string{}
+		for _, turn := range s.pendingTurns {
+			queued = append(queued, turn.input.id)
+		}
 		for _, input := range s.queue {
 			queued = append(queued, input.id)
 		}

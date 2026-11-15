@@ -240,7 +240,7 @@ func (h runHost) Ask(request QuestionRequest) QuestionReply {
 	return reply
 }
 
-func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runLease, execution *runExecution) {
+func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runLease, execution *runExecution, sessionID string) {
 	ctx = protocol.WithExecutionIdentity(ctx, protocol.ExecutionIdentity{RunID: string(runID)})
 	stopMetricsUpdates := func() {}
 	withMetrics := false
@@ -270,7 +270,7 @@ func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runL
 		source = SourceRef{Kind: "runtime"}
 	}
 	if !lease.guard(func() {
-		r.events.Publish(Event{RunID: runID, Type: EventRunStarted, Source: source})
+		r.events.Publish(Event{RunID: runID, SessionID: sessionID, Type: EventRunStarted, Source: source})
 	}) {
 		return
 	}

@@ -252,6 +252,9 @@ func (r *loopRunner) publishSummary(result *RunResult, callback RunCallback) {
 	if r.stepLimitHit {
 		reason = "step_limit"
 	}
+	if a := r.agent; a.run.todoPartialCloseout {
+		reason = "incomplete"
+	}
 	if result.Error != nil {
 		reason = "execution_error"
 	}

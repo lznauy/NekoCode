@@ -9,6 +9,11 @@ import (
 // DefaultMaxConcurrentTasks is used when no delegated execution limit is configured.
 const DefaultMaxConcurrentTasks = 8
 
+// MaxRequestedSteps bounds model-selected budgets, independently of a host
+// profile's larger allowed ceiling. Zero in TaskSpec means omitted.
+const MaxRequestedSteps = 150
+const DefaultBackgroundSteps = 12
+
 // TaskStatus is the tool-layer view of delegated task completion.
 type TaskStatus int
 
@@ -37,6 +42,9 @@ type TaskSpec struct {
 	ReadOnly      bool
 	Isolation     string
 	ResumeID      string
+	ForkID        string
+	MaxSteps      int
+	ReviewPolicy  string
 	Title         string
 	Prompt        string
 	Profile       string
@@ -79,6 +87,8 @@ type TaskSummary struct {
 	WorkspaceKind  string              `json:"workspace_kind,omitempty"`
 	QueueReason    string              `json:"queue_reason,omitempty"`
 	SchedulingNote string              `json:"scheduling_note,omitempty"`
+	Delivery       string              `json:"delivery,omitempty"`
+	Notified       bool                `json:"notified"`
 	Isolation      string              `json:"isolation,omitempty"`
 	Recorded       bool                `json:"recorded"`
 	Title          string              `json:"title,omitempty"`

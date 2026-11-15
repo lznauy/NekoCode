@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"nekocode/bot/extension/tool/runtime/toolutil"
@@ -26,25 +24,21 @@ func RunHost(ctx context.Context, command string, timeout time.Duration) (string
 
 	var output []byte
 	var err error
-	if runtime.GOOS != "windows" {
-		// Kill the whole process group on timeout/cancel so nested children
-		// (e.g. `bash -c 'sleep 30'`) cannot outlive the deadline.
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		var buf strings.Builder
-		cmd.Stdout = &buf
-		cmd.Stderr = &buf
-		if err = cmd.Start(); err == nil {
-			// Registered after Start so cmd.Process is stable when the
-			// callback reads it.
-			stop := context.AfterFunc(cmdCtx, func() {
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			})
-			defer stop()
-			err = cmd.Wait()
-			output = []byte(buf.String())
-		}
-	} else {
-		output, err = cmd.CombinedOutput()
+	// Kill the whole process group on timeout/cancel so nested children
+	// (e.g. `bash -c 'sleep 30'`) cannot outlive the deadline.
+	cmd.SysProcAttr = hostProcessAttributes()
+	var buf strings.Builder
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	if err = cmd.Start(); err == nil {
+		// Registered after Start so cmd.Process is stable when the
+		// callback reads it.
+		stop := context.AfterFunc(cmdCtx, func() {
+			_ = signalProcessTree(cmd.Process, true)
+		})
+		defer stop()
+		err = cmd.Wait()
+		output = []byte(buf.String())
 	}
 	cleaned := toolutil.StripAnsi(string(output))
 	cleaned = truncateCapturedOutput(cleaned)

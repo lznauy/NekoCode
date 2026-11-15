@@ -568,3 +568,36 @@ func TestSubagentDemandOwnershipPersistsBeforeFirstAttempt(t *testing.T) {
 		t.Fatal("failed change mutated ownership")
 	}
 }
+
+func TestBackgroundBeginPersistsAdmittedIdentityAndResultOwnership(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	child, err := OpenSubagent("parent", "worker", "/project", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := child.BeginBackground("admitted-first", "executor", "first", nil); err != nil {
+		t.Fatal(err)
+	}
+	info, err := ReadSubagentMetadata("parent", "worker")
+	if err != nil || info.CurrentAttemptID != "admitted-first" || info.LatestAttempt == nil || !info.LatestAttempt.RuntimeResult {
+		t.Fatalf("background identity not durable before execution: %+v %v", info, err)
+	}
+	if err := child.Close(); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := OpenSubagent("parent", "worker", "/project", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resumed.Close()
+	if err := resumed.BeginBackground("admitted-first", "executor", "duplicate", nil); err == nil {
+		t.Fatal("attempt identity was reused")
+	}
+	if err := resumed.BeginBackground("admitted-second", "executor", "second", nil); err != nil {
+		t.Fatal(err)
+	}
+	info, err = ReadSubagentMetadata("parent", "worker")
+	if err != nil || info.CurrentAttemptID != "admitted-second" || info.RunCount != 2 || !info.LatestAttempt.RuntimeResult {
+		t.Fatalf("resumed attempt lost host identity: %+v %v", info, err)
+	}
+}

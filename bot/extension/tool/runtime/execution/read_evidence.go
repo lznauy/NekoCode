@@ -20,7 +20,7 @@ type readEvidence struct {
 	visible  bool
 }
 
-// ReadEvidence belongs to one executor. It retains hashes, never file content,
+// ReadEvidence tracks content knowledge from read and successful mutation results for one executor. It retains hashes, never file content,
 // and is not copied with file caches or restored from session data.
 type ReadEvidence struct {
 	mu       sync.Mutex
@@ -38,7 +38,7 @@ func FileReadsFromContext(ctx context.Context) *ReadEvidence {
 	return nil
 }
 
-// Record creates a pending, process-local read receipt. Only delivery of its
+// Record creates a pending, process-local content-version receipt. Only delivery of its
 // exact preview can activate it; producer/provider call IDs are not identities.
 func (r *ReadEvidence) Record(path string, data []byte, preview string) string {
 	if r == nil {

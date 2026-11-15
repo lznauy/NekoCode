@@ -13,7 +13,7 @@ func EstimateEventBytes(ev core.Event) int { return eventBytes(ev) }
 // Count frequent text payloads directly. Less frequent structured controls
 // use their encoded size so large questions or approval arguments count too.
 func eventBytes(ev core.Event) int {
-	n := 256 + len(ev.ID) + len(ev.RunID) + len(ev.Source.Kind) + len(ev.Source.ID)
+	n := 256 + len(ev.ID) + len(ev.RunID) + len(ev.SessionID) + len(ev.Source.Kind) + len(ev.Source.ID)
 	switch p := ev.Payload.(type) {
 	case core.DeltaPayload:
 		n += len(p.Delta)

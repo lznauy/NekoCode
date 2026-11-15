@@ -1,8 +1,11 @@
+//go:build linux
+
 package impl
 
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"syscall"
@@ -35,6 +38,7 @@ func runChild(
 	sysproc *syscall.SysProcAttr,
 	unavailableMatch func(stderr string, runErr error) bool,
 	unavailReason string,
+	files ...[]*os.File,
 ) (string, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -43,6 +47,9 @@ func runChild(
 	cmd.Env = env
 	cmd.Dir = dir
 	cmd.SysProcAttr = sysproc
+	if len(files) > 0 {
+		cmd.ExtraFiles = files[0]
+	}
 
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout

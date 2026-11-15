@@ -10,6 +10,15 @@ import (
 	"nekocode/protocol"
 )
 
+func TestUnauthenticatedEndpointOmitsAuthorization(t *testing.T) {
+	if _, exists := New("", "", "test-model").headers()["Authorization"]; exists {
+		t.Fatal("empty API key produced an authentication header")
+	}
+	if got := New("secret", "", "test-model").headers()["Authorization"]; got != "Bearer secret" {
+		t.Fatalf("configured authentication changed: %q", got)
+	}
+}
+
 func TestBuildBodyOmitsInternalToolErrorFlag(t *testing.T) {
 	c := New("", "", "test-model")
 	body := c.buildBody([]types.Message{

@@ -11,6 +11,7 @@ import (
 	"nekocode/bot/extension/tool/runtime/workspace"
 	"nekocode/bot/provider/types"
 	"nekocode/protocol"
+	"nekocode/util/secrets"
 	textutil "nekocode/util/text"
 )
 
@@ -91,7 +92,7 @@ func (s Source) Read(ctx context.Context, sessionID string, q Query, base int, t
 		}
 		currentText := current
 		if ref.Source == "tool" {
-			currentText = textutil.NormalizeTerminalOutput(currentText)
+			currentText = textutil.NormalizeTerminalOutput(secrets.Redact(currentText))
 		}
 		if types.SkillContentHash(currentText) != ref.ContentHash {
 			out.Status = "changed"

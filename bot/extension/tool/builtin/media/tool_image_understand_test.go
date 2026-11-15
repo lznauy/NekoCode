@@ -76,6 +76,39 @@ func TestImageUnderstandToolOpenAI(t *testing.T) {
 	}
 }
 
+func TestImageUnderstandAuthenticationIsOptional(t *testing.T) {
+	for _, protocol := range []string{"openai", "anthropic"} {
+		for _, key := range []string{"", "secret"} {
+			t.Run(protocol+"/"+key, func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if key == "" {
+						for _, name := range []string{"Authorization", "X-Api-Key"} {
+							if _, exists := r.Header[name]; exists {
+								t.Errorf("empty credential sent as %s", name)
+							}
+						}
+					} else if protocol == "openai" && r.Header.Get("Authorization") != "Bearer secret" || protocol == "anthropic" && r.Header.Get("x-api-key") != key {
+						t.Error("configured credential was not delivered")
+					}
+					w.Header().Set("Content-Type", "application/json")
+					if protocol == "openai" {
+						_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"visible"}}]}`)
+					} else {
+						_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"visible"}]}`)
+					}
+				}))
+				defer server.Close()
+				ctx, path := imageUnderstandTestContext(t)
+				tool := NewImageUnderstandTool([]config.ImageUnderstandConfig{{Name: "fast", Protocol: protocol, APIKey: key, Model: "vision", BaseURL: server.URL}})
+				out, err := tool.Execute(ctx, map[string]any{"path": path})
+				if err != nil || out.Text != "visible" {
+					t.Fatalf("out=%q err=%v", out.Text, err)
+				}
+			})
+		}
+	}
+}
+
 func TestImageUnderstandToolAccurateModeSelectsAccurateModel(t *testing.T) {
 	var received map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -172,12 +205,12 @@ func TestImageUnderstandingStreamErrors(t *testing.T) {
 	}
 }
 
-func TestImageUnderstandingStreamFinishesWithoutWaitingForEOF(t *testing.T) {
+func TestImageUnderstandingStreamDoneDoesNotWaitForEOF(t *testing.T) {
 	r, w := io.Pipe()
 	defer r.Close()
 	defer w.Close()
 	go func() {
-		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial OCR\"},\"finish_reason\":\"length\"}]}\n\n")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial OCR\"},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n")
 	}()
 	done := make(chan error, 1)
 	go func() {

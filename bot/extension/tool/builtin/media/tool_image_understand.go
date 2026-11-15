@@ -15,12 +15,15 @@ import (
 	"strings"
 	"time"
 
+	"nekocode/bot/calllog"
 	"nekocode/bot/config"
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/toolutil"
 	"nekocode/bot/extension/tool/runtime/workspace"
+	providertypes "nekocode/bot/provider/types"
 	"nekocode/logger"
 	utilhttp "nekocode/util/http"
+	"nekocode/util/modelbudget"
 	utilurl "nekocode/util/url"
 )
 
@@ -56,7 +59,7 @@ func NewImageUnderstandTool(models []config.ImageUnderstandConfig) *ImageUnderst
 func (t *ImageUnderstandTool) Name() string { return "image_understand" }
 
 func (t *ImageUnderstandTool) Description() string {
-	return "Quickly read 1–4 local images without deep reasoning. Batch related screenshots with paths in one call; results follow input order. Use fast for ordinary screenshots and accurate to preserve small text and original resolution."
+	return "Inspect 1–4 local images. Start with fast for ordinary screenshots; accurate preserves small text/resolution. Batch related views and ask a focused question. Reuse findings for unchanged source; additional inspection should resolve a specific remaining issue. Available model names: " + strings.Join(t.modelNames(), ", ") + ". Omit model to select the configured default for mode; never read application configuration to discover models. Use the model enum below. A quota failure needs a changed model/mode or a later retry, not blind repetition."
 }
 
 func (t *ImageUnderstandTool) Parameters() []core.Parameter {
@@ -65,7 +68,7 @@ func (t *ImageUnderstandTool) Parameters() []core.Parameter {
 		{Name: "paths", Type: "array", Items: &core.Schema{Type: "string"}, Description: "1–4 related local images in order. Combined source size must not exceed 20 MiB. Provide either path or paths."},
 		{Name: "prompt", Type: "string", Required: false, Description: "Focused question or analysis instruction. A concise mode-specific prompt is used when omitted."},
 		{Name: "mode", Type: "string", Required: false, Enum: []string{string(imageUnderstandModeFast), string(imageUnderstandModeAccurate)}, Description: "fast (default) resizes large images and limits output; accurate preserves the original image and uses the configured accurate model."},
-		{Name: "model", Type: "string", Required: false, Description: "Image understanding model name from config. Uses the first configured model if omitted."},
+		{Name: "model", Type: "string", Required: false, Enum: t.modelNames(), Description: "Optional name from the available enum. Omit to select the mode default; no configuration file access is needed."},
 		{Name: "max_tokens", Type: "integer", Description: "Output limit, 1–4096 tokens. Defaults to 1024; increase only for full OCR or detailed extraction."},
 	}
 }
@@ -120,7 +123,7 @@ func (t *ImageUnderstandTool) PermissionPlan(args map[string]any, workspaceRoot 
 	}
 }
 
-func (t *ImageUnderstandTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
+func (t *ImageUnderstandTool) Execute(ctx context.Context, args map[string]any) (output core.ToolOutput, returnErr error) {
 	started := time.Now()
 	paths, err := toolutil.ImageUnderstandingPaths(args)
 	if err != nil {
@@ -184,6 +187,23 @@ func (t *ImageUnderstandTool) Execute(ctx context.Context, args map[string]any) 
 		}
 	}
 
+	if err := modelbudget.Admit(modelbudget.WithRole(ctx, modelbudget.Work, "")); err != nil {
+		return core.ToolOutput{}, err
+	}
+	usage := &imageCallUsage{}
+	ctx = context.WithValue(ctx, imageCallUsageKey{}, usage)
+	modelStart := time.Now()
+	defer func() {
+		sessionID := calllog.SessionFromContext(ctx)
+		if manager, ok := workspace.FromContext(ctx); ok && sessionID == "" {
+			sessionID = manager.SessionID()
+		}
+		record := calllog.NewRecord(ctx, "image_understand", sessionID, modelStart)
+		record.ToolCallID = core.ToolCallIDFromContext(ctx)
+		record.UsageReported = &usage.reported
+		record.SetOutcome(usage.usage, &providertypes.RequestMeta{Model: cfg.Model, Protocol: protocol, BaseURL: cfg.BaseURL}, returnErr)
+		writeImageCallRecord(record)
+	}()
 	switch protocol {
 	case "openai":
 		toolText, toolErr := t.executeOpenAIUnderstanding(ctx, cfg, prompt, images, maxTokens, onText)
@@ -252,10 +272,10 @@ func (t *ImageUnderstandTool) resolveUnderstandModel(args map[string]any, mode i
 				return model, nil
 			}
 		}
-		return config.ImageUnderstandConfig{}, fmt.Errorf("image understand model %q is not configured", name)
+		return config.ImageUnderstandConfig{}, fmt.Errorf("image understand model %q is not configured; choose from %v or omit model", name, t.modelNames())
 	}
 	if len(t.models) == 0 {
-		return config.ImageUnderstandConfig{}, fmt.Errorf("no image understand models configured — add image_understand_models in ~/.nekocode/config.json")
+		return config.ImageUnderstandConfig{}, fmt.Errorf("no image understanding models are available; report the configuration blocker to the user")
 	}
 	for _, model := range t.models {
 		if strings.EqualFold(strings.TrimSpace(model.Name), string(mode)) {
@@ -263,7 +283,7 @@ func (t *ImageUnderstandTool) resolveUnderstandModel(args map[string]any, mode i
 		}
 	}
 	if mode == imageUnderstandModeAccurate {
-		return config.ImageUnderstandConfig{}, fmt.Errorf("accurate image understanding model is not configured — add a model named %q to image_understand_models or pass model explicitly", imageUnderstandModeAccurate)
+		return config.ImageUnderstandConfig{}, fmt.Errorf("accurate image understanding model is not configured; use fast or select an available model: %v", t.modelNames())
 	}
 	return t.models[0], nil
 }
@@ -358,13 +378,35 @@ func (t *ImageUnderstandTool) post(ctx context.Context, endpoint string, headers
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
-		data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-		if err != nil {
-			return nil, err
-		}
-		return nil, fmt.Errorf("image model request failed (%s): %s", resp.Status, strings.TrimSpace(string(data)))
+		return nil, imageHTTPError(resp.StatusCode, resp.Body)
 	}
 	return resp, nil
+}
+
+// Provider messages may echo credentials or request contents. Expose only known
+// error categories, keeping HTTP status usable even for unknown response shapes.
+func imageHTTPError(status int, body io.Reader) error {
+	const limit = 16 << 10
+	diagnostic := "image model request failed"
+	data, err := io.ReadAll(io.LimitReader(body, limit+1))
+	var response struct {
+		Error struct {
+			Code string `json:"code"`
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if err == nil && len(data) <= limit && json.Unmarshal(data, &response) == nil {
+		for _, category := range []string{response.Error.Code, response.Error.Type} {
+			switch category {
+			case "invalid_request_error", "authentication_error", "permission_error",
+				"not_found_error", "rate_limit_error", "api_error", "overloaded_error",
+				"invalid_api_key", "model_not_found", "insufficient_quota",
+				"context_length_exceeded", "unsupported_parameter", "invalid_image_format":
+				return utilhttp.NewHTTPError(status, diagnostic+": "+category)
+			}
+		}
+	}
+	return utilhttp.NewHTTPError(status, diagnostic)
 }
 
 func newImageUnderstandHTTPClient() *http.Client {
@@ -395,3 +437,35 @@ func imageUnderstandEndpoint(baseURL, protocol string) (string, error) {
 	}
 	return utilurl.JoinURLPathWithVersion(baseURL, "v1", "chat/completions"), nil
 }
+
+func (t *ImageUnderstandTool) modelNames() []string {
+	names := make([]string, 0, len(t.models))
+	seen := map[string]bool{}
+	for _, m := range t.models {
+		if m.Name != "" && !seen[m.Name] {
+			names = append(names, m.Name)
+			seen[m.Name] = true
+		}
+	}
+	return names
+}
+
+type imageCallUsageKey struct{}
+type imageCallUsage struct {
+	usage    providertypes.StreamUsage
+	reported bool
+}
+
+func observeImageUsage(ctx context.Context, usage *providertypes.StreamUsage) {
+	if usage == nil {
+		return
+	}
+	if record, ok := ctx.Value(imageCallUsageKey{}).(*imageCallUsage); ok {
+		record.reported = true
+		normalized := *usage
+		normalized.Normalize()
+		record.usage.Merge(&normalized)
+	}
+}
+
+var writeImageCallRecord = calllog.Write

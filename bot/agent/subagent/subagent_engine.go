@@ -264,7 +264,7 @@ func profileAllowsCall(allowed map[string]struct{}, call core.ToolCallItem) bool
 func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []string, workflow string, addTokens func(int, int), recordCall func(types.StreamUsage), sessionID string, phase func(string), output RunConfig) ([]core.ToolCallItem, string, error) {
 	ctx = protocol.WithPolicyConfiguration(ctx, output.guard.Configuration())
 	toolDefs := e.filteredToolDefs(allowed)
-	request := ctxmgr.ModelRequest{Tools: toolDefs, OutputTokens: provider.MaxOutputTokensFor(e.llmClient)}
+	request := ctxmgr.ModelRequest{HandoffOnly: output.finalizing, Tools: toolDefs, OutputTokens: provider.MaxOutputTokensFor(e.llmClient)}
 	if read, bound := refbridge.ReaderFromContext(ctx); bound && read != nil && slices.Contains(output.Profile.Tools, "context_refs") {
 		page, err := read(ctx, refbridge.Query{Limit: refbridge.MaxPageRecords})
 		if err != nil {
@@ -381,20 +381,23 @@ func (e *Engine) filteredToolDefs(allowed []string) []types.ToolDef {
 		Type: "function",
 		Function: types.FunctionDef{
 			Name:        submitResultToolName,
-			Description: "Submit the complete delegated-task handoff and end the sub-agent run. This reserved internal lifecycle event is not an external capability and must be the only tool call in the batch.",
+			Description: "End this run with a scoped handoff; call alone. Complete: outcome=complete, unfinished=[]. Partial: supply outcome, next_action and unfinished. Use risks=[] only when assessed and none remain.",
 			Parameters: types.Parameters{
 				Type: "object",
 				Properties: map[string]types.Property{
-					"summary":             {Type: "string", Description: "Complete conclusion or changes made."},
+					"summary":             {Type: "string", Description: "Concise conclusion; reference full logs."},
 					"evidence":            {Type: "array", Description: "Key evidence supporting the summary.", Items: &types.Property{Type: "string"}},
-					"evidence_ids":        {Type: "array", Description: "Optional, at most 16 unique evidence reference IDs returned by evidence for this attempt. Associations do not prove task completion or tests passed. Omit when no receipts are available.", Items: &types.Property{Type: "string"}},
+					"evidence_ids":        {Type: "array", Description: "At most 16 evidence IDs from this attempt; not proof of success.", Items: &types.Property{Type: "string"}},
 					"files":               {Type: "array", Description: "Files involved in the work.", Items: &types.Property{Type: "string"}},
 					"verification_checks": verificationChecksSchema(),
+					"outcome":             handoffOutcomeSchema(),
+					"next_action":         {Type: "string", Description: "Non-complete: next step and stop condition, prerequisite or decision. Max 1024 bytes; no auto-resume."},
 					"verification":        {Type: "string", Description: "Verification actually performed and its result; explicitly state when not run."},
-					"unfinished":          {Type: "array", Description: "Unfinished items, or an empty array.", Items: &types.Property{Type: "string"}},
+					"unfinished":          {Type: "array", Description: "Actionable work remaining in scope; [] means complete. Put validation limitations in verification_gaps.", Items: &types.Property{Type: "string"}},
+					"verification_gaps":   {Type: "array", Description: "Unverified assumptions, blocked tests and out-of-scope checks; do not imply unfinished scope.", Items: &types.Property{Type: "string"}},
 					"risks":               {Type: "array", Description: "Remaining risks, or an empty array.", Items: &types.Property{Type: "string"}},
 				},
-				Required: []string{"summary", "evidence", "files", "verification", "unfinished", "risks"},
+				Required: []string{"summary", "evidence", "files", "verification", "unfinished", "risks", "outcome"},
 			},
 		},
 	})

@@ -15,6 +15,9 @@ import (
 
 // ModelRequest describes one complete provider request projection.
 type ModelRequest struct {
+	// HandoffOnly avoids spending an extra model request on automatic compaction
+	// during finalization. Oversized input still fails closed; history is retained.
+	HandoffOnly        bool
 	TaskReferences     TaskReferences
 	ContextReferences  refbridge.Page
 	EvidenceReferences refbridge.Page

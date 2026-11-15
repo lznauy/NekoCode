@@ -42,6 +42,7 @@ type runRecording struct {
 }
 
 type recordedEvent struct {
+	SessionID   string          `json:"session_id,omitempty"`
 	Version     string          `json:"version,omitempty"`
 	ID          string          `json:"id"`
 	Sequence    uint64          `json:"sequence,omitempty"`
@@ -378,6 +379,7 @@ func (r *EventRecorder) writeEventLocked(run *runRecording, ev core.Event) error
 func recordedEventFrom(ev core.Event) recordedEvent {
 	payload, payloadType := marshalPayload(ev.Payload)
 	return recordedEvent{
+		SessionID:   ev.SessionID,
 		Version:     ev.Version,
 		ID:          ev.ID,
 		Sequence:    ev.Sequence,
@@ -594,14 +596,15 @@ func (r recordedEvent) Event() (core.Event, error) {
 		return core.Event{}, err
 	}
 	return core.Event{
-		Version:  core.ProtocolVersion,
-		ID:       r.ID,
-		Sequence: r.Sequence,
-		RunID:    r.RunID,
-		Type:     r.Type,
-		Source:   r.Source,
-		Time:     r.Time,
-		Payload:  payload,
+		SessionID: r.SessionID,
+		Version:   core.ProtocolVersion,
+		ID:        r.ID,
+		Sequence:  r.Sequence,
+		RunID:     r.RunID,
+		Type:      r.Type,
+		Source:    r.Source,
+		Time:      r.Time,
+		Payload:   payload,
 	}, nil
 }
 

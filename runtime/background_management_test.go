@@ -38,12 +38,12 @@ func TestBackgroundDependenciesDoNotOccupySlotsAndPinUpstream(t *testing.T) {
 	defer rt.Close()
 	release := make(chan struct{})
 	defer close(release)
-	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "A", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, _ protocol.BackgroundHost) (string, error) {
+	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "A", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, _ protocol.BackgroundHost) (protocol.BackgroundResult, error) {
 		select {
 		case <-release:
-			return "done", nil
+			return protocol.BackgroundResult{Text: "done"}, nil
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return protocol.BackgroundResult{Text: ""}, ctx.Err()
 		}
 	}})
 	if err != nil {
@@ -51,7 +51,10 @@ func TestBackgroundDependenciesDoNotOccupySlotsAndPinUpstream(t *testing.T) {
 	}
 	var ran atomic.Int32
 	for _, id := range []string{"B", "C"} {
-		_, err = rt.background.submit(t.Context(), protocol.BackgroundWork{ID: id, SessionID: "session", ReadOnly: true, After: []string{"A"}, Run: func(context.Context, protocol.BackgroundHost) (string, error) { ran.Add(1); return "done", nil }})
+		_, err = rt.background.submit(t.Context(), protocol.BackgroundWork{ID: id, SessionID: "session", ReadOnly: true, After: []string{"A"}, Run: func(context.Context, protocol.BackgroundHost) (protocol.BackgroundResult, error) {
+			ran.Add(1)
+			return protocol.BackgroundResult{Text: "done"}, nil
+		}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -64,7 +67,9 @@ func TestBackgroundDependenciesDoNotOccupySlotsAndPinUpstream(t *testing.T) {
 	if active != 1 {
 		t.Fatalf("waiting tasks occupied slots: %d", active)
 	}
-	if _, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "A", SessionID: "session", After: []string{"B"}, Run: func(context.Context, protocol.BackgroundHost) (string, error) { return "", nil }}); err == nil {
+	if _, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "A", SessionID: "session", After: []string{"B"}, Run: func(context.Context, protocol.BackgroundHost) (protocol.BackgroundResult, error) {
+		return protocol.BackgroundResult{Text: ""}, nil
+	}}); err == nil {
 		t.Fatal("cycle/resume of leased dependency accepted")
 	}
 	if err := rt.CancelBackgroundTask(t.Context(), "session", "A"); err != nil {
@@ -84,17 +89,50 @@ func TestBackgroundDependenciesRunAfterSuccess(t *testing.T) {
 	defer rt.Close()
 	release := make(chan struct{})
 	done := make(chan struct{})
-	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "A", SessionID: "session", ReadOnly: true, Run: func(context.Context, protocol.BackgroundHost) (string, error) { <-release; return "ready", nil }})
+	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "A", SessionID: "session", ReadOnly: true, Run: func(context.Context, protocol.BackgroundHost) (protocol.BackgroundResult, error) {
+		<-release
+		return protocol.BackgroundResult{Text: "ready"}, nil
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "B", SessionID: "session", ReadOnly: true, After: []string{"A"}, Run: func(context.Context, protocol.BackgroundHost) (string, error) { close(done); return "done", nil }})
+	_, err = rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "B", SessionID: "session", ReadOnly: true, After: []string{"A"}, Run: func(context.Context, protocol.BackgroundHost) (protocol.BackgroundResult, error) {
+		close(done)
+		return protocol.BackgroundResult{Text: "done"}, nil
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	close(release)
 	awaitBackground(t, done)
 	waitBackgroundStatus(t, rt, "B", "completed")
+}
+
+func TestPartialBackgroundHandoffDoesNotSatisfyDependencies(t *testing.T) {
+	services := backgroundServices(t.TempDir())
+	services.Modes.Current = func() mode.ID { return mode.Standard }
+	rt := New(RunnerFunc(func(context.Context, string, RunHost) (string, error) { return "", nil }), services)
+	defer rt.Close()
+	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "unfinished", SessionID: "session", ReadOnly: true, Run: func(_ context.Context, host protocol.BackgroundHost) (protocol.BackgroundResult, error) {
+		host.Step(protocol.StepEvent{Action: protocol.StepActionSubAgentEnd, SubAgentStatus: "partial"})
+		return protocol.BackgroundResult{Text: "remaining regression not run"}, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitBackgroundStatus(t, rt, "unfinished", "partial")
+	var ran atomic.Int32
+	_, err = rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "dependent", SessionID: "session", ReadOnly: true, After: []string{"unfinished"}, Run: func(context.Context, protocol.BackgroundHost) (protocol.BackgroundResult, error) {
+		ran.Add(1)
+		return protocol.BackgroundResult{Text: "should not run"}, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitBackgroundStatus(t, rt, "dependent", "blocked")
+	if ran.Load() != 0 {
+		t.Fatal("unfinished upstream admitted dependent work")
+	}
 }
 func TestRetryBackgroundReviewDoesNotReplayWorker(t *testing.T) {
 	var reviews, workers atomic.Int32
@@ -105,7 +143,10 @@ func TestRetryBackgroundReviewDoesNotReplayWorker(t *testing.T) {
 		return "reviewed", nil
 	}), backgroundServices(t.TempDir()))
 	defer rt.Close()
-	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "A", SessionID: "session", ReadOnly: true, Run: func(context.Context, protocol.BackgroundHost) (string, error) { workers.Add(1); return "evidence", nil }})
+	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "A", SessionID: "session", ReadOnly: true, Run: func(context.Context, protocol.BackgroundHost) (protocol.BackgroundResult, error) {
+		workers.Add(1)
+		return protocol.BackgroundResult{Text: "evidence"}, nil
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,12 +201,12 @@ func TestBackgroundKeepsOriginOnSessionSwitch(t *testing.T) {
 	}
 	release := make(chan struct{})
 	started := make(chan struct{})
-	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "A", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, h protocol.BackgroundHost) (string, error) {
+	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "A", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, h protocol.BackgroundHost) (protocol.BackgroundResult, error) {
 		h.Step(protocol.StepEvent{Action: protocol.StepActionSubAgentStart, SubAgentAttemptID: "attempt", SubAgentStatus: "running"})
 		close(started)
 		<-release
 		h.(protocol.BackgroundUsageSink).Usage(protocol.BackgroundUsage{TotalTokens: 12})
-		return "origin evidence", nil
+		return protocol.BackgroundResult{Text: "origin evidence"}, nil
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -218,20 +259,20 @@ func TestBackgroundUsageCheckpointRecoveryAndRetiredTotals(t *testing.T) {
 	services.Modes.Current = func() mode.ID { return mode.Standard }
 	usageSaved, release := make(chan struct{}), make(chan struct{})
 	rt := New(RunnerFunc(func(context.Context, string, RunHost) (string, error) { return "", nil }), services)
-	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "usage", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, h protocol.BackgroundHost) (string, error) {
+	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "usage", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, h protocol.BackgroundHost) (protocol.BackgroundResult, error) {
 		sink := h.(protocol.BackgroundUsageSink)
 		if err := sink.Usage(protocol.BackgroundUsage{TotalTokens: 15, ToolUseCount: 2}); err != nil {
-			return "", err
+			return protocol.BackgroundResult{Text: ""}, err
 		}
 		if err := sink.Usage(protocol.BackgroundUsage{TotalTokens: 20, ToolUseCount: 3}); err != nil {
-			return "", err
+			return protocol.BackgroundResult{Text: ""}, err
 		}
 		close(usageSaved)
 		select {
 		case <-release:
-			return "done", nil
+			return protocol.BackgroundResult{Text: "done"}, nil
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return protocol.BackgroundResult{Text: ""}, ctx.Err()
 		}
 	}})
 	if err != nil {
@@ -264,13 +305,10 @@ func TestBackgroundUsageCheckpointRecoveryAndRetiredTotals(t *testing.T) {
 	}
 	close(release)
 	waitBackgroundStatus(t, rt, "usage", "completed")
-	rt.background.mu.Lock()
+	rt.background.lockMutation()
 	e := rt.background.entries["usage"]
-	rt.background.retireUsageLocked(e)
-	delete(rt.background.entries, "usage")
-	rt.background.order = nil
-	err = rt.background.saveLocked("session")
-	rt.background.mu.Unlock()
+	err = rt.background.removeTaskLocked(e)
+	rt.background.unlockMutation()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,9 +356,9 @@ func TestBackgroundReleasesCapturedResourcesForUnstartedTasks(t *testing.T) {
 			rt.background.entries["upstream"] = &backgroundEntry{BackgroundTask: BackgroundTask{ID: "upstream", SessionID: "session", Status: "running"}}
 			rt.background.order = append(rt.background.order, "upstream")
 			rt.background.mu.Unlock()
-			_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "dependent", SessionID: "session", ReadOnly: true, After: []string{"upstream"}, Release: func() { released.Add(1) }, Run: func(context.Context, protocol.BackgroundHost) (string, error) {
+			_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "dependent", SessionID: "session", ReadOnly: true, After: []string{"upstream"}, Release: func() { released.Add(1) }, Run: func(context.Context, protocol.BackgroundHost) (protocol.BackgroundResult, error) {
 				t.Error("unstarted task ran")
-				return "", nil
+				return protocol.BackgroundResult{Text: ""}, nil
 			}})
 			if err != nil {
 				rt.Close()
@@ -359,12 +397,13 @@ func TestRetiredResumeUsageDoesNotDoubleAfterRestart(t *testing.T) {
 	if err := rt.background.load("session"); err != nil {
 		t.Fatal(err)
 	}
-	rt.background.mu.Lock()
-	rt.background.retireUsageLocked(&backgroundEntry{BackgroundTask: BackgroundTask{ID: "resumed", SessionID: "session", Usage: BackgroundUsage{TotalTokens: 20, ToolUseCount: 2}}})
+	rt.background.lockMutation()
+	rt.background.retired["session"] = BackgroundUsage{TotalTokens: 20, ToolUseCount: 2}
+	rt.background.retiredByTask["session"] = map[string]BackgroundUsage{"resumed": {TotalTokens: 20, ToolUseCount: 2}}
 	rt.background.entries["resumed"] = &backgroundEntry{BackgroundTask: BackgroundTask{ID: "resumed", SessionID: "session", Status: "completed", Usage: BackgroundUsage{TotalTokens: 10, ToolUseCount: 1}}}
 	rt.background.order = []string{"resumed"}
 	err := rt.background.saveLocked("session")
-	rt.background.mu.Unlock()
+	rt.background.unlockMutation()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,11 +419,13 @@ func TestRetiredResumeUsageDoesNotDoubleAfterRestart(t *testing.T) {
 	}
 
 	// Retire the resumed attempt again, then recover a newer canonical checkpoint.
-	recovered.background.mu.Lock()
-	recovered.background.retireUsageLocked(recovered.background.entries["resumed"])
+	recovered.background.lockMutation()
+	usage := recovered.background.entries["resumed"].Usage
+	recovered.background.retired["session"] = addBackgroundUsage(recovered.background.retired["session"], usage)
+	recovered.background.retiredByTask["session"]["resumed"] = addBackgroundUsage(recovered.background.retiredByTask["session"]["resumed"], usage)
 	recovered.background.entries["resumed"].Usage = BackgroundUsage{TotalTokens: 5, ToolUseCount: 1}
 	err = recovered.background.saveLocked("session")
-	recovered.background.mu.Unlock()
+	recovered.background.unlockMutation()
 	if err != nil {
 		t.Fatal(err)
 	}

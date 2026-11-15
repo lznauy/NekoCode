@@ -108,14 +108,14 @@ func TestProcessListAndRuntimeSummary(t *testing.T) {
 	}
 }
 
-func TestDefaultProcessWaitAndWatchHaveNoPeriodicWakeup(t *testing.T) {
+func TestProcessObservationHonorsEarlierCallerCancellation(t *testing.T) {
 	for _, event := range []string{"exit", "output"} {
 		t.Run(event, func(t *testing.T) {
 			tool := testShellTool()
 			cleanupShellTool(t, tool)
 			process := NewProcessTool(tool)
-			if process.waitDuration() != 0 {
-				t.Fatal("default process monitoring still samples on a periodic deadline")
+			if process.waitDuration() != defaultProcessObservationWait {
+				t.Fatal("default process observation budget changed")
 			}
 			_, err := tool.ExecuteWithPermission(t.Context(), map[string]any{"command": "sleep 5", "name": "quiet"}, permReq())
 			if err != nil {
@@ -135,7 +135,7 @@ func TestDefaultProcessWaitAndWatchHaveNoPeriodicWakeup(t *testing.T) {
 	}
 }
 
-func TestUnboundedProcessWaitReturnsOnlyAtRealExit(t *testing.T) {
+func TestBoundedProcessWaitReturnsAtEarlierRealExit(t *testing.T) {
 	tool := testShellTool()
 	cleanupShellTool(t, tool)
 	process := NewProcessTool(tool)

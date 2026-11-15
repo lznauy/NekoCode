@@ -10,6 +10,9 @@ import (
 	"nekocode/bot/extension/tool/runtime/toolutil"
 )
 
+const defaultProcessObservationWait = 30 * time.Second
+const maxProcessObservationWait = 2 * time.Minute
+
 // ProcessTool operates on commands that shell has already returned as managed
 // tasks. Waiting is event-driven inside the runtime; the model never polls.
 type ProcessTool struct {
@@ -26,13 +29,14 @@ func (t *ProcessTool) Name() string { return "process" }
 func (t *ProcessTool) Description() string {
 	return "Manage a still-running task returned by shell. " +
 		"Use wait when subsequent work needs the command to finish, watch when it needs the next output or exit event, list for recovery or inspection, and stop to terminate it. " +
-		"wait and watch suspend inference until the requested event, cancellation or an explicit host wait budget; there is no periodic model wake-up. wait_timeout, when a host budget is supplied, leaves the process running. Reuse its task ID, never restart shell just because waiting expired. new_output_bytes measures captured output since observation, not CPU/work progress. Repeated unchanged_waits calls for diagnosis or justified waiting, not blind polling or automatic killing."
+		"wait and watch return on the requested event, cancellation or one bounded observation deadline (default 30 seconds, optional wait_timeout_ms capped at 120000). A larger value is capped, not rejected. wait_timeout leaves the process running; it does not mean the command failed. The host does not automatically poll or repeat the call. For a persistent server, check readiness rather than waiting for exit or assuming a new log line will arrive. Reuse its task ID, never restart shell just because waiting expired. new_output_bytes measures captured output since observation, not CPU/work progress. Repeated unchanged_waits calls for diagnosis or justified waiting, not blind polling or automatic killing."
 }
 
 func (t *ProcessTool) Parameters() []core.Parameter {
 	return []core.Parameter{
 		{Name: "action", Type: "string", Required: true, Enum: []string{"list", "wait", "watch", "stop"}, Description: "Operation to perform."},
 		{Name: "task", Type: "string", Required: false, Description: "Task name returned by shell. Required for wait, watch, and stop."},
+		{Name: "wait_timeout_ms", Type: "number", Required: false, Description: "Optional positive observation budget in milliseconds; values over 120000 are capped. Default 30000. Only wait/watch. Expiry returns running state without terminating the process. This is separate from shell.timeout_ms, which is a hard lifetime."},
 		{Name: "event", Type: "string", Required: false, Enum: []string{"output", "exit"}, Description: "Event for watch; omit for other actions."},
 	}
 }
@@ -50,6 +54,25 @@ func (t *ProcessTool) Execute(ctx context.Context, args map[string]any) (core.To
 		return core.ToolOutput{}, err
 	}
 	action = strings.ToLower(strings.TrimSpace(action))
+	observationWait := t.waitDuration()
+	waitCapped := false
+	if raw, supplied := args["wait_timeout_ms"]; supplied {
+		if action != "wait" && action != "watch" {
+			return core.ToolOutput{}, fmt.Errorf("wait_timeout_ms is only valid for wait/watch")
+		}
+		if raw == nil {
+			return core.ToolOutput{}, fmt.Errorf("wait_timeout_ms must be a positive number")
+		}
+		duration, err := optionalDurationArg(args, "wait_timeout_ms")
+		if err != nil {
+			return core.ToolOutput{}, err
+		}
+		if duration > maxProcessObservationWait {
+			duration = maxProcessObservationWait
+			waitCapped = true
+		}
+		observationWait = duration
+	}
 	registry := t.shell.registryOnce()
 	owner := t.shell.CurrentSessionID()
 	switch action {
@@ -65,31 +88,38 @@ func (t *ProcessTool) Execute(ctx context.Context, args map[string]any) (core.To
 	}
 	switch action {
 	case "wait":
-		result, err := registry.wait(ctx, owner, ref, t.waitDuration())
+		result, err := registry.wait(ctx, owner, ref, observationWait)
 		if err != nil {
 			return core.ToolOutput{}, err
 		}
-		return processToolOutput(result), nil
+		return withWaitCapNotice(processToolOutput(result), waitCapped), nil
 	case "watch":
 		event, err := toolutil.RequireStringArg(args, "event")
 		if err != nil {
 			return core.ToolOutput{}, err
 		}
-		result, err := registry.watch(ctx, owner, ref, strings.ToLower(strings.TrimSpace(event)), t.waitDuration())
+		result, err := registry.watch(ctx, owner, ref, strings.ToLower(strings.TrimSpace(event)), observationWait)
 		if err != nil {
 			return core.ToolOutput{}, err
 		}
-		return processToolOutput(result), nil
+		return withWaitCapNotice(processToolOutput(result), waitCapped), nil
 	default: // stop; other values were rejected above.
 		return registry.stop(owner, ref)
 	}
+}
+
+func withWaitCapNotice(output core.ToolOutput, capped bool) core.ToolOutput {
+	if capped {
+		output.Text = "wait_timeout_ms exceeded the observation limit; this call waited at most 120000 ms. The process remains managed normally.\n" + output.Text
+	}
+	return output
 }
 
 func (t *ProcessTool) waitDuration() time.Duration {
 	if t.waitTimeout > 0 {
 		return t.waitTimeout
 	}
-	return 0 // No periodic timeout: the host waits without sampling the model.
+	return defaultProcessObservationWait
 }
 
 func formatProcessResult(result processResult) string {
@@ -106,13 +136,10 @@ func formatProcessResult(result processResult) string {
 	}
 	if result.info.managed && result.info.status == "running" {
 		fmt.Fprintf(&b, "new_output_bytes: %d\nunchanged_waits: %d\n", result.observation.NewOutputBytes, result.observation.UnchangedWaits)
-		if result.observation.UnchangedWaits < 2 {
-			fmt.Fprintf(&b, "next_call: {\"action\":\"wait\",\"task\":%q}\n", result.info.name)
-		}
 		if result.observation.UnchangedWaits >= 2 {
 			b.WriteString("diagnostic_hint: Repeated waits captured no new output. This does not prove the process is stuck. Inspect the retained output/state and choose justified waiting, an explicit stop, or report a blocker. Do not blindly repeat waits or relaunch the command.\n")
 		} else if result.reason == "wait_timeout" {
-			b.WriteString("wait_hint: Only this observation wait expired; the process is still running. Continue managing this task, not a new shell launch.\n")
+			b.WriteString("wait_hint: Only this observation wait expired; the process is still running. For a persistent server, test service readiness instead of waiting for exit or another log line. Choose the next action using the evidence; do not blindly repeat waits or relaunch an existing process.\n")
 		}
 	}
 	if result.reason == "reused_running" {

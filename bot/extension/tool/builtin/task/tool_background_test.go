@@ -18,7 +18,7 @@ func TestSubmitUsesDedicatedExecutorWithoutProfileSelection(t *testing.T) {
 	tool := NewSubmitTool()
 	hasRequirements := false
 	for _, p := range tool.Parameters() {
-		if p.Name == "required_tools" && p.Required {
+		if p.Name == "required_tools" && !p.Required {
 			hasRequirements = true
 		}
 		if p.Name == "read_only" {
@@ -29,7 +29,7 @@ func TestSubmitUsesDedicatedExecutorWithoutProfileSelection(t *testing.T) {
 		}
 	}
 	if !hasRequirements {
-		t.Fatal("required tools are not part of the submission contract")
+		t.Fatal("required tools should be conditionally required for new tasks")
 	}
 	definition, _ := mode.Resolve(mode.SuperAgent)
 	ctx := protocol.WithBackgroundSubmitter(mode.WithSnapshot(t.Context(), definition.Snapshot), submitTestHost{})

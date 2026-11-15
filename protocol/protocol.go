@@ -191,8 +191,9 @@ type TodoItem struct {
 	Status  string `json:"status"`
 }
 
-// TodoUpdate selects a saved plan or replaces its complete list.
+// TodoUpdate selects a saved plan, replaces its list, or patches named steps.
 type TodoUpdate struct {
+	Patch      bool
 	PlanID     string
 	Items      []TodoItem
 	SelectOnly bool

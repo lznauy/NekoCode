@@ -120,7 +120,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.Content == "" {
-			return m, readClipboardImage()
+			return m, m.readClipboardImage()
 		}
 		input, cmd := m.Input.Update(msg)
 		m.Input = input

@@ -41,7 +41,7 @@ func (r *turnRunner) continueUnfinishedPlan() bool {
 		return false
 	}
 	status := a.deps.ctxMgr.Status()
-	if !status.HasTasks || !status.TasksActionable || coordination.PendingTasks > 0 {
+	if !status.HasTasks || !status.TasksActionable || coordination.PendingTasks > 0 || coordination.PendingReviews > 0 {
 		return false
 	}
 	planID := a.deps.ctxMgr.ActiveTodoPlanID()
@@ -77,15 +77,16 @@ func (r *turnRunner) continueUnfinishedPlan() bool {
 			break
 		}
 	}
+	// Bound correction attempts across tool calls too: a model that cannot
+	// follow the plan must surface the unfinished work instead of looping or
+	// losing the answer it was trying to deliver.
+	if a.run.todoCompletionChecks >= 3 {
+		a.run.todoPartialCloseout = true
+		return false
+	}
 	a.stream.discardText()
 	a.clearFinalState()
 	a.run.step++
-	// Bound correction attempts across tool calls too: a model that cannot
-	// follow the plan must surface the unfinished work instead of looping.
-	if a.run.todoCompletionChecks >= 3 {
-		a.run.err = fmt.Errorf("仍有未完成待办，自动推进未能继续：%s", strings.Join(remaining, "；"))
-		return true
-	}
 	a.run.todoCompletionChecks++
 	a.injectHint(&policy.Hint{Type: "todo_completion", Severity: "critical", Content: "[todo_completion] 当前步骤结束不代表用户需求完成。仍有待办：" + strings.Join(remaining, "；") + "。核对原需求与已有结果，用 todo_write 如实更新；按当前模式继续执行下一步、分析或必要验证。已完成工作不要重做，不要为结束而虚报完成或删除尚未交付的项。若确实受阻，将对应项标为 blocked 并说明原因，需要用户决定时再用 question。用户取消的项标为 cancelled 并说明原因。已有受理的后台任务时可以给进度说明并让出本轮。"})
 	return true
@@ -107,7 +108,7 @@ func (r *turnRunner) todoDispositionSummary(includeOpen bool) string {
 		label := ""
 		switch item.Status {
 		case "pending", "in_progress":
-			if includeOpen {
+			if includeOpen || a.run.todoPartialCloseout {
 				label = "未完成"
 			}
 		case "blocked":

@@ -26,6 +26,10 @@ func newHarness(t *testing.T, runner rt.RunnerFunc, options Options) *harness {
 	return newHarnessWithServices(t, runner, options, rt.ServiceGroups{})
 }
 func newHarnessWithServices(t *testing.T, runner rt.RunnerFunc, options Options, services rt.ServiceGroups) *harness {
+	return newHarnessWithBackend(t, runner, options, services, nil)
+}
+
+func newHarnessWithBackend(t *testing.T, runner rt.RunnerFunc, options Options, services rt.ServiceGroups, wrap func(*rt.Runtime) Backend) *harness {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	in, input := io.Pipe()
@@ -45,7 +49,11 @@ func newHarnessWithServices(t *testing.T, runner rt.RunnerFunc, options Options,
 	if services.Models.CurrentModel == nil {
 		services.Models.CurrentModel = func() rt.ModelSelection { return rt.ModelSelection{Model: "test-model"} }
 	}
-	backend := rt.New(runner, services)
+	runtimeBackend := rt.New(runner, services)
+	var backend Backend = runtimeBackend
+	if wrap != nil {
+		backend = wrap(runtimeBackend)
+	}
 	h := &harness{in: input, frames: make(chan map[string]any, 1024), done: make(chan error, 1), cancel: cancel}
 	go func() {
 		defer close(h.frames)
@@ -63,7 +71,7 @@ func newHarnessWithServices(t *testing.T, runner rt.RunnerFunc, options Options,
 		}
 	}()
 	go func() { h.done <- Serve(ctx, in, out, backend, "/workspace", options) }()
-	t.Cleanup(func() { cancel(); _ = input.Close(); _ = output.Close(); _ = backend.Close() })
+	t.Cleanup(func() { cancel(); _ = input.Close(); _ = output.Close(); _ = runtimeBackend.Close() })
 	return h
 }
 

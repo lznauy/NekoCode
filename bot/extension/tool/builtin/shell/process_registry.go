@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"nekocode/util/secrets"
 	"os"
 	"os/exec"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,6 +36,7 @@ type taskRegistry struct {
 	mu        sync.Mutex
 	tasks     map[string]*shellTask
 	reserved  map[string]struct{}
+	scratch   map[scratchIdentity]*scratchDirectory
 	nextID    int
 	lifecycle context.Context
 	cancel    context.CancelFunc
@@ -42,7 +45,7 @@ type taskRegistry struct {
 func newTaskRegistry() *taskRegistry {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &taskRegistry{
-		tasks: make(map[string]*shellTask), reserved: make(map[string]struct{}),
+		tasks: make(map[string]*shellTask), reserved: make(map[string]struct{}), scratch: make(map[scratchIdentity]*scratchDirectory),
 		lifecycle: ctx, cancel: cancel,
 	}
 }
@@ -50,6 +53,7 @@ func newTaskRegistry() *taskRegistry {
 type startRequest struct {
 	name       string
 	owner      string
+	actor      string
 	command    string
 	directory  string
 	profile    sandbox.Profile
@@ -118,6 +122,11 @@ func (r *taskRegistry) startOrReuse(ctx context.Context, req startRequest) (*she
 	if err := r.lifecycle.Err(); err != nil {
 		return nil, false, fmt.Errorf("process registry is closed: %w", err)
 	}
+	if !req.host && runtime.GOOS == "linux" {
+		if err := r.prepareScratch(&req); err != nil {
+			return nil, false, err
+		}
+	}
 	launchKey := req.identity()
 	if strings.TrimSpace(req.name) == "" {
 		r.mu.Lock()
@@ -159,7 +168,8 @@ func (r *taskRegistry) startOrReuse(ctx context.Context, req startRequest) (*she
 	t := &shellTask{
 		name: name, owner: req.owner, cmd: req.command, launchKey: launchKey,
 		startedAt: time.Now(), status: taskRunning, proc: proc, cancel: cancel,
-		done: make(chan struct{}), changed: make(chan struct{}, 1),
+		scratchFile: req.profile.ScratchFile,
+		done:        make(chan struct{}), changed: make(chan struct{}, 1),
 		drained: make(chan struct{}),
 	}
 	r.register(t)
@@ -511,11 +521,13 @@ func (r *taskRegistry) stopTasks(tasks []*shellTask) error {
 }
 
 func (r *taskRegistry) shutdown() error {
+	r.launchMu.Lock()
+	defer r.launchMu.Unlock()
 	if err := r.stopAll(); err != nil {
 		return err
 	}
 	r.cancel()
-	return nil
+	return r.removeScratch()
 }
 
 func (r *taskRegistry) task(owner, ref string) (*shellTask, error) {
@@ -588,6 +600,8 @@ func waitTaskDrained(t *shellTask, max time.Duration) {
 }
 
 func drainToRing(t *shellTask, reader io.Reader) {
+	filter := secrets.NewFilter()
+	defer func() { t.appendLogs(filter.Transform(nil, true)) }()
 	if reader == nil {
 		return
 	}
@@ -595,7 +609,7 @@ func drainToRing(t *shellTask, reader io.Reader) {
 	for {
 		n, err := reader.Read(buf)
 		if n > 0 {
-			t.appendLogs(buf[:n])
+			t.appendLogs(filter.Transform(buf[:n], false))
 		}
 		if err != nil {
 			if err != io.EOF {

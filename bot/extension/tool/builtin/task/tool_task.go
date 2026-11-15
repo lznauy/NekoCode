@@ -19,6 +19,27 @@ type TaskTool struct {
 	run taskbridge.TaskRunner
 }
 
+// Parse the wire representation only. The owner resolves ceilings and defaults
+// against the actual profile, so direct callers and model tools share one rule.
+func taskStepArg(args map[string]any, name string) (int, error) {
+	raw, supplied := args[name]
+	if !supplied {
+		return 0, nil
+	}
+	switch value := raw.(type) {
+	case int:
+		if value > 0 {
+			return value, nil
+		}
+	case float64:
+		converted := int(value)
+		if converted > 0 && float64(converted) == value {
+			return converted, nil
+		}
+	}
+	return 0, fmt.Errorf("%s must be a positive integer", name)
+}
+
 func NewTaskTool() *TaskTool { return &TaskTool{} }
 
 func (t *TaskTool) Wire(run taskbridge.TaskRunner) {
@@ -107,10 +128,6 @@ func (t *TaskTool) execute(ctx context.Context, args map[string]any, readOnly bo
 	if err != nil {
 		return core.ToolOutput{}, err
 	}
-	requiredTools, err := stringSliceArg(args, "required_tools")
-	if err != nil {
-		return core.ToolOutput{}, err
-	}
 	resumeID := ""
 	if raw, exists := args["resume_id"]; exists {
 		var ok bool
@@ -118,6 +135,10 @@ func (t *TaskTool) execute(ctx context.Context, args map[string]any, readOnly bo
 		if !ok || strings.TrimSpace(resumeID) == "" {
 			return core.ToolOutput{}, fmt.Errorf("resume_id must be a non-empty string")
 		}
+	}
+	requiredTools, err := stringSliceArg(args, "required_tools")
+	if err != nil {
+		return core.ToolOutput{}, err
 	}
 
 	profile := ""
@@ -154,8 +175,15 @@ func (t *TaskTool) execute(ctx context.Context, args map[string]any, readOnly bo
 	if len(after) > 8 {
 		return core.ToolOutput{}, fmt.Errorf("at most 8 dependencies")
 	}
+	maxSteps, err := taskStepArg(args, "max_steps")
+	if err != nil {
+		return core.ToolOutput{}, err
+	}
+	if _, supplied := args["stage_steps"]; supplied {
+		return core.ToolOutput{}, fmt.Errorf("stage_steps has been removed; use max_steps for this attempt")
+	}
 	result, err := t.run(subCtx, taskbridge.TaskSpec{RequiredTools: requiredTools, After: after, InputRefs: inputRefs, ReadOnly: readOnly,
-		Isolation: isolation, Title: title, Prompt: prompt, Profile: profile, Skills: skills, ResumeID: resumeID,
+		Isolation: isolation, Title: title, Prompt: prompt, Profile: profile, Skills: skills, ResumeID: resumeID, ForkID: toolutil.OptStringArg(args, "fork_from", ""), MaxSteps: maxSteps, ReviewPolicy: toolutil.OptStringArg(args, "review_policy", ""),
 	})
 	if result != nil {
 		summary = result.Summary

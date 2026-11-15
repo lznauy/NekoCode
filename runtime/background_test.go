@@ -42,13 +42,13 @@ func TestBackgroundDispatchReturnsAndCompletionWakesCoordinator(t *testing.T) {
 		if input == "B" {
 			started, release = startedB, releaseB
 		}
-		receipt, err := host.(protocol.BackgroundSubmitter).SubmitBackground(ctx, protocol.BackgroundWork{ID: input, SessionID: "session", GroupID: input, ReadOnly: true, Workspace: "workspace", Run: func(ctx context.Context, _ protocol.BackgroundHost) (string, error) {
+		receipt, err := host.(protocol.BackgroundSubmitter).SubmitBackground(ctx, protocol.BackgroundWork{ID: input, SessionID: "session", GroupID: input, ReadOnly: true, Workspace: "workspace", Run: func(ctx context.Context, _ protocol.BackgroundHost) (protocol.BackgroundResult, error) {
 			close(started)
 			select {
 			case <-release:
-				return "result-" + input, nil
+				return protocol.BackgroundResult{Text: "result-" + input}, nil
 			case <-ctx.Done():
-				return "", ctx.Err()
+				return protocol.BackgroundResult{Text: ""}, ctx.Err()
 			}
 		}})
 		if err != nil {
@@ -103,13 +103,13 @@ func TestBackgroundApprovalSurvivesForegroundAndOnlyPausesItsTask(t *testing.T) 
 		if input != "A" {
 			return "other demand accepted", nil
 		}
-		_, err := host.(protocol.BackgroundSubmitter).SubmitBackground(ctx, protocol.BackgroundWork{ID: "approval-task", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, h protocol.BackgroundHost) (string, error) {
+		_, err := host.(protocol.BackgroundSubmitter).SubmitBackground(ctx, protocol.BackgroundWork{ID: "approval-task", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, h protocol.BackgroundHost) (protocol.BackgroundResult, error) {
 			reply := h.Confirm(protocol.ConfirmRequest{ToolName: "shell"})
 			if !reply.Allowed {
-				return "denied", nil
+				return protocol.BackgroundResult{Text: "denied"}, nil
 			}
 			close(finished)
-			return "approved", nil
+			return protocol.BackgroundResult{Text: "approved"}, nil
 		}})
 		return "dispatched", err
 	}), backgroundServices(t.TempDir()))
@@ -286,13 +286,13 @@ func TestBackgroundSharedWritersSerializeAndReadTasksProceed(t *testing.T) {
 	defer rt.Close()
 	for _, id := range []string{"write1", "write2", "read"} {
 		name := id
-		_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: id, SessionID: "session", GroupID: id, Workspace: "shared", ReadOnly: id == "read", Run: func(ctx context.Context, _ protocol.BackgroundHost) (string, error) {
+		_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: id, SessionID: "session", GroupID: id, Workspace: "shared", ReadOnly: id == "read", Run: func(ctx context.Context, _ protocol.BackgroundHost) (protocol.BackgroundResult, error) {
 			started <- name
 			select {
 			case <-releases[name]:
-				return name, nil
+				return protocol.BackgroundResult{Text: name}, nil
 			case <-ctx.Done():
-				return "", ctx.Err()
+				return protocol.BackgroundResult{Text: ""}, ctx.Err()
 			}
 		}})
 		if err != nil {
@@ -333,11 +333,11 @@ func TestBackgroundCloseCancelsTaskWaitingForApproval(t *testing.T) {
 	rt := New(RunnerFunc(func(context.Context, string, RunHost) (string, error) { return "", nil }), backgroundServices(t.TempDir()))
 	requested := make(chan struct{})
 	exited := make(chan struct{})
-	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "approval-close", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, h protocol.BackgroundHost) (string, error) {
+	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "approval-close", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, h protocol.BackgroundHost) (protocol.BackgroundResult, error) {
 		defer close(exited)
 		close(requested)
 		h.Confirm(protocol.ConfirmRequest{ToolName: "shell"})
-		return "", ctx.Err()
+		return protocol.BackgroundResult{Text: ""}, ctx.Err()
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -359,11 +359,13 @@ func TestBackgroundCancellationPreservesAttemptIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := make(chan struct{})
-	_, err = rt.background.submit(ctx, protocol.BackgroundWork{ID: "task", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, host protocol.BackgroundHost) (string, error) {
-		host.Step(protocol.StepEvent{Action: protocol.StepActionSubAgentStart, SubAgentAttemptID: "attempt", SubAgentAttemptSeq: 3})
+	var expectedAttempt string
+	_, err = rt.background.submit(ctx, protocol.BackgroundWork{ID: "task", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, host protocol.BackgroundHost) (protocol.BackgroundResult, error) {
+		expectedAttempt = protocol.ExecutionFromContext(ctx).AttemptID
+		host.Step(protocol.StepEvent{Action: protocol.StepActionSubAgentStart, SubAgentAttemptID: expectedAttempt, SubAgentAttemptSeq: 3})
 		close(started)
 		<-ctx.Done()
-		return "", ctx.Err()
+		return protocol.BackgroundResult{Text: ""}, ctx.Err()
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -375,7 +377,7 @@ func TestBackgroundCancellationPreservesAttemptIdentity(t *testing.T) {
 	select {
 	case event := <-events:
 		payload, ok := event.Payload.(SubAgentPayload)
-		if !ok || payload.AttemptID != "attempt" || payload.AttemptSeq != 3 || payload.Status != "interrupted" {
+		if !ok || payload.AttemptID != expectedAttempt || payload.AttemptSeq != 3 || payload.Status != "interrupted" {
 			t.Fatalf("lost cancellation ownership: %+v", event.Payload)
 		}
 	case <-ctx.Done():

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"nekocode/protocol"
+	"nekocode/util/secrets"
 	"os"
 	"strings"
 	"sync"
@@ -32,15 +33,25 @@ type OutputCapture struct {
 	err      error
 	finished bool
 	result   ToolOutput
+	filter   *secrets.Filter
 }
 
 func NewOutputCapture(store *OutputStore, limit int, stop func()) *OutputCapture {
-	return &OutputCapture{store: store, limit: max(0, limit), stop: stop}
+	return &OutputCapture{store: store, limit: max(0, limit), stop: stop, filter: secrets.NewFilter()}
 }
 
 func (c *OutputCapture) Write(p []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	data := c.filter.Transform(p, false)
+	n, err := c.writeLocked(data)
+	if err != nil {
+		return min(len(p), n), err
+	}
+	return len(p), nil
+}
+
+func (c *OutputCapture) writeLocked(p []byte) (int, error) {
 	if c.finished {
 		return 0, os.ErrClosed
 	}
@@ -102,6 +113,12 @@ func (c *OutputCapture) Finish() (ToolOutput, error) {
 	defer c.mu.Unlock()
 	if c.finished {
 		return c.result, c.err
+	}
+	if !c.limited && c.err == nil {
+		_, err := c.writeLocked(c.filter.Transform(nil, true))
+		if err != nil && !errors.Is(err, ErrOutputLimit) {
+			c.err = err
+		}
 	}
 	c.finished = true
 	if c.file == nil {

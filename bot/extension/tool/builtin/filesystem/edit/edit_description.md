@@ -15,5 +15,5 @@ Default behavior:
 Prefer copying enough unchanged context into oldString to make the match unique. Do not use line numbers, read windows, revision tags, or structured edit intents.
 
 Constraints:
-- Read the current file version before editing. An oldString anchor alone does not replace a read. Read again after any modification or context compaction; if output is truncated, read smaller ranges.
+- Read the current file version before editing. An oldString anchor alone does not replace a read. A delivered successful write/edit receipt also establishes knowledge of that exact version. Read again after external modification, receipt removal or context compaction; if output is truncated, read smaller ranges.
 - Writes are committed atomically: a failed edit leaves the original file unchanged. Use `/rewind` to undo a completed edit or conversation turn.

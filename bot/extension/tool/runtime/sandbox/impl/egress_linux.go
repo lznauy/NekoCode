@@ -47,19 +47,7 @@ func superviseRestrictedCommand(profile Profile, command string, env []string) e
 	var listener net.Listener
 	var active sync.Map
 	if len(profile.OutboundDomains) > 0 {
-		fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
-		if err != nil {
-			return err
-		}
-		req, err := unix.NewIfreq("lo")
-		if err == nil {
-			req.SetUint16(unix.IFF_UP | unix.IFF_LOOPBACK)
-			err = unix.IoctlIfreq(fd, unix.SIOCSIFFLAGS, req)
-		}
-		_ = unix.Close(fd)
-		if err != nil {
-			return err
-		}
+		var err error
 		listener, err = net.Listen("tcp4", "127.0.0.1:0")
 		if err != nil {
 			return err

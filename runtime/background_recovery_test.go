@@ -115,7 +115,9 @@ func TestDependencySaveFailurePreservesExecutionAndDiagnostic(t *testing.T) {
 	b := rt.background
 	b.mu.Lock()
 	b.entries["upstream"] = &backgroundEntry{BackgroundTask: BackgroundTask{ID: "upstream", SessionID: "session", Status: "failed", Notified: true}}
-	e := &backgroundEntry{BackgroundTask: BackgroundTask{ID: "dependent", SessionID: "session", Status: "waiting_dependencies", Error: "previous diagnostic", After: []string{"upstream"}}, work: protocol.BackgroundWork{Run: func(context.Context, protocol.BackgroundHost) (string, error) { return "", nil }, Release: func() { released.Add(1) }}}
+	e := &backgroundEntry{BackgroundTask: BackgroundTask{ID: "dependent", SessionID: "session", Status: "waiting_dependencies", Error: "previous diagnostic", After: []string{"upstream"}}, work: protocol.BackgroundWork{Run: func(context.Context, protocol.BackgroundHost) (protocol.BackgroundResult, error) {
+		return protocol.BackgroundResult{Text: ""}, nil
+	}, Release: func() { released.Add(1) }}}
 	b.entries[e.ID] = e
 	b.order = []string{"upstream", e.ID}
 	b.resolveDependenciesLocked()
@@ -157,7 +159,10 @@ func TestDependencyPersistenceRecoversWithoutAnotherWake(t *testing.T) {
 			b.mu.Lock()
 			b.loaded["session"] = true
 			b.entries["upstream"] = &backgroundEntry{BackgroundTask: BackgroundTask{ID: "upstream", SessionID: "session", Status: upstreamStatus, Notified: true}}
-			e := &backgroundEntry{interactionID: "task_scope_recovery", BackgroundTask: BackgroundTask{ID: "dependent", SessionID: "session", Status: "waiting_dependencies", After: []string{"upstream"}}, work: protocol.BackgroundWork{ReadOnly: true, Run: func(context.Context, protocol.BackgroundHost) (string, error) { ran.Add(1); return "done", nil }, Release: func() { released.Add(1) }}}
+			e := &backgroundEntry{interactionID: "task_scope_recovery", BackgroundTask: BackgroundTask{ID: "dependent", SessionID: "session", Status: "waiting_dependencies", After: []string{"upstream"}}, work: protocol.BackgroundWork{ReadOnly: true, Run: func(context.Context, protocol.BackgroundHost) (protocol.BackgroundResult, error) {
+				ran.Add(1)
+				return protocol.BackgroundResult{Text: "done"}, nil
+			}, Release: func() { released.Add(1) }}}
 			b.entries[e.ID] = e
 			b.order = []string{"upstream", e.ID}
 			b.mu.Unlock()
@@ -224,7 +229,10 @@ func TestDependencyRetryShutdownReleasesWithoutExecuting(t *testing.T) {
 	b.mu.Lock()
 	b.loaded["session"] = true
 	b.entries["upstream"] = &backgroundEntry{BackgroundTask: BackgroundTask{ID: "upstream", SessionID: "session", Status: "failed", Notified: true}}
-	e := &backgroundEntry{BackgroundTask: BackgroundTask{ID: "dependent", SessionID: "session", Status: "waiting_dependencies", After: []string{"upstream"}}, work: protocol.BackgroundWork{Run: func(context.Context, protocol.BackgroundHost) (string, error) { ran.Add(1); return "", nil }, Release: func() { released.Add(1) }}}
+	e := &backgroundEntry{BackgroundTask: BackgroundTask{ID: "dependent", SessionID: "session", Status: "waiting_dependencies", After: []string{"upstream"}}, work: protocol.BackgroundWork{Run: func(context.Context, protocol.BackgroundHost) (protocol.BackgroundResult, error) {
+		ran.Add(1)
+		return protocol.BackgroundResult{Text: ""}, nil
+	}, Release: func() { released.Add(1) }}}
 	b.entries[e.ID] = e
 	b.order = []string{"upstream", e.ID}
 	b.mu.Unlock()
@@ -263,13 +271,15 @@ func TestResumedBackgroundTaskKeepsDemandAcrossRestart(t *testing.T) {
 	}), services)
 	defer rt.Close()
 	foreignCtx := protocol.WithCoordination(t.Context(), protocol.Coordination{GroupID: "unrelated", Notification: true})
-	if _, err := rt.background.submit(foreignCtx, protocol.BackgroundWork{ID: "saved", SessionID: "session", GroupID: "unrelated", Run: func(context.Context, protocol.BackgroundHost) (string, error) { return "", nil }}); err == nil {
+	if _, err := rt.background.submit(foreignCtx, protocol.BackgroundWork{ID: "saved", SessionID: "session", GroupID: "unrelated", Run: func(context.Context, protocol.BackgroundHost) (protocol.BackgroundResult, error) {
+		return protocol.BackgroundResult{Text: ""}, nil
+	}}); err == nil {
 		t.Fatal("foreign completion notification resumed a legacy task")
 	}
 	workerGroup := make(chan string, 1)
-	receipt, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "saved", SessionID: "session", GroupID: "new-run", ReadOnly: true, Run: func(ctx context.Context, _ protocol.BackgroundHost) (string, error) {
+	receipt, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "saved", SessionID: "session", GroupID: "new-run", ReadOnly: true, Run: func(ctx context.Context, _ protocol.BackgroundHost) (protocol.BackgroundResult, error) {
 		workerGroup <- protocol.CoordinationFromContext(ctx).GroupID
-		return "done", nil
+		return protocol.BackgroundResult{Text: "done"}, nil
 	}})
 	if err != nil {
 		t.Fatal(err)

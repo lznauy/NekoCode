@@ -26,11 +26,11 @@ func TestStopBackgroundTasksStopsWorkersAndQueuedDemands(t *testing.T) {
 			return "fresh accepted", nil
 		}
 		for _, id := range []string{"a", "b"} {
-			_, err := host.(protocol.BackgroundSubmitter).SubmitBackground(ctx, protocol.BackgroundWork{ID: id, SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, _ protocol.BackgroundHost) (string, error) {
+			_, err := host.(protocol.BackgroundSubmitter).SubmitBackground(ctx, protocol.BackgroundWork{ID: id, SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, _ protocol.BackgroundHost) (protocol.BackgroundResult, error) {
 				started <- struct{}{}
 				<-ctx.Done()
 				finished <- struct{}{}
-				return "", ctx.Err()
+				return protocol.BackgroundResult{Text: ""}, ctx.Err()
 			}})
 			if err != nil {
 				return "", err

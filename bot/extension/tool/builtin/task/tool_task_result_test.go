@@ -54,9 +54,9 @@ func TestTaskResultContinuationUsesIssuedReferenceWithoutCopyingOpaqueToken(t *t
 	if output.NextCall == nil {
 		t.Error("missing ready-to-use continuation call")
 	}
-	second, err := tool.Execute(t.Context(), map[string]any{"id": "task", "attempt_id": "attempt", "offset": float64(100)})
+	second, err := tool.Execute(t.Context(), output.NextCall)
 	if err != nil {
-		t.Fatalf("cannot continue with issued task/attempt identity: %v", err)
+		t.Fatalf("cannot continue with issued cursor: %v", err)
 	}
 	var page taskbridge.ResultPage
 	if err := json.Unmarshal([]byte(second.Text), &page); err != nil || page.Offset != 100 || page.HasMore {
@@ -64,96 +64,66 @@ func TestTaskResultContinuationUsesIssuedReferenceWithoutCopyingOpaqueToken(t *t
 	}
 }
 
-func TestTaskResultContinuationDoesNotCrossAttemptOrReaderScope(t *testing.T) {
+func TestTaskResultExplicitContinuationRequiresReference(t *testing.T) {
 	tool := NewResultTool()
-	reader := func(ref string) taskbridge.ResultReader {
-		return func(_ context.Context, q taskbridge.ResultQuery) (taskbridge.ResultPage, error) {
-			if q.Offset > 0 && q.Ref != ref {
-				t.Errorf("wrong scope reference: %+v", q)
-			}
-			return taskbridge.ResultPage{ID: q.ID, AttemptID: "attempt", Ref: ref, Content: "page", HasMore: true, NextOffset: 100}, nil
-		}
-	}
-	tool.Wire(reader("old-parent-ref"))
-	if _, err := tool.Execute(t.Context(), map[string]any{"id": "task"}); err != nil {
-		t.Fatal(err)
-	}
-	for _, args := range []map[string]any{
-		{"id": "other", "attempt_id": "attempt", "offset": float64(100)},
-		{"id": "task", "attempt_id": "different-attempt", "offset": float64(100)},
-	} {
-		if _, err := tool.Execute(t.Context(), args); err == nil {
-			t.Fatal("reused a different task/attempt reference")
-		}
-	}
-	tool.Wire(reader("new-parent-ref"))
-	next := map[string]any{"id": "task", "attempt_id": "attempt", "offset": float64(100)}
-	if _, err := tool.Execute(t.Context(), next); err == nil {
-		t.Fatal("reused previous reader scope's reference")
-	}
-	if _, err := tool.Execute(t.Context(), map[string]any{"id": "task"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tool.Execute(t.Context(), next); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestTaskResultReferenceCacheCapacityAndOverwrite(t *testing.T) {
-	tool := NewResultTool()
-	ref := "original"
+	reads := 0
 	tool.Wire(func(_ context.Context, q taskbridge.ResultQuery) (taskbridge.ResultPage, error) {
-		return taskbridge.ResultPage{ID: q.ID, AttemptID: "attempt", Ref: ref, Content: "result"}, nil
+		reads++
+		return taskbridge.ResultPage{ID: q.ID, AttemptID: q.AttemptID, Ref: q.Ref, Offset: q.Offset, Content: "page"}, nil
 	})
-	for i := 0; i < 128; i++ {
-		id := fmt.Sprintf("task-%d", i)
-		if _, err := tool.Execute(t.Context(), map[string]any{"id": id}); err != nil {
-			t.Fatal(err)
-		}
+	args := map[string]any{"id": "task", "attempt_id": "attempt", "offset": float64(100)}
+	if _, err := tool.Execute(t.Context(), args); err == nil || reads != 0 {
+		t.Fatal("implicit continuation reached the reader")
 	}
-	ref = "updated"
-	if _, err := tool.Execute(t.Context(), map[string]any{"id": "task-0"}); err != nil {
-		t.Fatal(err)
+	args["result_ref"] = "pinned-ref"
+	if _, err := tool.Execute(t.Context(), args); err != nil || reads != 1 {
+		t.Fatalf("explicit reference could not recover without a cache: %v", err)
 	}
-	if len(tool.refs) != 128 || tool.refs[resultPageKey{"task-0", "attempt"}] != "updated" {
-		t.Fatal("overwrite evicted an unrelated reference")
-	}
-	if _, err := tool.Execute(t.Context(), map[string]any{"id": "task-new"}); err != nil {
-		t.Fatal(err)
-	}
-	if len(tool.refs) != 128 || tool.refs[resultPageKey{"task-new", "attempt"}] != "updated" {
-		t.Fatal("cache growth is unbounded or new reference missing")
+	if len(tool.pages) != 0 {
+		t.Fatal("terminal page consumed continuation capacity")
 	}
 }
 
-func TestResultReferenceLRUKeepsRecentlyPagedAttempt(t *testing.T) {
+func TestTaskResultCursorCapacityKeepsRecentlyUsedPage(t *testing.T) {
 	tool := NewResultTool()
 	tool.Wire(func(_ context.Context, q taskbridge.ResultQuery) (taskbridge.ResultPage, error) {
 		if q.Offset > 0 && q.Ref != "ref-"+q.ID {
-			t.Fatalf("paging lost exact reference: %+v", q)
+			t.Fatalf("cursor lost exact reference: %+v", q)
 		}
-		return taskbridge.ResultPage{ID: q.ID, AttemptID: "attempt", Ref: "ref-" + q.ID, Content: "page", Offset: q.Offset, NextOffset: q.Offset + 1, HasMore: true}, nil
+		return taskbridge.ResultPage{ID: q.ID, AttemptID: "attempt", Ref: "ref-" + q.ID, Content: "page", Offset: q.Offset, NextOffset: 1, HasMore: true}, nil
 	})
-	read := func(id string, offset int) {
+	read := func(args map[string]any) map[string]any {
 		t.Helper()
-		if _, err := tool.Execute(t.Context(), map[string]any{"id": id, "attempt_id": "attempt", "offset": float64(offset)}); err != nil {
+		out, err := tool.Execute(t.Context(), args)
+		if err != nil {
 			t.Fatal(err)
 		}
+		var page struct {
+			NextCall map[string]any `json:"next_call"`
+		}
+		if err := json.Unmarshal([]byte(out.Text), &page); err != nil {
+			t.Fatal(err)
+		}
+		return page.NextCall
 	}
-	for i := 0; i < 128; i++ {
-		read(fmt.Sprint(i), 0)
+	var oldest, evicted map[string]any
+	for i := 0; i < resultCacheLimit; i++ {
+		next := read(map[string]any{"id": fmt.Sprint(i)})
+		if i == 0 {
+			oldest = next
+		}
+		if i == 1 {
+			evicted = next
+		}
 	}
-	read("0", 1) // Oldest inserted, but now most recently used.
-	read("new", 0)
-	if tool.refs[resultPageKey{"0", "attempt"}] == "" || tool.refs[resultPageKey{"1", "attempt"}] != "" {
-		t.Fatal("cache did not evict least recently used reference")
+	read(oldest)
+	read(map[string]any{"id": "new"})
+	if _, err := tool.Execute(t.Context(), evicted); err == nil {
+		t.Fatal("least recently used cursor survived eviction")
 	}
-	read("0", 2)
-	tool.Wire(func(context.Context, taskbridge.ResultQuery) (taskbridge.ResultPage, error) {
-		return taskbridge.ResultPage{}, nil
-	})
-	if len(tool.refs) != 0 || len(tool.recent) != 0 {
-		t.Fatal("reader scope change retained cached references")
+	read(oldest)
+	if len(tool.pages) != resultCacheLimit {
+		t.Fatal("cursor cache is unbounded")
 	}
 }
 
@@ -176,7 +146,7 @@ func TestTaskResultNextCallSurvivesReaderRebind(t *testing.T) {
 	if err := json.Unmarshal([]byte(first.Text), &page); err != nil {
 		t.Fatal(err)
 	}
-	tool.Wire(reader) // A new coordinator run has no in-memory reference cache.
+	tool.Wire(reader) // Explicit cursors remain usable across coordinator runs.
 	if _, err := tool.Execute(t.Context(), page.NextCall); err != nil {
 		t.Fatalf("self-contained continuation failed: %v", err)
 	}

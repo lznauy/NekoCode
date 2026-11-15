@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"maps"
 	"nekocode/protocol"
 )
 
@@ -18,18 +19,15 @@ func (r *Runtime) RetryBackgroundNotification(ctx context.Context, sessionID, id
 	if err := b.load(sessionID); err != nil {
 		return err
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.lockMutation()
+	defer b.unlockMutation()
 	e := b.entries[id]
 	if b.closed || e == nil || e.SessionID != sessionID || e.cancel != nil || e.Delivery != "failed" {
 		return fmt.Errorf("only failed result reviews may be retried")
 	}
-	previous := e.DeliveryError
-	e.Delivery = ""
-	e.DeliveryError = ""
-	if err := b.saveLocked(sessionID); err != nil {
-		e.Delivery = "failed"
-		e.DeliveryError = previous
+	next := e.BackgroundTask
+	next.Delivery, next.DeliveryError = "", ""
+	if err := b.saveTaskLocked(e, next); err != nil {
 		return err
 	}
 	b.signal()
@@ -73,15 +71,14 @@ func (b *backgroundTasks) resolveDependenciesLocked() error {
 			if !failed && !ready {
 				continue
 			}
-			previousStatus, previousError := e.Status, e.Error
+			next := e.BackgroundTask
 			if failed {
-				e.Status = "blocked"
-				e.Error = "upstream did not complete successfully"
+				next.Status = "blocked"
+				next.Error = "upstream did not complete successfully"
 			} else {
-				e.Status = "queued"
+				next.Status = "queued"
 			}
-			if err := b.saveLocked(e.SessionID); err != nil {
-				e.Status, e.Error = previousStatus, previousError
+			if err := b.saveTaskLocked(e, next); err != nil {
 				return fmt.Errorf("task %s dependency transition: %w", e.ID, err)
 			}
 			if failed {
@@ -98,26 +95,21 @@ func (b *backgroundTasks) resolveDependenciesLocked() error {
 
 func (h backgroundHost) Usage(u protocol.BackgroundUsage) error {
 	b := h.runtime.background
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.lockMutation()
+	defer b.unlockMutation()
 	e := b.entries[h.id]
 	if !h.owns(e) || e.cancel == nil {
 		return fmt.Errorf("task is no longer active")
 	}
-	previous, previousAttempt := e.Usage, e.AttemptUsage
+	next := e.BackgroundTask
 	// Each checkpoint is cumulative within one attempt, not an additive sample.
-	e.Usage.TotalTokens += u.TotalTokens - e.AttemptUsage.TotalTokens
-	e.Usage.CacheHitTokens += u.CacheHitTokens - e.AttemptUsage.CacheHitTokens
-	e.Usage.CacheMissTokens += u.CacheMissTokens - e.AttemptUsage.CacheMissTokens
-	e.Usage.ToolUseCount += u.ToolUseCount - e.AttemptUsage.ToolUseCount
-	e.Usage.DurationMs += u.DurationMs - e.AttemptUsage.DurationMs
-	e.AttemptUsage = BackgroundUsage{u.TotalTokens, u.CacheHitTokens, u.CacheMissTokens, u.ToolUseCount, u.DurationMs}
-	if err := b.saveLocked(h.sessionID); err != nil {
-		e.Usage = previous
-		e.AttemptUsage = previousAttempt
-		return err
-	}
-	return nil
+	next.Usage.TotalTokens += u.TotalTokens - next.AttemptUsage.TotalTokens
+	next.Usage.CacheHitTokens += u.CacheHitTokens - next.AttemptUsage.CacheHitTokens
+	next.Usage.CacheMissTokens += u.CacheMissTokens - next.AttemptUsage.CacheMissTokens
+	next.Usage.ToolUseCount += u.ToolUseCount - next.AttemptUsage.ToolUseCount
+	next.Usage.DurationMs += u.DurationMs - next.AttemptUsage.DurationMs
+	next.AttemptUsage = BackgroundUsage{u.TotalTokens, u.CacheHitTokens, u.CacheMissTokens, u.ToolUseCount, u.DurationMs}
+	return b.saveTaskLocked(e, next)
 }
 
 func (r *Runtime) BackgroundUsage(sessionID string) (BackgroundUsage, error) {
@@ -147,16 +139,35 @@ func (r *Runtime) BackgroundUsage(sessionID string) (BackgroundUsage, error) {
 	return total, nil
 }
 
-func (b *backgroundTasks) retireUsageLocked(e *backgroundEntry) {
-	if b.retiredByTask == nil {
-		b.retiredByTask = map[string]map[string]BackgroundUsage{}
+// removeTaskLocked publishes eviction and its usage transfer only after the
+// owning session's snapshot is saved, including eviction across sessions.
+func (b *backgroundTasks) removeTaskLocked(e *backgroundEntry) error {
+	state := b.snapshotLocked(e.SessionID)
+	for i, task := range state.Tasks {
+		if task.ID == e.ID {
+			state.Tasks = append(state.Tasks[:i], state.Tasks[i+1:]...)
+			break
+		}
 	}
-	if b.retiredByTask[e.SessionID] == nil {
-		b.retiredByTask[e.SessionID] = map[string]BackgroundUsage{}
+	state.RetiredUsage = addBackgroundUsage(state.RetiredUsage, e.Usage)
+	state.RetiredByTask = maps.Clone(state.RetiredByTask)
+	if state.RetiredByTask == nil {
+		state.RetiredByTask = map[string]BackgroundUsage{}
 	}
-	b.retired[e.SessionID] = addBackgroundUsage(b.retired[e.SessionID], e.Usage)
-	byTask := b.retiredByTask[e.SessionID]
-	byTask[e.ID] = addBackgroundUsage(byTask[e.ID], e.Usage)
+	state.RetiredByTask[e.ID] = addBackgroundUsage(state.RetiredByTask[e.ID], e.Usage)
+	if err := b.saveStateLocked(e.SessionID, state); err != nil {
+		return err
+	}
+	b.retired[e.SessionID] = state.RetiredUsage
+	b.retiredByTask[e.SessionID] = state.RetiredByTask
+	delete(b.entries, e.ID)
+	for i, id := range b.order {
+		if id == e.ID {
+			b.order = append(b.order[:i], b.order[i+1:]...)
+			break
+		}
+	}
+	return nil
 }
 
 // Caller owns the task mutex. Every accepted task releases captured resources,

@@ -12,12 +12,23 @@ import (
 const backgroundReviewResultBudget = 64 << 10
 
 type backgroundReviewResult struct {
-	BackgroundTask
-	ResultComplete bool                         `json:"result_complete"`
-	ReadResult     *backgroundReviewReadRequest `json:"read_result,omitempty"`
+	ID              string                       `json:"id"`
+	Title           string                       `json:"title"`
+	Status          string                       `json:"status"`
+	AttemptID       string                       `json:"attempt_id,omitempty"`
+	AttemptSeq      int                          `json:"attempt_seq,omitempty"`
+	Isolation       string                       `json:"isolation,omitempty"`
+	Error           string                       `json:"error,omitempty"`
+	Result          string                       `json:"result,omitempty"`
+	ResultTruncated bool                         `json:"result_truncated,omitempty"`
+	Review          *protocol.TaskReview         `json:"review,omitempty"`
+	ReviewComplete  bool                         `json:"review_complete"`
+	ResultComplete  bool                         `json:"result_complete"`
+	ReadResult      *backgroundReviewReadRequest `json:"read_result,omitempty"`
 }
 
 type backgroundReviewReadRequest struct {
+	Ref       string `json:"result_ref,omitempty"`
 	ID        string `json:"id"`
 	AttemptID string `json:"attempt_id,omitempty"`
 	Limit     int    `json:"limit"`
@@ -32,27 +43,40 @@ type backgroundReviewTask struct {
 }
 
 type backgroundReview struct {
-	Results      []backgroundReviewResult `json:"results"`
-	GroupTasks   []backgroundReviewTask   `json:"group_tasks"`
-	PendingTasks int                      `json:"pending_tasks"`
+	GroupID        string                   `json:"plan_id,omitempty"`
+	Results        []backgroundReviewResult `json:"results"`
+	GroupTasks     []backgroundReviewTask   `json:"group_tasks"`
+	PendingTasks   int                      `json:"pending_tasks"`
+	PendingReviews int                      `json:"pending_reviews"`
 }
 
 // Caller holds b.mu. Include the entire demand's inventory, not just the
 // workers whose completion happens to have triggered this coordinator turn.
 func (b *backgroundTasks) reviewLocked(sessionID, group string, ids []string) backgroundReview {
-	review := backgroundReview{Results: []backgroundReviewResult{}, GroupTasks: []backgroundReviewTask{}}
+	review := backgroundReview{GroupID: group, Results: []backgroundReviewResult{}, GroupTasks: []backgroundReviewTask{}}
+	included := map[string]bool{}
 	budget := backgroundReviewResultBudget
 	for _, id := range ids {
+		included[id] = true
 		task := b.entries[id].BackgroundTask
-		task.Prompt = protocol.SubagentTextPreview(task.Prompt, 1024)
-		text := backgroundTextPrefix(task.Result, budget)
-		complete := len(text) == len(task.Result) && !task.ResultTruncated &&
-			!strings.HasSuffix(task.Result, "\n[truncated; inspect saved task output]")
-		task.Result = text
-		budget -= len(text)
-		result := backgroundReviewResult{BackgroundTask: task, ResultComplete: complete}
-		if !complete {
-			result.ReadResult = &backgroundReviewReadRequest{ID: task.ID, AttemptID: task.AttemptID, Limit: 2000}
+		result := backgroundReviewResult{ID: task.ID, Title: task.Title, Status: task.Status, AttemptID: task.AttemptID, AttemptSeq: task.AttemptSeq, Isolation: task.Isolation, Error: task.Error, ResultTruncated: task.ResultTruncated}
+		if task.Review != nil {
+			// Do not repeat the formatted report when an exact structured handoff
+			// fits. Larger handoffs use their exact canonical result reference.
+			copy, complete := boundedTaskReview(*task.Review)
+			dataSize := taskReviewSize(copy)
+			if dataSize <= budget {
+				result.Review, result.ReviewComplete = copy, complete && task.ReviewComplete
+				budget -= dataSize
+			}
+		}
+		if task.Review == nil {
+			result.Result = backgroundTextPrefix(task.Result, budget)
+			result.ResultComplete = len(result.Result) == len(task.Result) && !task.ResultTruncated && !strings.HasSuffix(task.Result, "\n[truncated; inspect saved task output]")
+			budget -= len(result.Result)
+		}
+		if !result.ResultComplete && !result.ReviewComplete {
+			result.ReadResult = &backgroundReviewReadRequest{Ref: task.ResultRef, ID: task.ID, AttemptID: task.AttemptID, Limit: 2000}
 		}
 		review.Results = append(review.Results, result)
 	}
@@ -67,6 +91,10 @@ func (b *backgroundTasks) reviewLocked(sessionID, group string, ids []string) ba
 		switch task.Status {
 		case "queued", "running", "waiting_approval", "waiting_question", "waiting_dependencies":
 			review.PendingTasks++
+		default:
+			if !included[id] && !task.Notified && task.Delivery != "stopped" {
+				review.PendingReviews++
+			}
 		}
 	}
 	return review

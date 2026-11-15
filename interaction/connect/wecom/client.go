@@ -75,7 +75,7 @@ type eventMessage struct {
 
 type messageSender interface {
 	replyText(context.Context, string, string) error
-	sendMarkdown(context.Context, string, string) error
+	sendMarkdownPart(context.Context, string, string) error
 }
 
 type wsClient struct {
@@ -198,23 +198,30 @@ func (c *wsClient) heartbeat(ctx context.Context, done, ready <-chan struct{}, c
 }
 
 func (c *wsClient) replyText(ctx context.Context, reqID, text string) error {
-	body := map[string]any{
-		"msgtype": "stream",
-		"stream": map[string]any{
-			"id":      requestID("stream"),
-			"finish":  true,
-			"content": truncateUTF8(text, maxTextBytes),
-		},
+	parts, err := splitMessage(text, maxTextBytes)
+	if err != nil {
+		return err
 	}
-	return c.write(ctx, wsFrame{Command: cmdRespond, Headers: frameHeaders{RequestID: reqID}, Body: mustJSON(body)})
+	for i, part := range parts {
+		body := map[string]any{
+			"msgtype": "stream",
+			"stream": map[string]any{
+				"id": requestID("stream"), "finish": true, "content": part,
+			},
+		}
+		if err := c.write(ctx, wsFrame{Command: cmdRespond, Headers: frameHeaders{RequestID: reqID}, Body: mustJSON(body)}); err != nil {
+			return fmt.Errorf("reply part %d/%d: %w", i+1, len(parts), err)
+		}
+	}
+	return nil
 }
 
-func (c *wsClient) sendMarkdown(ctx context.Context, chatID, text string) error {
+func (c *wsClient) sendMarkdownPart(ctx context.Context, chatID, text string) error {
 	body := map[string]any{
 		"chatid":  chatID,
 		"msgtype": "markdown",
 		"markdown": map[string]string{
-			"content": truncateUTF8(text, maxTextBytes),
+			"content": text,
 		},
 	}
 	reqID := requestID(cmdSend)

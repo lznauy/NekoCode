@@ -65,6 +65,7 @@ func TestDeleteSessionKeepsSessionWhenAttachmentCleanupFails(t *testing.T) {
 }
 
 func TestRewindMenuShowsUserMessagesAndChangedFiles(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	cwd := t.TempDir()
 	manager := session.New(cwd)
 	cp := checkpoint.New(t.TempDir())

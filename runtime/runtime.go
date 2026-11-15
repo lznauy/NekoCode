@@ -50,7 +50,7 @@ type Runtime struct {
 	background      *backgroundTasks
 
 	mu            sync.Mutex
-	mutationMu    sync.Mutex
+	mutationMu    mutationGate
 	recordingMu   sync.Mutex
 	mutating      bool
 	currentRun    RunID
@@ -84,12 +84,13 @@ func New(runner Runner, services ServiceGroups) *Runtime {
 	validateServices(services)
 	events := eventbus.NewEventBus()
 	rt := &Runtime{
-		runner:    runner,
-		services:  services,
-		events:    events,
-		runs:      runstore.NewRunStore(0),
-		status:    RunIdle,
-		cancelled: make(map[RunID]struct{}),
+		mutationMu: make(mutationGate, 1),
+		runner:     runner,
+		services:   services,
+		events:     events,
+		runs:       runstore.NewRunStore(0),
+		status:     RunIdle,
+		cancelled:  make(map[RunID]struct{}),
 	}
 	events.AddOrderedObserver(rt.runs.Record)
 	events.AddOrderedObserver(rt.recordMetrics)

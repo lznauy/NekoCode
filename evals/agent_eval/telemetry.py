@@ -1,0 +1,177 @@
+"""Explicit adapter for current NekoCode session journals and physical call logs.
+
+Not the public protocol: missing/rotated data is reported, never replaced by zero.
+"""
+import json
+import os
+from pathlib import Path
+
+
+class Telemetry:
+    def __init__(self, root, session=None):
+        self.root = Path(root)
+        self.session = session
+        self.calls = {}
+        self.events = {}
+        self._files = {}
+        self._bound_session = session
+
+    def _rows(self, path):
+        # Resume at the last complete line. Detect replacement/rotation and
+        # copytruncate, including truncate-and-regrow past the old offset.
+        try:
+            with path.open('rb') as stream:
+                info = os.fstat(stream.fileno())
+                identity = (info.st_dev, info.st_ino)
+                offset, anchor, previous = self._files.get(path, (0, b'', None))
+                if previous != identity or info.st_size < offset:
+                    offset, anchor = 0, b''
+                if anchor:
+                    stream.seek(offset - len(anchor))
+                    if stream.read(len(anchor)) != anchor:
+                        offset, anchor = 0, b''
+                stream.seek(offset)
+                while True:
+                    line = stream.readline()
+                    if not line or not line.endswith(b'\n'):
+                        break
+                    offset = stream.tell()
+                    try:
+                        row = json.loads(line)
+                    except (ValueError, UnicodeError):
+                        continue
+                    if isinstance(row, dict):
+                        yield row
+                stream.seek(max(0, offset - 64))
+                anchor = stream.read(min(64, offset))
+                self._files[path] = (offset, anchor, identity)
+        except FileNotFoundError:
+            # A writer can rotate a journal between glob and open.
+            self._files.pop(path, None)
+
+    def refresh(self):
+        if not self.session:
+            return
+        if self._bound_session != self.session:
+            self.calls.clear()
+            self.events.clear()
+            self._files.clear()
+            self._bound_session = self.session
+        active = set()
+        for path in (self.root / "logs").glob("llm-calls.jsonl*"):
+            if not path.is_file():
+                continue
+            active.add(path)
+            for row in self._rows(path):
+                sid = row.get("session", "")
+                if not isinstance(sid, str) or (sid != self.session and not sid.startswith(self.session + "/")):
+                    continue
+                key = row.get("call_id") or (row.get("ts"), row.get("seq"), row.get("source"), sid)
+                self.calls[str(key)] = row
+        directory = self.root / "sessions" / self.session / "runs"
+        for path in directory.glob("*/events.jsonl"):
+            active.add(path)
+            for row in self._rows(path):
+                key = (row.get("run_id"), row.get("id") or row.get("sequence"))
+                self.events[str(key)] = row
+        self._files = {p: state for p, state in self._files.items() if p in active}
+
+    def background(self):
+        if not self.session:
+            return None
+        path = self.root / "sessions" / self.session / "background.json"
+        try:
+            state = json.loads(path.read_text())
+            if not isinstance(state, dict) or state.get("version") not in {1, 2} or not isinstance(state.get("tasks"), list):
+                return None
+            if any(not isinstance(t, dict) or t.get("session_id") != self.session or not isinstance(t.get("status"), str) for t in state["tasks"]):
+                return None
+            return state
+        except (OSError, ValueError):
+            return None
+
+    def cost(self):
+        rows = list(self.calls.values())
+        def usage_known(row):
+            # New records are explicit. Older records without the flag can be
+            # trusted only when they contain a non-zero provider usage value.
+            if row.get("usage_reported") is not None:
+                return row.get("usage_reported") is True
+            return any(type(row.get(key)) is int and row[key] > 0 for key in ("in", "out", "total"))
+        def total(key):
+            return sum(r[key] for r in rows) if rows and all(type(r.get(key)) is int and usage_known(r) for r in rows) else None
+        return {"model_calls": len(rows) if rows else None,
+                "tool_model_calls": sum(r.get("source") == "image_understand" for r in rows) if rows else None,
+                "usage_unknown_calls": sum(not usage_known(r) for r in rows) if rows else None,
+                "observed_total_tokens": sum(r["total"] for r in rows if type(r.get("total")) is int and usage_known(r)) if rows else None, "input_tokens": total("in"),
+                "output_tokens": total("out"), "total_tokens": total("total"),
+                "fresh_tokens": total("new") if rows and all(r.get("cache_usage_reported") for r in rows) else None,
+                "cached_tokens": total("cached") if rows and all(r.get("cache_usage_reported") for r in rows) else None,
+                "tool_started": sum(e.get("type") == "tool_started" for e in self.events.values()) if self.events else None,
+                "tool_blocked": sum(e.get("type") == "tool_blocked" for e in self.events.values()) if self.events else None,
+                "tool_calls": sum(e.get("type") == "tool_started" for e in self.events.values()) if self.events else None}
+
+    def safe_calls(self):
+        keys = {"call_id", "tool_call_id", "usage_reported", "failure_stage", "ts", "seq", "source", "session", "model", "execution", "requested_effort", "effective_effort", "dur_ms", "ttft_ms", "in", "out", "total", "new", "cached", "reasoning", "cache_usage_reported", "err"}
+        return [{k: v for k, v in r.items() if k in keys} for r in self.calls.values()]
+
+
+def protocol_tool_cost(path, session):
+    """Count root task wire requests/results, separately from runtime starts.
+
+    Missing traces are unknown. Child-agent and setup frames are excluded;
+    tool-internal model calls and process exit status are outside this metric.
+    """
+    unknown = {"tool_requests": None, "tool_result_errors": None, "context_snapshot_polls": None}
+    if not session:
+        return unknown
+    requests, errors = set(), set()
+    context_snapshot_polls = 0
+    observed = False
+    try:
+        lines = Path(path).read_text().splitlines()
+        for line in lines:
+            row = json.loads(line)
+            frame = row.get("message", {})
+            if (row.get("direction") == "host" and frame.get("type") == "control_request"
+                    and frame.get("request", {}).get("subtype") == "context.snapshot"):
+                context_snapshot_polls += 1
+            if (row.get("direction") != "agent" or frame.get("session_id") != session
+                    or frame.get("parent_tool_use_id") is not None
+                    or frame.get("nekocode_subagent_id")
+                    or frame.get("user_message_uuid") != "task"):
+                continue
+            observed = True
+            content = frame.get("message", {}).get("content", [])
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if frame.get("type") == "assistant" and block.get("type") == "tool_use" and block.get("id"):
+                    requests.add((frame.get("run_id"), block["id"]))
+                if (frame.get("type") == "user" and block.get("type") == "tool_result"
+                        and block.get("is_error") is True and block.get("tool_use_id")):
+                    errors.add((frame.get("run_id"), block["tool_use_id"]))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return unknown
+    return {"tool_requests": len(requests), "tool_result_errors": len(errors),
+            "context_snapshot_polls": context_snapshot_polls} if observed else unknown
+
+
+def coordination_audit(events, background):
+    """Observable workflow quality, never a semantic correctness score."""
+    rows = list(events)
+    completions = [e for e in rows if e.get('type') == 'tool_completed' and isinstance(e.get('payload'), dict)]
+    errors = [e for e in completions if e['payload'].get('is_error')]
+    result_errors = [e for e in errors if e['payload'].get('tool_name') == 'task_result']
+    tasks = background.get('tasks', []) if isinstance(background, dict) else None
+    audit = {
+        'schema_version': 2,
+        'all_runtime_tool_errors': len(errors) if rows else None,
+        'task_result_read_errors': len(result_errors) if rows else None,
+        'handoff_outcomes': {state: sum((t.get('review') or {}).get('outcome', 'legacy') == state for t in tasks)
+                             for state in ['complete', 'continue', 'blocked', 'decision', 'legacy']} if tasks is not None else None,
+        'limitations': ['Scheduling outcomes are worker reports, not independently verified task quality.',
+                        'Runtime completed-tool errors include observed coordinator/worker events; missing/rotated journals can undercount.']}
+    return audit

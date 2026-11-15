@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "id": "snake",
+  "version": 1,
+  "title": "浏览器贪吃蛇",
+  "tags": [
+    "product",
+    "browser",
+    "state",
+    "verification"
+  ],
+  "kind": "product",
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "board",
+      "description": "board",
+      "required": true
+    },
+    {
+      "id": "start_move",
+      "description": "start move",
+      "required": true
+    },
+    {
+      "id": "steer",
+      "description": "steer",
+      "required": true
+    },
+    {
+      "id": "food_growth",
+      "description": "food growth",
+      "required": true
+    },
+    {
+      "id": "pause",
+      "description": "pause",
+      "required": true
+    },
+    {
+      "id": "wall_collision",
+      "description": "wall collision",
+      "required": true
+    },
+    {
+      "id": "restart",
+      "description": "restart",
+      "required": true
+    },
+    {
+      "id": "browser_errors",
+      "description": "browser errors",
+      "required": true
+    },
+    {
+      "id": "reverse",
+      "description": "reverse",
+      "required": true
+    },
+    {
+      "id": "self_collision",
+      "description": "self collision",
+      "required": true
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 600,
+    "model_calls": 70,
+    "total_tokens": 2000000,
+    "verifier_seconds": 90
+  },
+  "source": "Original local task; explicit DOM accessibility/verification contract"
+}

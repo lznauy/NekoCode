@@ -4,13 +4,79 @@
 package impl
 
 import (
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
+
+func TestNativeScratchSurvivesCommandsWithoutSharingTmp(t *testing.T) {
+	if !isNativeAvailable() {
+		t.Skip("native sandbox not available")
+	}
+	ws, scratch := t.TempDir(), t.TempDir()
+	profile := Profile{Workspace: ws, ScratchDir: scratch, WritePaths: []string{scratch}}
+	if _, err := runNativeBash(t.Context(), `printf retained > "$NEKOCODE_SCRATCH/evidence"; mkdir -p "$GOCACHE"; printf cached > "$GOCACHE/entry"; printf transient > /tmp/command-marker`, profile, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runNativeBash(t.Context(), `test ! -e /tmp/command-marker && cat "$NEKOCODE_SCRATCH/evidence" "$GOCACHE/entry"`, profile, 10*time.Second)
+	if err != nil || out != "retainedcached" {
+		t.Fatalf("state lost or /tmp shared: %q, %v", out, err)
+	}
+}
+
+func TestNativeLoopbackProbe(t *testing.T) {
+	if os.Getenv("NEKOCODE_NATIVE_LOOPBACK_PROBE") != "1" {
+		t.Skip("sandbox helper only")
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("loopback-ok")) }))
+	defer server.Close()
+	client := &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 2 * time.Second}
+	response, err := client.Get(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	data, err := io.ReadAll(response.Body)
+	if err != nil || string(data) != "loopback-ok" {
+		t.Fatalf("local HTTP failed: %q, %v", data, err)
+	}
+	if connection, err := net.DialTimeout("tcp4", "198.51.100.1:80", 200*time.Millisecond); err == nil {
+		connection.Close()
+		t.Fatal("isolated network unexpectedly reached outbound address")
+	}
+}
+
+func TestNativeLoopbackSupportsHTTPWithoutOutboundNetwork(t *testing.T) {
+	if !isNativeAvailable() {
+		t.Skip("native sandbox not available")
+	}
+	ws := t.TempDir()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := filepath.Join(ws, "loopback-probe")
+	if err = os.WriteFile(probe, data, 0700); err != nil {
+		t.Fatal(err)
+	}
+	command := "NEKOCODE_NATIVE_LOOPBACK_PROBE=1 '" + strings.ReplaceAll(probe, "'", "'\\''") + "' -test.run='^TestNativeLoopbackProbe$' -test.v"
+	out, err := runNativeBash(t.Context(), command, Profile{Workspace: ws}, 10*time.Second)
+	if err != nil || !strings.Contains(out, "--- PASS: TestNativeLoopbackProbe") {
+		t.Fatalf("isolated local HTTP: %v\n%s", err, out)
+	}
+}
 
 func TestRunNativeBash_SimpleEcho(t *testing.T) {
 	if !isNativeAvailable() {
@@ -122,36 +188,59 @@ func TestRunNativeBash_CachePathMounted(t *testing.T) {
 	}
 }
 
-// TestRunNativeBash_WritePathCreatedUnderHome verifies that a WritePath
-// located under a read-only top-level directory (e.g. /home) that does not
-// yet exist on the host can still be created and written inside the sandbox.
-// In the legacy hide mode /home was hidden, so MkdirAll created fresh dirs in
-// the tmpfs root; after the "restrict, don't hide" change /home is bound
-// read-only, which would make MkdirAll fail with EPERM before the writable
-// bind could be established.
+// Verify source creation independently of host HOME permissions.
+func TestRunNativeBash_WritePathCreated(t *testing.T) {
+	if !isNativeAvailable() {
+		t.Skip("native sandbox not available")
+	}
+	testNativeWritePathCreation(t, t.TempDir())
+}
+
+// Also cover a source beneath a top-level bind that becomes read-only inside
+// the sandbox. The host directory itself must be writable to honor WritePaths.
 func TestRunNativeBash_WritePathCreatedUnderHome(t *testing.T) {
 	if !isNativeAvailable() {
 		t.Skip("native sandbox not available")
 	}
-
-	home, _ := os.UserHomeDir()
-	if home == "" {
-		t.Skip("no home directory")
-	}
-
-	// A path under $HOME that does not exist on the host.
-	newDir := filepath.Join(home, ".nekocode_test_writepath_"+strconv.Itoa(os.Getpid()))
-	// Ensure it does not exist on the host before the run.
-	_ = os.RemoveAll(newDir)
-	t.Cleanup(func() { _ = os.RemoveAll(newDir) })
-
-	ws := t.TempDir()
-	_, err := runNativeBash(t.Context(), "echo data > "+newDir+"/file.txt", Profile{
-		Workspace:  ws,
-		WritePaths: []string{newDir},
-	}, 10*time.Second)
+	home, err := os.UserHomeDir()
 	if err != nil {
-		t.Fatalf("write to non-existent WritePath under /home failed: %v", err)
+		t.Skipf("no home directory: %v", err)
+	}
+	base, err := os.MkdirTemp(home, ".nekocode_test_writepath_")
+	if err != nil {
+		if errors.Is(err, syscall.EROFS) || errors.Is(err, os.ErrPermission) {
+			t.Skipf("host HOME is not writable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+	testNativeWritePathCreation(t, base)
+}
+
+func testNativeWritePathCreation(t *testing.T, base string) {
+	t.Helper()
+	for _, mode := range []string{"", "1"} {
+		name := "visible"
+		if mode != "" {
+			name = "hidden"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("NEKOCODE_SANDBOX_HIDE_FS", mode)
+			newDir := filepath.Join(base, name, "missing", "nested")
+			ws := t.TempDir()
+			file := filepath.Join(newDir, "file.txt")
+			command := "echo data > '" + strings.ReplaceAll(file, "'", "'\"'\"'") + "'"
+			_, err := runNativeBash(t.Context(), command, Profile{
+				Workspace: ws, WritePaths: []string{newDir},
+			}, 10*time.Second)
+			if err != nil {
+				t.Fatalf("write to non-existent WritePath failed: %v", err)
+			}
+			data, err := os.ReadFile(file)
+			if err != nil || string(data) != "data\n" {
+				t.Fatalf("host WritePath did not receive data: %q, %v", data, err)
+			}
+		})
 	}
 }
 

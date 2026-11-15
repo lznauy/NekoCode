@@ -16,7 +16,11 @@ func configureProcess(cmd *exec.Cmd) {
 func killProcessTree(process *os.Process) error {
 	err := syscall.Kill(-process.Pid, syscall.SIGKILL)
 	if errors.Is(err, syscall.ESRCH) {
-		return process.Kill()
+		err = process.Kill()
+		if errors.Is(err, os.ErrProcessDone) {
+			return nil
+		}
+		return err
 	}
 	return err
 }

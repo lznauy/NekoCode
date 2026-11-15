@@ -27,6 +27,7 @@ type SubagentAttemptUsage struct {
 // SubagentAttempt is one admitted execution of a durable task. TranscriptStart
 // and TranscriptEnd are inclusive sequence numbers; an empty range has start=end+1.
 type SubagentAttempt struct {
+	RuntimeResult   bool   `json:"runtime_result,omitempty"`
 	ID              string `json:"id"`
 	Seq             int    `json:"seq"`
 	Prompt          string `json:"prompt"`
@@ -265,6 +266,33 @@ func (s *SubagentSession) SetWorkspaceBaseline(base, head string) error {
 func (s *SubagentSession) Snapshot() *Snapshot { return s.snapshot.Clone() }
 
 func (s *SubagentSession) Begin(profile, prompt string, skills []string, title ...string) error {
+	return s.begin(uuid.NewString(), false, profile, prompt, skills, title...)
+}
+
+// BeginBackground uses the Runtime-admitted attempt identity and persists its
+// result ownership before model execution. Recovery can correlate both stores.
+func (s *SubagentSession) BeginBackground(attemptID, profile, prompt string, skills []string, title ...string) error {
+	if err := validateID(attemptID); err != nil {
+		return err
+	}
+	if len(attemptID) > 255 {
+		return fmt.Errorf("invalid attempt identity")
+	}
+	if err := s.begin(attemptID, true, profile, prompt, skills, title...); err != nil {
+		return err
+	}
+	return s.snapshot.saveAt(s.root)
+}
+
+func (s *SubagentSession) begin(attemptID string, runtimeResult bool, profile, prompt string, skills []string, title ...string) error {
+	if s.lock == nil || s.snapshot.Subagent == nil {
+		return fmt.Errorf("subagent session is closed")
+	}
+	for _, prior := range s.snapshot.Subagent.Attempts {
+		if prior.ID == attemptID {
+			return fmt.Errorf("attempt identity is already in use")
+		}
+	}
 	meta := s.snapshot.Subagent
 	if meta.RunCount > 0 && meta.Profile != profile {
 		return fmt.Errorf("cannot change subagent profile on resume")
@@ -279,7 +307,7 @@ func (s *SubagentSession) Begin(profile, prompt string, skills []string, title .
 	}
 	meta.RunCount++
 	attempt := SubagentAttempt{
-		ID: uuid.NewString(), Seq: meta.RunCount, Prompt: prompt, Status: "running",
+		ID: attemptID, RuntimeResult: runtimeResult, Seq: meta.RunCount, Prompt: prompt, Status: "running",
 		StartedAt: time.Now().Unix(), TranscriptStart: s.snapshot.TranscriptSeq + 1,
 		TranscriptEnd: s.snapshot.TranscriptSeq,
 	}

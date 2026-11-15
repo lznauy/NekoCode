@@ -28,7 +28,7 @@ func (t *ReadTool) readImage(ctx context.Context, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("[Image] %s — %s, %dx%d", filepath.Base(path), format, cfg.Width, cfg.Height), nil
+	return fmt.Sprintf("[Image metadata only; pixels not delivered. Use image_understand for visual inspection.] %s — %s, %dx%d", filepath.Base(path), format, cfg.Width, cfg.Height), nil
 }
 
 func (t *ReadTool) readPDF(path string) (string, error) {

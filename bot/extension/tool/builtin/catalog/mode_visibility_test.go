@@ -37,6 +37,9 @@ func TestBackgroundToolsAreCoordinatorOnly(t *testing.T) {
 					}
 				}
 			}
+			if visible["task_findings"] {
+				t.Fatal("review workflow tool exposed by generic toolbox")
+			}
 			if !visible["task_result"] {
 				t.Error("result reader hidden")
 			}

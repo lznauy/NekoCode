@@ -96,14 +96,15 @@ const (
 )
 
 type Event struct {
-	Version  string    `json:"version,omitempty"`
-	ID       string    `json:"id"`
-	Sequence uint64    `json:"sequence,omitempty"`
-	RunID    RunID     `json:"run_id,omitempty"`
-	Type     EventType `json:"type"`
-	Source   SourceRef `json:"source"`
-	Time     time.Time `json:"time"`
-	Payload  any       `json:"payload,omitempty"`
+	SessionID string    `json:"session_id,omitempty"`
+	Version   string    `json:"version,omitempty"`
+	ID        string    `json:"id"`
+	Sequence  uint64    `json:"sequence,omitempty"`
+	RunID     RunID     `json:"run_id,omitempty"`
+	Type      EventType `json:"type"`
+	Source    SourceRef `json:"source"`
+	Time      time.Time `json:"time"`
+	Payload   any       `json:"payload,omitempty"`
 }
 
 // IsRunTerminal identifies the existing run settlement boundary.

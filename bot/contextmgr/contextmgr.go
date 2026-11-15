@@ -17,6 +17,7 @@ import (
 	"nekocode/bot/provider"
 	"nekocode/bot/provider/types"
 	"nekocode/protocol"
+	"nekocode/util/modelbudget"
 )
 
 type Manager struct {
@@ -137,7 +138,7 @@ func (m *Manager) streamingSummarizer(ctx context.Context, client provider.LLM, 
 			// response (provider closed the stream without content — often
 			// transient) is retried once. A cancelled context ends the loop.
 			var budgetErr *RequestBudgetError
-			if strings.TrimSpace(summary) != "" || ctx.Err() != nil || errors.As(err, &budgetErr) {
+			if strings.TrimSpace(summary) != "" || ctx.Err() != nil || errors.As(err, &budgetErr) || errors.Is(err, modelbudget.ErrExhausted) {
 				return summary, err
 			}
 		}
@@ -163,6 +164,9 @@ func (m *Manager) summarizeStreamOnce(ctx context.Context, client provider.LLM, 
 	m.state.mu.RUnlock()
 	requestMessages, err := prepareSummaryRequest(msgs, prevSummary, window, client)
 	if err != nil {
+		return "", err
+	}
+	if err := modelbudget.Admit(modelbudget.WithRole(ctx, modelbudget.Work, "")); err != nil {
 		return "", err
 	}
 	tokens, errs := client.ChatStream(ctx, requestMessages, nil)

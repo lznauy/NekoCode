@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"nekocode/interaction/connect"
 	controlruntime "nekocode/runtime"
 )
 
@@ -15,6 +16,55 @@ type fakeSender struct {
 	text  string
 	err   error
 	sent  []string
+}
+
+type statusRecorder struct {
+	controlruntime.ConnectorRuntime
+	statuses []controlruntime.ConnectorStatusPayload
+}
+
+func (r *statusRecorder) ReportConnectorStatus(status controlruntime.ConnectorStatusPayload) {
+	r.statuses = append(r.statuses, status)
+}
+
+func TestInvalidMessageDoesNotBlockQueuedDelivery(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := Config{BotID: "bot", Secret: "secret"}
+	cfg.finishPairing("owner", "owner")
+	if err := saveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	rt := &statusRecorder{}
+	c := New(rt)
+	sender := &fakeSender{err: errors.New("offline")}
+	sink := eventSink{c: c, sender: sender}
+	// A valid message is queued while offline; invalid UTF-8 must not
+	// become a retryable queue entry before the next valid message.
+	if err := sink.Post(t.Context(), connect.Intent{Kind: connect.IntentResult, Text: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	c.routeRun, c.routeChat = "invalid-run", "owner"
+	err := sink.Post(t.Context(), connect.Intent{Kind: connect.IntentResult, RunID: "invalid-run", Text: "invalid UTF-8: \xff"})
+	if err == nil {
+		t.Fatal("invalid UTF-8 was treated as deferred delivery")
+	}
+	if len(c.pending) != 1 || c.routeRun != "" {
+		t.Fatalf("invalid message retained delivery state: pending=%d route=%s", len(c.pending), c.routeRun)
+	}
+	lastStatus := rt.statuses[len(rt.statuses)-1]
+	if lastStatus.Status != "error" || !strings.Contains(lastStatus.Message, "prepare") || strings.Contains(lastStatus.Message, "reconnect") {
+		t.Fatalf("invalid UTF-8 not reported separately: %+v", lastStatus)
+	}
+	if err := sink.Post(t.Context(), connect.Intent{Kind: connect.IntentResult, Text: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	sender.err = nil
+	for range 3 {
+		c.flushPending(t.Context(), sender)
+	}
+	if strings.Join(sender.sent, ",") != "first,second" || len(c.pending) != 0 {
+		t.Fatalf("healthy reconnect blocked: sent=%v pending=%d", sender.sent, len(c.pending))
+	}
 }
 
 func TestGroupRoutesOnlyItsOwnRun(t *testing.T) {
@@ -46,7 +96,7 @@ func (s *fakeSender) replyText(_ context.Context, reqID, text string) error {
 	return nil
 }
 
-func (s *fakeSender) sendMarkdown(_ context.Context, _ string, text string) error {
+func (s *fakeSender) sendMarkdownPart(_ context.Context, _ string, text string) error {
 	if s.err != nil {
 		return s.err
 	}
@@ -56,11 +106,11 @@ func (s *fakeSender) sendMarkdown(_ context.Context, _ string, text string) erro
 
 func TestPendingMessagesSurviveFailedFlush(t *testing.T) {
 	c := New(nil)
-	c.enqueue(outboundMessage{chatID: "chat-1", text: "first"})
-	c.enqueue(outboundMessage{chatID: "chat-1", text: "second"})
+	c.enqueue(outboundMessage{chatID: "chat-1", parts: []string{"first"}})
+	c.enqueue(outboundMessage{chatID: "chat-1", parts: []string{"second"}})
 	failing := &fakeSender{err: errors.New("offline")}
 	c.flushPending(context.Background(), failing)
-	if len(c.pending) != 2 || c.pending[0].text != "first" {
+	if len(c.pending) != 2 || strings.Join(c.pending[0].parts, "") != "first" {
 		t.Fatalf("pending after failure = %#v", c.pending)
 	}
 	connected := &fakeSender{}
@@ -74,7 +124,7 @@ func TestClearDeliveryStateDropsOldIdentityMessages(t *testing.T) {
 	c := New(nil)
 	c.routeRun = "run-1"
 	c.routeChat = "old-chat"
-	c.enqueue(outboundMessage{chatID: "old-chat", text: "secret result"})
+	c.enqueue(outboundMessage{chatID: "old-chat", parts: []string{"secret result"}})
 	c.acceptMessage("msg-1", time.Now())
 	c.clearDeliveryState()
 	if c.routeRun != "" || c.routeChat != "" || len(c.pending) != 0 || len(c.seen) != 0 {

@@ -64,15 +64,14 @@ func (p *Process) Terminate(grace time.Duration) error {
 	if p == nil || p.cmd == nil || p.cmd.Process == nil {
 		return fmt.Errorf("process not started")
 	}
-	pid := p.cmd.Process.Pid
 	if runtime.GOOS == "windows" {
-		if err := p.cmd.Process.Kill(); err != nil {
+		if err := signalProcessTree(p.cmd.Process, true); err != nil {
 			return err
 		}
 		p.finish()
 		return nil
 	}
-	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	_ = signalProcessTree(p.cmd.Process, false)
 	deadline := time.NewTimer(grace)
 	defer deadline.Stop()
 	for {
@@ -81,7 +80,7 @@ func (p *Process) Terminate(grace time.Duration) error {
 			p.finish()
 			return nil
 		case <-deadline.C:
-			err := syscall.Kill(-pid, syscall.SIGKILL)
+			err := signalProcessTree(p.cmd.Process, true)
 			p.finish()
 			return err
 		}
@@ -105,12 +104,15 @@ func (p *Process) finish() {
 	})
 }
 
-func startCommand(ctx context.Context, name string, args []string, env []string, dir string, sysproc *syscall.SysProcAttr, cleanup func()) (*Process, error) {
+func startCommand(ctx context.Context, name string, args []string, env []string, dir string, sysproc *syscall.SysProcAttr, cleanup func(), files ...[]*os.File) (*Process, error) {
 	cmdCtx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(cmdCtx, name, args...)
 	cmd.Env = env
 	cmd.Dir = dir
 	cmd.SysProcAttr = sysproc
+	if len(files) > 0 {
+		cmd.ExtraFiles = files[0]
+	}
 
 	// Wire output through io.Pipe writers: exec copies process output into
 	// them and Wait() blocks until the copy completes, so the final bytes
@@ -134,8 +136,8 @@ func startCommand(ctx context.Context, name string, args []string, env []string,
 		done: make(chan struct{}), cleanup: cleanup,
 	}
 	p.stopKill = context.AfterFunc(cmdCtx, func() {
-		if cmd.Process != nil && runtime.GOOS != "windows" {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if cmd.Process != nil {
+			_ = signalProcessTree(cmd.Process, true)
 		}
 	})
 	return p, nil
@@ -152,9 +154,6 @@ func StartHost(ctx context.Context, command string) (*Process, error) {
 
 // StartHostIn executes in an explicitly owned workspace without process chdir.
 func StartHostIn(ctx context.Context, command, dir string) (*Process, error) {
-	sysproc := &syscall.SysProcAttr{}
-	if runtime.GOOS != "windows" {
-		sysproc.Setpgid = true
-	}
+	sysproc := hostProcessAttributes()
 	return startCommand(ctx, "bash", []string{"-c", command}, nil, dir, sysproc, nil)
 }

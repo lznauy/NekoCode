@@ -14,7 +14,7 @@ type backgroundHost struct {
 
 // owns rejects callbacks from an older execution even when the task ID is reused.
 func (h backgroundHost) owns(e *backgroundEntry) bool {
-	return e != nil && e.SessionID == h.sessionID && e.interactionID == h.interactionID
+	return e != nil && !e.settling && e.SessionID == h.sessionID && e.interactionID == h.interactionID
 }
 
 func (h backgroundHost) Step(ev protocol.StepEvent) {
@@ -34,12 +34,14 @@ func (h backgroundHost) Step(ev protocol.StepEvent) {
 			b.mu.Unlock()
 			return
 		}
-		if ev.SubAgentAttemptID != "" {
-			e.AttemptID, e.AttemptSeq = ev.SubAgentAttemptID, ev.SubAgentAttemptSeq
+		// Execution identity is admitted and persisted by Runtime, never replaced
+		// by a worker callback. Sequence numbers reflect the child's durable history.
+		ev.SubAgentAttemptID = e.AttemptID
+		if ev.SubAgentAttemptSeq > 0 {
+			e.AttemptSeq = ev.SubAgentAttemptSeq
 		}
-		if ev.SubAgentAttemptID == "" {
-			ev.SubAgentAttemptID, ev.SubAgentAttemptSeq = e.AttemptID, e.AttemptSeq
-		}
+		ev.SubAgentAttemptSeq = e.AttemptSeq
+
 		if terminal {
 			// Preserve the worker's outcome even after cancellation, but leave
 			// the task active until execute settles and publishes its sole End.
@@ -64,6 +66,7 @@ func (h backgroundHost) status(status string) {
 	}
 	h.runtime.background.mu.Unlock()
 	h.Step(protocol.StepEvent{Action: protocol.StepActionSubAgentUpdate, SubAgentStatus: status})
+	h.runtime.background.signal()
 }
 func (h backgroundHost) Confirm(req protocol.ConfirmRequest) protocol.ConfirmReply {
 	if h.ctx.Err() != nil {

@@ -59,7 +59,9 @@ func TestBackgroundStoredTruncationSurvivesRecoveryAndRequiresFullRead(t *testin
 	services.Modes.Current = func() mode.ID { return mode.Standard }
 	rt := New(RunnerFunc(func(context.Context, string, RunHost) (string, error) { return "", nil }), services)
 	body := "x" + strings.Repeat("证据🙂", backgroundResultLimit/8)
-	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "large", SessionID: "session", GroupID: "group", Run: func(context.Context, protocol.BackgroundHost) (string, error) { return body, nil }})
+	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "large", SessionID: "session", GroupID: "group", Run: func(context.Context, protocol.BackgroundHost) (protocol.BackgroundResult, error) {
+		return protocol.BackgroundResult{Text: body}, nil
+	}})
 	if err != nil {
 		rt.Close()
 		t.Fatal(err)

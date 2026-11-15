@@ -2,6 +2,7 @@ package permission
 
 import (
 	"bytes"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -68,16 +69,19 @@ func BashRuleMatches(spec string, info map[string]any, mode BashMatchMode) bool 
 	}
 	pattern := normalizeBashSpec(spec)
 	trimmedCmd := strings.TrimSpace(cmd)
+	if strings.HasPrefix(pattern, "| ") {
+		return mode == MatchAnySubcommand && shellPipelineMatches(strings.TrimSpace(strings.TrimPrefix(pattern, "| ")), cmd)
+	}
 	if !hasBashWildcard(pattern) && strings.TrimSpace(pattern) == trimmedCmd {
 		return true
 	}
-	subcmds := shellCommands(cmd)
+	subcmds := cachedShellCommands(cmd, mode == MatchAnySubcommand)
 	if len(subcmds) == 0 {
 		return false
 	}
 	matched := 0
 	for _, sub := range subcmds {
-		if matchBashPattern(pattern, sub) {
+		if matchBashPattern(pattern, sub) || mode == MatchAnySubcommand && matchBashPattern(pattern, normalizeGuardExecutable(sub)) {
 			if mode == MatchAnySubcommand {
 				return true
 			}
@@ -89,6 +93,39 @@ func BashRuleMatches(spec string, info map[string]any, mode BashMatchMode) bool 
 		}
 	}
 	return mode == MatchAllSubcommands && matched == len(subcmds)
+}
+
+// Guard rules recognize executable paths, but allow rules retain the exact
+// executable identity: ./ls must never inherit the builtin ls permission.
+func normalizeGuardExecutable(command string) string {
+	return normalizeShellProjection(command, true, true)
+}
+
+// A pipeline rule describes syntax, not a command prefix. Walk only the
+// receiving branch so quoted pipes and an unrelated shell cannot match.
+func shellPipelineMatches(pattern, command string) bool {
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "")
+	if err != nil {
+		return false
+	}
+	matched := false
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if matched {
+			return false
+		}
+		binary, ok := node.(*syntax.BinaryCmd)
+		if !ok || binary.Op != syntax.Pipe && binary.Op != syntax.PipeAll {
+			return true
+		}
+		for _, sub := range cachedShellCommands(renderShellNode(binary.Y), true) {
+			if matchBashPattern(pattern+" *", normalizeGuardExecutable(sub)) {
+				matched = true
+				break
+			}
+		}
+		return !matched
+	})
+	return matched
 }
 
 func hasBashWildcard(pattern string) bool {
@@ -154,11 +191,15 @@ func stripWrappers(cmd string) string {
 }
 
 func normalizeShellCommand(cmd string, unwrap bool) string {
-	key := shellNormalizationKey{command: cmd, unwrap: unwrap}
+	return normalizeShellProjection(cmd, unwrap, false)
+}
+
+func normalizeShellProjection(cmd string, unwrap, guard bool) string {
+	key := shellNormalizationKey{command: cmd, unwrap: unwrap, guard: guard}
 	if cached, ok := shellNormalizationCache.Load(key); ok {
 		return cached.(string)
 	}
-	value := normalizeShellCommandUncached(cmd, unwrap)
+	value := normalizeShellCommandUncached(cmd, unwrap, guard)
 	if shellNormalizationCount.Add(1) > shellParseCacheMax {
 		shellNormalizationCache.Clear()
 		shellNormalizationCount.Store(1)
@@ -167,7 +208,7 @@ func normalizeShellCommand(cmd string, unwrap bool) string {
 	return value
 }
 
-func normalizeShellCommandUncached(cmd string, unwrap bool) string {
+func normalizeShellCommandUncached(cmd string, unwrap, guard bool) string {
 	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
 	file, err := parser.Parse(strings.NewReader(cmd), "")
 	if err != nil || len(file.Stmts) != 1 || len(file.Stmts[0].Redirs) != 0 {
@@ -217,7 +258,11 @@ func normalizeShellCommandUncached(cmd string, unwrap bool) string {
 	offset := len(tokens) - len(unwrapped)
 	for i, token := range unwrapped {
 		if token.static {
-			quoted, err := syntax.Quote(token.value, syntax.LangBash)
+			value := token.value
+			if guard && i == 0 && strings.Contains(value, "/") {
+				value = path.Base(value)
+			}
+			quoted, err := syntax.Quote(value, syntax.LangBash)
 			if err != nil {
 				return cmd
 			}
@@ -238,6 +283,7 @@ const shellParseCacheMax = 256
 type shellNormalizationKey struct {
 	command string
 	unwrap  bool
+	guard   bool
 }
 
 var (
@@ -253,20 +299,28 @@ var (
 // re-matched against many rules (deny/ask/allow passes plus allow coverage)
 // on every tool call, and the parse dominates that cost. Callers must not
 // mutate the returned slice — it is shared from the cache.
-func shellCommands(cmd string) []string {
-	if v, ok := shellParseCache.Load(cmd); ok {
+func shellCommands(cmd string) []string { return cachedShellCommands(cmd, false) }
+
+type shellGuardParseKey struct{ command string }
+
+func cachedShellCommands(cmd string, guards bool) []string {
+	var key any = cmd
+	if guards {
+		key = shellGuardParseKey{cmd}
+	}
+	if v, ok := shellParseCache.Load(key); ok {
 		return v.([]string)
 	}
-	out := parseShellCommands(cmd)
+	out := parseShellCommands(cmd, guards)
 	if shellParseCount.Add(1) > shellParseCacheMax {
 		shellParseCache.Clear()
 		shellParseCount.Store(1)
 	}
-	shellParseCache.Store(cmd, out)
+	shellParseCache.Store(key, out)
 	return out
 }
 
-func parseShellCommands(cmd string) []string {
+func parseShellCommands(cmd string, guards bool) []string {
 	parser := syntax.NewParser()
 	file, err := parser.Parse(strings.NewReader(cmd), "")
 	if err != nil {
@@ -291,6 +345,9 @@ func parseShellCommands(cmd string) []string {
 			}
 			return true
 		case *syntax.CallExpr:
+			if guards {
+				out = append(out, indirectGuardCommands(n)...)
+			}
 			// Also retain the command projection so narrow deny/ask rules
 			// still match when an attacker appends a redirection.
 			if s := renderShellNode(n); s != "" {

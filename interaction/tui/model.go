@@ -66,6 +66,7 @@ type Model struct {
 	runtimeEvents         <-chan controlruntime.Event
 	metrics               controlruntime.MetricsSnapshot
 	commandMenuBack       []string
+	clipboardGeneration   uint64
 	sessionLoadGeneration uint64
 	sessionLoading        bool
 	sessionLoadStarted    time.Time

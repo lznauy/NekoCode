@@ -42,6 +42,8 @@ stdout 只输出协议 JSON；CLI 诊断错误写 stderr，内部诊断日志沿
 
 - 一个连接独占一个 runtime，默认创建新会话；`--resume` 在开始读取消息前恢复会话。
 - `initialize` 可省略；如果使用，必须在第一条 user 消息之前发送，且只能成功一次。
+- 可在 initialize 设置 `model_call_budget`（1–1000000 的整数）。预算覆盖这条连接启动的前台、排队输入及其后台任务与结果协调，按请求发出前原子计数，包含在途、失败和重试；普通额度耗尽后最多预留 8 次不同 attempt 的交接及 4 次协调调用，小预算按比例缩小。`server.info` 与 `context.snapshot` 的 `execution_budget` 返回当前计数。没有配置时不限制。预算是连接内的内存对象；后台已受理工作继续使用原对象，不写进会话或在重连时重置旧工作的额度。新连接可以为新受理工作设置新预算，同一计划的不同预算报告分开协调。
+- 已覆盖主模型、子任务、压缩与 image_understand 调用；外部 MCP/脚本自己访问模型不在该计数器内。预算计数是请求 admission 上限，不是精确账单或 token 上限。不会中断正在执行的工具批次；阶段交接与最终回答仍可能因取消、上下文过大或模型协议错误失败，必须保留 partial/验证缺口。
 - user 消息按 FIFO 排队，一个 runtime 同时只运行一个 turn。
 - 每次接受输入后输出 `system/input_queued`，其 `accepted_uuid` 是关联 ID。
 - 每个已启动 turn 输出 `system/init`，最终恰好一条 `result`。
@@ -116,8 +118,9 @@ thinking signature 或供应商 usage。完整 assistant 内容是权威值，�
 ### 结果与统计
 
 `result.subtype` 支持 `success`、`error_during_execution`、`error_cancelled`、
-`error_step_limit`，含 `is_error`、`result`、`duration_ms` 和可选 `errors` 数组。
-`stop_reason` 分别为 `completed`、`execution_error`、`cancelled`、`step_limit`。
+`error_step_limit`、`error_incomplete`，含 `is_error`、`result`、`duration_ms` 和可选 `errors` 数组。
+`stop_reason` 分别为 `completed`、`execution_error`、`cancelled`、`step_limit`、`incomplete`。
+未完成清单的部分报告使用 `error_incomplete`，保留报告正文并设置 `is_error=true`；单次 CLI 退出码为 `1`。
 runtime 的失败/取消终态优先于代理摘要，保存会话等收尾失败不会被标为成功。
 
 一次性 `--output-schema` 模式还使用 `error_output_validation`：最终答案 JSON 解析失败、包含额外 JSON 值或尾随内容、以及 Schema Validate 失败均归入此类，退出码为 `1`。运行取消优先报告 `error_cancelled` 和退出码 `130`；启动前的 Schema 文件或编译错误仍退出 `2`，不会启动运行。输出校验失败不自动重试。
@@ -299,3 +302,22 @@ EOF、重复 ID、未知请求、中断工具结算、结构化参数、超大�
 ### 子任务查询边界
 
 Headless stream-json 与 ACP 继续以既有事件流传递子任务进度，不新增专有任务查询 RPC。需要跨会话列表、历史、轮次、工具输出、搜索/导出和后台管理的集成，可使用同一 Runtime 的 [HTTP 接口](RUNTIME_HTTP_API.md#任务与后台管理)。事件预览不替代规范历史；不能将“有任务事件”解释为协议提供了任务查询或删除方法。
+
+自动后台协调轮次使用普通 `system/init`、审批/提问、输出和 `result` 帧；其 `user_message_uuid` 为协调轮次的 `run_id`，因为没有对应的新用户输入。`init.nekocode_source.kind=task_completion` 标识该来源。只绑定当前会话已登记任务计划的 runtime 轮次，协调期间会话切换和取消沿用普通运行规则。
+
+取消由 runtime 在与运行受理相同的锁边界内裁定：`CancelRunWithResult` 返回实际 `run_id` 和 `queued_removed`、`started`、`terminal` 或 `absent`。空运行 ID 选择真实当前执行；`CancelRun` 保留兼容入口。Headless 仅在 `queued_removed` 时删除已受理输入，已经开始附件准备或已有终态的轮次仍保留到 `result`，不通过查询快照猜测队列状态。`interrupt` 与取消式 shutdown 均使用此契约；EOF 会等待已受理轮次交付结果。
+
+
+### Background interactions in Super mode
+
+Interactive connections also forward approvals and questions from the bound
+session's background tasks after the foreground turn has ended. These reverse
+`control_request` frames include `nekocode_subagent_id` and `nekocode_run_id`;
+they do not require an active foreground `user_message_uuid`. Answer them through
+the same `control_response` mechanism. Foreground completion does not reject a
+background task's pending request. EOF, shutdown cancellation and disconnection
+reject pending interactions. `session.new` and `session.resume` require the
+current session's background tasks to settle or be cancelled, as well as no
+pending interactions, so future requests cannot lose their connection binding.
+
+共享调用预算耗尽属于运行错误，不作为普通 assistant 成功回答。仅当普通额度为零且该预算下所有后台 worker 均已结束时，runtime 可将未用 worker 交接预留转给最终协调；总请求上限不变，普通调查仍禁止。该转移不会取消在途工具或模型请求。

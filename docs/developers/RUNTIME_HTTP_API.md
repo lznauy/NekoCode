@@ -28,6 +28,9 @@ static cross-compilation targets are documented in [`build/README.md`](../../bui
 ## Rules
 
 - JSON requests reject unknown fields and multiple JSON values.
+- Request bodies are limited to 1 MiB, including chunked bodies and trailing
+  whitespace. Larger bodies return HTTP 413 before runtime mutation. Endpoint
+  limits may be stricter (background task append remains limited to 16 KiB).
 - Runtime protocol errors include a stable `code`.
 - SSE event IDs are monotonic cursors. Clients reconnect with `after` or
   `Last-Event-ID`.
@@ -141,6 +144,11 @@ read-only under full access.
 
 The response is `202 Accepted` with `{"run_id":"run_1"}`. A blank
 `source.kind` defaults to `http`.
+
+Input admission keeps the request's cancellation and deadline, capped at 30
+seconds. Cancelled admission returns 408; an expired admission deadline returns
+504. Once accepted, the run has its own lifetime: returning the HTTP response or
+disconnecting does not cancel it. Use `POST /runs/{runID}/abort` to stop it.
 
 ## Interaction
 

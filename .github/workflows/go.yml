@@ -35,10 +35,33 @@ jobs:
           test -z "$unformatted" || { printf '%s\n' "$unformatted"; exit 1; }
       - name: Build
         run: CC=/tmp/zigcc-linux-amd64 go build ./...
+      - name: Cross-compile Windows entry points
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: "1"
+          CC: /tmp/zigcc-windows-amd64
+        run: |
+          cat > /tmp/zigcc-windows-amd64 <<'EOF'
+          #!/bin/sh
+          exec zig cc -target x86_64-windows-gnu "$@"
+          EOF
+          chmod +x /tmp/zigcc-windows-amd64
+          go build ./headless ./acp ./cmd/headless ./cmd/daemon ./cmd/tui
       - name: Architecture boundaries
         run: go test ./internal/architecture
       - name: Test
         run: CC=/tmp/zigcc-linux-amd64 go test ./...
+      - name: Test standalone evals Go module
+        working-directory: evals
+        run: CC=/tmp/zigcc-linux-amd64 go test -count=1 ./...
+      - name: Test offline evals
+        working-directory: evals
+        env:
+          NEKOCODE_EVAL_BROWSER_TESTS: "0"
+        run: |
+          python3 -c 'import sys; assert sys.version_info >= (3, 11), "offline evals require Python 3.11+"'
+          python3 -m unittest discover -s tests -v
       - name: Vet
         run: CC=/tmp/zigcc-linux-amd64 go vet ./...
 

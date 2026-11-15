@@ -1,7 +1,12 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
+	"image"
+	"image/png"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -10,8 +15,6 @@ import (
 func TestCurrentRunExistsThroughoutAttachmentPreparation(t *testing.T) {
 	for _, outcome := range []string{"completed", "failed", "cancelled"} {
 		t.Run(outcome, func(t *testing.T) {
-			var block atomic.Bool
-			var once sync.Once
 			var started atomic.Int32
 			entered, release := make(chan struct{}), make(chan struct{})
 			var releaseOnce sync.Once
@@ -19,13 +22,17 @@ func TestCurrentRunExistsThroughoutAttachmentPreparation(t *testing.T) {
 			services.Models.ImageAttachmentsEnabled = func() bool { return true }
 			services.Sessions.ListSessions = func() []SessionMeta { return nil }
 			services.Sessions.SessionMessages = func() []DisplayMessage { return nil }
-			services.Sessions.CurrentSessionID = func() string {
-				if block.Load() {
-					once.Do(func() { close(entered) })
-					<-release
-				}
-				return "session"
+			services.Sessions.CurrentSessionID = func() string { return "session" }
+			t.Setenv("HOME", t.TempDir())
+			var encoded bytes.Buffer
+			if err := png.Encode(&encoded, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+				t.Fatal(err)
 			}
+			path := filepath.Join(t.TempDir(), "source.png")
+			if err := os.WriteFile(path, encoded.Bytes(), 0600); err != nil {
+				t.Fatal(err)
+			}
+
 			rt := New(RunnerFunc(func(context.Context, string, RunHost) (string, error) { return "done", nil }), services)
 			defer rt.Close()
 			defer releaseOnce.Do(func() { close(release) })
@@ -41,12 +48,13 @@ func TestCurrentRunExistsThroughoutAttachmentPreparation(t *testing.T) {
 			if err := rt.WaitRun(t.Context(), first); err != nil {
 				t.Fatal(err)
 			}
-			block.Store(true)
-			path := ""
+			// Release is the real attachment ownership callback: it runs only
+			// after reading and adopting the image, before RunStarted is emitted.
+			images := []ImageAttachment{{Label: "image", Path: path, Release: func() { close(entered); <-release }}}
 			if outcome == "failed" {
-				path = t.TempDir()
+				images = append(images, ImageAttachment{Label: "invalid", Path: t.TempDir()})
 			}
-			second, err := rt.StartRun(t.Context(), Input{Source: SourceRef{Kind: "gui", ID: "client"}, Text: "new image draft", Images: []ImageAttachment{{Label: "image", Path: path}}})
+			second, err := rt.StartRun(t.Context(), Input{Source: SourceRef{Kind: "gui", ID: "client"}, Text: "new image draft", Images: images})
 			if err != nil {
 				t.Fatal(err)
 			}

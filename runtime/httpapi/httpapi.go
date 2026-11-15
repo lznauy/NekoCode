@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"nekocode/mode"
 	controlruntime "nekocode/runtime"
@@ -36,11 +37,12 @@ type Runtime interface {
 }
 
 type Server struct {
-	rt Runtime
+	rt                    Runtime
+	inputAdmissionTimeout time.Duration
 }
 
 func New(rt Runtime) *Server {
-	return &Server{rt: rt}
+	return &Server{rt: rt, inputAdmissionTimeout: 30 * time.Second}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -78,7 +80,33 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /runs/{runID}/abort", s.handleAbort)
 	mux.HandleFunc("POST /approvals/{approvalID}", s.handleApproval)
 	mux.HandleFunc("POST /questions/{questionID}", s.handleQuestion)
-	return mux
+	return limitRequestBody(mux)
+}
+
+// MaxRequestBodyBytes bounds decoded inputs before any runtime mutation. The
+// limit also applies to chunked requests and trailing JSON whitespace.
+const MaxRequestBodyBytes int64 = 1 << 20
+
+func limitRequestBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ContentLength > MaxRequestBodyBytes {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds 1 MiB")
+			return
+		}
+		if r.Body != nil && r.Body != http.NoBody {
+			r.Body = http.MaxBytesReader(w, r.Body, MaxRequestBodyBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func writeDecodeError(w http.ResponseWriter, err error) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		return
+	}
+	writeError(w, http.StatusBadRequest, err.Error())
 }
 
 type submitRequest struct {
@@ -155,7 +183,7 @@ func (s *Server) handleConnectCommand(w http.ResponseWriter, r *http.Request) {
 	}
 	var req connectRequest
 	if err := decodeOptionalJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	resp, err := s.rt.Connect(r.Context(), r.PathValue("name"), req.Args)
@@ -259,11 +287,33 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
-	var req submitRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	ctx, cancel := context.WithTimeout(r.Context(), s.inputAdmissionTimeout)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		writeAdmissionError(w, err)
 		return
 	}
+	// Context deadlines alone do not interrupt Body.Read. Close synthetic
+	// readers, and interrupt a real HTTP connection before Close takes its
+	// body lock, so a stalled upload cannot outlive input admission.
+	body := r.Body
+	stopRead := context.AfterFunc(ctx, func() {
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now())
+		if body != nil {
+			_ = body.Close()
+		}
+	})
+	defer stopRead()
+	var req submitRequest
+	if err := decodeJSON(r, &req); err != nil {
+		if ctx.Err() != nil {
+			writeAdmissionError(w, ctx.Err())
+		} else {
+			writeDecodeError(w, err)
+		}
+		return
+	}
+	stopRead()
 	if strings.TrimSpace(req.Text) == "" {
 		writeError(w, http.StatusBadRequest, "text is required")
 		return
@@ -279,17 +329,32 @@ func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
 	if req.Sender != nil {
 		sender = *req.Sender
 	}
-	runID, err := s.rt.StartRun(context.WithoutCancel(r.Context()), controlruntime.Input{
+	if err := ctx.Err(); err != nil {
+		writeAdmissionError(w, err)
+		return
+	}
+	runID, err := s.rt.StartRun(controlruntime.WithDetachedRun(ctx), controlruntime.Input{
 		Source: source,
 		Sender: sender,
 		Text:   req.Text,
 		Images: req.Images,
 	})
 	if err != nil {
-		writeRuntimeError(w, err)
+		writeAdmissionError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, submitResponse{RunID: runID})
+}
+
+func writeAdmissionError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, context.Canceled):
+		writeError(w, http.StatusRequestTimeout, "input admission cancelled")
+	case errors.Is(err, context.DeadlineExceeded):
+		writeError(w, http.StatusGatewayTimeout, "input admission timed out")
+	default:
+		writeRuntimeError(w, err)
+	}
 }
 
 func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
@@ -304,7 +369,7 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request) {
 	var req approvalRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	err := s.rt.DecideApproval(r.Context(), r.PathValue("approvalID"), controlruntime.ApprovalDecision{
@@ -322,7 +387,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleQuestion(w http.ResponseWriter, r *http.Request) {
 	var req questionRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	err := s.rt.AnswerQuestion(r.Context(), r.PathValue("questionID"), controlruntime.QuestionReply{
@@ -427,6 +492,11 @@ func writeError(w http.ResponseWriter, status int, message string) {
 }
 
 func writeRuntimeError(w http.ResponseWriter, err error) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		writeDecodeError(w, err)
+		return
+	}
 	status := http.StatusBadRequest
 	body := map[string]any{"error": err.Error()}
 	var protocolErr *controlruntime.ProtocolError
@@ -508,7 +578,7 @@ func (s *Server) handleSetInteractionMode(w http.ResponseWriter, r *http.Request
 		Mode mode.ID `json:"mode"`
 	}
 	if err := decodeJSON(r, &request); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDecodeError(w, err)
 		return
 	}
 	if request.Mode == "" {

@@ -26,15 +26,15 @@ func (t *TodoWriteTool) SetApplyFn(fn protocol.TodoUpdateFunc) {
 
 func (t *TodoWriteTool) Name() string { return "todo_write" }
 func (t *TodoWriteTool) Description() string {
-	return "Maintain a delivery checklist for multi-step work in any mode. Replace todos in the active plan; reuse returned item IDs when renaming or updating. At most one item may be in_progress. Completed items require a brief result; blocked/cancelled items require a reason. Never omit unfinished items: retain or explicitly cancel them with a reason. Tool or subagent links are optional. To resume a saved plan in this session, supply plan_id; omit todos to activate and retrieve that plan before continuing. This activates unfinished work, so use it only when continuing the relevant demand. Reconcile the checklist before the final answer. Tool success alone does not prove completion."
+	return "Maintain a delivery checklist. New plan example: omit plan_id and every item id; the returned plan supplies IDs. To add a step later, use patch=true and omit that new step's id; to update an existing step, use its exact returned id. Never invent plan or step IDs. Patch updates preserve other work; default patch=false replaces the full list and must retain unfinished steps or cancel them with a reason. Multiple independent steps may be in_progress when they are actually running in parallel; leave queued work pending. Completed steps need a brief result. Supply an exact saved plan_id without todos only to activate that same demand. Reconcile before final answer; tool success does not prove completion."
 }
 
 func (t *TodoWriteTool) Parameters() []core.Parameter {
 	return []core.Parameter{
 		{
-			Name: "todos", Type: "array", Description: "Complete replacement task list.",
+			Name: "todos", Type: "array", Description: "Changed steps when patch=true; otherwise the complete replacement list.",
 			Items: &core.Schema{
-				Type: "object", Required: []string{"content", "status"},
+				Type: "object",
 				Properties: map[string]core.Schema{
 					"content": {Type: "string", Description: "Concrete deliverable or verification step."},
 					"status":  {Type: "string", Enum: []string{"pending", "in_progress", "completed", "blocked", "cancelled"}},
@@ -45,6 +45,7 @@ func (t *TodoWriteTool) Parameters() []core.Parameter {
 			},
 		},
 		{Name: "plan_id", Type: "string", Description: "Optional saved plan ID to activate and continue in this session; omitted means the active demand."},
+		{Name: "patch", Type: "boolean", Description: "Default false for compatibility. Prefer true to update only listed steps without resending the whole plan. Existing steps need returned id; new steps omit id and require content/status."},
 	}
 }
 
@@ -61,6 +62,14 @@ func (t *TodoWriteTool) Execute(ctx context.Context, args map[string]any) (core.
 		}
 	}
 	_, hasTodos := args["todos"]
+	patch := false
+	if raw, exists := args["patch"]; exists {
+		var valid bool
+		patch, valid = raw.(bool)
+		if !valid || !hasTodos {
+			return core.ToolOutput{}, fmt.Errorf("patch must be boolean and requires todos")
+		}
+	}
 	if !hasTodos && planID == "" {
 		return core.ToolOutput{}, fmt.Errorf("todos or a saved plan_id is required")
 	}
@@ -94,13 +103,14 @@ func (t *TodoWriteTool) Execute(ctx context.Context, args map[string]any) (core.
 	if fn == nil {
 		return core.ToolOutput{}, fmt.Errorf("todo plan storage is not available")
 	}
-	plan, err := fn(protocol.TodoUpdate{PlanID: planID, Items: items, SelectOnly: !hasTodos})
+	plan, err := fn(protocol.TodoUpdate{PlanID: planID, Items: items, SelectOnly: !hasTodos, Patch: patch})
 	if err != nil {
 		return core.ToolOutput{}, err
 	}
 	items = plan.Items
 	var b strings.Builder
 	fmt.Fprintf(&b, "Plan %s (%d items):\n", plan.ID, len(items))
+
 	done := protocol.CountCompleted(items)
 	for i, it := range items {
 		fmt.Fprintf(&b, "%d. [%s] %s %s %s", i+1, it.ID, todoStatusIcon(it.Status), it.Status, protocol.SubagentTextPreview(it.Content, 64))

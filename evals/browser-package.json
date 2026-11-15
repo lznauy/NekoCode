@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "description": "Optional independent browser verifier dependencies, installed outside agent workspaces",
+  "dependencies": {"playwright-core": "1.65.0"}
+}

@@ -49,13 +49,14 @@ func NewRunStore(limit int) *RunStore {
 
 // PrepareRun makes an admitted run queryable before attachment preparation and
 // its first event. This does not fabricate an event or accept the input text.
-func (s *RunStore) PrepareRun(id core.RunID, source core.SourceRef) {
+func (s *RunStore) PrepareRun(id core.RunID, source core.SourceRef, sessionID string) {
 	if id == "" {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.record(id).snapshot.Source = source
+	snapshot := &s.record(id).snapshot
+	snapshot.Source, snapshot.SessionID = source, sessionID
 }
 
 func (s *RunStore) Record(ev core.Event) {
@@ -90,6 +91,9 @@ func (s *RunStore) Record(ev core.Event) {
 			}
 		}
 	case core.EventRunStarted:
+		if ev.SessionID != "" {
+			rec.snapshot.SessionID = ev.SessionID
+		}
 		rec.snapshot.Status = core.RunRunning
 		if rec.snapshot.StartedAt.IsZero() {
 			rec.snapshot.StartedAt = ev.Time
@@ -610,7 +614,7 @@ func snapshotBytes(v core.RunSnapshot) int {
 }
 
 func snapshotTextBytes(v core.RunSnapshot) int {
-	n := len(v.ID) + len(v.Input) + len(v.Output) + len(v.Reasoning) + len(v.Error) + len(v.Phase) +
+	n := len(v.ID) + len(v.SessionID) + len(v.Input) + len(v.Output) + len(v.Reasoning) + len(v.Error) + len(v.Phase) +
 		len(v.Source.Kind) + len(v.Source.ID) + len(v.Sender.ID) + len(v.Sender.Username) + len(v.Sender.Display) + 512
 	for _, tool := range v.Tools {
 		n += len(tool.Args) + len(tool.Preview) + len(tool.Output) + len(tool.Name) + len(tool.CallID) + len(tool.SubAgentID) + 256

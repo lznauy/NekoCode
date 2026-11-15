@@ -28,6 +28,16 @@ type taskResultIdentity struct {
 // or arbitrary paths. The reference pins parent/task/attempt/content together;
 // it identifies evidence and grants no authority or permission to execute it.
 func ReadSubagentResult(ctx context.Context, parentID string, q taskbridge.ResultQuery) (taskbridge.ResultPage, error) {
+	return readSubagentResult(ctx, parentID, q, false)
+}
+
+// ReadLegacySubagentResult is the compatibility fallback for synchronous and
+// older attempts. Runtime-owned attempts must never borrow transcript success.
+func ReadLegacySubagentResult(ctx context.Context, parentID string, q taskbridge.ResultQuery) (taskbridge.ResultPage, error) {
+	return readSubagentResult(ctx, parentID, q, true)
+}
+
+func readSubagentResult(ctx context.Context, parentID string, q taskbridge.ResultQuery, legacyOnly bool) (taskbridge.ResultPage, error) {
 	fail := func(err error) (taskbridge.ResultPage, error) { return taskbridge.ResultPage{}, err }
 	if err := ctx.Err(); err != nil {
 		return fail(err)
@@ -94,10 +104,13 @@ func ReadSubagentResult(ctx context.Context, parentID string, q taskbridge.Resul
 	if selected == nil {
 		return fail(fmt.Errorf("attempt not found; use task_list latest_attempt.id or a previous result_ref"))
 	}
+	if legacyOnly && selected.RuntimeResult {
+		return fail(fmt.Errorf("attempt result is owned by runtime; its committed report is unavailable, child transcript is not a substitute"))
+	}
 	switch selected.Status {
 	case "completed", "partial", "failed", "interrupted":
 	default:
-		return fail(fmt.Errorf("task result is not final (%s); do not poll a running task", selected.Status))
+		return fail(&taskbridge.ResultNotReadyError{Status: selected.Status})
 	}
 	if selected.Result == "" {
 		return fail(fmt.Errorf("attempt has no saved result"))

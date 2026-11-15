@@ -308,11 +308,14 @@ func (c *Client) buildRequest(messages []types.Message, tools []types.ToolDef, s
 }
 
 func (c *Client) headers() map[string]string {
-	return map[string]string{
-		"x-api-key":         c.APIKey,
-		"Authorization":     "Bearer " + c.APIKey,
+	headers := map[string]string{
 		"anthropic-version": "2023-06-01",
 	}
+	if c.APIKey != "" {
+		headers["x-api-key"] = c.APIKey
+		headers["Authorization"] = "Bearer " + c.APIKey
+	}
+	return headers
 }
 
 func (c *Client) RequestMeta() types.RequestMeta {

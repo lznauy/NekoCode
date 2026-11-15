@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"nekocode/logger"
 )
 
 // defaultRequestTimeout bounds a single JSON-RPC round trip.
@@ -34,6 +38,22 @@ type client struct {
 	reqID          atomic.Int64
 	tools          []toolDef
 	requestTimeout time.Duration
+	killTree       func(*os.Process) error
+	stopping       bool
+	treeStopped    bool
+	wait           *processWait
+	writePending   <-chan error
+	readPending    <-chan stdioReadResult
+}
+
+type processWait struct {
+	done chan struct{}
+	err  error // read only after done closes
+}
+
+type stdioReadResult struct {
+	line []byte
+	err  error
 }
 
 // newClient creates an unstarted client.
@@ -62,6 +82,14 @@ func (c *client) Start(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if c.stopping {
+		if err := c.stopLocked(2 * time.Second); err != nil {
+			return fmt.Errorf("previous MCP server cleanup incomplete: %w", err)
+		}
+	}
 	if c.cmd != nil {
 		return nil
 	}
@@ -96,8 +124,7 @@ func (c *client) Start(ctx context.Context) error {
 	c.stdoutPipe = stdout
 
 	if err := c.initialize(ctx); err != nil {
-		_ = c.stopLocked(2 * time.Second)
-		return fmt.Errorf("initialize: %w", err)
+		return errors.Join(fmt.Errorf("initialize: %w", err), c.stopLocked(2*time.Second))
 	}
 	return nil
 }
@@ -109,40 +136,13 @@ func (c *client) Close() error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.stopLocked(2 * time.Second)
-}
-
-// stopLocked terminates the server process immediately: stdin is closed and
-// the whole process group is killed without a graceful-exit window. MCP
-// commands are untrusted session input and may spawn descendants that inherit
-// stdio and outlive the direct child. The timeout only guards the
-// pathological case where the tree kill failed; the wait then falls back to
-// killing the direct child. The caller must hold c.mu.
-func (c *client) stopLocked(timeout time.Duration) error {
-	if c.cmd == nil || c.cmd.Process == nil {
-		return nil
+	err := c.stopLocked(2 * time.Second)
+	if err != nil {
+		// Manager shutdown/removal has a void API; it must still expose a
+		// cleanup failure when its caller cannot receive the returned error.
+		logger.Log("MCP %s cleanup failed: %v", c.name, err)
 	}
-
-	if c.stdin != nil {
-		_ = c.stdin.Close()
-	}
-	_ = killProcessTree(c.cmd.Process)
-	if c.stdoutPipe != nil {
-		_ = c.stdoutPipe.Close()
-	}
-
-	waitCh := make(chan error, 1)
-	go func() { waitCh <- c.cmd.Wait() }()
-
-	select {
-	case <-waitCh:
-	case <-time.After(timeout):
-		_ = c.cmd.Process.Kill()
-		<-waitCh
-	}
-
-	c.cmd, c.stdin, c.stdout, c.stdoutPipe = nil, nil, nil, nil
-	return nil
+	return err
 }
 
 // ListTools discovers the server's tools, starting it if necessary.
@@ -279,46 +279,79 @@ func (c *client) sendRequest(ctx context.Context, method string, params any) (js
 		return nil, err
 	}
 
-	type readResult struct {
-		line []byte
-		err  error
-	}
 	reader := c.stdout
 	if reader == nil {
 		return nil, fmt.Errorf("read: MCP server stdout unavailable")
 	}
 	// Requests are serialized by c.mu. Read only while a request is pending,
 	// discarding notifications instead of queuing them without a bound.
+	skipped := 0
+	var frames []json.RawMessage
+	var response *jsonrpcResponse
 	for {
-		readCh := make(chan readResult, 1)
-		go func() {
-			line, err := reader.ReadBytes('\n')
-			readCh <- readResult{line: line, err: err}
-		}()
-
-		var line []byte
+		if skipped >= maxSkippedStdioFrames {
+			return nil, errors.Join(fmt.Errorf("too many invalid or unrelated MCP messages"), c.stopLocked(100*time.Millisecond))
+		}
 		select {
-		case result := <-readCh:
-			if result.err != nil {
-				return nil, fmt.Errorf("read: %w", result.err)
-			}
-			line = result.line
 		case <-ctx.Done():
-			_ = c.stopLocked(100 * time.Millisecond)
-			<-readCh
-			return nil, ctx.Err()
+			return nil, errors.Join(ctx.Err(), c.stopLocked(100*time.Millisecond))
 		case <-timer.C:
-			_ = c.stopLocked(100 * time.Millisecond)
-			<-readCh
-			return nil, fmt.Errorf("%s timed out after %s", method, timeout)
+			return nil, errors.Join(fmt.Errorf("%s timed out after %s", method, timeout), c.stopLocked(100*time.Millisecond))
+		default:
 		}
+		if len(frames) == 0 && response != nil {
+			if response.Error != nil {
+				return nil, fmt.Errorf("rpc error %d: %s", response.Error.Code, response.Error.Message)
+			}
+			return response.Result, nil
+		}
+		if len(frames) == 0 {
+			readCh := make(chan stdioReadResult, 1)
+			c.readPending = readCh
+			go func() {
+				line, err := readStdioFrame(reader)
+				readCh <- stdioReadResult{line: line, err: err}
+			}()
 
-		var message struct {
-			Method string          `json:"method"`
-			ID     json.RawMessage `json:"id"`
+			var line []byte
+			select {
+			case result := <-readCh:
+				c.readPending = nil
+				if result.err != nil {
+					return nil, errors.Join(fmt.Errorf("read: %w", result.err), c.stopLocked(100*time.Millisecond))
+				}
+				line = result.line
+			case <-ctx.Done():
+				cleanupErr := c.stopLocked(100 * time.Millisecond)
+				return nil, errors.Join(ctx.Err(), cleanupErr)
+			case <-timer.C:
+				cleanupErr := c.stopLocked(100 * time.Millisecond)
+				return nil, errors.Join(fmt.Errorf("%s timed out after %s", method, timeout), cleanupErr)
+			}
+
+			line = bytes.TrimSpace(line)
+			if len(line) > 0 && line[0] == '[' {
+				if err := json.Unmarshal(line, &frames); err != nil {
+					frames = nil
+				}
+			} else {
+				frames = []json.RawMessage{line}
+			}
 		}
-		if err := json.Unmarshal(line, &message); err != nil {
-			return nil, fmt.Errorf("unmarshal: %w", err)
+		if len(frames) == 0 {
+			skipped++
+			continue
+		}
+		line := frames[0]
+		frames = frames[1:]
+		var message struct {
+			JSONRPC string          `json:"jsonrpc"`
+			Method  string          `json:"method"`
+			ID      json.RawMessage `json:"id"`
+		}
+		if err := json.Unmarshal(line, &message); err != nil || message.JSONRPC != "2.0" {
+			skipped++
+			continue
 		}
 		if message.Method != "" {
 			if len(message.ID) != 0 {
@@ -339,15 +372,43 @@ func (c *client) sendRequest(ctx context.Context, method string, params any) (js
 		}
 		var resp jsonrpcResponse
 		if err := json.Unmarshal(line, &resp); err != nil {
-			return nil, fmt.Errorf("unmarshal: %w", err)
+			skipped++
+			continue
 		}
 		if resp.ID != id {
-			return nil, fmt.Errorf("response id mismatch: got %d, expected %d", resp.ID, id)
+			skipped++
+			continue
 		}
-		if resp.Error != nil {
-			return nil, fmt.Errorf("rpc error %d: %s", resp.Error.Code, resp.Error.Message)
+		if resp.Result == nil && resp.Error == nil {
+			skipped++
+			continue
 		}
-		return resp.Result, nil
+		// Finish the already-read batch before returning: a server request
+		// after our response still needs its reply, including string IDs.
+		if response == nil {
+			response = &resp
+		}
+	}
+}
+
+const (
+	maxStdioFrameBytes    = 16 << 20
+	maxSkippedStdioFrames = 64
+)
+
+// Bound a single line before JSON decoding; a broken server must not grow
+// memory without limit. The request deadline still bounds noise recovery.
+func readStdioFrame(reader *bufio.Reader) ([]byte, error) {
+	var line []byte
+	for {
+		fragment, err := reader.ReadSlice('\n')
+		if len(line)+len(fragment) > maxStdioFrameBytes {
+			return nil, fmt.Errorf("MCP message exceeds %d bytes", maxStdioFrameBytes)
+		}
+		line = append(line, fragment...)
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return line, err
+		}
 	}
 }
 
@@ -388,23 +449,26 @@ func (c *client) writeMessage(
 	if writer == nil {
 		return fmt.Errorf("write: MCP server stdin unavailable")
 	}
+	message := make([]byte, len(body)+1)
+	copy(message, body)
+	message[len(body)] = '\n'
 	writeCh := make(chan error, 1)
+	c.writePending = writeCh
 	go func() {
-		_, err := writer.Write(append(body, '\n'))
+		_, err := writer.Write(message)
 		writeCh <- err
 	}()
 
 	select {
 	case err := <-writeCh:
+		c.writePending = nil
 		if err != nil {
-			return fmt.Errorf("write: %w", err)
+			return errors.Join(fmt.Errorf("write: %w", err), c.stopLocked(100*time.Millisecond))
 		}
 		return nil
 	case <-ctx.Done():
-		_ = c.stopLocked(100 * time.Millisecond)
-		return ctx.Err()
+		return errors.Join(ctx.Err(), c.stopLocked(100*time.Millisecond))
 	case <-timeout:
-		_ = c.stopLocked(100 * time.Millisecond)
-		return fmt.Errorf("%s timed out after %s", method, timeoutDuration)
+		return errors.Join(fmt.Errorf("%s timed out after %s", method, timeoutDuration), c.stopLocked(100*time.Millisecond))
 	}
 }

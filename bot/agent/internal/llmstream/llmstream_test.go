@@ -90,9 +90,9 @@ func TestWriteCallRecordAssemblesEvidence(t *testing.T) {
 func TestWriteCallRecordOnFailureKeepsErr(t *testing.T) {
 	got := captureRecord(t)
 
-	writeCallRecord(LLMCallOptions{}, &StreamResult{}, time.Now(), errors.New("stream idle timeout"))
+	writeCallRecord(LLMCallOptions{}, &StreamResult{}, time.Now(), errors.New("stream idle timeout: no tokens"), "stream")
 
-	if got.Err != "error: *errors.errorString" {
+	if got.Err != "stream idle timeout" || got.FailureStage != "stream" {
 		t.Errorf("err = %q", got.Err)
 	}
 	if got.Source != "unknown" {

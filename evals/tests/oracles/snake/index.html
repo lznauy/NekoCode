@@ -1,0 +1,18 @@
+<!doctype html><meta charset="utf-8"><title>Verifier reference snake</title>
+<p id="score">0</p><p id="status">ready</p>
+<button id="start">Start</button><button id="pause">Pause</button><button id="restart">Restart</button>
+<div id="board" style="display:grid;grid-template-columns:repeat(12,15px)"></div>
+<script>
+const board=document.querySelector('#board'),scoreEl=document.querySelector('#score'),statusEl=document.querySelector('#status');
+let snake,food,dir,next,score,status,timer;
+function spawn(){const empty=[];for(let y=0;y<12;y++)for(let x=0;x<12;x++)if(!snake.some(c=>c.x===x&&c.y===y))empty.push({x,y});food=empty[Math.floor(Math.random()*empty.length)];}
+function draw(){board.replaceChildren();for(let y=0;y<12;y++)for(let x=0;x<12;x++){const c=document.createElement('div');c.dataset.x=x;c.dataset.y=y;c.dataset.state=snake.some(c=>c.x===x&&c.y===y)?'snake':food.x===x&&food.y===y?'food':'empty';c.style.cssText='width:15px;height:15px;border:1px solid #ddd;background:'+(c.dataset.state==='snake'?'green':c.dataset.state==='food'?'red':'white');board.append(c);}scoreEl.textContent=score;statusEl.textContent=status;}
+function reset(){clearInterval(timer);snake=[{x:5,y:5},{x:4,y:5},{x:3,y:5}];dir={x:1,y:0};next=dir;score=0;status='ready';spawn();draw();}
+function step(){if(status!=='running')return;dir=next;const head={x:snake[0].x+dir.x,y:snake[0].y+dir.y},eat=head.x===food.x&&head.y===food.y;const body=eat?snake:snake.slice(0,-1);if(head.x<0||head.x>=12||head.y<0||head.y>=12||body.some(c=>c.x===head.x&&c.y===head.y)){status='over';clearInterval(timer);draw();return;}snake.unshift(head);if(eat){score++;spawn();}else snake.pop();draw();}
+function start(){if(status==='running')return;if(status==='over')reset();status='running';clearInterval(timer);timer=setInterval(step,200);draw();}
+document.querySelector('#start').onclick=start;
+document.querySelector('#restart').onclick=()=>{reset();start();};
+document.querySelector('#pause').onclick=()=>{if(status==='running'){status='paused';clearInterval(timer);}else if(status==='paused'){status='running';timer=setInterval(step,200);}draw();};
+addEventListener('keydown',e=>{const d={ArrowRight:{x:1,y:0},ArrowLeft:{x:-1,y:0},ArrowDown:{x:0,y:1},ArrowUp:{x:0,y:-1}}[e.key];if(!d)return;e.preventDefault();if(d.x===-dir.x&&d.y===-dir.y)return;next=d;});
+reset();
+</script>

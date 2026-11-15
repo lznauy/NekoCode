@@ -104,7 +104,7 @@ func friendlyStructureList(structures []string) string {
 	values := append([]string(nil), structures...)
 	labels := map[string]string{
 		"command_substitution": "命令替换", "process_substitution": "进程替换",
-		"dynamic_command": "动态命令名", "eval": "eval 间接执行", "source": "加载脚本",
+		"dynamic_command": "动态命令名", "indirect_execution": "间接执行命令", "eval": "eval 间接执行", "source": "加载脚本",
 		"shell_command_string": "Shell -c 命令字符串", "shell_heredoc_code": "Shell heredoc 代码",
 		"unparseable": "无法可靠解析",
 	}

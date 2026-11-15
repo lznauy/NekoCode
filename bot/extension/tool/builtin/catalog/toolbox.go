@@ -97,6 +97,7 @@ func (e *Toolbox) RebuildRegistryWithConfig(cfg ToolboxConfig) {
 	if e.taskResult == nil {
 		e.taskResult = task.NewResultTool()
 	}
+
 	if e.taskList == nil {
 		e.taskList = task.NewTaskListTool()
 	}

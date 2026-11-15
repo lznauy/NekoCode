@@ -366,14 +366,14 @@ func requestJSON[T any](ctx context.Context, c *apiClient, method, endpoint stri
 	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return zero, sharedhttp.NewHTTPError(resp.StatusCode, string(data))
+		return zero, withRetryAfter(sharedhttp.NewHTTPError(resp.StatusCode, string(data)), data, resp.Header.Get("Retry-After"), time.Now())
 	}
 	var decoded apiResponse[T]
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return zero, err
 	}
 	if !decoded.OK {
-		return zero, fmt.Errorf("telegram api: %s", decoded.Description)
+		return zero, withRetryAfter(fmt.Errorf("telegram api: %s", decoded.Description), data, resp.Header.Get("Retry-After"), time.Now())
 	}
 	return decoded.Result, nil
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	rt "nekocode/runtime"
+	"nekocode/util/modelbudget"
 	"nekocode/util/version"
 )
 
@@ -50,6 +51,7 @@ func resolveWithinCWD(base, path string) (string, error) {
 }
 
 type turn struct {
+	init                      map[string]any
 	input                     userInput
 	runID                     rt.RunID
 	cancel                    context.CancelFunc
@@ -66,16 +68,19 @@ type turn struct {
 }
 
 type pendingRequest struct {
+	runID    rt.RunID
 	kind, id string
 	approval *rt.ApprovalView
 }
 
 type server struct {
+	callBudget         *modelbudget.Budget
 	backend            Backend
 	conn               *transport
 	options            Options
 	cwd, sessionID     string
 	active             *turn
+	pendingTurns       map[rt.RunID]*turn // admitted inputs awaiting their first runtime event
 	queue              []userInput
 	queueBytes         int
 	pending            map[string]pendingRequest
@@ -102,6 +107,10 @@ func Serve(ctx context.Context, in io.ReadCloser, out io.WriteCloser, backend Ba
 	s := &server{backend: backend, options: options, cwd: cwd, pending: make(map[string]pendingRequest), seen: make(map[string]bool)}
 	s.conn = newTransport(ctx, in, out)
 	defer func() {
+		for id, pending := range s.pending {
+			s.deny(context.Background(), pending)
+			delete(s.pending, id)
+		}
 		cancel()
 		_ = in.Close()
 		_ = out.Close()
@@ -109,6 +118,11 @@ func Serve(ctx context.Context, in io.ReadCloser, out io.WriteCloser, backend Ba
 			s.active.cancel()
 			_ = backend.CancelRun(context.Background(), s.active.runID)
 			_ = backend.WaitRun(context.Background(), s.active.runID)
+		}
+		for id, turn := range s.pendingTurns {
+			turn.cancel()
+			_ = backend.CancelRun(context.Background(), id)
+			_ = backend.WaitRun(context.Background(), id)
 		}
 		s.conn.wg.Wait()
 	}()
@@ -148,7 +162,7 @@ func (s *server) serve(ctx context.Context) error {
 		reads = nil
 	}
 	for {
-		if s.active == nil && len(s.queue) != 0 {
+		if s.active == nil && len(s.pendingTurns) == 0 && len(s.queue) != 0 {
 			input := s.queue[0]
 			s.queue[0] = userInput{}
 			s.queue = s.queue[1:]
@@ -156,11 +170,11 @@ func (s *server) serve(ctx context.Context) error {
 			if err := s.start(ctx, input); err != nil {
 				return err
 			}
-			if s.active == nil {
+			if s.active == nil && len(s.pendingTurns) == 0 {
 				continue
 			}
 		}
-		if (s.eof || s.shuttingDown) && s.active == nil && len(s.queue) == 0 {
+		if (s.eof || s.shuttingDown) && s.active == nil && len(s.pendingTurns) == 0 && len(s.queue) == 0 {
 			return nil
 		}
 		select {
@@ -187,7 +201,20 @@ func (s *server) serve(ctx context.Context) error {
 			if !ok {
 				return errors.New("reliable runtime event stream closed (overflow or backend shutdown)")
 			}
+			if turn := s.pendingTurns[event.RunID]; turn != nil && (event.Type == rt.EventRunStarted || event.IsRunTerminal()) {
+				if s.active != nil {
+					return errors.New("runtime started overlapping foreground turns")
+				}
+				delete(s.pendingTurns, event.RunID)
+				s.active = turn
+				if err := s.sendTurn("system", turn.init); err != nil {
+					return err
+				}
+			}
 			if s.active == nil || event.RunID != s.active.runID {
+				if err := s.backgroundInteraction(ctx, event); err != nil {
+					return err
+				}
 				continue
 			}
 			if err := s.event(ctx, event); err != nil {
@@ -203,7 +230,7 @@ func (s *server) start(ctx context.Context, input userInput) error {
 	}
 	t := &turn{input: input, started: time.Now(), tools: make(map[toolKey]*toolState), wireIDs: make(map[string]bool)}
 	s.active = t
-	turnCtx, cancel := context.WithCancel(ctx)
+	turnCtx, cancel := context.WithCancel(modelbudget.WithRole(modelbudget.WithBudget(ctx, s.callBudget), modelbudget.Coordinator, ""))
 	t.cancel = cancel
 	// Snapshot configuration before starting the runner, then publish init with
 	// the allocated ID before consuming any of its buffered events.
@@ -232,17 +259,25 @@ func (s *server) start(ctx context.Context, input userInput) error {
 		Source: rt.SourceRef{Kind: "headless", ID: input.id}, Text: input.text, Images: inputImages,
 	})
 	t.runID = id
-	if sendErr := s.sendTurn("system", init); sendErr != nil {
-		return sendErr
-	}
 	if err != nil {
 		cancel()
+		if sendErr := s.sendTurn("system", init); sendErr != nil {
+			return sendErr
+		}
 		if err := s.result(rt.RunResult{Error: err.Error()}, "error_during_execution"); err != nil {
 			return err
 		}
 		s.active = nil
 		return nil
 	}
+	// StartRun may accept an input into the runtime queue. Acceptance is not
+	// execution: only its RunStarted (or preparation failure) selects active.
+	t.init = init
+	if s.pendingTurns == nil {
+		s.pendingTurns = make(map[rt.RunID]*turn)
+	}
+	s.pendingTurns[id] = t
+	s.active = nil
 	return nil
 }
 
@@ -291,6 +326,8 @@ func (s *server) result(result rt.RunResult, subtype string) error {
 	}
 	fields["stop_reason"] = reason
 	switch reason {
+	case "incomplete":
+		subtype = "error_incomplete"
 	case "step_limit":
 		subtype = "error_step_limit"
 	case "cancelled":
@@ -329,7 +366,25 @@ func (s *server) clearQueue() []string {
 	return ids
 }
 
+func (s *server) cancelQueuedTurns(ctx context.Context) ([]string, error) {
+	ids := []string{}
+	for id, turn := range s.pendingTurns {
+		result, err := s.backend.CancelRunWithResult(ctx, id)
+		if err != nil {
+			return ids, err
+		}
+		if result.State != rt.CancellationQueued {
+			continue
+		}
+		turn.cancel()
+		delete(s.pendingTurns, id)
+		ids = append(ids, turn.input.id)
+	}
+	return append(ids, s.clearQueue()...), nil
+}
+
 func (s *server) receive(ctx context.Context, f frame) error {
+	ctx = modelbudget.WithRole(modelbudget.WithBudget(ctx, s.callBudget), modelbudget.Coordinator, "")
 	if len(f.UUID) > 256 || len(f.RequestID) > 256 || len(f.Response.RequestID) > 256 || len(f.SessionID) > 256 {
 		return s.send("system", map[string]any{"subtype": "error", "error": "IDs must not exceed 256 bytes"})
 	}

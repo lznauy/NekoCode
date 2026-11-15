@@ -139,7 +139,7 @@ func TestBackgroundResumePreservesUnreadUpdates(t *testing.T) {
 	b.order = append(b.order, "a")
 	b.mu.Unlock()
 	delivered := make(chan struct{})
-	_, err := b.submit(t.Context(), protocol.BackgroundWork{ID: "a", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, host protocol.BackgroundHost) (string, error) {
+	_, err := b.submit(t.Context(), protocol.BackgroundWork{ID: "a", SessionID: "session", ReadOnly: true, Run: func(ctx context.Context, host protocol.BackgroundHost) (protocol.BackgroundResult, error) {
 		err := host.(protocol.BackgroundInputSource).ApplyUpdates(func(updates []protocol.BackgroundUpdate) error {
 			if len(updates) != 1 || updates[0].Text != "unread at completion" {
 				t.Errorf("lost unread update: %+v", updates)
@@ -147,7 +147,7 @@ func TestBackgroundResumePreservesUnreadUpdates(t *testing.T) {
 			return nil
 		})
 		close(delivered)
-		return "", err
+		return protocol.BackgroundResult{Text: ""}, err
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -159,12 +159,12 @@ func TestUpdateSequenceUsesCanonicalFloorWhenRuntimeHistoryWasPruned(t *testing.
 	rt := New(RunnerFunc(func(context.Context, string, RunHost) (string, error) { return "", nil }), backgroundServices(t.TempDir()))
 	defer rt.Close()
 	started, release, delivered := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "pruned", SessionID: "session", ReadOnly: true, UpdateSequenceFloor: 50, Run: func(ctx context.Context, host protocol.BackgroundHost) (string, error) {
+	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "pruned", SessionID: "session", ReadOnly: true, UpdateSequenceFloor: 50, Run: func(ctx context.Context, host protocol.BackgroundHost) (protocol.BackgroundResult, error) {
 		close(started)
 		select {
 		case <-release:
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return protocol.BackgroundResult{Text: ""}, ctx.Err()
 		}
 		err := host.(protocol.BackgroundInputSource).ApplyUpdates(func(updates []protocol.BackgroundUpdate) error {
 			if len(updates) != 1 || updates[0].Sequence != 51 {
@@ -173,7 +173,7 @@ func TestUpdateSequenceUsesCanonicalFloorWhenRuntimeHistoryWasPruned(t *testing.
 			return nil
 		})
 		close(delivered)
-		return "", err
+		return protocol.BackgroundResult{Text: ""}, err
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -211,11 +211,11 @@ func TestResumedUpdateSequenceReconcilesRetainedHistoryAndCanonicalReceipt(t *te
 				t.Fatal(err)
 			}
 			b := original.background
-			b.mu.Lock()
+			b.lockMutation()
 			b.entries["resume"] = &backgroundEntry{BackgroundTask: BackgroundTask{ID: "resume", SessionID: "session", Status: "interrupted", Notified: true, UpdateSequence: tc.oldSequence, PendingUpdates: tc.pending}}
 			b.order = []string{"resume"}
 			err := b.saveLocked("session")
-			b.mu.Unlock()
+			b.unlockMutation()
 			original.Close()
 			if err != nil {
 				t.Fatal(err)
@@ -229,12 +229,12 @@ func TestResumedUpdateSequenceReconcilesRetainedHistoryAndCanonicalReceipt(t *te
 				err      error
 			}
 			received := make(chan observed, 1)
-			_, err = recovered.background.submit(t.Context(), protocol.BackgroundWork{ID: "resume", SessionID: "session", ReadOnly: true, UpdateSequenceFloor: tc.canonical, Run: func(ctx context.Context, host protocol.BackgroundHost) (string, error) {
+			_, err = recovered.background.submit(t.Context(), protocol.BackgroundWork{ID: "resume", SessionID: "session", ReadOnly: true, UpdateSequenceFloor: tc.canonical, Run: func(ctx context.Context, host protocol.BackgroundHost) (protocol.BackgroundResult, error) {
 				close(started)
 				select {
 				case <-release:
 				case <-ctx.Done():
-					return "", ctx.Err()
+					return protocol.BackgroundResult{Text: ""}, ctx.Err()
 				}
 				manager := ctxmgr.New(ctxmgr.Config{})
 				manager.Restore(ctxmgr.ManagerSnapshot{TaskUpdateSequence: tc.canonical})
@@ -247,7 +247,7 @@ func TestResumedUpdateSequenceReconcilesRetainedHistoryAndCanonicalReceipt(t *te
 					return nil
 				})
 				received <- observed{manager.Snapshot(), applied, applyErr}
-				return "done", applyErr
+				return protocol.BackgroundResult{Text: "done"}, applyErr
 			}})
 			if err != nil {
 				t.Fatal(err)

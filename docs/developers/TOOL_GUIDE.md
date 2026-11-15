@@ -169,12 +169,96 @@ defer toolbox.Close()
 
 ### 托管进程等待与重复启动
 
-shell 的短观察窗口与 process 的 wait_timeout 都不表示命令失败。等待返回仍在运行时，反馈包含 task、new_output_bytes（相对上次观察的原始捕获字节增量）、unchanged_waits；正常等待附带 next_call。连续两次等待没有新输出会撤下默认再次等待调用，附加诊断提示，不自动停止进程；新输出或终态会清除空等计数。日志安静不代表没有 CPU、磁盘或业务进展，计数不作卡死判定。
+shell 的短观察窗口与 process 的 wait_timeout 都不表示命令失败。等待返回仍在运行时，反馈包含 task、new_output_bytes（相对上次观察的原始捕获字节增量）、unchanged_waits；不会自动附带再次等待的 next_call。观察超时会提示检查服务就绪或其他进展证据，连续两次没有新输出会附加诊断提示，不自动停止进程；新输出或终态会清除空等计数。日志安静不代表没有 CPU、磁盘或业务进展，计数不作卡死判定。
 
 匿名 shell 启动在同一注册表内对完全相同的活跃请求复用原进程，明确返回 reused_running/no new command。匹配包含执行者/会话、精确命令、目录、host 标志、完整授权沙箱配置、硬生命周期以及继承环境；仅保存摘要，不输出环境值。并发启动的检查和注册串行完成，观察等待不持启动锁。不同权限、会话、环境或生命周期不合并；不同显式 name 允许有意并行，相同显式 name 仍拒绝重复。进程结束后可重新启动；返回已复用的进程不会重置其超时或等待历史。
 
 重试前先确认原进程终态并检查部分副作用。该机制不解析命令语义，也不识别改写命令或自行套用 shell timeout 后的语义等价请求；反馈和工作流规则要求先诊断，不能把这些改写当成自动重试授权。
 
-默认 process.wait 及 watch 不再因周期性观察窗口而返回模型：wait/exit 等真实退出，watch/output 等新输出或退出，均可取消。显式宿主等待预算才产生 wait_timeout；shell.timeout_ms 仍是会终止命令的硬生命周期。等待取消不会自动重放或停止命令。
+process.wait 和 watch 每次有有限观察窗口，默认 30 秒，可传 wait_timeout_ms（正数，最多 120000 毫秒）调整。wait/exit 等退出，watch/output 等新输出或退出；在事件、窗口到期或取消三者中取先发生者。观察到期返回 wait_timeout 和仍在运行的状态，不杀进程，也不把静默判为卡死。工具返回一次观察结果，由模型决定下一步；工具内部不循环唤醒模型或重复等待。shell.timeout_ms 仍是会终止命令的硬生命周期，两者不可混淆。启动托管任务不再统一建议 wait；常驻服务应验证就绪，而不是等待退出。
 
 上下文达到现有压缩压力时，Context 可先把已有完整产物的旧检索结果收为短预览，近期配对和错误保留。完整记录和产物仍在；短预览不授权修改源文件，也不能据此宣称已经重新核实了被省略内容。无需为检查点额外调用摘要模型，无压力时保持已有缓存前缀。
+
+
+### 隔离网络中的本地服务验证
+
+Linux 默认每条 shell 命令有自己的网络命名空间。同一命令内的服务和浏览器/HTTP客户端可以使用 loopback；另一条 shell 命令的 localhost 不指向已有服务。共享 $NEKOCODE_SCRATCH 不代表共享网络。该变量是 shell 命名空间内的路径，文件应由 shell 创建和读取；read/write/edit 等文件工具不会将同名宿主路径映射到 actor 缓存。需要跨工具使用的脚本或截图放在授权工作区。把启动、有限就绪探针、客户端验证与退出清理放在同一条命令。Chrome 使用 scratch 下可写的独立 user-data-dir。
+
+示例（通过一条 shell 调用执行）：
+
+```bash
+set -eu
+python3 -u -m http.server 8000 --bind 127.0.0.1 > "$NEKOCODE_SCRATCH/http.log" 2>&1 &
+server_pid=$!
+trap 'kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true' EXIT
+python3 - <<'PY'
+import time, urllib.request
+for attempt in range(50):
+    try:
+        urllib.request.urlopen('http://127.0.0.1:8000/', timeout=0.2).close()
+        break
+    except OSError:
+        time.sleep(0.1)
+else:
+    raise SystemExit('local server did not become ready')
+PY
+profile=$(mktemp -d "$NEKOCODE_SCRATCH/chrome-XXXXXX")
+google-chrome --headless=new --no-sandbox --disable-gpu \
+  --user-data-dir="$profile" --screenshot="$NEKOCODE_SCRATCH/page.png" \
+  http://127.0.0.1:8000/
+```
+
+这里的 --no-sandbox 仅是让 Chrome 在既有命令沙箱内运行，不是 shell 的 sandbox_mode=host。测试结束后将需要保留的证据导出到授权工作区。
+
+成功的 `write` / `edit` 回执与 `read` 共用进程内的文件版本凭证：只有完整回执确实进入当前执行器的模型上下文，且磁盘原始字节未改变，才能继续修改该版本。回执被裁剪、移除、会话恢复或切换 agent 都不能沿用凭证。较大的 `write` diff 在受管执行中保存为完整结果产物，模型收到简短确认与产物引用；保存产物失败则保留原始内联 diff。交互确认预览仍保留完整 diff。
+
+
+### 图片检查与凭据输出
+
+`read` 对图片仅返回格式和尺寸，不传递像素，也不构成视觉检查。使用 `image_understand` 检查画面；其 `model` 参数的 enum 提供安全的已配置模型名称，省略时按 mode 选择。普通截图优先 fast，按具体疑点批量检查相关视图；不要为发现模型名称读取应用配置。HTTP 失败仅返回状态与恢复指引，不回显供应商响应正文。
+
+应用加载/保存配置时，在进程内登记明确命名的凭据值。工具文本、完整结果产物、搜索输出捕获、shell 输出流和诊断日志在交付/落盘前脱敏已登记值，处理跨 chunk 的完整凭据及 JSON 转义拼写，凭据轮换后已有流也会更新。技能引用以脱敏后的实际交付内容核验连续性。
+
+这是避免意外明文回显的保护，不是任意秘密探测、操作系统文件隔离或防恶意编码外传；不会清理历史原始记录。配置仍可能被程序读取，尚未登记的值、派生/编码值以及主动截取的片段不在保证内。
+
+`image_understand` 的模型尝试写入同一 `llm-calls.jsonl`，带父会话、执行身份和 `tool_call_id`；工作区权限身份不作为日志归属。JSON、SSE 与 Anthropic usage 会归一化；SSE 在内容完成后继续收集 usage，直到 `[DONE]` 或正常 EOF。缺失 usage 会明确标记 `usage_reported=false`；传输超时由 HTTP 请求期限统一管理并返回错误。
+
+
+### 后台任务的阶段交接
+
+Super 模式 `task_submit` 使用 `max_steps` 限制本次 attempt，默认 12 个普通模型轮次，并受已保存的 profile 上限约束。默认值在装配层加载实际 profile 后统一计算；显式超限的 `max_steps` 会报错，不静默截断。模型显式请求上限为 150，host profile 的配置上限为 200；同步子代理省略 `max_steps` 时继承 profile，profile 未配置时使用默认 150。它在完整工具批次后停止普通工具，只开放最终交接；未完成项返回 partial，不能满足 `after` 的成功依赖。协调者依据已保存的 evidence、验证结果和 unfinished 决定下一步，使用同一个 `resume_id` 保留历史和工作区，并设置下一阶段额度、具体下一步及停止条件。不要为读取旧报告另建任务。阶段交接复用已有持久化 attempt 和完成通知，不是后台任务仍在运行的实时 checkpoint，也不会自动续跑。
+
+执行器通过步骤和全树调用预算限制成本；预算耗尽后按原协议交接，由协调者结合证据和 unfinished 决定是否继续。工具批次是否重复不参与进展或完成判定。
+
+收尾请求不再为了自动压缩阈值额外调用模型；仍校验真实上下文上限。确实放不下时保留完整历史并交回 partial，避免静默删证据后声称完成。
+
+### 通用交接与证据读取
+
+核心与任务工作流的边界见 [通用 Harness 设计](AGENT_HARNESS.md)。
+
+后台执行器一次返回完整结构化交接或纯文本结果。Runtime 按 task/attempt 保存不可变记录，再生成有界通知；结构化预览超限时使用通知中的 `read_result`（含固定 `result_ref`）读取同一记录，不依赖另一份格式化文本。`review_complete=true` 表示结构化报告已完整送达；纯文本执行器使用 `result_complete`。新引用与精确 attempt 查询不依赖调度历史缓存，旧 child-session 引用仍可读取；当前 attempt 的提交失败不会回退成旧文本成功。
+
+`task_result.next_call` 使用短 `cursor`，续页只传 cursor。主机保存精确的任务、attempt、内容引用、offset 和 limit，每次仍调用当前 reader 做权限及内容绑定校验。句柄在同进程 reader 重绑后仍可用，最多保留 128 个；重启或淘汰后，用保存的 id 和确切 attempt_id 从 offset 0 恢复。错误不会自动切到最新 attempt；`recovery_call` 提供明确恢复入口。长期证据共享仍使用 result_ref。
+
+显式指定非零 offset 时必须同时提供 result_ref；id 和 attempt_id 不再通过缓存隐式补全引用。最后一页不占用 cursor 缓存。
+
+通用 executor 不提供 findings schema、task_findings 工具或审查专用的收尾门禁。任务特有的报告结构由委托提示词、技能或外部验收器定义；生产协议不再兼容旧实验的 findings 字段，也不要求其他任务补齐。
+
+`nekocode_submit_result` 新增可选 outcome 与 next_action：
+
+| outcome | 含义 | 独立 batch 中的交付 |
+|---|---|---|
+| complete | 委托范围完成，不得有 unfinished | 等批次结束 |
+| continue | 当前无需决策，原任务仍有下一步 | 等批次结束 |
+| blocked | 缺少执行前置条件 | 及时唤醒 |
+| decision | 需要协调者决定方向 | 及时唤醒 |
+
+非 complete 必须保留 unfinished 和 next_action，结果仍为 partial；不能满足 after 的成功依赖，不自动续做或重放。unfinished 只列委托范围内仍需执行的工作；未验证假设、被环境阻塞的测试和范围外检查写入 verification_gaps，保留可见性但不阻止范围交接。工作区、工具权限与审批规则不变。outcome 不认证验证通过或成果正确。摘要被截短时保留调度元数据，完整证据仍通过 canonical 报告或 task_result 读取。
+
+新建 task_submit 默认 review_policy=batch；显式 immediate 保留逐阶段决策，resume 省略时沿用保存策略。未提供 outcome 的旧交接立即交付，不根据验证结果或风险推断调度。host 错误、取消和审批/问题等待不能被 worker 的 outcome 隐藏。用户输入仍优先。
+
+图像 SSE 的内容完成与传输结束分别处理：`finish_reason` 固定内容，随后仍读取 usage，直到 `[DONE]` 或正常 EOF；HTTP 请求 deadline 统一管理超时，解析器不关闭连接、不设置尾部宽限定时器。未正常结束的请求返回错误，不以已收到的部分内容冒充成功。
+
+### Shell 间接执行的支持边界
+
+权限检查支持明确列出的 `find` 谓词和 `xargs` 参数；可静态确定的间接执行仍需整条命令的精确审批，嵌套硬拒绝规则保持优先。不支持的参数、GNU 长选项缩写、动态可执行文件名及 xargs 替换模式（`-I`、`-i`、`--replace`）直接拒绝，精确审批和自动判断均不能覆盖。此时改用可检查的直接命令或内置文件工具；权限检查不尝试实现完整命令解释器。文件、网络和进程权限仍由沙箱独立约束。

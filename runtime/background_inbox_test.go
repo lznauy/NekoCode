@@ -160,7 +160,7 @@ func TestBackgroundInboxSerializedSizeCannotExceedRecoveryLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b.mu.Lock()
+	b.lockMutation()
 	for i := range 90 {
 		id := RunID(fmt.Sprintf("queued_%d", i))
 		b.demands[id] = &BackgroundDemand{ID: id, SessionID: "session", Input: Input{Text: strings.Repeat("\x00", backgroundDemandTextLimit)}, Status: "pending"}
@@ -169,7 +169,7 @@ func TestBackgroundInboxSerializedSizeCannotExceedRecoveryLimit(t *testing.T) {
 	err = b.saveLocked("session")
 	b.demands = map[RunID]*BackgroundDemand{}
 	b.demandOrder = nil
-	b.mu.Unlock()
+	b.unlockMutation()
 	if err == nil {
 		t.Fatal("oversized serialized state accepted")
 	}

@@ -91,8 +91,8 @@ func (r *Runtime) DeleteSubagent(ctx context.Context, parent, id string) error {
 	if err := b.load(parent); err != nil {
 		return err
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.lockMutation()
+	defer b.unlockMutation()
 	e := b.entries[id]
 	if e != nil && e.SessionID != parent {
 		return fmt.Errorf("task belongs to another session")
@@ -109,31 +109,22 @@ func (r *Runtime) DeleteSubagent(ctx context.Context, parent, id string) error {
 	if r.services.Sessions.DeleteSubagent == nil {
 		return fmt.Errorf("task deletion unavailable")
 	}
-	if err := r.services.Sessions.DeleteSubagent(parent, id); err != nil {
-		return err
+	b.mu.Unlock()
+	deleteErr := r.services.Sessions.DeleteSubagent(parent, id)
+	b.mu.Lock()
+	if deleteErr != nil {
+		return deleteErr
+	}
+	if err := b.deleteResultsLocked(parent, id); err != nil {
+		return fmt.Errorf("history deleted; result cleanup failed, retry: %w", err)
 	}
 	if e != nil {
-		b.retireUsageLocked(e)
-		delete(b.entries, id)
-		index := -1
-		for i, key := range b.order {
-			if key == id {
-				index = i
-				break
-			}
-		}
-		if index >= 0 {
-			b.order = append(b.order[:index], b.order[index+1:]...)
-		}
-		if err := b.saveLocked(parent); err != nil {
-			// Keep an interrupted tombstone so a retry can finish the sidecar cleanup.
+		if err := b.removeTaskLocked(e); err != nil {
+			// External history is already deleted; retain a non-executable
+			// tombstone so an explicit retry can finish the receipt cleanup.
 			e.Status = "interrupted"
 			e.Error = "history deleted; repeat deletion to finish receipt cleanup"
-			e.Notified = true
-			e.Delivery = "stopped"
-			e.Usage = BackgroundUsage{}
-			b.entries[id] = e
-			b.order = append(b.order, id)
+			e.Notified, e.Delivery = true, "stopped"
 			return fmt.Errorf("history deleted; receipt cleanup failed, retry: %w", err)
 		}
 	}

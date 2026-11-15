@@ -13,6 +13,7 @@ import (
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/permission"
 	"nekocode/bot/extension/tool/runtime/sandbox"
+	"nekocode/bot/extension/tool/runtime/taskbridge"
 	"nekocode/bot/extension/tool/runtime/toolutil"
 	workspacectx "nekocode/bot/extension/tool/runtime/workspace"
 )
@@ -76,6 +77,7 @@ func (t *ShellTool) Description() string {
 		"Commands that finish quickly return their output directly; commands still running after a short runtime-controlled observation return a task name and continue under process management. " +
 		"Use the process tool to wait, watch, list or stop that task; a wait timeout does not mean the command failed. Anonymous identical live launches in the same execution environment reuse the existing process, without starting another. Use distinct explicit names for intentional parallel copies. " +
 		"A non-zero exit is reported as status: failed with exit_code; judge verification by that status, not by trailing success text. Pipelines use normal shell semantics, so preserve upstream failures with pipefail or separate commands when they matter. " +
+		"On Linux, sandbox commands in this toolbox share actor/workspace-scoped $NEKOCODE_SCRATCH for logs and reusable artifacts, with a writable GOCACHE and XDG_CACHE_HOME. /tmp is private to each command: do not store cross-command logs or caches there. NEKOCODE_SCRATCH is a shell namespace path: create/read reusable scratch files through shell; filesystem tools do not map that path to the actor cache. Use authorized workspace paths for files shared across tools. Shell exports may override these defaults. State is removed when this toolbox closes; export lasting evidence into authorized workspace files. Isolated loopback is private to EACH shell command; separate commands cannot reach each other at localhost, even with the same actor/workspace. For local HTTP/browser tests, start the server in the background, probe its URL with a deadline, run the client and clean up the server via a trap, all in ONE shell command. Chrome may need an explicit writable --user-data-dir under $NEKOCODE_SCRATCH. This does not grant outbound networking. " +
 		"Network, extra writable roots, and host execution require the corresponding minimal permission request. " +
 		"If a command fails because of a likely sandbox restriction, inspect the error and retry shell with the minimal required outbound_domains, network, writable_roots, or sandbox_mode request so the runtime can obtain approval; do not stop at reporting the restriction. Check partial side effects before retrying, respect explicit denials and configured domain restrictions, and do not assume every permission or network error requires host execution. " +
 		"By default commands run in an isolated workspace-write sandbox: the host filesystem is visible read-only (host binaries like npm globals and nix profiles are executable), but writes outside the workspace and authorized writable roots fail. For HTTP/HTTPS access to known domains, prefer outbound_domains with workspace-write or read-only mode. Use sandbox_mode=host only when unsandboxed host execution is needed; it cannot be combined with outbound_domains, including restrictions inherited from permissions.sandbox rules."
@@ -166,6 +168,7 @@ func (t *ShellTool) run(ctx context.Context, args map[string]any, grant core.Per
 	initial, err := t.registryOnce().start(ctx, startRequest{
 		name:       optStringArg(args, "name"),
 		owner:      t.CurrentSessionID(),
+		actor:      taskbridge.TaskIDFromCtx(ctx),
 		command:    command,
 		directory:  workspace,
 		profile:    profile,
@@ -239,7 +242,7 @@ func optionalDurationArg(args map[string]any, key string) (time.Duration, error)
 func formatManagedShellRun(task, output string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "task: %s\n", task)
-	fmt.Fprintf(&b, "next_call: {\"action\":\"wait\",\"task\":%q}\n", task)
+	b.WriteString("status: running\nlaunch_hint: A running process is not necessarily ready. For a persistent service, do not wait for its exit. Under isolated networking, perform server readiness checks and client requests in the same shell command; separate commands have separate localhost networks.\n")
 	appendProcessOutput(&b, output)
 	return b.String()
 }

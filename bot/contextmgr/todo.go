@@ -25,17 +25,25 @@ func (m *Manager) ApplyTodos(update protocol.TodoUpdate, persist func() error) (
 	oldItems := append([]protocol.TodoItem(nil), m.state.ctx.TodoItems...)
 	oldPlans := m.state.ctx.TodoPlans.Clone()
 	previous, exists := oldPlans[group]
-	if group == current {
+	if group == current || current == "" && update.PlanID == "" {
 		previous = oldItems
 	}
 	if update.PlanID != "" && !exists && group != current {
 		m.state.mu.Unlock()
-		return protocol.TodoPlan{}, fmt.Errorf("unknown plan_id %q in this session", group)
+		if current != "" {
+			return protocol.TodoPlan{}, fmt.Errorf("unknown plan_id %q in this session; no changes were applied. Use the exact plan_id returned by task_submit/todo_write, or omit plan_id to update the active plan %q. Never invent plan IDs", group, current)
+		}
+		return protocol.TodoPlan{}, fmt.Errorf("unknown plan_id %q in this session; no changes were applied. Omit plan_id to start a plan for the current demand, or use an exact saved plan_id returned by todo_write. Never invent plan IDs", group)
 	}
-	next := protocol.EnsureTodoIDs(previous)
+	previous = protocol.EnsureTodoIDs(previous)
+	next := append([]protocol.TodoItem(nil), previous...)
 	var err error
 	if !update.SelectOnly {
-		next, err = protocol.ReconcileTodos(previous, update.Items)
+		if update.Patch {
+			next, err = protocol.PatchTodos(previous, update.Items)
+		} else {
+			next, err = protocol.ReconcileTodos(previous, update.Items)
+		}
 	}
 	if err != nil {
 		m.state.mu.Unlock()

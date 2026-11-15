@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"nekocode/mode"
+	"nekocode/util/modelbudget"
 	"strings"
 )
 
@@ -27,28 +28,50 @@ type backgroundState struct {
 }
 
 func (b *backgroundTasks) addDemandLocked(d BackgroundDemand) error {
-	count := 0
-	for _, item := range b.demands {
-		if item.SessionID == d.SessionID {
-			count++
-		}
-	}
-	if count >= backgroundHistoryLimit {
-		for i, id := range b.demandOrder {
-			item := b.demands[id]
-			if item.SessionID == d.SessionID && (item.Status == "done" || item.Status == "cancelled") {
-				delete(b.demands, id)
-				b.demandOrder = append(b.demandOrder[:i], b.demandOrder[i+1:]...)
-				count--
+	state := b.snapshotLocked(d.SessionID)
+	evicted := RunID("")
+	if len(state.Demands) >= backgroundHistoryLimit {
+		for i, old := range state.Demands {
+			if old.Status == "done" || old.Status == "cancelled" {
+				evicted = old.ID
+				state.Demands = append(state.Demands[:i], state.Demands[i+1:]...)
 				break
 			}
 		}
 	}
-	if count >= backgroundHistoryLimit {
+	if len(state.Demands) >= backgroundHistoryLimit {
 		return fmt.Errorf("demand history is full; inspect and discard pending receipts first")
+	}
+	state.Demands = append(state.Demands, d)
+	if err := b.saveStateLocked(d.SessionID, state); err != nil {
+		return err
+	}
+	if evicted != "" {
+		delete(b.demands, evicted)
+		for i, id := range b.demandOrder {
+			if id == evicted {
+				b.demandOrder = append(b.demandOrder[:i], b.demandOrder[i+1:]...)
+				break
+			}
+		}
 	}
 	b.demands[d.ID] = &d
 	b.demandOrder = append(b.demandOrder, d.ID)
+	return nil
+}
+
+func (b *backgroundTasks) saveDemandLocked(d *BackgroundDemand, next BackgroundDemand) error {
+	state := b.snapshotLocked(next.SessionID)
+	for i := range state.Demands {
+		if state.Demands[i].ID == next.ID {
+			state.Demands[i] = next
+			break
+		}
+	}
+	if err := b.saveStateLocked(next.SessionID, state); err != nil {
+		return err
+	}
+	*d = next
 	return nil
 }
 
@@ -95,28 +118,28 @@ func (r *Runtime) ResumeBackgroundDemand(ctx context.Context, sessionID string, 
 	if err := b.load(sessionID); err != nil {
 		return err
 	}
-	b.mu.Lock()
+	b.lockMutation()
 	d := b.demands[id]
 	if b.closed || d == nil || d.SessionID != sessionID || d.Status != "pending" {
-		b.mu.Unlock()
+		b.unlockMutation()
 		return fmt.Errorf("only unstarted recovered demands may be resumed")
 	}
 	if len(b.inputs) >= backgroundQueueLimit {
-		b.mu.Unlock()
+		b.unlockMutation()
 		return fmt.Errorf("coordinator input queue is full")
 	}
-	inputCtx, cancel := context.WithCancel(b.ctx)
+	inputCtx, cancel := context.WithCancel(modelbudget.WithRole(modelbudget.WithBudget(b.ctx, modelbudget.FromContext(ctx)), modelbudget.Coordinator, ""))
 	in := &backgroundInput{input: d.Input, sessionID: sessionID, id: id, ctx: inputCtx, cancel: cancel, done: make(chan struct{})}
-	d.Status = "queued"
-	if err := b.saveLocked(sessionID); err != nil {
-		d.Status = "pending"
-		b.mu.Unlock()
+	next := *d
+	next.Status = "queued"
+	if err := b.saveDemandLocked(d, next); err != nil {
+		b.unlockMutation()
 		cancel()
 		return err
 	}
 	b.inputs = append(b.inputs, in)
 	b.pending[id] = in
-	b.mu.Unlock()
+	b.unlockMutation()
 	b.signal()
 	return nil
 }
@@ -132,8 +155,8 @@ func (r *Runtime) DiscardBackgroundDemand(ctx context.Context, sessionID string,
 	if err := b.load(sessionID); err != nil {
 		return err
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.lockMutation()
+	defer b.unlockMutation()
 	d := b.demands[id]
 	if b.closed || d == nil || d.SessionID != sessionID {
 		return fmt.Errorf("demand not found in session")
@@ -141,13 +164,9 @@ func (r *Runtime) DiscardBackgroundDemand(ctx context.Context, sessionID string,
 	if d.Status != "pending" && d.Status != "interrupted" && d.Status != "failed" {
 		return fmt.Errorf("cancel a live demand through its run ID")
 	}
-	previous := d.Status
-	d.Status = "cancelled"
-	if err := b.saveLocked(sessionID); err != nil {
-		d.Status = previous
-		return err
-	}
-	return nil
+	next := *d
+	next.Status = "cancelled"
+	return b.saveDemandLocked(d, next)
 }
 
 func validBackgroundDemand(d BackgroundDemand, sessionID string) bool {

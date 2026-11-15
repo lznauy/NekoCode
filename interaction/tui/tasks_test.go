@@ -1220,3 +1220,42 @@ func TestTaskDetailLoadsCompletePromptOutsideHistoryTail(t *testing.T) {
 		})
 	}
 }
+
+func TestTaskAttemptElapsed(t *testing.T) {
+	now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name    string
+		attempt controlruntime.SubagentAttemptSummary
+		want    string
+	}{
+		{"persisted", controlruntime.SubagentAttemptSummary{DurationMs: 1250}, "耗时 1.3s"},
+		{"running", controlruntime.SubagentAttemptSummary{Status: "running", StartedAt: now.Add(-65 * time.Second)}, "耗时 1m5s"},
+		{"completed", controlruntime.SubagentAttemptSummary{Status: "completed", StartedAt: now.Add(-10 * time.Minute), EndedAt: now.Add(-9 * time.Minute)}, "耗时 1m0s"},
+		{"missing timestamps", controlruntime.SubagentAttemptSummary{Status: "completed"}, ""},
+		{"terminal without end", controlruntime.SubagentAttemptSummary{Status: "failed", StartedAt: now.Add(-time.Minute)}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := taskAttemptElapsed(&tc.attempt, now); got != tc.want {
+				t.Fatalf("elapsed = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTaskViewsDisplayAttemptElapsed(t *testing.T) {
+	m := openedTaskModel(t)
+	openTestDetail(m)
+	d := m.tasks.detail
+	d.attempt = &controlruntime.SubagentAttemptSummary{ID: "elapsed-attempt", Seq: 1, Status: "completed", DurationMs: 65000}
+	d.info.LatestAttempt = cloneTaskAttempt(d.attempt)
+	d.info.RunCount = 1
+	for name, view := range map[string]string{
+		"attempts": m.taskAttemptsView(120),
+		"detail":   m.taskPanelView(120, 24),
+		"metrics":  taskMetrics(d.info),
+	} {
+		if !strings.Contains(ansi.Strip(view), "耗时 1m5s") {
+			t.Fatalf("%s missing elapsed: %s", name, view)
+		}
+	}
+}

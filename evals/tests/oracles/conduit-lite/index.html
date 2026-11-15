@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Conduit Lite</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 1.5rem; max-width: 46rem; }
+  h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+  .sub { margin: 0 0 1.25rem; opacity: .75; }
+  form.filters { display: flex; flex-wrap: wrap; gap: .75rem; align-items: flex-end; padding: .9rem; border: 1px solid #8884; border-radius: .6rem; }
+  label { display: flex; flex-direction: column; gap: .25rem; font-size: .85rem; }
+  input { font: inherit; padding: .35rem .5rem; border: 1px solid #8888; border-radius: .35rem; min-width: 9rem; }
+  button { font: inherit; padding: .4rem .8rem; border: 1px solid #8888; border-radius: .35rem; background: #8881; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  #error[hidden], #empty[hidden] { display: none; }
+  #error { margin: 1rem 0 0; padding: .7rem .9rem; border: 1px solid #d33; border-radius: .5rem; color: #b00; background: #fdd2; }
+  #status { margin: 1.1rem 0 .5rem; font-size: .9rem; opacity: .8; }
+  ul#list { list-style: none; margin: 0; padding: 0; display: grid; gap: .9rem; }
+  article.card { border: 1px solid #8885; border-radius: .6rem; padding: .8rem 1rem; }
+  article.card h2 { font-size: 1.1rem; margin: 0 0 .2rem; }
+  .meta { font-size: .85rem; opacity: .8; }
+  .desc { margin: .35rem 0 .5rem; }
+  .tags { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .4rem; padding: 0; list-style: none; }
+  .tags li { font-size: .75rem; padding: .1rem .5rem; border: 1px solid #8886; border-radius: 1rem; }
+  nav.pager { display: flex; gap: .75rem; align-items: center; justify-content: center; margin-top: 1.2rem; }
+</style>
+</head>
+<body>
+<h1>Conduit Lite</h1>
+<p class="sub">Browse demo articles. Two per page; filters match tags and authors exactly.</p>
+
+<form class="filters" id="filters" autocomplete="off">
+  <label>Tag
+    <input id="tag" name="tag" placeholder="go">
+  </label>
+  <label>Author
+    <input id="author" name="author" placeholder="alice">
+  </label>
+  <button type="submit" id="apply">Apply filters</button>
+  <button type="button" id="reset">Reset</button>
+</form>
+
+<p id="error" role="alert" hidden></p>
+<p id="empty" hidden>No articles match these filters.</p>
+<p id="status" aria-live="polite"></p>
+<ul id="list"></ul>
+
+<nav class="pager" aria-label="Pagination">
+  <button type="button" id="prev">Previous</button>
+  <span id="pageInfo"></span>
+  <button type="button" id="next">Next</button>
+</nav>
+
+<script>
+(function () {
+  "use strict";
+
+  var PAGE_SIZE = 2;
+  var state = { page: 1, tag: "", author: "", total: 0, loading: false };
+
+  var els = {
+    form: document.getElementById("filters"),
+    tag: document.getElementById("tag"),
+    author: document.getElementById("author"),
+    apply: document.getElementById("apply"),
+    reset: document.getElementById("reset"),
+    error: document.getElementById("error"),
+    empty: document.getElementById("empty"),
+    status: document.getElementById("status"),
+    list: document.getElementById("list"),
+    prev: document.getElementById("prev"),
+    next: document.getElementById("next"),
+    pageInfo: document.getElementById("pageInfo")
+  };
+
+  function showError(message) {
+    if (!message) {
+      els.error.textContent = "";
+      els.error.hidden = true;
+      return;
+    }
+    els.error.textContent = message;
+    els.error.hidden = false;
+  }
+
+  function buildUrl() {
+    var params = new URLSearchParams();
+    params.set("limit", String(PAGE_SIZE));
+    params.set("offset", String((state.page - 1) * PAGE_SIZE));
+    if (state.tag) { params.set("tag", state.tag); }
+    if (state.author) { params.set("author", state.author); }
+    return "/api/articles?" + params.toString();
+  }
+
+  function errorText(payload, status) {
+    if (payload && payload.errors && typeof payload.errors === "object") {
+      var parts = [];
+      Object.keys(payload.errors).forEach(function (key) {
+        var values = payload.errors[key];
+        if (Array.isArray(values)) {
+          values.forEach(function (v) { parts.push(key + ": " + v); });
+        } else {
+          parts.push(key + ": " + String(values));
+        }
+      });
+      if (parts.length) { return parts.join("; "); }
+    }
+    return "Request failed with HTTP " + status;
+  }
+
+  // Render one article card. All user-supplied text goes in through
+  // textContent / createElement only; no HTML string assignment anywhere.
+  function renderCard(article) {
+    var li = document.createElement("li");
+    var card = document.createElement("article");
+    card.className = "card";
+
+    var title = document.createElement("h2");
+    title.textContent = article.title || article.slug || "(untitled)";
+    card.appendChild(title);
+
+    var meta = document.createElement("p");
+    meta.className = "meta";
+    var authorName = (article.author && article.author.username) || "unknown";
+    meta.textContent = "by " + authorName + " · " + (article.createdAt || "");
+    card.appendChild(meta);
+
+    var desc = document.createElement("p");
+    desc.className = "desc";
+    desc.textContent = article.description || "";
+    card.appendChild(desc);
+
+    var body = document.createElement("p");
+    body.textContent = article.body || "";
+    card.appendChild(body);
+
+    var tags = Array.isArray(article.tagList) ? article.tagList : [];
+    var tagList = document.createElement("ul");
+    tagList.className = "tags";
+    tags.forEach(function (t) {
+      var item = document.createElement("li");
+      item.textContent = t;
+      tagList.appendChild(item);
+    });
+    card.appendChild(tagList);
+
+    li.appendChild(card);
+    return li;
+  }
+
+  function updatePager() {
+    var pages = Math.max(1, Math.ceil(state.total / PAGE_SIZE));
+    if (state.page > pages) { state.page = pages; }
+    els.pageInfo.textContent = "Page " + state.page + " of " + pages;
+    els.prev.disabled = state.loading || state.page <= 1;
+    els.next.disabled = state.loading || state.page >= pages;
+  }
+
+  function load() {
+    state.loading = true;
+    showError("");
+    els.apply.disabled = true;
+    updatePager();
+
+    fetch(buildUrl(), { headers: { Accept: "application/json" } })
+      .then(function (response) {
+        return response.json().then(function (payload) {
+          return { ok: response.ok, status: response.status, payload: payload };
+        }).catch(function () {
+          return { ok: false, status: response.status, payload: null };
+        });
+      })
+      .then(function (result) {
+        if (!result.ok) {
+          els.list.replaceChildren();
+          els.empty.hidden = true;
+          state.total = 0;
+          els.status.textContent = "Could not load articles.";
+          showError(errorText(result.payload, result.status));
+          return;
+        }
+        var data = result.payload || {};
+        var articles = Array.isArray(data.articles) ? data.articles : [];
+        var total = typeof data.articlesCount === "number" ? data.articlesCount : articles.length;
+
+        // An offset past the end (e.g. filters shrank the result set) retries
+        // on the last real page instead of showing a bogus empty page.
+        var lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
+        if (articles.length === 0 && total > 0 && state.page > lastPage) {
+          state.page = lastPage;
+          state.loading = false;
+          els.apply.disabled = false;
+          load();
+          return;
+        }
+
+        state.total = total;
+        els.list.replaceChildren();
+        articles.forEach(function (a) { els.list.appendChild(renderCard(a)); });
+        els.empty.hidden = total !== 0;
+        els.status.textContent = total === 0
+          ? "0 articles match."
+          : "Showing " + (articles.length) + " of " + total + " matching article" + (total === 1 ? "" : "s") +
+            " (page " + state.page + ").";
+      })
+      .catch(function () {
+        els.list.replaceChildren();
+        state.total = 0;
+        els.status.textContent = "Could not load articles.";
+        showError("Network error: the Conduit Lite server did not respond.");
+      })
+      .finally(function () {
+        state.loading = false;
+        els.apply.disabled = false;
+        updatePager();
+      });
+  }
+
+  function applyFilters() {
+    // Any filter change restarts at page 1.
+    state.tag = els.tag.value.trim();
+    state.author = els.author.value.trim();
+    state.page = 1;
+    load();
+  }
+
+  els.form.addEventListener("submit", function (event) {
+    event.preventDefault();
+    applyFilters();
+  });
+
+  els.reset.addEventListener("click", function () {
+    els.tag.value = "";
+    els.author.value = "";
+    applyFilters();
+  });
+
+  els.prev.addEventListener("click", function () {
+    if (state.page > 1) { state.page -= 1; load(); }
+  });
+
+  els.next.addEventListener("click", function () {
+    if (state.page * PAGE_SIZE < state.total) { state.page += 1; load(); }
+  });
+
+  // Deep links: /?tag=go&author=alice
+  var initial = new URLSearchParams(window.location.search);
+  els.tag.value = initial.get("tag") || "";
+  els.author.value = initial.get("author") || "";
+  applyFilters();
+})();
+</script>
+</body>
+</html>

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"nekocode/protocol"
+	"nekocode/util/secrets"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,13 +84,13 @@ func (s *OutputStore) Directory() (string, error) {
 	return s.dir, nil
 }
 
-// PreserveOutput stores the exact original in a private file.
+// PreserveOutput stores the full result with loaded credentials redacted.
 func (s *OutputStore) PreserveOutput(content string) (string, error) {
 	file, err := s.createOutput()
 	if err != nil {
 		return "", err
 	}
-	_, writeErr := file.WriteString(content)
+	_, writeErr := file.WriteString(secrets.Redact(content))
 	syncErr := file.Sync()
 	closeErr := file.Close()
 	if writeErr != nil {
@@ -124,6 +125,7 @@ func (o ToolOutput) Render() string {
 
 // BoundOutput preserves an existing artifact when narrowing its preview.
 func (s *OutputStore) BoundOutput(output ToolOutput, limit int) (ToolOutput, error) {
+	output.Text = secrets.Redact(output.Text)
 	if output.Artifact.Path != "" {
 		if err := s.CheckArtifact(output.Artifact); err != nil {
 			return ToolOutput{}, err

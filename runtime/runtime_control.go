@@ -64,7 +64,9 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 	if len(input.Images) > MaxImageAttachments {
 		return "", protocolError(ErrorInvalidInput, "start_run", "too many image attachments")
 	}
-	r.mutationMu.Lock()
+	if err := r.mutationMu.LockContext(ctx); err != nil {
+		return "", err
+	}
 	defer r.mutationMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -77,6 +79,7 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 	if len(input.Images) > 0 && !r.ImageAttachmentsEnabled() {
 		return "", protocolError(ErrorUnsupported, "start_run", "image attachments require a configured image understanding model")
 	}
+	sessionID := r.CurrentSessionID()
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
@@ -122,12 +125,21 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 		r.releaseRecordedRun(runID)
 		return "", protocolError(ErrorClosed, "start_run", "closed")
 	}
+	if err := ctx.Err(); err != nil {
+		r.mu.Unlock()
+		r.releaseRecordedRun(runID)
+		return "", err
+	}
 	// Install the projection before exposing Running or starting preparation.
-	r.runs.PrepareRun(runID, input.Source)
+	r.runs.PrepareRun(runID, input.Source, sessionID)
 	r.currentRun = runID
 	r.status = RunRunning
 	delete(r.cancelled, runID)
-	runCtx, cancel := context.WithCancel(core.WithRunSource(ctx, input.Source))
+	executionCtx := ctx
+	if detached, _ := ctx.Value(detachedRunKey{}).(bool); detached {
+		executionCtx = context.WithoutCancel(ctx)
+	}
+	runCtx, cancel := context.WithCancel(core.WithRunSource(executionCtx, input.Source))
 	r.runContext = runCtx
 	r.cancelRun = cancel
 	r.cancelDone = nil
@@ -138,7 +150,7 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 	r.runExecution = execution
 	r.mu.Unlock()
 
-	go r.run(runCtx, runID, input, lease, execution)
+	go r.run(runCtx, runID, input, lease, execution, sessionID)
 	return runID, nil
 }
 
@@ -238,34 +250,8 @@ func (r *Runtime) SteerRun(ctx context.Context, runID RunID, input Input) error 
 }
 
 func (r *Runtime) CancelRun(ctx context.Context, runID RunID) error {
-	if err := r.ensureOpen(); err != nil {
-		return err
-	}
-	if handled, err := r.cancelQueuedInput(runID); handled {
-		return err
-	}
-	control, active, err := r.beginCancel(runID)
-	if err != nil {
-		return err
-	}
-	if !active {
-		return nil
-	}
-	control.lease.deactivate()
-	if control.cancel != nil {
-		control.cancel()
-	}
-	r.approvals.RejectRun(control.runID)
-	r.questions.RejectRun(control.runID)
-	if err := control.lease.wait(ctx); err != nil {
-		go r.publishCancellation(control, "cancelled")
-		return err
-	}
-	// Runner shutdown may involve provider cleanup and final usage accounting.
-	// Keep CancelRun responsive while the terminal event is serialized after
-	// that work by publishCancellation.
-	go r.publishCancellation(control, "cancelled")
-	return nil
+	_, err := r.CancelRunWithResult(ctx, runID)
+	return err
 }
 
 func (r *Runtime) publishCancellation(control cancelControl, message string) {

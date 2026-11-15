@@ -3,6 +3,7 @@ package shell
 import (
 	"context"
 	"io"
+	"os"
 	"sync"
 	"time"
 
@@ -36,13 +37,14 @@ func (s taskStatus) String() string {
 }
 
 type shellTask struct {
-	name      string
-	owner     string
-	cmd       string
-	launchKey string
-	startedAt time.Time
-	proc      processHandle
-	cancel    context.CancelFunc
+	name        string
+	owner       string
+	cmd         string
+	launchKey   string
+	startedAt   time.Time
+	proc        processHandle
+	scratchFile *os.File // immutable after registration; used only for idle-handle eviction
+	cancel      context.CancelFunc
 
 	mu             sync.Mutex
 	status         taskStatus

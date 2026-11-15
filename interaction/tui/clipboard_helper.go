@@ -28,7 +28,7 @@ func RunClipboardHelper() (bool, int) {
 	}
 	debug.SetMemoryLimit(64 << 20)
 	if err := clipboard.Init(); err != nil {
-		_, _ = fmt.Fprint(os.Stderr, err)
+		_, _ = fmt.Fprint(os.Stderr, "无法连接桌面剪贴板；请在本地桌面会话中运行。SSH/无桌面环境不能直接读取本机截图，请将图片保存并提供文件路径。")
 		return true, 2
 	}
 	format := clipboard.FmtText

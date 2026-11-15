@@ -72,11 +72,11 @@ func TestCoordinatorUnfinishedPlanCorrectionIsBounded(t *testing.T) {
 			t.Fatal("correction stopped early")
 		}
 	}
-	if !a.turnRunner.handleText(&reasoningResult{Action: actionChat, ActionInput: "done"}, nil) || a.run.err == nil || a.run.finalText != "" {
-		t.Fatal("stuck coordinator did not expose unfinished plan")
+	if !a.turnRunner.handleText(&reasoningResult{Action: actionChat, ActionInput: "Partial review report."}, nil) || a.run.err != nil || !a.run.todoPartialCloseout {
+		t.Fatal("stuck coordinator did not produce a partial closeout")
 	}
-	if !strings.Contains(a.run.err.Error(), "verify") {
-		t.Fatal("unfinished items missing from failure")
+	if !strings.Contains(a.run.finalText, "Partial review report.") || !strings.Contains(a.run.finalText, "verify") || !strings.Contains(a.run.finalText, "未完成") {
+		t.Fatalf("partial report or unfinished items missing: %q", a.run.finalText)
 	}
 }
 func TestCoordinatorPlanProgressAllowsFurtherCorrection(t *testing.T) {
@@ -119,7 +119,7 @@ func TestCoordinatorNotificationSelectsOwnPlanAtRealRunEntry(t *testing.T) {
 	}}
 	a.deps.llmClient = model
 	result := a.RunContext(a.getCtx(), "Review demand completion.", nil, nil)
-	if result.Error == nil || !strings.Contains(result.Error.Error(), "verify") || model.calls != 4 || strings.Contains(result.Error.Error(), "unrelated") {
+	if result.Error != nil || result.StopReason != "incomplete" || !strings.Contains(result.FinalOutput, "verify") || model.calls != 4 || strings.Contains(result.FinalOutput, "unrelated") {
 		t.Fatalf("notification used another demand plan: calls=%d result=%+v", model.calls, result)
 	}
 }
@@ -232,7 +232,7 @@ func TestResumingSavedPlanCannotEndAfterTextOnlyResponse(t *testing.T) {
 	tool.SetApplyFn(a.updateTodos)
 	a.deps.toolRegistry.Register(tool)
 	result := a.RunContext(t.Context(), "Continue the saved plan.", nil, nil)
-	if result.Error == nil || !strings.Contains(result.Error.Error(), "verify") || result.FinalOutput != "" {
+	if result.Error != nil || result.StopReason != "incomplete" || !strings.Contains(result.FinalOutput, "verify") || !strings.Contains(result.FinalOutput, "I will continue.") {
 		t.Fatalf("resumed plan silently ended: %+v", result)
 	}
 }

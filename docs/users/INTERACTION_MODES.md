@@ -125,7 +125,7 @@ Plan 可以通过文件读取、代码搜索、网页检索以及获准的索引
 | `coder` | 标准模式中的实现、修复和运行命令 | 在其工具范围及当前权限内执行，包含 shell、编辑和测试所需工具 |
 | `executor` | 通用任务、媒体理解与生成、已配置的外部服务 | 仅 Super Agent 可委派；按派发时捕获的工具范围执行，继续遵守审批和沙箱 |
 
-Super Agent 固定使用专用 `executor`，派发工具不提供 Profile 选择；`explore`、`coder` 和自定义 Profile 保留给标准模式。主 Agent 可以并行派出多个 executor 实例。派发时通过 `required_tools` 声明必需工具，宿主会在启动子任务前检查是否具备。需要 `git status/diff`、测试等命令时，使用默认 `tool_scope="general"` 并声明 `required_tools=["shell"]`；“只审查、不改文件”写在任务约束中。纯文件阅读与检索可以显式选择 `tool_scope="read_tools_only"`，该范围不包含 shell、写入工具或 MCP，可并行执行。旧 `read_only` 参数会被拒绝并提示正确用法，避免启动后才发现工具不足。FULL 和审批只能决定可见工具如何执行，不能补上被工具范围排除的 shell。
+Super Agent 固定使用专用 `executor`，派发工具不提供 Profile 选择；`explore`、`coder` 和自定义 Profile 保留给标准模式。主 Agent 可以并行派出多个 executor 实例。新任务通过 `required_tools` 声明必需工具，宿主会在启动子任务前检查是否具备；续做同一任务时可以省略，宿主沿用已保存的能力上限。需要 `git status/diff`、测试等命令时，使用默认 `tool_scope="general"` 并声明 `required_tools=["shell"]`；“只审查、不改文件”写在任务约束中。纯文件阅读与检索可以显式选择 `tool_scope="read_tools_only"`，该范围不包含 shell、写入工具或 MCP，可并行执行。旧 `read_only` 参数会被拒绝并提示正确用法，避免启动后才发现工具不足。FULL 和审批只能决定可见工具如何执行，不能补上被工具范围排除的 shell。
 
 自定义 Profile 可以声明更窄的工具范围、技能、步数和可选模型，见 [自定义 Agent 指南](../developers/AGENT_GUIDE.md)。技能只提供工作流，不会扩大执行者的工具范围。内置 Profile 也不等于主对话所有已注册工具的完整副本。
 

@@ -50,7 +50,7 @@ func (s *replacementCompactor) summarize(history []types.Message, prevArchive st
 	if summarizer == nil {
 		summarizer = s.summarizer
 	}
-	if summarizer == nil || len(history) <= 2 {
+	if summarizer == nil || len(history) <= 2 && !hasRuntimeEvent(history) {
 		return prevArchive, history, originalLen - len(history), nil
 	}
 	keepStart := s.recentStart(history, budget)
@@ -71,11 +71,17 @@ func (s *replacementCompactor) summarize(history []types.Message, prevArchive st
 	return archive, recent, originalLen - len(recent), nil
 }
 
+func hasRuntimeEvent(history []types.Message) bool {
+	for _, message := range history {
+		if message.Role == "user" && message.Source == types.MessageSourceRuntimeEvent {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *replacementCompactor) recentStart(history []types.Message, budget int) int {
 	start := userTurnBoundary(history, s.keepTurns)
-	if start <= 0 {
-		return start
-	}
 
 	maxRecentTokens := s.effectiveBudget(budget) / 3
 	if maxRecentTokens < 2000 {
@@ -88,7 +94,38 @@ func (s *replacementCompactor) recentStart(history []types.Message, budget int) 
 		}
 		start = next
 	}
+	if token.EstimateTokens(history[start:]) > maxRecentTokens {
+		return recentExchangeBoundary(history, start, maxRecentTokens)
+	}
 	return start
+}
+
+// A single user turn can contain arbitrarily many tool exchanges. Under
+// pressure, archive its older exchanges while preserving a complete suffix.
+// The archive carries the original request; tool calls and their results must
+// never straddle the cut, including parallel calls with interleaved events.
+func recentExchangeBoundary(history []types.Message, start, maxTokens int) int {
+	pending := make(map[string]bool)
+	remainingTokens := token.EstimateTokens(history)
+	lastBoundary := start
+	for i, msg := range history {
+		boundary := msg.Role == "assistant" || msg.IsConversationUser() ||
+			msg.Role == "user" && msg.Source == types.MessageSourceRuntimeEvent
+		if i > start && len(pending) == 0 && boundary {
+			lastBoundary = i
+			if remainingTokens <= maxTokens {
+				return i
+			}
+		}
+		for _, call := range msg.ToolCalls {
+			pending[call.ID] = true
+		}
+		if msg.Role == "tool" {
+			delete(pending, msg.ToolCallID)
+		}
+		remainingTokens -= token.EstimateTokens(history[i : i+1])
+	}
+	return lastBoundary
 }
 
 func userTurnBoundary(msgs []types.Message, turns int) int {

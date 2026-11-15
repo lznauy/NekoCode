@@ -141,7 +141,7 @@ func (m *Manager) AddToolResultsBatch(results []ToolResultMsg) {
 			}
 		}
 
-		if role == "tool" && r.ToolName == "read" && !message.IsError {
+		if role == "tool" && (r.ToolName == "read" || r.ToolName == "write" || r.ToolName == "edit") && !message.IsError {
 			message.ReadID = r.Message.ReadID
 		}
 		if deferred {

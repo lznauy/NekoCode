@@ -68,9 +68,11 @@ func New(apiKey, baseURL, model string) *Client {
 }
 
 func (c *Client) headers() map[string]string {
-	return map[string]string{
-		"Authorization": "Bearer " + c.APIKey,
+	headers := map[string]string{}
+	if c.APIKey != "" {
+		headers["Authorization"] = "Bearer " + c.APIKey
 	}
+	return headers
 }
 
 func (c *Client) RequestMeta() types.RequestMeta {

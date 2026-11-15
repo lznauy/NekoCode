@@ -124,6 +124,9 @@ func runLandlockBash(ctx context.Context, command string, profile Profile, timeo
 		return "", err
 	}
 	writable = append(writable, writePaths...)
+	if profile.ScratchFile != nil {
+		writable = append(writable, scratchAccessPath(profile))
+	}
 
 	// helperConfig mirrors tbsb's unexported helperConfig{WritableDirs `json:"w"`}.
 	cfg := struct {
@@ -141,7 +144,7 @@ func runLandlockBash(ctx context.Context, command string, profile Profile, timeo
 
 	// Replicate tbsb applySandbox argv: <self> __sandbox__ -- bash -c <command>
 	args := []string{"__sandbox__", "--", "bash", "-c", command}
-	env := append(os.Environ(),
+	env := append(commandEnvironment(os.Environ(), profile),
 		"__SANDBOX_HELPER=1",
 		"__SANDBOX_CONFIG="+string(cfgJSON),
 	)
@@ -184,6 +187,9 @@ func startLandlockBash(ctx context.Context, command string, profile Profile) (*P
 		return nil, err
 	}
 	writable = append(writable, writePaths...)
+	if profile.ScratchFile != nil {
+		writable = append(writable, scratchAccessPath(profile))
+	}
 
 	cfg := struct {
 		WritableDirs []string `json:"w"`
@@ -197,7 +203,7 @@ func startLandlockBash(ctx context.Context, command string, profile Profile) (*P
 		return nil, fmt.Errorf("get executable path: %w", err)
 	}
 	args := []string{"__sandbox__", "--", "bash", "-c", command}
-	env := append(os.Environ(),
+	env := append(commandEnvironment(os.Environ(), profile),
 		"__SANDBOX_HELPER=1",
 		"__SANDBOX_CONFIG="+string(cfgJSON),
 	)

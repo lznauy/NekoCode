@@ -169,12 +169,16 @@ func (c *Connector) pollLoop(ctx context.Context, client *apiClient, generation 
 		}
 		cfg, err := loadConfig()
 		if err != nil {
-			time.Sleep(3 * time.Second)
+			if !waitPollRetry(ctx, pollErrorDelay) {
+				return
+			}
 			continue
 		}
 		idx := cfg.activeIndex()
 		if idx < 0 {
-			time.Sleep(3 * time.Second)
+			if !waitPollRetry(ctx, pollErrorDelay) {
+				return
+			}
 			continue
 		}
 		profile := &cfg.Profiles[idx]
@@ -187,7 +191,9 @@ func (c *Connector) pollLoop(ctx context.Context, client *apiClient, generation 
 			if ctx.Err() != nil {
 				return
 			}
-			time.Sleep(3 * time.Second)
+			if !waitPollRetry(ctx, pollRetryDelay(err)) {
+				return
+			}
 			continue
 		}
 		for _, update := range updates {

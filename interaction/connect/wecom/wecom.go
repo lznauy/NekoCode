@@ -351,10 +351,21 @@ type eventSink struct {
 }
 
 type outboundMessage struct {
-	chatID   string
-	text     string
+	chatID string
+	// Only prepared parts enter the retry queue; format errors are permanent.
+	parts    []string
 	runID    controlruntime.RunID
 	terminal bool
+}
+
+func (out *outboundMessage) send(ctx context.Context, sender messageSender) error {
+	for len(out.parts) > 0 {
+		if err := sender.sendMarkdownPart(ctx, out.chatID, out.parts[0]); err != nil {
+			return err
+		}
+		out.parts = out.parts[1:]
+	}
+	return nil
 }
 
 func (eventSink) Caps() connect.Capabilities { return connect.Capabilities{} }
@@ -380,8 +391,16 @@ func (s eventSink) Post(ctx context.Context, intent connect.Intent) error {
 		return nil
 	}
 	terminal := intent.Kind == connect.IntentResult || intent.Kind == connect.IntentFailed || intent.Kind == connect.IntentStopped
-	out := outboundMessage{chatID: chatID, text: intent.Text, runID: intent.RunID, terminal: terminal}
-	err = s.sender.sendMarkdown(ctx, out.chatID, out.text)
+	parts, err := splitMessage(intent.Text, maxTextBytes)
+	if err != nil {
+		s.c.base.PublishStatus("error", "WeCom message could not be prepared: "+err.Error())
+		if terminal {
+			s.c.clearRoute(intent.RunID)
+		}
+		return fmt.Errorf("prepare WeCom message: %w", err)
+	}
+	out := outboundMessage{chatID: chatID, parts: parts, runID: intent.RunID, terminal: terminal}
+	err = out.send(ctx, s.sender)
 	if err != nil {
 		s.c.enqueue(out)
 		s.c.base.PublishStatus("error", "WeCom send deferred until reconnect: "+err.Error())
@@ -416,7 +435,7 @@ func (c *Connector) flushPending(ctx context.Context, sender messageSender) {
 		out := c.pending[0]
 		c.pending = c.pending[1:]
 		c.pendingMu.Unlock()
-		if err := sender.sendMarkdown(ctx, out.chatID, out.text); err != nil {
+		if err := out.send(ctx, sender); err != nil {
 			c.pendingMu.Lock()
 			if len(c.pending) >= maxPendingMessages {
 				c.pending = c.pending[:maxPendingMessages-1]

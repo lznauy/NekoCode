@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "id": "pelican-bicycle",
+  "version": 1,
+  "title": "鹈鹕骑自行车 SVG",
+  "tags": ["visual", "svg", "composition", "verification"],
+  "kind": "product",
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {"id": "svg_document", "description": "有效 SVG 文档及 viewBox", "required": true},
+    {"id": "self_contained", "description": "无脚本或外部资源", "required": true},
+    {"id": "vector_only", "description": "矢量作品，无嵌入位图", "required": true},
+    {"id": "rendered", "description": "Chrome 实际渲染非空，桌面和窄屏可查看", "required": true},
+    {"id": "pelican_identity", "description": "截图复核：长喙、喉囊和鸟体可辨认为鹈鹕", "required": false},
+    {"id": "bicycle_structure", "description": "截图复核：双轮、车架、车把、车座和踏板关系合理", "required": false},
+    {"id": "riding_pose", "description": "截图复核：鸟确实在骑车，接触关系与遮挡合理", "required": false},
+    {"id": "visual_quality", "description": "截图复核：构图完整、主体清楚、无明显穿插或裁切", "required": false}
+  ],
+  "budgets": {"wall_seconds": 600, "model_calls": 50, "total_tokens": 2000000, "verifier_seconds": 90},
+  "source": "Simon Willison: https://github.com/simonw/pelican-bicycle — original one-line prompt; local file delivery and verification contract added"
+}

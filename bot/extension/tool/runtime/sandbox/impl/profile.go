@@ -1,5 +1,7 @@
 package impl
 
+import "os"
+
 type SandboxMode string
 
 const (
@@ -27,6 +29,16 @@ type Profile struct {
 	// Workspace is the primary working directory, bind-mounted read-write
 	// at its host-absolute path unless ModeReadOnly is selected. Required.
 	Workspace string
+
+	// ScratchDir is actor-owned command state assigned by the shell host, not
+	// a model-selected writable root. It survives commands in that actor's
+	// toolbox; /tmp remains private to each sandbox. The shell host pins the
+	// original directory with ScratchFile rather than authorizing this path.
+	ScratchDir  string
+	ScratchFile *os.File `json:"-"`
+	// ScratchFD is assigned only by native launch when inheriting ScratchFile.
+	ScratchFD     int
+	ScratchSource string
 
 	// Network records whether network use is authorized.
 	//   false (default) = request network isolation where the backend supports it

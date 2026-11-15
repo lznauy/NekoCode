@@ -26,6 +26,7 @@ func (a *adapter) wireTaskLister(rt *controlruntime.Runtime) {
 		for _, item := range page.Items {
 			summary := taskbridge.TaskSummary{WorkspaceKind: item.WorkspaceKind, Isolation: item.Isolation, Recorded: item.Recorded, ID: item.ID, Title: item.Title, Profile: item.Profile, Status: item.Status, Prompt: item.Prompt, Result: item.Result, RunCount: item.RunCount}
 			summary.QueueReason, summary.SchedulingNote = item.QueueReason, item.SchedulingNote
+			summary.Delivery, summary.Notified = item.Delivery, item.Notified
 			if attempt := item.LatestAttempt; attempt != nil {
 				summary.LatestAttempt = &taskbridge.TaskAttemptSummary{Summary: attempt.Summary, ID: attempt.ID, Seq: attempt.Seq, Status: attempt.Status, Prompt: attempt.Prompt, Result: attempt.Result, TranscriptStart: attempt.TranscriptStart, TranscriptEnd: attempt.TranscriptEnd, TotalTokens: attempt.TotalTokens, CacheHitTokens: attempt.CacheHitTokens, CacheMissTokens: attempt.CacheMissTokens, ToolUseCount: attempt.ToolUseCount, ContextTokens: attempt.ContextTokens, ContextWindow: attempt.ContextWindow}
 			}

@@ -26,13 +26,13 @@ func TestBackgroundConfiguredLimitAndIndependentWorkspaces(t *testing.T) {
 	release := make(chan struct{})
 	for _, id := range []string{"A", "B", "C"} {
 		id := id
-		_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: id, SessionID: "session", Isolation: "worktree", Workspace: "repo#worktree:" + id, Run: func(ctx context.Context, _ protocol.BackgroundHost) (string, error) {
+		_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: id, SessionID: "session", Isolation: "worktree", Workspace: "repo#worktree:" + id, Run: func(ctx context.Context, _ protocol.BackgroundHost) (protocol.BackgroundResult, error) {
 			started <- id
 			select {
 			case <-release:
-				return "done", nil
+				return protocol.BackgroundResult{Text: "done"}, nil
 			case <-ctx.Done():
-				return "", ctx.Err()
+				return protocol.BackgroundResult{Text: ""}, ctx.Err()
 			}
 		}})
 		if err != nil {
@@ -110,10 +110,10 @@ func TestWorktreeApplyCannotBypassActiveBackgroundBarrier(t *testing.T) {
 	rt := New(RunnerFunc(func(context.Context, string, RunHost) (string, error) { return "", nil }), services)
 	defer rt.Close()
 	started := make(chan struct{})
-	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "writer", SessionID: "session", Workspace: "shared", Run: func(ctx context.Context, _ protocol.BackgroundHost) (string, error) {
+	_, err := rt.background.submit(t.Context(), protocol.BackgroundWork{ID: "writer", SessionID: "session", Workspace: "shared", Run: func(ctx context.Context, _ protocol.BackgroundHost) (protocol.BackgroundResult, error) {
 		close(started)
 		<-ctx.Done()
-		return "", ctx.Err()
+		return protocol.BackgroundResult{Text: ""}, ctx.Err()
 	}})
 	if err != nil {
 		t.Fatal(err)

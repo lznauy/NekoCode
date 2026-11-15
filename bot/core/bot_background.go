@@ -14,7 +14,6 @@ import (
 	"nekocode/bot/agent/subagent"
 	"nekocode/bot/config"
 	ctxmgr "nekocode/bot/contextmgr"
-	"nekocode/bot/extension/agentprofile"
 	"nekocode/bot/extension/mcp"
 	tools "nekocode/bot/extension/tool"
 	"nekocode/bot/extension/tool/builtin/capability"
@@ -41,8 +40,14 @@ func (b *Bot) submitBackgroundTask(ctx context.Context, spec taskbridge.TaskSpec
 	if spec.Profile != "" && spec.Profile != "executor" {
 		return nil, fmt.Errorf("Super Agent can only submit dedicated executor tasks")
 	}
+	if spec.ReviewPolicy != "" && spec.ReviewPolicy != "immediate" && spec.ReviewPolicy != "batch" {
+		return nil, fmt.Errorf("invalid review_policy")
+	}
 	if len(spec.After)+len(spec.InputRefs) > 8 {
 		return nil, fmt.Errorf("at most 8 combined result inputs and dependencies")
+	}
+	if spec.ForkID != "" && (spec.ResumeID != "" || spec.Isolation == "" || len(spec.After) > 0) {
+		return nil, fmt.Errorf("fork_from requires a new task with explicit isolation and no after dependencies")
 	}
 	if spec.ResumeID != "" && len(spec.After) > 0 {
 		return nil, fmt.Errorf("new dependencies require a new task; resumed result inputs may only narrow")
@@ -64,6 +69,8 @@ func (b *Bot) submitBackgroundTask(ctx context.Context, spec taskbridge.TaskSpec
 	var savedGroup string
 	var savedCeiling []string
 	var updateSequenceFloor uint64
+	var handoff string
+	var renderedRefs []string
 	if id != "" {
 		metadata, err := session.ReadSubagentMetadata(parentID, id)
 		if err != nil {
@@ -104,8 +111,31 @@ func (b *Bot) submitBackgroundTask(ctx context.Context, spec taskbridge.TaskSpec
 		}
 	} else {
 		id = uuid.NewString()
+		if spec.ForkID != "" {
+			metadata, page, context, err := captureTaskHandoff(ctx, parentID, spec.ForkID)
+			if err != nil {
+				return nil, err
+			}
+			savedGroup, savedCeiling = metadata.GroupID, metadata.ToolCeiling
+			if savedCeiling == nil {
+				return nil, fmt.Errorf("source executor has no saved tool ceiling")
+			}
+			// This reader exposes only explicitly pinned report inputs, not execution tools.
+			savedCeiling = append(slices.Clone(savedCeiling), "task_result")
+			if spec.Skills == nil {
+				spec.Skills = slices.Clone(metadata.Skills)
+			}
+			if !slices.Contains(spec.InputRefs, page.Ref) {
+				spec.InputRefs = append(slices.Clone(spec.InputRefs), page.Ref)
+			}
+			if len(spec.InputRefs) > 8 {
+				return nil, fmt.Errorf("fork source plus inputs exceed 8 result references")
+			}
+			handoff = context
+			renderedRefs = []string{page.Ref}
+		}
 	}
-	inputRefs, resultReader, resultContext, err := captureResultInputs(ctx, parentID, spec.InputRefs)
+	inputRefs, resultReader, resultContext, err := captureResultInputs(ctx, parentID, spec.InputRefs, renderedRefs...)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +146,10 @@ func (b *Bot) submitBackgroundTask(ctx context.Context, spec taskbridge.TaskSpec
 	if err := profile.CheckSource(ctx); err != nil {
 		return nil, err
 	}
-	profile = agentprofile.Clone(profile)
+	profile, err = resolveTaskStepBudget(profile, spec, taskbridge.DefaultBackgroundSteps)
+	if err != nil {
+		return nil, err
+	}
 	if resultReader != nil || len(spec.After) > 0 {
 		profile.Tools = append(profile.Tools, "task_result")
 	}
@@ -212,7 +245,7 @@ func (b *Bot) submitBackgroundTask(ctx context.Context, spec taskbridge.TaskSpec
 				names = append(names, capability.ToolName)
 			}
 		}
-		if spec.ResumeID != "" {
+		if spec.ResumeID != "" || spec.ForkID != "" {
 			if savedCeiling == nil {
 				return nil, fmt.Errorf("saved executor task has no capability ceiling; create a new task")
 			}
@@ -288,34 +321,35 @@ func (b *Bot) submitBackgroundTask(ctx context.Context, spec taskbridge.TaskSpec
 	}
 	work := protocol.BackgroundWork{After: slices.Clone(spec.After), Prompt: spec.Prompt, UpdateSequenceFloor: updateSequenceFloor, ID: id, SessionID: parentID, GroupID: group, Title: spec.Title, Profile: profile.Name, ReadOnly: readOnly, Workspace: cwd}
 	work.Isolation, work.SchedulingNote = spec.Isolation, schedulingNote
+	work.ReviewPolicy = spec.ReviewPolicy
 	if spec.Isolation == "worktree" {
 		work.Workspace = cwd + "#worktree:" + id
 	}
-	work.Run = func(taskCtx context.Context, background protocol.BackgroundHost) (output string, runErr error) {
+	work.Run = func(taskCtx context.Context, background protocol.BackgroundHost) (submitted protocol.BackgroundResult, runErr error) {
 		// Dependencies are resolved only after admission to an execution slot. The
 		// scheduler pins upstream attempts until this task has captured their results.
 		taskRefs, taskReader, taskContext := inputRefs, resultReader, resultContext
 		if len(spec.After) > 0 {
 			refs := slices.Clone(spec.InputRefs)
 			for _, upstream := range spec.After {
-				page, err := session.ReadSubagentResult(taskCtx, parentID, taskbridge.ResultQuery{ID: upstream, Limit: 256})
+				page, err := readTaskResult(taskCtx, parentID, taskbridge.ResultQuery{ID: upstream, Limit: 256})
 				if err != nil {
-					return "", fmt.Errorf("dependency result: %w", err)
+					return protocol.BackgroundResult{}, fmt.Errorf("dependency result: %w", err)
 				}
 				refs = append(refs, page.Ref)
 			}
 			var err error
 			taskRefs, taskReader, taskContext, err = captureResultInputs(taskCtx, parentID, refs)
 			if err != nil {
-				return "", err
+				return protocol.BackgroundResult{}, err
 			}
 		}
 		standard, _ := mode.Resolve(mode.Standard)
 		taskCtx = mode.WithSnapshot(taskbridge.WithTaskID(taskCtx, id), standard.Snapshot)
-		taskCtx = protocol.WithExecutionIdentity(taskCtx, protocol.ExecutionIdentity{RunID: "task_" + id, TaskID: id})
+		taskCtx = protocol.WithExecutionIdentity(taskCtx, protocol.ExecutionIdentity{RunID: "task_" + id, TaskID: id, AttemptID: protocol.ExecutionFromContext(taskCtx).AttemptID})
 		child, err := session.OpenSubagent(parentID, id, cwd, spec.ResumeID != "")
 		if err != nil {
-			return "", err
+			return protocol.BackgroundResult{}, err
 		}
 		defer child.Close()
 		taskGroup := protocol.CoordinationFromContext(taskCtx).GroupID
@@ -323,10 +357,10 @@ func (b *Bot) submitBackgroundTask(ctx context.Context, spec taskbridge.TaskSpec
 			taskGroup = group
 		}
 		if err := child.SetGroupID(taskGroup); err != nil {
-			return "", err
+			return protocol.BackgroundResult{}, err
 		}
 		local := cfg
-		local.Prompt = spec.Prompt + taskContext
+		local.Prompt = spec.Prompt + handoff + taskContext
 		if source, ok := background.(protocol.BackgroundInputSource); ok {
 			local.PendingUpdates = source.ApplyUpdates
 		}
@@ -344,12 +378,12 @@ func (b *Bot) submitBackgroundTask(ctx context.Context, spec taskbridge.TaskSpec
 					check = worktree.SnapshotIsolationReason
 				}
 				if reason := check(taskCtx, cwd); reason != "" {
-					return "", fmt.Errorf("automatic worktree preflight changed: %s; no worker model was started. Resubmit with isolation=shared to inspect the current working copy", reason)
+					return protocol.BackgroundResult{}, fmt.Errorf("automatic worktree preflight changed: %s; no worker model was started. Resubmit with isolation=shared to inspect the current working copy", reason)
 				}
 			}
 			lease, err = worktree.Acquire(parentID, id)
 			if err != nil {
-				return "", err
+				return protocol.BackgroundResult{}, err
 			}
 			defer lease.Close()
 			if snapshotWorkspace {
@@ -358,7 +392,7 @@ func (b *Bot) submitBackgroundTask(ctx context.Context, spec taskbridge.TaskSpec
 				info, err = lease.Open(taskCtx, cwd, id, spec.ResumeID != "")
 			}
 			if err != nil {
-				return "", err
+				return protocol.BackgroundResult{}, err
 			}
 			target = info.Cwd
 			local.IsolatedWorkspace = true
@@ -391,7 +425,7 @@ func (b *Bot) submitBackgroundTask(ctx context.Context, spec taskbridge.TaskSpec
 			return prompt.Environment{Cwd: target, Roots: []prompt.Root{{Path: target, Access: "read-write"}}, ManagedProcesses: box.ManagedProcessSummary()}
 		}
 		if err := child.SetIsolation(spec.Isolation); err != nil {
-			return "", err
+			return protocol.BackgroundResult{}, err
 		}
 		workspaceKind := "shared"
 		if spec.Isolation == "worktree" {
@@ -401,28 +435,28 @@ func (b *Bot) submitBackgroundTask(ctx context.Context, spec taskbridge.TaskSpec
 			}
 		}
 		if err := child.SetWorkspaceKind(workspaceKind); err != nil {
-			return "", err
+			return protocol.BackgroundResult{}, err
 		}
 		if info.Path != "" {
 			if err := child.SetWorkspaceBaseline(info.Base, info.SourceHead); err != nil {
-				return "", err
+				return protocol.BackgroundResult{}, err
 			}
 			local.Prompt += fmt.Sprintf("\n[Workspace baseline] workspace_base=%s; source_head=%s. Compare saved Git baselines for incremental review; snapshot file timestamps are not original edit times. Ignored dependencies may be absent.", info.Base, info.SourceHead)
 		}
 		if profile.RequiredRole == mode.Coordinator {
 			if err := child.SetToolCeiling(profile.Tools); err != nil {
-				return "", err
+				return protocol.BackgroundResult{}, err
 			}
 		}
 		if err := child.SetResultInputs(taskRefs); err != nil {
-			return "", err
+			return protocol.BackgroundResult{}, err
 		}
-		if err := child.Begin(profile.Name, spec.Prompt, names, spec.Title); err != nil {
-			return "", err
+		if err := child.BeginBackground(protocol.ExecutionFromContext(taskCtx).AttemptID, profile.Name, spec.Prompt, names, spec.Title); err != nil {
+			return protocol.BackgroundResult{}, err
 		}
 		attempt := child.Snapshot().Subagent.CurrentAttempt()
 		if attempt == nil {
-			return "", fmt.Errorf("missing task attempt")
+			return protocol.BackgroundResult{}, fmt.Errorf("missing task attempt")
 		}
 		local.AttemptID = attempt.ID
 		local.References = child.ReferenceSource()
@@ -468,9 +502,13 @@ func (b *Bot) submitBackgroundTask(ctx context.Context, spec taskbridge.TaskSpec
 		llm := provider.New(provider.Config{APIKey: selected.APIKey, BaseURL: selected.BaseURL, Model: selected.Model, Protocol: selected.Protocol, Reasoning: resolvedReasoning(selected)})
 		result, err := subagent.New(subagent.Config{LLM: llm, Tools: box.Registry, CompactionModel: compaction}).Run(taskCtx, local)
 		if result == nil {
-			return "", errors.Join(err, fmt.Errorf("subagent returned no result"))
+			return protocol.BackgroundResult{}, errors.Join(err, fmt.Errorf("subagent returned no result"))
 		}
-		output = subagent.FormatResult(result)
+		output := subagent.FormatResult(result)
+		if result.Handoff != nil {
+			submitted.Review = &protocol.TaskReview{TaskReport: *result.Handoff, WorkspaceKind: workspaceKind, WorkspacePath: info.Path, WorkspaceBase: info.Base, SourceHead: info.SourceHead}
+		}
+
 		if info.Path != "" {
 			output += fmt.Sprintf("\n[Worktree retained: %s; workspace_base=%s; source_head=%s; review and apply explicitly for task %s]", info.Path, info.Base, info.SourceHead, id)
 		}
@@ -488,7 +526,8 @@ func (b *Bot) submitBackgroundTask(ctx context.Context, spec taskbridge.TaskSpec
 		if result.Status == subagent.StatusFailed && err == nil {
 			err = fmt.Errorf("subagent failed")
 		}
-		return output, err
+		submitted.Text = output
+		return submitted, err
 	}
 	b.backgroundLeases.Add(1)
 	var releaseOnce sync.Once
@@ -504,6 +543,12 @@ func (b *Bot) submitBackgroundTask(ctx context.Context, spec taskbridge.TaskSpec
 	}
 	if snapshotWorkspace {
 		workspaceNote += " Private snapshot includes staged, unstaged and non-ignored untracked files; the original working copy and its index remain unchanged."
+	}
+	if spec.ForkID != "" {
+		workspaceNote += " Continues evidence from " + spec.ForkID + " in a new task; source workspace and history are unchanged."
+	}
+	if spec.ReviewPolicy == "batch" {
+		workspaceNote += " Explicit continue/complete handoffs may be batched with this plan independently of verification quality; blocked/decision handoffs and host errors are delivered promptly."
 	}
 	if spec.Isolation == "worktree" {
 		workspaceNote += " Results stay in the task worktree; review and apply explicitly with /worktree before claiming integration."

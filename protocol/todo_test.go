@@ -31,7 +31,6 @@ func TestTodoReconciliationRejectsInvalidTransitions(t *testing.T) {
 		{{Content: "a", Status: "completed"}},
 		{{Content: "a", Status: "blocked"}},
 		{{Content: "a", Status: "cancelled"}},
-		{{Content: "a", Status: "in_progress"}, {Content: "b", Status: "in_progress"}},
 		{{Content: "a", Status: "pending", ID: "invented"}},
 	} {
 		if _, err := ReconcileTodos(nil, items); err == nil {

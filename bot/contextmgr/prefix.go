@@ -45,10 +45,11 @@ type PrefixTurnStats struct {
 }
 
 type prefixTracker struct {
-	previous *prefixShape
-	pending  []string
-	calls    []PrefixCallStats
-	turn     PrefixTurnStats
+	compacted bool
+	previous  *prefixShape
+	pending   []string
+	calls     []PrefixCallStats
+	turn      PrefixTurnStats
 }
 
 // PrefixBaseline carries the last observed request's cache-relevant head
@@ -114,6 +115,17 @@ func (t *prefixTracker) Observe(current prefixShape) {
 		t.pending = []string{"cold-start"}
 	} else {
 		t.pending = changedPrefixParts(*t.previous, current)
+	}
+	// Compaction is a cause of a history rewrite, not a separate prefix
+	// segment. Consume it only on an observed request, not preflight drafts.
+	if t.compacted {
+		for _, part := range t.pending {
+			if part == "history" {
+				t.pending = append(t.pending, "compaction")
+				break
+			}
+		}
+		t.compacted = false
 	}
 	copyShape := current
 	copyShape.history = append([][32]byte(nil), current.history...)

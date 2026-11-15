@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -58,6 +60,8 @@ type Record struct {
 	ProfileHash        string                       `json:"profile_hash,omitempty"`
 	Policy             protocol.PolicyConfiguration `json:"policy,omitzero"`
 	Execution          protocol.ExecutionIdentity   `json:"execution,omitzero"`
+	ToolCallID         string                       `json:"tool_call_id,omitempty"`
+	UsageReported      *bool                        `json:"usage_reported,omitempty"`
 	CallID             string                       `json:"call_id,omitempty"`
 	TS                 time.Time                    `json:"ts"`
 	Seq                uint64                       `json:"seq"`
@@ -85,6 +89,7 @@ type Record struct {
 	SystemFingerprint string      `json:"system_fingerprint,omitempty"`
 	PrefixDiag        *PrefixDiag `json:"prefix,omitempty"`
 	Err               string      `json:"err,omitempty"`
+	FailureStage      string      `json:"failure_stage,omitempty"`
 }
 
 // NewRecord snapshots the execution scope for one physical model invocation.
@@ -120,6 +125,11 @@ func (r *Record) SetOutcome(usage providertypes.StreamUsage, meta *providertypes
 // and the compact human summary used when inspecting the JSONL file.
 func (r *Record) SetUsage(usage providertypes.StreamUsage) {
 	usage.Normalize()
+	reported := usage.UsageReported || usage.HasTokens()
+	if r.UsageReported != nil {
+		reported = *r.UsageReported
+	}
+	r.UsageReported = &reported
 	input := max(0, usage.PromptTokens)
 	r.InTokens = input
 	r.OutTokens = max(0, usage.CompletionTokens)
@@ -200,6 +210,19 @@ func ErrorSummary(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "context deadline exceeded"
 	}
+	if strings.HasPrefix(err.Error(), "stream idle timeout:") {
+		return "stream idle timeout"
+	}
+	if errors.Is(err, io.EOF) {
+		return "stream ended unexpectedly"
+	}
+	var networkErr net.Error
+	if errors.As(err, &networkErr) {
+		if networkErr.Timeout() {
+			return "network timeout"
+		}
+		return "network error"
+	}
 	var httpErr *utilhttp.HTTPError
 	if errors.As(err, &httpErr) {
 		return fmt.Sprintf("API error (HTTP %d)", httpErr.StatusCode)
@@ -207,6 +230,9 @@ func ErrorSummary(err error) string {
 	t := reflect.TypeOf(err)
 	if t == nil {
 		return "error"
+	}
+	if strings.Contains(t.String(), "net.OpError") {
+		return "network error"
 	}
 	return "error: " + t.String()
 }
@@ -274,4 +300,15 @@ func (s *sink) logFile() *os.File {
 // ShortDigest renders a 32-byte digest as 12 hex chars for PrefixDiag.
 func ShortDigest(digest [32]byte) string {
 	return hex.EncodeToString(digest[:6])
+}
+
+type sessionScopeKey struct{}
+
+// WithSession binds the call-log scope, independently of workspace grants.
+func WithSession(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, sessionScopeKey{}, id)
+}
+func SessionFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(sessionScopeKey{}).(string)
+	return id
 }

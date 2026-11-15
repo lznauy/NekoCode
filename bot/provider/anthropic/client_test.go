@@ -10,6 +10,22 @@ import (
 	"nekocode/protocol"
 )
 
+func TestUnauthenticatedEndpointOmitsCredentials(t *testing.T) {
+	headers := New("", "", "test-model").headers()
+	for _, name := range []string{"Authorization", "x-api-key"} {
+		if _, exists := headers[name]; exists {
+			t.Fatalf("empty API key produced %s", name)
+		}
+	}
+	if headers["anthropic-version"] == "" {
+		t.Fatal("protocol version header missing")
+	}
+	headers = New("secret", "", "test-model").headers()
+	if headers["Authorization"] != "Bearer secret" || headers["x-api-key"] != "secret" {
+		t.Fatal("configured authentication changed")
+	}
+}
+
 func TestToMessagesConsolidatesSystemContext(t *testing.T) {
 	c := New("", "", "test")
 	got, system := c.toMessages([]types.Message{

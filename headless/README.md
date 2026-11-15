@@ -193,7 +193,7 @@ for line in proc.stdout:                       # 每行一个 JSON 帧
 | `user` | `message.content` | `tool_result`（与 `tool_use` 使用同一 `tool_use_id`） |
 | `stream_event` | `content_block_start/delta/stop` | 仅 `--include-partial-messages` 时输出，**合成**增量块 |
 | `subagent` | `text_delta` / `reasoning_delta` / `message` | `event` 区分输出类型；携带 `subagent_id`，增量仅在开启 partial messages 时发送 |
-| `result` | `success` / `error_during_execution` / `error_cancelled` / `error_step_limit` | 每轮恰好一条；含 `is_error`、`result`、`duration_ms`、可选 `errors`、`nekocode_usage` |
+| `result` | `success` / `error_during_execution` / `error_cancelled` / `error_step_limit` / `error_incomplete` | 每轮恰好一条；含 `is_error`、`result`、`duration_ms`、可选 `errors`、`nekocode_usage` |
 | `control_request` | `can_use_tool` / `nekocode_question` | 反向请求，必须用 `control_response` 作答 |
 | `control_response` | — | 对宿主 `control_request` 的应答 |
 | `control_cancel_request` | — | 审批/提问因运行取消或 EOF 作废 |
@@ -201,6 +201,8 @@ for line in proc.stdout:                       # 每行一个 JSON 帧
 `user_message_uuid` 表示“这条输出属于哪一轮输入”；输入生命周期帧（`input_queued` 等）
 中，`input_queued` / 被拒绝的输入分别用 `accepted_uuid` / `rejected_uuid`；
 `input_duplicate` 使用 `user_message_uuid`。运行事件还携带 `run_id`，启动失败未分配 ID 时省略。
+
+后台任务完成后的自动协调轮次也发送 `system/init`、审批/提问及最终 `result`。它没有新的用户输入，`user_message_uuid` 使用该协调轮次的 `run_id`；`init.nekocode_source.kind=task_completion` 标明来源。连接保持在原会话，协调轮次可通过普通 interrupt 取消。
 
 ## 工具调用
 

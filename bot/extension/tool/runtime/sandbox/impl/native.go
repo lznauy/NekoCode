@@ -75,6 +75,7 @@ type nativeLaunch struct {
 	workdir string
 	sysproc *syscall.SysProcAttr
 	cleanup func()
+	files   []*os.File
 }
 
 // prepareNativeLaunch performs the preparation shared by runNativeBash and
@@ -146,6 +147,20 @@ func prepareNativeLaunch(command string, profile Profile) (*nativeLaunch, error)
 		cleanup = func() { proxy.Close(); previousCleanup() }
 		profile.EgressSocket = proxy.socket()
 	}
+	var files []*os.File
+	profile.ScratchFD = 0
+	profile.ScratchSource = ""
+	if profile.ScratchFile != nil {
+		info, err := profile.ScratchFile.Stat()
+		if err != nil || !info.IsDir() {
+			cleanup()
+			return nil, fmt.Errorf("invalid pinned scratch: %v", err)
+		}
+		files = []*os.File{profile.ScratchFile}
+		profile.ScratchFD = 3
+		profile.ScratchSource = profile.ScratchDir
+		profile.ScratchDir = filepath.Join("/tmp", ".nekocode-"+filepath.Base(profile.ScratchDir))
+	}
 	profileJSON, err := json.Marshal(profile)
 	if err != nil {
 		cleanup()
@@ -189,6 +204,7 @@ func prepareNativeLaunch(command string, profile Profile) (*nativeLaunch, error)
 		workdir: profile.Workspace,
 		sysproc: sysproc,
 		cleanup: cleanup,
+		files:   files,
 	}, nil
 }
 
@@ -220,9 +236,9 @@ func runNativeBash(ctx context.Context, command string, profile Profile, timeout
 	}
 
 	if profile.OutboundDomains != nil {
-		return runChild(ctx, launch.self, launch.args, nil, launch.workdir, timeout, launch.sysproc, nil, "")
+		return runChild(ctx, launch.self, launch.args, nil, launch.workdir, timeout, launch.sysproc, nil, "", launch.files)
 	}
-	return runChild(ctx, launch.self, launch.args, nil, launch.workdir, timeout, launch.sysproc, unavail, "namespace creation failed")
+	return runChild(ctx, launch.self, launch.args, nil, launch.workdir, timeout, launch.sysproc, unavail, "namespace creation failed", launch.files)
 }
 
 func startNativeBash(ctx context.Context, command string, profile Profile) (*Process, error) {
@@ -232,7 +248,7 @@ func startNativeBash(ctx context.Context, command string, profile Profile) (*Pro
 	}
 	// startCommand invokes cleanup on start failure and after the process
 	// exits, so ownership of launch.cleanup transfers to it here.
-	p, err := startCommand(ctx, launch.self, launch.args, nil, launch.workdir, launch.sysproc, launch.cleanup)
+	p, err := startCommand(ctx, launch.self, launch.args, nil, launch.workdir, launch.sysproc, launch.cleanup, launch.files)
 	if err != nil {
 		return nil, UnavailableError{Reason: fmt.Sprintf("namespace creation failed: %v", err)}
 	}
@@ -356,6 +372,11 @@ func init() {
 // (absolute paths in commands still work) while /tmp, /home and the system
 // directories are isolated or read-only.
 func sandboxChildSetupAndExec(profile Profile, command string) error {
+	if !profile.Network || profile.OutboundDomains != nil {
+		if err := enableLoopback(); err != nil {
+			return err
+		}
+	}
 	root := profile.StagingRoot
 	if root == "" {
 		root = defaultStagingRoot()
@@ -364,6 +385,14 @@ func sandboxChildSetupAndExec(profile Profile, command string) error {
 	// 1. Detach all mounts from the host namespace so nothing leaks back.
 	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
 		return fmt.Errorf("make root private: %w", err)
+	}
+
+	// Materialize authorized host directories before constructing the mount tree.
+	// Source existence must not depend on whether the target is hidden or read-only.
+	for _, path := range profile.WritePaths {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			return fmt.Errorf("create WritePath %s: %w", path, err)
+		}
 	}
 
 	// 2. The new root is a fresh tmpfs mounted on the staging mountpoint.
@@ -487,6 +516,12 @@ func sandboxChildSetupAndExec(profile Profile, command string) error {
 			return err
 		}
 	}
+	if profile.ScratchFD != 0 {
+		if err := mountPinnedScratch(root, profile); err != nil {
+			return err
+		}
+		profile.ScratchFD = 0
+	}
 
 	// ReadPaths: bind read-only at their host-absolute paths. These are
 	// extra authorized workspace roots that must be visible (but not
@@ -544,7 +579,7 @@ func sandboxChildSetupAndExec(profile Profile, command string) error {
 	}
 
 	// 5. Environment + exec the command.
-	env := buildSandboxEnv()
+	env := commandEnvironment(buildSandboxEnv(), profile)
 	if profile.OutboundDomains != nil {
 		return superviseRestrictedCommand(profile, command, env)
 	}
@@ -568,6 +603,46 @@ func sandboxChildSetupAndExec(profile Profile, command string) error {
 		return fmt.Errorf("exec shell: %w", lastErr)
 	}
 	return fmt.Errorf("no usable shell found (tried %v)", shells)
+}
+
+func mountPinnedScratch(root string, profile Profile) error {
+	// The inherited FD pins identity but belongs to the old mount namespace.
+	// Reopen in this namespace, compare inode identity, then mount that new FD.
+	// Closing both before user exec also prevents walking the old host root.
+	inherited := os.NewFile(uintptr(profile.ScratchFD), "scratch-identity")
+	if inherited == nil {
+		return fmt.Errorf("missing scratch identity descriptor")
+	}
+	defer inherited.Close()
+	want, err := inherited.Stat()
+	if err != nil {
+		return err
+	}
+	source, err := os.Open(profile.ScratchSource)
+	if err != nil {
+		return fmt.Errorf("open scratch mount source: %w", err)
+	}
+	defer source.Close()
+	got, err := source.Stat()
+	if err != nil || !os.SameFile(want, got) {
+		return fmt.Errorf("scratch mount source was replaced")
+	}
+	target := filepath.Join(root, strings.TrimPrefix(profile.ScratchDir, "/"))
+	if err := os.Mkdir(target, 0700); err != nil && !os.IsExist(err) {
+		return fmt.Errorf("create scratch mount: %w", err)
+	}
+	// Authorized binds may already provide the target directory. Pin it in
+	// this namespace without following a replaceable final symlink. Scratch
+	// always mounts the actor source, never the unrelated host alias content.
+	targetFD, err := unix.Open(target, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("open scratch mount target: %w", err)
+	}
+	defer unix.Close(targetFD)
+	if err := unix.Mount(fmt.Sprintf("/proc/self/fd/%d", source.Fd()), fmt.Sprintf("/proc/self/fd/%d", targetFD), "", unix.MS_BIND, ""); err != nil {
+		return fmt.Errorf("bind pinned scratch: %w", err)
+	}
+	return nil
 }
 
 // setupDev creates a minimal /dev tree on a fresh tmpfs inside the staging
@@ -627,22 +702,7 @@ func bindHostPathWithRemountPolicy(root, src string, readOnly bool, ignoreReadOn
 	}
 	dst := filepath.Join(root, src)
 	if err := os.MkdirAll(dst, 0o755); err != nil {
-		// The target may sit under a read-only top-level bind (e.g. a
-		// WritePath under /home after the "restrict, don't hide" change),
-		// so MkdirAll fails with EROFS/EPERM before the writable bind can
-		// be established. WritePaths are authorized writable roots, so
-		// materializing their directory on the host is acceptable and
-		// matches the caller's intent; retry after creating the source.
-		if !readOnly && (errors.Is(err, syscall.EROFS) || errors.Is(err, syscall.EPERM)) {
-			if mkErr := os.MkdirAll(src, 0o755); mkErr != nil {
-				return fmt.Errorf("mkdir %s: %w", src, mkErr)
-			}
-			if err := os.MkdirAll(dst, 0o755); err != nil {
-				return fmt.Errorf("mkdir %s: %w", src, err)
-			}
-		} else {
-			return fmt.Errorf("mkdir %s: %w", src, err)
-		}
+		return fmt.Errorf("mkdir %s: %w", src, err)
 	}
 	if err := unix.Mount(src, dst, "", unix.MS_BIND, ""); err != nil {
 		return fmt.Errorf("bind %s: %w", src, err)
@@ -711,18 +771,6 @@ func buildSandboxEnv() []string {
 		env = setEnv(env, k, v)
 	}
 	return env
-}
-
-// setEnv replaces (or appends) the value of env key k in the KEY=VAL list.
-func setEnv(env []string, k, v string) []string {
-	prefix := k + "="
-	for i, e := range env {
-		if strings.HasPrefix(e, prefix) {
-			env[i] = prefix + v
-			return env
-		}
-	}
-	return append(env, prefix+v)
 }
 
 // sandboxPath builds PATH for the sandboxed shell. On NixOS the real

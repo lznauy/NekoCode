@@ -20,6 +20,7 @@ type Backend interface {
 	StartRun(context.Context, rt.Input) (rt.RunID, error)
 	WaitRun(context.Context, rt.RunID) error
 	CancelRun(context.Context, rt.RunID) error
+	CancelRunWithResult(context.Context, rt.RunID) (rt.RunCancellation, error)
 	DecideApproval(context.Context, string, rt.ApprovalDecision) error
 	AnswerQuestion(context.Context, string, rt.QuestionReply) error
 	// Events must honor EventFilter.Reliable.

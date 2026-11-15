@@ -15,9 +15,14 @@ import (
 // Reverse control requests bridge runtime approvals/questions to the host.
 // Their lifetime is tracked by the server's pending map.
 func (s *server) request(ctx context.Context, pending pendingRequest, request map[string]any) error {
+	if pending.runID == "" && s.active != nil {
+		pending.runID = s.active.runID
+	}
 	if s.options.once {
 		// Cancel before waking the blocked runner so it cannot start another step.
-		s.active.cancel()
+		if s.active != nil {
+			s.active.cancel()
+		}
 		s.deny(ctx, pending)
 		return fmt.Errorf("non-interactive run requires human %s; use interactive mode or configure permission rules", pending.kind)
 	}
@@ -39,15 +44,21 @@ func (s *server) deny(ctx context.Context, p pendingRequest) {
 	}
 }
 
-func (s *server) rejectPending(ctx context.Context) error {
+func (s *server) rejectPending(ctx context.Context) error { return s.rejectRunPending(ctx, "") }
+
+func (s *server) rejectRunPending(ctx context.Context, runID rt.RunID) error {
+	var failures []error
 	for id, p := range s.pending {
+		if runID != "" && p.runID != runID {
+			continue
+		}
 		s.deny(ctx, p)
 		delete(s.pending, id)
 		if err := s.conn.send(map[string]any{"type": "control_cancel_request", "request_id": id}); err != nil {
-			return err
+			failures = append(failures, err)
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 func (s *server) resolved(kind, brokerID string) error {

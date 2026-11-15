@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"nekocode/bot/config"
+	providertypes "nekocode/bot/provider/types"
 )
 
 const imageUnderstandingTruncated = "\n[Image result truncated at max_tokens; increase max_tokens (up to 4096) or narrow the question.]"
@@ -33,8 +34,9 @@ func (t *ImageUnderstandTool) executeOpenAIUnderstanding(ctx context.Context, cf
 			"role":    "user",
 			"content": content,
 		}},
-		"max_tokens": maxTokens,
-		"stream":     true,
+		"max_tokens":     maxTokens,
+		"stream":         true,
+		"stream_options": map[string]bool{"include_usage": true},
 	}
 	// Use the same model capability contract as the main provider. Avoid
 	// sending provider-specific thinking fields to models that lack them.
@@ -45,19 +47,21 @@ func (t *ImageUnderstandTool) executeOpenAIUnderstanding(ctx context.Context, cf
 	if capability.DisableEffort != "" {
 		body["reasoning_effort"] = capability.DisableEffort
 	}
-	resp, err := t.post(ctx, endpoint, map[string]string{
-		"Authorization": "Bearer " + cfg.APIKey,
-		"Accept":        "text/event-stream",
-	}, body)
+	headers := map[string]string{"Accept": "text/event-stream"}
+	if cfg.APIKey != "" {
+		headers["Authorization"] = "Bearer " + cfg.APIKey
+	}
+	resp, err := t.post(ctx, endpoint, headers, body)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
-		return readImageUnderstandingStream(resp.Body, onText)
+		return readImageUnderstandingStreamUsage(resp.Body, onText, func(u *providertypes.StreamUsage) { observeImageUsage(ctx, u) })
 	}
 	// Some compatible gateways return JSON even when streaming is requested.
 	var response struct {
+		Usage   *providertypes.StreamUsage `json:"usage"`
 		Choices []struct {
 			FinishReason string `json:"finish_reason"`
 			Message      struct {
@@ -68,6 +72,7 @@ func (t *ImageUnderstandTool) executeOpenAIUnderstanding(ctx context.Context, cf
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&response); err != nil {
 		return "", err
 	}
+	observeImageUsage(ctx, response.Usage)
 	if len(response.Choices) == 0 {
 		return "", fmt.Errorf("image model returned no choices")
 	}
@@ -86,6 +91,10 @@ func (t *ImageUnderstandTool) executeOpenAIUnderstanding(ctx context.Context, cf
 }
 
 func readImageUnderstandingStream(reader io.Reader, onText func()) (string, error) {
+	return readImageUnderstandingStreamUsage(reader, onText, nil)
+}
+
+func readImageUnderstandingStreamUsage(reader io.Reader, onText func(), onUsage func(*providertypes.StreamUsage)) (string, error) {
 	const maxBytes = 4 << 20
 	scanner := bufio.NewScanner(io.LimitReader(reader, maxBytes+1))
 	scanner.Buffer(make([]byte, 4096), maxBytes+1)
@@ -111,7 +120,8 @@ func readImageUnderstandingStream(reader io.Reader, onText func()) (string, erro
 			continue
 		}
 		var chunk struct {
-			Error   json.RawMessage `json:"error"`
+			Usage   *providertypes.StreamUsage `json:"usage"`
+			Error   json.RawMessage            `json:"error"`
 			Choices []struct {
 				FinishReason string `json:"finish_reason"`
 				Delta        struct {
@@ -122,10 +132,13 @@ func readImageUnderstandingStream(reader io.Reader, onText func()) (string, erro
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			return "", fmt.Errorf("decode image model stream: %w", err)
 		}
+		if chunk.Usage != nil && onUsage != nil {
+			onUsage(chunk.Usage)
+		}
 		if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
 			return "", fmt.Errorf("image model stream error: %s", chunk.Error)
 		}
-		if len(chunk.Choices) > 0 {
+		if !complete && len(chunk.Choices) > 0 {
 			if chunk.Choices[0].Delta.Content != "" && onText != nil {
 				onText()
 			}
@@ -133,9 +146,6 @@ func readImageUnderstandingStream(reader io.Reader, onText func()) (string, erro
 			if chunk.Choices[0].FinishReason != "" {
 				complete = true
 				truncated = chunk.Choices[0].FinishReason == "length"
-				// The result is complete; do not wait for a gateway to close
-				// its connection or send an optional trailing usage event.
-				break
 			}
 		}
 	}
@@ -199,17 +209,40 @@ func (t *ImageUnderstandTool) executeAnthropicUnderstanding(ctx context.Context,
 		}},
 	}
 	var response struct {
+		Usage *struct {
+			Input       int  `json:"input_tokens"`
+			Output      int  `json:"output_tokens"`
+			CacheRead   *int `json:"cache_read_input_tokens"`
+			CacheCreate *int `json:"cache_creation_input_tokens"`
+		} `json:"usage"`
 		StopReason string `json:"stop_reason"`
 		Content    []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
 	}
-	if err := t.postJSON(ctx, endpoint, map[string]string{
-		"x-api-key":         cfg.APIKey,
-		"anthropic-version": "2023-06-01",
-	}, body, &response); err != nil {
+	headers := map[string]string{"anthropic-version": "2023-06-01"}
+	if cfg.APIKey != "" {
+		headers["x-api-key"] = cfg.APIKey
+	}
+	if err := t.postJSON(ctx, endpoint, headers, body, &response); err != nil {
 		return "", err
+	}
+	if response.Usage != nil {
+		raw := response.Usage
+		u := &providertypes.StreamUsage{PromptTokens: raw.Input, CompletionTokens: raw.Output}
+		if raw.CacheRead != nil {
+			u.CacheUsageReported = true
+			u.CacheHitTokens = *raw.CacheRead
+			u.PromptTokens += *raw.CacheRead
+		}
+		if raw.CacheCreate != nil {
+			u.PromptTokens += *raw.CacheCreate
+		}
+		if u.CacheUsageReported {
+			u.CacheMissTokens = u.PromptTokens - u.CacheHitTokens
+		}
+		observeImageUsage(ctx, u)
 	}
 	var output []string
 	for _, block := range response.Content {

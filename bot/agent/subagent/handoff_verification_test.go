@@ -32,9 +32,9 @@ func TestHandoffVerificationPreservesOutcomesScopeAndLimitations(t *testing.T) {
 			t.Fatalf("missing %q in %s", want, result.Content)
 		}
 	}
-	handoff.VerificationChecks[0].Limitations[0] = "changed"
-	handoff.VerificationChecks[0].Scope = "changed"
-	if result.Handoff.VerificationChecks[0].Limitations[0] == "changed" || result.Handoff.VerificationChecks[0].Scope == "changed" {
+	handoff.Checks[0].Limitations[0] = "changed"
+	handoff.Checks[0].Scope = "changed"
+	if result.Handoff.Checks[0].Limitations[0] == "changed" || result.Handoff.Checks[0].Scope == "changed" {
 		t.Fatal("handoff shares mutable verification state")
 	}
 }
@@ -51,7 +51,7 @@ func TestHandoffVerificationRejectsIncompleteOrInvalidChecks(t *testing.T) {
 			}
 		})
 	}
-	for _, value := range []any{nil, "passed", []any{verificationArgs("confirmed")}, []any{"check"}, make([]any, maxVerificationChecks+1)} {
+	for _, value := range []any{nil, "passed", []any{"check"}, make([]any, maxVerificationChecks+1)} {
 		args := handoffArgs()
 		args["verification_checks"] = value
 		if _, _, err := submittedResult([]core.ToolCallItem{{Name: submitResultToolName, Args: args}}); err == nil {
@@ -98,5 +98,18 @@ func TestEnginePersistsVerificationGapsWithoutFailingHandoff(t *testing.T) {
 	}
 	if saved != result.Content || !strings.Contains(saved, "blocked=1") || !strings.Contains(saved, "production reachability not verified") {
 		t.Fatalf("durable handoff lost verification gaps: %s", saved)
+	}
+}
+
+func TestHandoffVerificationDefaultsOnlyOmittedMethod(t *testing.T) {
+	args := handoffArgs()
+	args["verification_checks"] = []any{verificationArgs("failed")}
+	h, _, err := submittedResult([]core.ToolCallItem{{Name: submitResultToolName, Args: args}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := h.Checks[0]
+	if check.Method != "unspecified" || check.Status != "failed" || len(check.Limitations) != 1 {
+		t.Fatalf("optional method default changed reported facts: %+v", check)
 	}
 }

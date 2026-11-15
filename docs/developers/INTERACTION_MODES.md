@@ -166,7 +166,7 @@ Super Agent 的模型请求还会过滤工具描述，使协调者只看到编�
 
 ## 6. 子任务如何执行和返回
 
-Super Agent 调用 `task_submit` 后，由 Runtime 的后台服务接管独立执行。跨轮次共用 8 个执行槽位和有界队列，任务组轮转；共享工作区写任务串行，隔离 worktree 可独立调度。Standard 的 `task` 仍同步等待结果。任务 ID 标识可继续的子会话，attempt ID 标识其中一次执行，两者不可互换。历史容量检查仅针对新增任务 ID；恢复已有 ID 不增加条目。需要新增空间时清理足量已消费且无未读追加的终态记录，不能淘汰未处理结果。后台最终状态在队列锁内判定，取消优先于部分完成结果。
+Super Agent 调用 `task_submit` 后，由 Runtime 的后台服务接管独立执行。跨轮次共用 8 个执行槽位和有界队列，任务组轮转；共享工作区写任务串行，隔离 worktree 可独立调度。Standard 的 `task` 仍同步等待结果。任务 ID 标识可继续的子会话，attempt ID 标识其中一次执行，两者不可互换。历史容量检查仅针对新增任务 ID；恢复已有 ID 不增加条目。需要新增空间时清理足量已消费且无未读追加的终态记录，不能淘汰未处理结果。后台最终状态在短时状态锁内判定；结算开始前的取消优先于部分完成结果，结算开始后不再改写该 attempt 的结果。存储操作在状态锁外执行，运行取消不等待持久化写入。
 
 ```mermaid
 sequenceDiagram
@@ -282,6 +282,8 @@ TUI、GUI 和命令菜单从同一注册表获取选项，不需要为新模式�
 
 ## 后台依赖、管理与归档
 
+新 worker 显式声明 `outcome=complete` 且 `unfinished=[]` 才表示完成，非完成 outcome 必须提供未完成项和下一步；互相矛盾的声明会被拒绝。旧记录省略 outcome 时仍按 unfinished 列表读取，并保留旧批处理策略。`task_list` 暴露 `delivery` 和 `notified`；交付未结算时先读取 `task_result` 并使用现有报告，等 `delivery=delivered` 或 `notified=true` 后再恢复同一任务。
+
 `task_submit.after` 和 `BackgroundWork.After` 声明最多 8 个已受理上游任务 ID。新任务只能引用当前会话已有任务，不接受自己、重复项和前向引用；`resume_id` 不能附加 after。等待状态 `waiting_dependencies` 计入有界队列，不占 8 个执行槽位。上游 completed 且释放执行槽后，下游变为 queued；partial/failed/interrupted/blocked 向下游传播 blocked。执行前通过规范结果读取取得 result_ref，按 inputs 的同一结果能力白名单装配，不授予旁系任务访问权。存在等待/活动下游时，上游不能被恢复或淘汰，避免引用变成新尝试。
 
 `RetryBackgroundNotification` 只接受 Delivery=failed 的终态任务，原子保存后重新唤醒验收，不恢复执行闭包。DeliveryAttempts 与 DeliveryError 保留诊断；新的会话/模式冲突视为未启动，回到待消费队列，不消耗原需求。
@@ -306,7 +308,7 @@ TUI、GUI 和命令菜单从同一注册表获取选项，不需要为新模式�
 
 ### 审查证据与增量基线
 
-子 Agent 的交接可附 `verification_checks`（最多 32 项）：每项记录 `name`、`status`（passed/failed/blocked/not_run）、`evidence`、`entrypoint`、`scope`、`limitations`。旧调用保留兼容；省略或空数组被明确呈现为“验证覆盖未报告”，不能解释为验证通过。宿主校验结构并固定输出状态计数、入口、适用范围和限制，不推断结论真假，也不因环境阻塞把成功交接改成执行失败。主 Agent 必须保留失败、阻塞和未执行项目；人工复用对象的 helper 探针不等于生产链路可达性证据。
+子 Agent 的交接可附 `verification_checks`（最多 32 项）：每项记录 `name`、`method`（executed/static/manual）、`status`（passed/failed/blocked/not_run）、`evidence`、`entrypoint`、`scope`、`limitations`。旧调用保留兼容；省略或空数组被明确呈现为“验证覆盖未报告”，不能解释为验证通过。宿主校验结构并固定输出状态计数、入口、适用范围和限制，不推断结论真假，也不因环境阻塞把成功交接改成执行失败。主 Agent 必须保留失败、阻塞和未执行项目；人工复用对象的 helper 探针不等于生产链路可达性证据。
 
 隔离工作区的 Git 内容基线在模型执行前由宿主保存为 `workspace_base`，snapshot 同时记录 `source_head`。`task_result` 每页都返回这两个可选字段；前者包含快照收录的脏工作区内容，后者只是源 HEAD。基线一经记录不能随任务恢复改变，旧任务缺失时保持未知。增量审查在确认属于同一仓库后比较两次 `workspace_base`，不按快照 mtime、文件数量或 HEAD 猜测增量。提交 ID 只供观察，不扩大读取权限或授权 worktree apply。
 
