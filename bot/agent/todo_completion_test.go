@@ -311,3 +311,39 @@ func TestTodoSyncFailureRetainsUnfinishedItemsInPartialReport(t *testing.T) {
 		}
 	}
 }
+
+func TestCompletionTodoErrorIdentifiesAllowedPlanAndRecovery(t *testing.T) {
+	a := coordinatorWithTodos(t, 0)
+	_, err := a.updateTodos(protocol.TodoUpdate{PlanID: "other", SelectOnly: true})
+	if err == nil {
+		t.Fatal("foreign plan accepted")
+	}
+	for _, hint := range []string{`"other"`, `"demand"`, "omit plan_id", "no changes"} {
+		if !strings.Contains(err.Error(), hint) {
+			t.Fatalf("missing recovery hint %q: %v", hint, err)
+		}
+	}
+	if _, err := a.updateTodos(protocol.TodoUpdate{SelectOnly: true}); err != nil {
+		t.Fatalf("recovery failed: %v", err)
+	}
+	if a.run.todoUpdateError != "" {
+		t.Fatal("successful recovery retained sync failure")
+	}
+}
+
+func TestCompletionTodoWithoutPlanIDUsesNotificationPlan(t *testing.T) {
+	a := coordinatorWithTodos(t, 0)
+	a.deps.ctxMgr.SelectTodoGroup("other")
+	a.deps.ctxMgr.SetTodos([]protocol.TodoItem{{Content: "unrelated", Status: "pending"}})
+	plan, err := a.updateTodos(protocol.TodoUpdate{Patch: true, Items: []protocol.TodoItem{{Content: "notification work", Status: "pending"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.ID != "demand" {
+		t.Fatalf("updated unrelated active plan: %s", plan.ID)
+	}
+	a.deps.ctxMgr.SelectTodoGroup("other")
+	if got := a.deps.ctxMgr.Snapshot().Todos; len(got) != 1 || got[0].Content != "unrelated" {
+		t.Fatalf("foreign checklist modified: %+v", got)
+	}
+}

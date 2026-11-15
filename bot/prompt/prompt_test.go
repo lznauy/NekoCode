@@ -37,7 +37,7 @@ func TestStaticPromptBytesAreStable(t *testing.T) {
 	if one != two || runtimeCalls != 0 {
 		t.Fatalf("BuildStatic depends on runtime state: equal=%v runtimeCalls=%d", one == two, runtimeCalls)
 	}
-	const wantSHA256 = "7eaf180bab7c3a5dc511dabafe8ccd98fce8c89de2d587489ca6adf5eb2c1124"
+	const wantSHA256 = "8c39c7fae610fca2592d699c0e87f83319e82b782722f7e6bac9b9f9316484a7"
 	if got := fmt.Sprintf("%x", sha256.Sum256([]byte(one))); got != wantSHA256 {
 		t.Fatalf("static prompt bytes changed: sha256=%s, want %s", got, wantSHA256)
 	}

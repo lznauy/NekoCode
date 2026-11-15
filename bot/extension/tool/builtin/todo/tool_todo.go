@@ -44,7 +44,7 @@ func (t *TodoWriteTool) Parameters() []core.Parameter {
 				},
 			},
 		},
-		{Name: "plan_id", Type: "string", Description: "Optional saved plan ID to activate and continue in this session; omitted means the active demand."},
+		{Name: "plan_id", Type: "string", Description: "Optional exact saved plan ID. In completion-notification turns, only the notice's top-level plan_id is allowed and omission uses that plan. In user turns, omission uses the active demand; supply a saved ID to continue it."},
 		{Name: "patch", Type: "boolean", Description: "Default false for compatibility. Prefer true to update only listed steps without resending the whole plan. Existing steps need returned id; new steps omit id and require content/status."},
 	}
 }

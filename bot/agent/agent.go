@@ -399,8 +399,14 @@ func (a *Agent) ask(req protocol.QuestionRequest) protocol.QuestionReply {
 func (a *Agent) updateTodos(update protocol.TodoUpdate) (plan protocol.TodoPlan, err error) {
 	defer func() { a.recordTodoUpdate(err) }()
 	coordination := protocol.CoordinationFromContext(a.getCtx())
-	if coordination.Notification && update.PlanID != "" && update.PlanID != coordination.GroupID {
-		return protocol.TodoPlan{}, fmt.Errorf("a completion notification can only update its own plan")
+	if coordination.Notification {
+		if coordination.GroupID == "" {
+			return protocol.TodoPlan{}, fmt.Errorf("completion notification has no plan_id; no changes were applied")
+		}
+		if update.PlanID != "" && update.PlanID != coordination.GroupID {
+			return protocol.TodoPlan{}, fmt.Errorf("completion notification cannot update plan_id %q; allowed plan_id is %q. Retry with that exact plan_id or omit plan_id to use the notification plan; no changes were applied", update.PlanID, coordination.GroupID)
+		}
+		update.PlanID = coordination.GroupID
 	}
 	if err := a.getCtx().Err(); err != nil {
 		return protocol.TodoPlan{}, err

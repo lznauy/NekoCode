@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/taskbridge"
 )
 
@@ -87,5 +88,59 @@ func TestTaskListValidatesPaginationAndWiring(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("default query did not reach lister")
+	}
+}
+
+func TestTaskListPaginationFitsExecutorBudget(t *testing.T) {
+	for _, text := range []string{strings.Repeat("结果", 8000), strings.Repeat("\x00", 8000)} {
+		tool := NewTaskListTool()
+		tool.Wire(func(_ context.Context, f taskbridge.TaskListFilter) (taskbridge.TaskPage, error) {
+			end := min(f.Offset+f.Limit, 12)
+			items := make([]taskbridge.TaskSummary, 0, end-f.Offset)
+			for i := f.Offset; i < end; i++ {
+				items = append(items, taskbridge.TaskSummary{ID: fmt.Sprint(i), Title: text, Prompt: text, Result: text,
+					LatestAttempt: &taskbridge.TaskAttemptSummary{ID: fmt.Sprintf("attempt-%d", i), Prompt: text, Result: text}})
+			}
+			return taskbridge.TaskPage{Items: items, Total: 12, NextOffset: end, HasMore: end < 12}, nil
+		})
+		offset := 0
+		for {
+			out, err := tool.Execute(t.Context(), map[string]any{"offset": float64(offset), "limit": float64(12)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(out.Text) > core.MaxOutputBytes {
+				t.Fatalf("page exceeds executor budget: %d > %d", len(out.Text), core.MaxOutputBytes)
+			}
+			var page taskbridge.TaskPage
+			if err := json.Unmarshal([]byte(out.Text), &page); err != nil {
+				t.Fatal(err)
+			}
+			if len(page.Items) == 0 || page.NextOffset != offset+len(page.Items) {
+				t.Fatalf("pagination cannot advance: %+v", page)
+			}
+			for i, item := range page.Items {
+				if item.ID != fmt.Sprint(offset+i) {
+					t.Fatalf("skipped task: %s", item.ID)
+				}
+			}
+			offset = page.NextOffset
+			if !page.HasMore {
+				break
+			}
+		}
+		if offset != 12 {
+			t.Fatalf("incomplete inventory: %d", offset)
+		}
+	}
+}
+
+func TestTaskListOversizedMetadataDoesNotReturnEmptyContinuation(t *testing.T) {
+	tool := NewTaskListTool()
+	tool.Wire(func(context.Context, taskbridge.TaskListFilter) (taskbridge.TaskPage, error) {
+		return taskbridge.TaskPage{Items: []taskbridge.TaskSummary{{ID: "task", SchedulingNote: strings.Repeat("x", core.MaxOutputBytes)}}, Total: 1, NextOffset: 1}, nil
+	})
+	if _, err := tool.Execute(t.Context(), nil); err == nil {
+		t.Fatal("oversized metadata returned an empty page that cannot advance")
 	}
 }

@@ -151,3 +151,46 @@ func TestTaskResultNextCallSurvivesReaderRebind(t *testing.T) {
 		t.Fatalf("self-contained continuation failed: %v", err)
 	}
 }
+
+func TestTaskResultCursorAcceptsConsistentArguments(t *testing.T) {
+	tool := NewResultTool()
+	var got taskbridge.ResultQuery
+	tool.Wire(func(_ context.Context, q taskbridge.ResultQuery) (taskbridge.ResultPage, error) {
+		got = q
+		return taskbridge.ResultPage{ID: "task", AttemptID: "attempt", Ref: "ref", Offset: q.Offset, NextOffset: 100, HasMore: q.Offset == 0}, nil
+	})
+	first, err := tool.Execute(t.Context(), map[string]any{"id": "task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var page struct {
+		NextCall map[string]any `json:"next_call"`
+	}
+	if err := json.Unmarshal([]byte(first.Text), &page); err != nil {
+		t.Fatal(err)
+	}
+	args := page.NextCall
+	args["id"] = "task"
+	args["limit"] = float64(2000)
+	if _, err := tool.Execute(t.Context(), args); err != nil {
+		t.Fatalf("redundant task ID and page size rejected: %v", err)
+	}
+	if got.ID != "task" || got.AttemptID != "attempt" || got.Ref != "ref" || got.Offset != 100 || got.Limit != 2000 {
+		t.Fatalf("wrong pinned query: %+v", got)
+	}
+	for _, tc := range []struct {
+		key   string
+		value any
+	}{
+		{"id", "other"}, {"attempt_id", "other"}, {"result_ref", "other"}, {"offset", float64(0)}, {"limit", float64(2001)}, {"limit", true},
+	} {
+		bad := map[string]any{"cursor": args["cursor"], tc.key: tc.value}
+		got = taskbridge.ResultQuery{}
+		if _, err := tool.Execute(t.Context(), bad); err == nil {
+			t.Fatalf("invalid cursor arguments accepted: %v", bad)
+		}
+		if got != (taskbridge.ResultQuery{}) {
+			t.Fatalf("invalid arguments reached reader: %+v", got)
+		}
+	}
+}

@@ -11,7 +11,7 @@ import (
 	"nekocode/protocol"
 )
 
-const taskListOutputBudget = 64 * 1024
+const taskListOutputBudget = core.MaxOutputBytes
 
 type TaskListTool struct {
 	toolutil.SafeReadOnlyTool
@@ -25,15 +25,15 @@ func (t *TaskListTool) Wire(list taskbridge.TaskLister) { t.list = list }
 func (t *TaskListTool) Name() string { return "task_list" }
 
 func (t *TaskListTool) Description() string {
-	return "List delegated tasks in the current parent session. Use items[].id as task.resume_id (task_submit.resume_id in Super Agent mode); never use latest_attempt.id, which identifies one execution attempt; recorded=true means saved context exists, including for interrupted tasks. When the user asks to continue the same work, resume that recorded task rather than starting a duplicate; interrupted does not mean unresumable. Returns bounded summaries with profile, status, delivery state, and latest attempt. If delivery is pending, read task_result and use that report; do not retry resume until the notification is settled. Does not scan other parent sessions. Results here are previews only; use task_result for complete paginated results, pinned to an exact attempt."
+	return "List delegated tasks in the current parent session. Use items[].id as task.resume_id (task_submit.resume_id in Super Agent mode); never use latest_attempt.id, which identifies one execution attempt; recorded=true means saved context exists, including for interrupted tasks. When the user asks to continue the same work, resume that recorded task rather than starting a duplicate; interrupted does not mean unresumable. Returns bounded summaries with profile, status, delivery state, and latest attempt. If delivery is pending, read task_result and use that report; do not retry resume until the notification is settled. Does not scan other parent sessions. When has_more is true, repeat the same query/status with offset set to next_offset; the byte budget may return fewer items than limit. Results here are previews only; use task_result for complete paginated results, pinned to an exact attempt."
 }
 
 func (t *TaskListTool) Parameters() []core.Parameter {
 	return []core.Parameter{
 		{Name: "query", Type: "string", Description: "Optional case-insensitive search over task ID, profile, and prompt."},
 		{Name: "status", Type: "string", Description: "Optional exact task status filter, such as running, failed, completed, partial, or interrupted."},
-		{Name: "offset", Type: "number", Description: "Zero-based result offset. Default 0."},
-		{Name: "limit", Type: "number", Description: "Maximum tasks to return, from 1 to 100. Default 20."},
+		{Name: "offset", Type: "integer", Description: "Zero-based result offset. Default 0."},
+		{Name: "limit", Type: "integer", Description: "Maximum tasks to return, from 1 to 100. Default 20."},
 	}
 }
 
@@ -82,13 +82,13 @@ func (t *TaskListTool) Execute(ctx context.Context, args map[string]any) (core.T
 	}
 	for i := range page.Items {
 		item := &page.Items[i]
-		item.Title = taskListPreview(item.Title, 256)
-		item.Prompt = taskListPreview(item.Prompt, 1024)
-		item.Result = taskListPreview(item.Result, 4096)
+		item.Title = taskListPreview(item.Title, 128)
+		item.Prompt = taskListPreview(item.Prompt, 256)
+		item.Result = taskListPreview(item.Result, 512)
 		if item.LatestAttempt != nil {
 			attempt := *item.LatestAttempt
-			attempt.Prompt = taskListPreview(attempt.Prompt, 1024)
-			attempt.Result = taskListPreview(attempt.Result, 4096)
+			attempt.Prompt = taskListPreview(attempt.Prompt, 256)
+			attempt.Result = taskListPreview(attempt.Result, 512)
 			item.LatestAttempt = &attempt
 		}
 	}
@@ -116,6 +116,9 @@ func (t *TaskListTool) Execute(ctx context.Context, args map[string]any) (core.T
 		} else {
 			high = count - 1
 		}
+	}
+	if high < 1 || len(data) > taskListOutputBudget {
+		return core.ToolOutput{}, fmt.Errorf("task_list: task metadata exceeds output budget at offset %d; narrow query or status", offset)
 	}
 	return core.ToolOutput{Text: string(data)}, nil
 }

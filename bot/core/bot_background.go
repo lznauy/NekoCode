@@ -537,6 +537,12 @@ func (b *Bot) submitBackgroundTask(ctx context.Context, spec taskbridge.TaskSpec
 		work.Release()
 		return nil, err
 	}
+	// A resumed task retains its durable demand even when this user turn
+	// started with a different active checklist. Follow-up submissions and todo
+	// updates must use the same owner, only after admission succeeds.
+	if spec.ResumeID != "" && receipt.GroupID != "" {
+		b.ctxMgr.SelectTodoGroup(receipt.GroupID)
+	}
 	workspaceNote := " Isolation: " + spec.Isolation + "."
 	if schedulingNote != "" && spec.Isolation == "shared" {
 		workspaceNote += " Shared workspace reason: " + schedulingNote + "; writers in this workspace execute sequentially."
@@ -553,7 +559,7 @@ func (b *Bot) submitBackgroundTask(ctx context.Context, spec taskbridge.TaskSpec
 	if spec.Isolation == "worktree" {
 		workspaceNote += " Results stay in the task worktree; review and apply explicitly with /worktree before claiming integration."
 	}
-	return &taskbridge.TaskResult{ID: receipt.ID, Status: taskbridge.TaskStatusAccepted, Content: "[Background task accepted] plan_id=" + receipt.GroupID + ". Status: " + receipt.Status + "." + workspaceNote + " This task retains its plan_id across resumes. Before submitting new follow-up tasks for this demand, select that saved plan using todo_write with plan_id and no todos when a saved checklist exists. This is an acceptance receipt, not completion. The runtime will deliver the result in a later coordinator turn. Do not wait or poll."}, nil
+	return &taskbridge.TaskResult{ID: receipt.ID, Status: taskbridge.TaskStatusAccepted, Content: "[Background task accepted] plan_id=" + receipt.GroupID + ". Status: " + receipt.Status + "." + workspaceNote + " This task retains its plan_id across resumes. A successful resume also activates this plan for checklist updates and new follow-up tasks. To continue a different saved demand without resuming a task, select its saved plan using todo_write with plan_id and no todos. This is an acceptance receipt, not completion. The runtime will deliver the result in a later coordinator turn. Do not wait or poll."}, nil
 }
 
 // BackgroundStatePath returns a trusted per-session sidecar location.

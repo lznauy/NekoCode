@@ -16,14 +16,17 @@ import (
 	"nekocode/protocol"
 )
 
-type isolationCaptureHost struct{ work protocol.BackgroundWork }
+type isolationCaptureHost struct {
+	work protocol.BackgroundWork
+	err  error
+}
 
 func (h *isolationCaptureHost) SubmitBackground(_ context.Context, work protocol.BackgroundWork) (protocol.BackgroundReceipt, error) {
 	h.work = work
 	if work.Release != nil {
 		work.Release()
 	}
-	return protocol.BackgroundReceipt{ID: work.ID, Status: "queued"}, nil
+	return protocol.BackgroundReceipt{ID: work.ID, GroupID: work.GroupID, Status: "queued"}, h.err
 }
 func (*isolationCaptureHost) CancelBackground(context.Context, string) error { return nil }
 
@@ -202,7 +205,10 @@ func TestBackgroundResumeUsesCanonicalDemandWithoutRetainedRuntimeHistory(t *tes
 	if err = child.Close(); err != nil {
 		t.Fatal(err)
 	}
+	b.ctxMgr.SelectTodoGroup("original-plan")
+	b.ctxMgr.SetTodos([]protocol.TodoItem{{Content: "original work", Status: "pending"}})
 	b.ctxMgr.SelectTodoGroup("new-run")
+	b.ctxMgr.SetTodos([]protocol.TodoItem{{Content: "unrelated work", Status: "pending"}})
 	host := &isolationCaptureHost{}
 	definition, _ := mode.Resolve(mode.SuperAgent)
 	ctx := protocol.WithBackgroundSubmitter(mode.WithSnapshot(t.Context(), definition.Snapshot), host)
@@ -213,6 +219,27 @@ func TestBackgroundResumeUsesCanonicalDemandWithoutRetainedRuntimeHistory(t *tes
 	if host.work.GroupID != "original-plan" {
 		t.Fatalf("resume reassigned canonical ownership: %q", host.work.GroupID)
 	}
+	if active := b.ctxMgr.ActiveTodoPlanID(); active != "original-plan" {
+		t.Fatalf("resume left checklist in another plan: %q", active)
+	}
+	if _, err := b.submitBackgroundTask(ctx, taskbridge.TaskSpec{Prompt: "follow-up", Isolation: "shared"}, config.ModelConfig{}, b.Configuration(), nil, b.getAgent()); err != nil {
+		t.Fatal(err)
+	}
+	if host.work.GroupID != "original-plan" {
+		t.Fatalf("follow-up detached from resumed plan: %q", host.work.GroupID)
+	}
+	if got := b.ctxMgr.Snapshot().TodoPlans["new-run"]; len(got) != 1 || got[0].Content != "unrelated work" {
+		t.Fatalf("resume changed unrelated checklist: %+v", got)
+	}
+	b.ctxMgr.SelectTodoGroup("new-run")
+	host.err = context.Canceled
+	if _, err := b.submitBackgroundTask(ctx, spec, config.ModelConfig{}, b.Configuration(), nil, b.getAgent()); err == nil {
+		t.Fatal("failed admission accepted")
+	}
+	if active := b.ctxMgr.ActiveTodoPlanID(); active != "new-run" {
+		t.Fatalf("failed resume switched active plan: %q", active)
+	}
+	host.err = nil
 	ctx = protocol.WithCoordination(ctx, protocol.Coordination{GroupID: "unrelated", Notification: true})
 	host.work = protocol.BackgroundWork{}
 	if _, err = b.submitBackgroundTask(ctx, spec, config.ModelConfig{}, b.Configuration(), nil, b.getAgent()); err == nil || host.work.ID != "" {
