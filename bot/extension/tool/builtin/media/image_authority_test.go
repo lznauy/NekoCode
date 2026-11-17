@@ -52,18 +52,3 @@ func TestImageFileRejectsAuthorityTargetLink(t *testing.T) {
 		t.Fatal("authority modified")
 	}
 }
-func TestImageURLSuffixIsOnlyAnExtension(t *testing.T) {
-	for _, tc := range []struct{ url, want string }{
-		{"https://example.test/a.PNG?download=1", ".png"},
-		{"https://example.test/a.jpeg#view", ".jpeg"},
-		{"https://example.test/a.webp", ".webp"},
-		{"https://example.test/a.png/subdir", ".jpg"},
-		{"https://example.test/a.png%2fsubdir", ".jpg"},
-		{"https://example.test/a.png/../../target", ".jpg"},
-		{"https://example.test/a.png\\target", ".jpg"},
-	} {
-		if got := imageExtFromURL(tc.url); got != tc.want {
-			t.Errorf("%s: got %s want %s", tc.url, got, tc.want)
-		}
-	}
-}

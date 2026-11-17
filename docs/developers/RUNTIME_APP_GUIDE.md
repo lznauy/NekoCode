@@ -23,6 +23,7 @@
 | 接入其他推理引擎 | `runtime.New(runner, serviceGroups)` | `Runner.Run` 和 ServiceGroups |
 | 新增进程内 UI | 接收同一个 `*runtime.Runtime` | 事件投影 |
 | 新增远程 UI | `httpapi.New(manager)` | HTTP/SSE 客户端 |
+| 对接其他 A2A Agent | daemon `-a2a` | [A2A 客户端](A2A.md) |
 | 通过子进程接入 | `nekocode-tui --headless` | [NDJSON 客户端](../../headless/README.md) |
 | 新增消息渠道 | `Runtime.RegisterConnector` | `Connector` |
 

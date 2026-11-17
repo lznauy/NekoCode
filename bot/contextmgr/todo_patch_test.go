@@ -61,3 +61,24 @@ func TestTodoUpdatesRejectUnknownIDsWithoutChangingPlan(t *testing.T) {
 		}
 	}
 }
+
+func TestDuplicateTodoUpdateIsAtomic(t *testing.T) {
+	for _, patch := range []bool{false, true} {
+		m := New(Config{})
+		plan, err := m.ApplyTodos(protocol.TodoUpdate{Items: []protocol.TodoItem{{Content: "inspect", Status: "pending"}}}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		completed := plan.Items[0]
+		completed.Status, completed.Result = "completed", "verified"
+		persisted := false
+		_, err = m.ApplyTodos(protocol.TodoUpdate{Patch: patch, Items: []protocol.TodoItem{completed, {Content: "inspect", Status: "pending"}}}, func() error { persisted = true; return nil })
+		if err == nil || persisted {
+			t.Fatalf("patch=%v duplicate update accepted or persisted", patch)
+		}
+		restored, err := m.ApplyTodos(protocol.TodoUpdate{PlanID: plan.ID, SelectOnly: true}, nil)
+		if err != nil || len(restored.Items) != 1 || restored.Items[0] != plan.Items[0] {
+			t.Fatalf("patch=%v rejected update changed state: %+v %v", patch, restored, err)
+		}
+	}
+}

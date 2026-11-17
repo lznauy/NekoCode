@@ -130,7 +130,7 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 			return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: errMsg}
 		}
 		var targetErr error
-		policyCall, boundFileTarget, targetErr = bindFilePolicyCall(tc)
+		policyCall, boundFileTarget, targetErr = e.bindFilePolicyCall(tc)
 		if targetErr != nil {
 			return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: targetErr.Error()}
 		}

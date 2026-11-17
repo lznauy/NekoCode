@@ -19,11 +19,13 @@ import (
 const maxReadFileBytes = 64 << 20
 
 func (t *ReadTool) readTextCached(ctx context.Context, path string, args map[string]any) (core.ToolOutput, error) {
-	startLine, err := toolutil.RequireIntArg(args, "startLine")
+	startLine, err := toolutil.OptIntArg(args, "startLine", 1)
 	if err != nil {
 		return core.ToolOutput{}, err
 	}
-	endLine, err := toolutil.RequireIntArg(args, "endLine")
+	startLine = max(1, startLine)
+	// Formatting clamps to the file length and maxReadLines before arithmetic.
+	endLine, err := toolutil.OptIntArg(args, "endLine", int(^uint(0)>>1))
 	if err != nil {
 		return core.ToolOutput{}, err
 	}
@@ -53,7 +55,6 @@ func (t *ReadTool) readTextCached(ctx context.Context, path string, args map[str
 	if fullLines == nil {
 		fullLines = strings.Split(toolutil.NormalizeText(string(data)), "\n")
 	}
-	startLine = max(1, startLine)
 	if endLine < startLine || startLine > len(fullLines) {
 		return core.ToolOutput{}, fmt.Errorf("invalid read range %d..%d (total %d)", startLine, endLine, len(fullLines))
 	}
@@ -94,7 +95,7 @@ func formatReadOutput(ctx context.Context, path string, lines []string, startLin
 		return fmt.Sprintf("[%s#ERR] startLine %d out of range (total %d)", filepath.Base(path), startLine, total)
 	}
 	start := startLine - 1
-	count := min(endLine-startLine+1, maxReadLines)
+	count := min(min(endLine, total)-startLine+1, maxReadLines)
 	end := min(start+count, total)
 
 	fullText := strings.Join(lines, "\n")

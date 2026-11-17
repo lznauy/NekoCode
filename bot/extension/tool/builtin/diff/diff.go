@@ -25,10 +25,11 @@ const (
 
 // DiffLine is one line of a unified diff output.
 type DiffLine struct {
-	Kind  LineKind
-	OldNo int // 0 for added lines
-	NewNo int // 0 for deleted lines
-	Text  string
+	Kind      LineKind
+	OldNo     int // 0 for added lines
+	NewNo     int // 0 for deleted lines
+	Text      string
+	NoNewline bool // This source line was not terminated by a newline.
 }
 
 // Hunk is a contiguous block of changes.
@@ -83,8 +84,11 @@ func ComputeDiff(oldText, newText string, context int) []Hunk {
 	if context < 0 {
 		context = 0
 	}
-	oldLines := SplitLines(oldText)
-	newLines := SplitLines(newText)
+	oldLines := splitDiffLines(oldText)
+	newLines := splitDiffLines(newText)
+	// More context than the complete inputs adds nothing and can overflow
+	// hunk offset arithmetic for otherwise valid large integer arguments.
+	context = min(context, max(len(oldLines), len(newLines)))
 	if len(oldLines) == 0 && len(newLines) == 0 {
 		return nil
 	}
@@ -115,14 +119,14 @@ func lcsOps(oldLines, newLines []string) []DiffLine {
 	i, j := 0, 0
 	for i < m || j < n {
 		if i < m && j < n && oldLines[i] == newLines[j] {
-			ops = append(ops, DiffLine{Kind: LineCtx, OldNo: i + 1, NewNo: j + 1, Text: oldLines[i]})
+			ops = append(ops, makeDiffLine(LineCtx, i+1, j+1, oldLines[i]))
 			i++
 			j++
 		} else if i < m && (j >= n || dp[at(i+1, j)] >= dp[at(i, j+1)]) {
-			ops = append(ops, DiffLine{Kind: LineDel, OldNo: i + 1, Text: oldLines[i]})
+			ops = append(ops, makeDiffLine(LineDel, i+1, 0, oldLines[i]))
 			i++
 		} else {
-			ops = append(ops, DiffLine{Kind: LineAdd, NewNo: j + 1, Text: newLines[j]})
+			ops = append(ops, makeDiffLine(LineAdd, 0, j+1, newLines[j]))
 			j++
 		}
 	}
@@ -173,7 +177,7 @@ func computeGreedyDiff(oldLines, newLines []string, context int) []Hunk {
 		if oi < len(oldLines) && ni < len(newLines) && oldLines[oi] == newLines[ni] {
 			// Context line
 			if cur != nil {
-				cur.Lines = append(cur.Lines, DiffLine{Kind: LineCtx, OldNo: oi + 1, NewNo: ni + 1, Text: oldLines[oi]})
+				cur.Lines = append(cur.Lines, makeDiffLine(LineCtx, oi+1, ni+1, oldLines[oi]))
 				if len(cur.Lines) > context*2+1 {
 					// Close hunk if too much context
 					finalizeHunk(cur)
@@ -194,16 +198,16 @@ func computeGreedyDiff(oldLines, newLines []string, context int) []Hunk {
 			}
 			// Prepend context lines
 			for i := cur.OldStart - 1; i < oi; i++ {
-				cur.Lines = append(cur.Lines, DiffLine{Kind: LineCtx, OldNo: i + 1, NewNo: ni + (i - (cur.OldStart - 1)) + 1, Text: oldLines[i]})
+				cur.Lines = append(cur.Lines, makeDiffLine(LineCtx, i+1, ni+(i-(cur.OldStart-1))+1, oldLines[i]))
 			}
 		}
 
 		// Decide: delete from old or add from new
 		if oi < len(oldLines) && (ni >= len(newLines) || !containsAt(newLines, ni, oldLines, oi)) {
-			cur.Lines = append(cur.Lines, DiffLine{Kind: LineDel, OldNo: oi + 1, NewNo: 0, Text: oldLines[oi]})
+			cur.Lines = append(cur.Lines, makeDiffLine(LineDel, oi+1, 0, oldLines[oi]))
 			oi++
 		} else if ni < len(newLines) {
-			cur.Lines = append(cur.Lines, DiffLine{Kind: LineAdd, OldNo: 0, NewNo: ni + 1, Text: newLines[ni]})
+			cur.Lines = append(cur.Lines, makeDiffLine(LineAdd, 0, ni+1, newLines[ni]))
 			ni++
 		}
 	}
@@ -269,9 +273,29 @@ func RenderHunks(hunks []Hunk) string {
 			default:
 				fmt.Fprintf(&sb, " %d:%s\n", l.OldNo, l.Text)
 			}
+			if l.NoNewline {
+				sb.WriteString("\\ No newline at end of file\n")
+			}
 		}
 	}
 	return sb.String()
+}
+
+// Compare newline terminators as part of each line, without changing SplitLines
+// semantics used by content-anchored editing. Render the terminator separately.
+func splitDiffLines(s string) []string {
+	if s == "" {
+		return nil
+	}
+	lines := strings.SplitAfter(s, "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
+func makeDiffLine(kind LineKind, oldNo, newNo int, text string) DiffLine {
+	return DiffLine{Kind: kind, OldNo: oldNo, NewNo: newNo, Text: strings.TrimSuffix(text, "\n"), NoNewline: !strings.HasSuffix(text, "\n")}
 }
 
 // SplitLines splits text into lines, dropping the trailing empty element from final newline.

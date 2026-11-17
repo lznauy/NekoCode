@@ -499,7 +499,7 @@ func (b *Bot) submitBackgroundTask(ctx context.Context, spec taskbridge.TaskSpec
 		local.OnToolCall = func(ev subagent.ToolCallEvent) {
 			emit(protocol.StepEvent{Action: ev.Action, CallID: ev.CallID, ToolName: ev.ToolName, ToolArgs: ev.ToolArgs, ToolInput: ev.ToolInput, Output: ev.Output, IsError: ev.IsError, Evidence: ev.Evidence, NonExecution: ev.NonExecution, Decision: ev.Decision})
 		}
-		llm := provider.New(provider.Config{APIKey: selected.APIKey, BaseURL: selected.BaseURL, Model: selected.Model, Protocol: selected.Protocol, Reasoning: resolvedReasoning(selected)})
+		llm := provider.New(provider.Config{APIKey: selected.APIKey, BaseURL: selected.BaseURL, Model: selected.Model, Protocol: selected.Protocol, Reasoning: resolvedReasoning(selected), MaxTokens: selected.MaxOutputTokens(32768)})
 		result, err := subagent.New(subagent.Config{LLM: llm, Tools: box.Registry, CompactionModel: compaction}).Run(taskCtx, local)
 		if result == nil {
 			return protocol.BackgroundResult{}, errors.Join(err, fmt.Errorf("subagent returned no result"))

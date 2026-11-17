@@ -1,12 +1,21 @@
 package runner
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"image"
+	"image/png"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"nekocode/bot/config"
+	"nekocode/bot/extension/tool/builtin/media"
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/permission"
 	"nekocode/protocol"
@@ -140,5 +149,52 @@ func TestManagedImageRetryKeepsOriginalTargetBeforeRemembering(t *testing.T) {
 	}
 	if d := e.permStore.Decide([]string{"image_gen"}, req); d.Err != nil || d.Allow {
 		t.Fatalf("changed target left remembered capability: %+v", d)
+	}
+}
+
+func TestResumeHonorsSavedDestinationDeny(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	root := t.TempDir()
+	destination := filepath.Join(root, "private", "out")
+	var img bytes.Buffer
+	if err := png.Encode(&img, image.NewRGBA(image.Rect(0, 0, 2, 3))); err != nil {
+		t.Fatal(err)
+	}
+	queries := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("Action") == "CVSync2AsyncSubmitTask" {
+			w.Write([]byte(`{"code":10000,"data":{"task_id":"task"}}`))
+			return
+		}
+		queries++
+		if queries == 1 {
+			w.WriteHeader(503)
+			return
+		}
+		w.Write([]byte(`{"code":10000,"data":{"status":"done","binary_data_base64":["` + base64.StdEncoding.EncodeToString(img.Bytes()) + `"]}}`))
+	}))
+	defer server.Close()
+	tool := media.NewImageGenTool([]config.ImageGenConfig{{Name: "test", Provider: "jimeng", BaseURL: server.URL, APIKey: "fixture", SecretKey: "fixture"}})
+	e := newTestExecutor(fakeRegistry{"image_gen": tool})
+	e.workspace.Configure(root, nil)
+	e.SetProjectStore(root)
+	e.SetPermissionPolicy(permission.PermissionsDecl{Allow: []string{"image_gen"}}, root, home)
+	first := e.ExecuteBatch(t.Context(), []core.ToolCallItem{{Name: "image_gen", Args: map[string]any{"prompt": "generate", "output_dir": destination}}})[0]
+	start := strings.Index(first.Error, `{"resume_id":`)
+	if start < 0 {
+		t.Fatalf("no receipt: %s", first.Error)
+	}
+	end := start + strings.Index(first.Error[start:], "}") + 1
+	var recovery map[string]any
+	if err := json.Unmarshal([]byte(first.Error[start:end]), &recovery); err != nil {
+		t.Fatal(err)
+	}
+	e.SetPermissionPolicy(permission.PermissionsDecl{Allow: []string{"image_gen"}, Deny: []string{"image_gen(/private/**)"}}, root, home)
+	result := e.ExecuteBatch(t.Context(), []core.ToolCallItem{{Name: "image_gen", Args: recovery}})[0]
+	files, _ := os.ReadDir(destination)
+	if result.Error == "" || len(files) > 0 {
+		t.Errorf("resume bypassed output deny: result=%+v savedFiles=%v", result, files)
 	}
 }

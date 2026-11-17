@@ -17,7 +17,7 @@ import (
 type sandboxRequest struct {
 	Mode            string
 	OutboundDomains []string
-	domainErr       error
+	validationErr   error
 	Network         bool
 	WritableRoots   []string
 }
@@ -27,7 +27,7 @@ type sandboxRequest struct {
 // command and capability approval into one atomic decision.
 func (t *ShellTool) PermissionPlan(args map[string]any, workspace string) *core.PermissionRequest {
 	request := t.effectiveSandboxRequest(args)
-	if request.domainErr != nil {
+	if request.validationErr != nil {
 		return nil
 	}
 	capabilities := request.permissionCapabilities()
@@ -181,12 +181,15 @@ func uniqueStrings(values []string) []string {
 
 func (t *ShellTool) effectiveSandboxRequest(args map[string]any) sandboxRequest {
 	r := sandboxRequestFromArgs(args)
+	if r.validationErr != nil {
+		return r
+	}
 	if profile, ok := t.sandboxProfileFor(args); ok && profile.OutboundDomains != nil {
 		r.OutboundDomains = netpolicy.Intersect(r.OutboundDomains, profile.OutboundDomains)
 	}
 	if r.OutboundDomains != nil {
 		if r.Mode == "host" {
-			r.domainErr = fmt.Errorf(`outbound_domains cannot be used with host execution: host mode cannot enforce domain restrictions; use sandbox_mode="workspace-write" or "read-only". If unrestricted host execution is intended, remove outbound_domains from both the tool arguments and matching permissions.sandbox rules (an empty array still requires isolation)`)
+			r.validationErr = fmt.Errorf(`outbound_domains cannot be used with host execution: host mode cannot enforce domain restrictions; use sandbox_mode="workspace-write" or "read-only". If unrestricted host execution is intended, remove outbound_domains from both the tool arguments and matching permissions.sandbox rules (an empty array still requires isolation)`)
 		}
 		r.Network = len(r.OutboundDomains) > 0
 	}

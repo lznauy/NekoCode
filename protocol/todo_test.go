@@ -61,3 +61,63 @@ func TestLegacyTodoIdentityAndExplicitDispositions(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestTodoReconciliationRejectsRepeatedContent(t *testing.T) {
+	for _, items := range [][]TodoItem{
+		{{Content: "inspect", Status: "pending"}, {Content: "inspect", Status: "pending"}},
+		{{Content: "inspect", Status: "pending"}, {Content: " inspect \n", Status: "in_progress"}},
+	} {
+		if _, err := ReconcileTodos(nil, items); err == nil {
+			t.Fatalf("duplicate content accepted: %+v", items)
+		}
+	}
+	old, err := ReconcileTodos(nil, []TodoItem{{Content: "inspect", Status: "pending"}, {Content: "verify", Status: "pending"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeated := append(append([]TodoItem(nil), old...), TodoItem{Content: "inspect", Status: "pending"})
+	if _, err := ReconcileTodos(old, repeated); err == nil {
+		t.Fatal("repeated replacement accepted")
+	}
+	renamed := append([]TodoItem(nil), old...)
+	renamed[1].Content = "inspect"
+	if _, err := ReconcileTodos(old, renamed); err == nil {
+		t.Fatal("rename to duplicate accepted")
+	}
+	replay, err := ReconcileTodos(old, old)
+	if err != nil || len(replay) != 2 || replay[0] != old[0] {
+		t.Fatalf("valid replacement replay failed: %+v %v", replay, err)
+	}
+}
+
+func TestTodoPatchRejectsRepeatedAdditions(t *testing.T) {
+	old, err := ReconcileTodos(nil, []TodoItem{{Content: "inspect", Status: "pending"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	addition := []TodoItem{{Content: "verify", Status: "pending"}}
+	next, err := PatchTodos(old, addition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := PatchTodos(next, addition); err == nil {
+			t.Fatal("replayed addition accepted")
+		}
+	}
+	if len(next) != 2 || next[0] != old[0] {
+		t.Fatalf("rejected replay mutated plan: %+v", next)
+	}
+	update := []TodoItem{{ID: next[1].ID, Status: "in_progress"}}
+	next, err = PatchTodos(next, update)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, err := PatchTodos(next, update)
+	if err != nil || replay[1] != next[1] {
+		t.Fatalf("ID update replay failed: %+v %v", replay, err)
+	}
+	if _, err := PatchTodos(old, []TodoItem{{Content: "deploy server A", Status: "pending"}, {Content: "deploy server B", Status: "pending"}}); err != nil {
+		t.Fatalf("distinct targets rejected: %v", err)
+	}
+}

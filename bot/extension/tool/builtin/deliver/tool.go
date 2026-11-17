@@ -58,6 +58,17 @@ func (t *DeliverFileTool) Execute(ctx context.Context, args map[string]any) (cor
 	if path == "" {
 		return core.ToolOutput{}, fmt.Errorf("path is required")
 	}
+	connector := ""
+	if _, supplied := args["connector"]; supplied {
+		value, err := toolutil.StringArg(args, "connector")
+		if err != nil {
+			return core.ToolOutput{}, err
+		}
+		connector = strings.TrimSpace(value)
+		if connector == "" {
+			return core.ToolOutput{}, fmt.Errorf("connector must be nonempty; omit it to use the current request source. No file was sent")
+		}
+	}
 	if t.deliverer == nil {
 		return core.ToolOutput{}, fmt.Errorf("file delivery backend unavailable")
 	}
@@ -100,7 +111,6 @@ func (t *DeliverFileTool) Execute(ctx context.Context, args map[string]any) (cor
 		return core.ToolOutput{}, err
 	}
 
-	connector := strings.TrimSpace(toolutil.OptStringArg(args, "connector", ""))
 	sent, err := t.deliverer.DeliverConnectorFile(ctx, connector, snapshot)
 	if err != nil {
 		if len(sent) > 0 {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"nekocode/bot/extension/tool/runtime/core"
+	"nekocode/bot/extension/tool/runtime/execution"
 	"nekocode/bot/extension/tool/runtime/permission"
 	"nekocode/bot/extension/tool/runtime/sandbox"
 	"nekocode/bot/extension/tool/runtime/taskbridge"
@@ -73,14 +74,12 @@ func (t *ShellTool) ExecutionMode(map[string]any) core.ExecutionMode {
 }
 
 func (t *ShellTool) Description() string {
-	return "Execute a shell command in a permission-managed sandbox. " +
-		"Commands that finish quickly return their output directly; commands still running after a short runtime-controlled observation return a task name and continue under process management. " +
-		"Use the process tool to wait, watch, list or stop that task; a wait timeout does not mean the command failed. Anonymous identical live launches in the same execution environment reuse the existing process, without starting another. Use distinct explicit names for intentional parallel copies. " +
-		"A non-zero exit is reported as status: failed with exit_code; judge verification by that status, not by trailing success text. Pipelines use normal shell semantics, so preserve upstream failures with pipefail or separate commands when they matter. " +
-		"On Linux, sandbox commands in this toolbox share actor/workspace-scoped $NEKOCODE_SCRATCH for logs and reusable artifacts, with a writable GOCACHE and XDG_CACHE_HOME. /tmp is private to each command: do not store cross-command logs or caches there. NEKOCODE_SCRATCH is a shell namespace path: create/read reusable scratch files through shell; filesystem tools do not map that path to the actor cache. Use authorized workspace paths for files shared across tools. Shell exports may override these defaults. State is removed when this toolbox closes; export lasting evidence into authorized workspace files. Isolated loopback is private to EACH shell command; separate commands cannot reach each other at localhost, even with the same actor/workspace. For local HTTP/browser tests, start the server in the background, probe its URL with a deadline, run the client and clean up the server via a trap, all in ONE shell command. Chrome may need an explicit writable --user-data-dir under $NEKOCODE_SCRATCH. This does not grant outbound networking. " +
-		"Network, extra writable roots, and host execution require the corresponding minimal permission request. " +
-		"If a command fails because of a likely sandbox restriction, inspect the error and retry shell with the minimal required outbound_domains, network, writable_roots, or sandbox_mode request so the runtime can obtain approval; do not stop at reporting the restriction. Check partial side effects before retrying, respect explicit denials and configured domain restrictions, and do not assume every permission or network error requires host execution. " +
-		"By default commands run in an isolated workspace-write sandbox: the host filesystem is visible read-only (host binaries like npm globals and nix profiles are executable), but writes outside the workspace and authorized writable roots fail. For HTTP/HTTPS access to known domains, prefer outbound_domains with workspace-write or read-only mode. Use sandbox_mode=host only when unsandboxed host execution is needed; it cannot be combined with outbound_domains, including restrictions inherited from permissions.sandbox rules."
+	return "Execute a shell command in a permission-managed sandbox; default workspace-write, network disabled. " +
+		"Quick commands return output; longer commands return a task name. Use the process tool to wait/watch/list/stop. Observation expiry leaves the command running; timeout_ms is a separate hard lifetime. Identical anonymous live launches reuse the process; use distinct names for intentional copies. " +
+		"Files: use authorized workspace paths to share files across shell/read/edit/image tools. On Linux, /tmp is private to each command. $NEKOCODE_SCRATCH survives shell calls in this actor/workspace but is shell-only and removed when the toolbox closes; GOCACHE and XDG_CACHE_HOME are writable there unless overridden. " +
+		"Local services: isolated localhost is private to each command. Run server, bounded readiness probe, client/browser and trap-based cleanup in ONE command. Chrome may need --user-data-dir under $NEKOCODE_SCRATCH. For separate calls needing host-network listening/access, request network=true; configured domain restrictions still apply. " +
+		"Results: status: failed and exit_code indicate command failure. Preserve upstream pipeline failures with pipefail or separate commands. Large output has a saved artifact: read it instead of rerunning. Capture is capped at 8 MiB and marked incomplete on capture limits/errors. " +
+		"Network, extra writable roots and host execution require minimal permission requests; see parameters. Host files outside authorized writable roots are read-only. On likely sandbox failures, inspect partial side effects and retry with the smallest outbound_domains/network/writable_roots/sandbox_mode request; respect denials. host mode cannot combine with outbound_domains, including inherited restrictions."
 }
 
 func (t *ShellTool) Parameters() []core.Parameter {
@@ -118,8 +117,8 @@ func (t *ShellTool) run(ctx context.Context, args map[string]any, grant core.Per
 		return core.ToolOutput{}, err
 	}
 	reqProfile := t.effectiveSandboxRequest(args)
-	if reqProfile.domainErr != nil {
-		return core.ToolOutput{}, reqProfile.domainErr
+	if reqProfile.validationErr != nil {
+		return core.ToolOutput{}, reqProfile.validationErr
 	}
 	requestedCaps := reqProfile.permissionCapabilities()
 	if hasCapability(requestedCaps, core.CapProcessHost) && !hasCapability(grant.Capabilities, core.CapProcessHost) {
@@ -165,16 +164,21 @@ func (t *ShellTool) run(ctx context.Context, args map[string]any, grant core.Per
 		return core.ToolOutput{}, err
 	}
 
+	var outputStore *core.OutputStore
+	if state := execution.ExecutionStateFromContext(ctx); state != nil {
+		outputStore = state.OutputStore
+	}
 	initial, err := t.registryOnce().start(ctx, startRequest{
-		name:       optStringArg(args, "name"),
-		owner:      t.CurrentSessionID(),
-		actor:      taskbridge.TaskIDFromCtx(ctx),
-		command:    command,
-		directory:  workspace,
-		profile:    profile,
-		host:       host,
-		timeout:    timeout,
-		sampleWait: t.initialWaitDuration(),
+		outputStore: outputStore,
+		name:        optStringArg(args, "name"),
+		owner:       t.CurrentSessionID(),
+		actor:       taskbridge.TaskIDFromCtx(ctx),
+		command:     command,
+		directory:   workspace,
+		profile:     profile,
+		host:        host,
+		timeout:     timeout,
+		sampleWait:  t.initialWaitDuration(),
 	})
 	if err != nil {
 		var unavailable sandbox.UnavailableError
@@ -188,10 +192,13 @@ func (t *ShellTool) run(ctx context.Context, args map[string]any, grant core.Per
 	}
 	info := initial.info
 	if info.managed {
-		return core.ToolOutput{Text: formatManagedShellRun(info.name, initial.output), Process: initial.observation}, nil
+		if info.status != "running" {
+			return processToolOutput(initial), nil
+		}
+		return core.ToolOutput{Text: formatManagedShellRun(info.name, initial.output), Process: initial.observation, Artifact: initial.captured.Artifact}, nil
 	}
 	if info.status == "done" {
-		return core.ToolOutput{Text: initial.output, Process: initial.observation}, nil
+		return core.ToolOutput{Text: initial.output, Process: initial.observation, Artifact: initial.captured.Artifact}, nil
 	}
 	return processToolOutput(initial), nil
 }

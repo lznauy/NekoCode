@@ -27,4 +27,8 @@ func TestImageReadDoesNotClaimToDeliverPixels(t *testing.T) {
 	if !strings.Contains(text, "pixels not delivered") || !strings.Contains(text, "image_understand") || !strings.Contains(text, "2x3") {
 		t.Fatal(text)
 	}
+	text, err = (&ReadTool{ImageUnderstandingUnavailable: true}).readImage(context.Background(), path)
+	if err != nil || strings.Contains(text, "image_understand") || !strings.Contains(text, "Visual inspection is unavailable") || !strings.Contains(text, "2x3") {
+		t.Fatalf("unconfigured image guidance: %q %v", text, err)
+	}
 }

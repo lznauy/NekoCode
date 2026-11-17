@@ -302,23 +302,17 @@ func (b *Bot) initPolicy() {
 }
 
 // effectiveModelWindow resolves one model's context window the same way the
-// active model's is resolved: the per-model override, then the built-in
-// table, then the default. It feeds the compaction pre-flight check.
+// active model's is resolved, including its fixed catalog snapshot. It feeds
+// the compaction pre-flight check.
 func effectiveModelWindow(m config.ModelConfig) int {
-	if m.ContextWindow > 0 {
-		return m.ContextWindow
-	}
-	if w, ok := config.KnownContextWindow(m.Model); ok {
-		return w
-	}
-	return config.DefaultContextWindow
+	return m.EffectiveContextWindow()
 }
 
 func (b *Bot) initAgent() {
 	am := b.cfg.ActiveModelConfig()
 	llmClient := provider.New(provider.Config{
 		APIKey: am.APIKey, BaseURL: am.BaseURL, Model: am.Model, Protocol: am.Protocol,
-		Reasoning: resolvedReasoning(am), Vision: am.EffectiveVision(),
+		Reasoning: resolvedReasoning(am), Vision: am.EffectiveVision(), MaxTokens: am.MaxOutputTokens(32768),
 	})
 
 	fm := b.cfg.ResolveModel(b.cfg.CompactionModel)
@@ -329,7 +323,7 @@ func (b *Bot) initAgent() {
 	compactionReasoning.Disabled = true
 	compactionModel := provider.New(provider.Config{
 		APIKey: fm.APIKey, BaseURL: fm.BaseURL, Model: fm.Model, Protocol: fm.Protocol,
-		Reasoning: compactionReasoning, MaxTokens: 2000,
+		Reasoning: compactionReasoning, MaxTokens: fm.MaxOutputTokens(2000),
 	})
 	b.ctxMgr.ConfigureModel(ctxmgr.ModelContext{
 		Window: b.cfg.EffectiveContextWindow(), AutoCompactPercent: b.cfg.EffectiveAutoCompactPercent(),

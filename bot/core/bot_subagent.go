@@ -169,7 +169,7 @@ func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provi
 		}
 		subLLM := provider.New(provider.Config{
 			APIKey: selectedModel.APIKey, BaseURL: selectedModel.BaseURL, Model: selectedModel.Model, Protocol: selectedModel.Protocol,
-			Reasoning: resolvedReasoning(selectedModel),
+			Reasoning: resolvedReasoning(selectedModel), MaxTokens: selectedModel.MaxOutputTokens(32768),
 		})
 		engine := subagent.New(subagent.Config{
 			LLM: subLLM, Tools: runRegistry, CompactionModel: compactionModel,

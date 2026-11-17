@@ -132,6 +132,9 @@ func (b *Bot) Configuration() config.Config {
 
 func (b *Bot) ApplyConfiguration(next config.Config) error {
 	next = next.Clone()
+	b.mu.Lock()
+	next.Catalog = b.cfg.Catalog
+	b.mu.Unlock()
 	if err := config.Validate(&next); err != nil {
 		return err
 	}

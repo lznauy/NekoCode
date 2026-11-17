@@ -20,7 +20,7 @@ import (
 
 func (m *Model) startChat(value string, images []controlruntime.ImageAttachment) tea.Cmd {
 	if handled, cmd := m.tryLocalCommand(value); handled {
-		m.finishLocalCommandInput()
+		m.finishLocalCommandInput(value)
 		return cmd
 	}
 	if m.sessionHistoryPaging && m.sessionHistoryPage > 0 {
@@ -59,12 +59,14 @@ func (m *Model) startChat(value string, images []controlruntime.ImageAttachment)
 	return spinnerTick()
 }
 
-func (m *Model) finishLocalCommandInput() {
+func (m *Model) finishLocalCommandInput(value string) {
 	if len(m.Input.ImageAttachments()) == 0 {
 		m.Input.Reset()
 		return
 	}
-	m.notifyImageDraftPreserved("图片未发送，草稿已保留。")
+	if !settingCommand(value) {
+		m.notifyImageDraftPreserved("图片未发送，草稿已保留。")
+	}
 }
 
 func (m *Model) notifyImageDraftPreserved(content string) {
@@ -86,6 +88,9 @@ func isCompactCommand(value string) bool {
 // task is in progress. The returned command runs after the message lands
 // (e.g. copying an emitted authorization link to the clipboard).
 func (m *Model) tryLocalCommand(value string) (bool, tea.Cmd) {
+	if m.changeModelSetting(value) {
+		return true, nil
+	}
 	if handled, cmd := m.backgroundCommand(value); handled {
 		return true, cmd
 	}

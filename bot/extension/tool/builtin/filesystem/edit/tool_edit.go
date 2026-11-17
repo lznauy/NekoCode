@@ -32,9 +32,9 @@ func (t *EditTool) Parameters() []core.Parameter {
 	return []core.Parameter{
 		{Name: "path", Type: "string", Required: true,
 			Description: "Absolute path to the file to edit."},
-		{Name: "oldString", Type: "string", Required: false,
+		{Name: "oldString", Type: "string", Required: true,
 			Description: "Exact text to replace."},
-		{Name: "newString", Type: "string", Required: false,
+		{Name: "newString", Type: "string", Required: true,
 			Description: "Replacement text. Use an empty string to delete oldString."},
 		{Name: "replaceAll", Type: "boolean", Required: false,
 			Description: "Replace every exact match of oldString. Defaults to false, which requires one unique match."},

@@ -139,7 +139,7 @@ func formatProcessResult(result processResult) string {
 		if result.observation.UnchangedWaits >= 2 {
 			b.WriteString("diagnostic_hint: Repeated waits captured no new output. This does not prove the process is stuck. Inspect the retained output/state and choose justified waiting, an explicit stop, or report a blocker. Do not blindly repeat waits or relaunch the command.\n")
 		} else if result.reason == "wait_timeout" {
-			b.WriteString("wait_hint: Only this observation wait expired; the process is still running. For a persistent server, test service readiness instead of waiting for exit or another log line. Choose the next action using the evidence; do not blindly repeat waits or relaunch an existing process.\n")
+			b.WriteString("wait_hint: Only this observation wait expired; the process is still running. For a persistent server, test service readiness instead of waiting for exit or another log line. Default isolated shell calls cannot reach another call's localhost: run server and readiness/client checks in the same command, or request network=true when host-network access is needed. Do not blindly repeat waits or relaunch an existing process.\n")
 		}
 	}
 	if result.reason == "reused_running" {
@@ -187,5 +187,5 @@ func formatProcessList(tasks []processInfo) string {
 }
 
 func processToolOutput(result processResult) core.ToolOutput {
-	return core.ToolOutput{Text: formatProcessResult(result), Process: result.observation}
+	return core.ToolOutput{Text: formatProcessResult(result), Process: result.observation, Artifact: result.captured.Artifact}
 }

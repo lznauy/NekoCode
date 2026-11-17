@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	neturl "net/url"
+	"strings"
 	"time"
 
 	"nekocode/bot/config"
@@ -47,15 +48,25 @@ func (t *ImageGenTool) executeJimeng(ctx context.Context, cfg config.ImageGenCon
 	if model == "" {
 		model = "jimeng_t2i_v31"
 	}
+	seed, err := toolutil.OptIntArg(args, "seed", -1)
+	if err != nil {
+		return "", err
+	}
+	width, err := toolutil.OptIntArg(args, "width", 1328)
+	if err != nil {
+		return "", err
+	}
+	height, err := toolutil.OptIntArg(args, "height", 1328)
+	if err != nil {
+		return "", err
+	}
 
 	signer := NewSigner(cfg.APIKey, cfg.SecretKey, "cn-north-1", "cv")
 	submitBody := map[string]any{
 		"req_key": model,
 		"prompt":  prompt,
-		"seed":    toolutil.OptIntArg(args, "seed", -1),
+		"seed":    seed,
 	}
-	width := toolutil.OptIntArg(args, "width", 1328)
-	height := toolutil.OptIntArg(args, "height", 1328)
 	if width > 0 && height > 0 {
 		submitBody["width"] = width
 		submitBody["height"] = height
@@ -66,22 +77,13 @@ func (t *ImageGenTool) executeJimeng(ctx context.Context, cfg config.ImageGenCon
 		return "", fmt.Errorf("submit: %w", err)
 	}
 
-	result, err := t.jimengPoll(ctx, signer, baseURL, map[string]any{
-		"req_key":  model,
-		"task_id":  taskID,
-		"req_json": `{"return_url":true}`,
-	})
-	if err != nil {
-		return "", fmt.Errorf("poll: %w", err)
+	if strings.TrimSpace(taskID) == "" {
+		return "", fmt.Errorf("generation submission returned no task ID; outcome unknown, do not resubmit automatically")
 	}
-
-	if len(result.ImageURLs) > 0 {
-		return t.downloadImages(ctx, result.ImageURLs, outputDir)
-	}
-	if len(result.BinaryDataBase64) > 0 {
-		return t.saveBase64Images(result.BinaryDataBase64, outputDir)
-	}
-	return "", fmt.Errorf("no images returned, status: %s", result.Status)
+	_, explicit := args["output_dir"]
+	task := imageTask{TaskID: taskID, Config: cfg, OutputDir: outputDir, ExplicitDir: explicit, Scope: imageScope(ctx)}
+	token := t.rememberImage(task)
+	return t.collectImage(ctx, token, task)
 }
 
 func (t *ImageGenTool) jimengSubmit(ctx context.Context, signer *Signer, baseURL string, body map[string]any) (string, error) {

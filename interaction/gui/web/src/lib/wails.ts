@@ -138,6 +138,7 @@ export function safeResolveModelProfile(model: ModelConfig): Promise<ModelProfil
   try {
     const spec = {
       provider: model.provider,
+      base_url: model.base_url,
       model: model.model,
       protocol: model.protocol,
       context_window: model.context_window,

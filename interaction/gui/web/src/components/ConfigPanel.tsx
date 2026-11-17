@@ -675,7 +675,7 @@ function ModelCard({
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [model.context_window, model.model, model.protocol, model.provider])
+  }, [model.context_window, model.model, model.protocol, model.provider, model.base_url])
 
   return (
     <div className="rounded-md border border-border/50 bg-surface px-4 py-3">
@@ -703,6 +703,9 @@ function ModelCard({
             ]}
             onChange={(v) => onChange({ reasoning_effort: v as ModelConfig['reasoning_effort'] })}
           />
+          {model.profile?.reasoning_source === 'origin' && (
+            <p className="mt-1 text-xs text-text-3">原厂参考（{model.profile.reasoning_reference}），当前服务未确认</p>
+          )}
         </Field>
         <Field label="上下文窗口覆盖">
           <div>
@@ -1050,6 +1053,7 @@ function formatNumber(value: number): string {
 function contextWindowSource(source?: string): string {
   switch (source) {
     case 'override': return '自定义'
+    case 'catalog': return '公共模型目录'
     case 'model': return '模型内置'
     case 'default': return '系统默认'
     default: return '解析中'

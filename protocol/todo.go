@@ -58,6 +58,11 @@ func ReconcileTodos(previous, proposed []TodoItem) ([]TodoItem, error) {
 	}
 	old := EnsureTodoIDs(previous)
 	used := make(map[string]bool, len(proposed))
+	contents := make(map[string]string, len(proposed))
+	oldContents := make(map[string]string, len(old))
+	for _, item := range old {
+		oldContents[item.ID] = item.Content
+	}
 	next := make([]TodoItem, 0, len(proposed))
 	for _, item := range proposed {
 		item.Content = strings.TrimSpace(item.Content)
@@ -98,6 +103,12 @@ func ReconcileTodos(previous, proposed []TodoItem) ([]TodoItem, error) {
 		if used[item.ID] {
 			return nil, fmt.Errorf("duplicate todo id %q", item.ID)
 		}
+		// Existing duplicate descriptions remain editable by stable ID, but
+		// neither additions nor renames may introduce another duplicate.
+		if id, exists := contents[item.Content]; exists && (oldContents[id] != item.Content || oldContents[item.ID] != item.Content) {
+			return nil, fmt.Errorf("duplicate todo content %q (existing id %s); no changes were applied. Update the existing step using its returned ID; distinct steps must describe their distinct targets", item.Content, id)
+		}
+		contents[item.Content] = item.ID
 		used[item.ID] = true
 		switch item.Status {
 		case "pending":

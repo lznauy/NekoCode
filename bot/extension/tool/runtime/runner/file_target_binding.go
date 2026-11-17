@@ -47,10 +47,17 @@ func validateFileTargetBinding(expected []boundFileTarget) error {
 
 // Managed image output remains implicit at execution so it retains the tool's
 // managed-directory access. Only policy and approval see its canonical path.
-func bindFilePolicyCall(tc core.ToolCallItem) (core.ToolCallItem, []boundFileTarget, error) {
+// A bare resume call downloads to the destination saved with the receipt, so
+// policy must evaluate that directory instead of the managed default.
+func (e *Executor) bindFilePolicyCall(tc core.ToolCallItem) (core.ToolCallItem, []boundFileTarget, error) {
 	targets := fileTargetBinding(tc)
 	if tc.Name != "image_gen" || len(targets) > 0 {
 		return tc, targets, nil
+	}
+	if dir, explicit := e.imageResumeOutputDir(tc.Args); explicit && dir != "" {
+		policyCall := tc
+		policyCall.Args = permission.SetFileTarget(tc.Args, permission.FileTarget{Key: "output_dir"}, dir)
+		return policyCall, []boundFileTarget{{path: dir, canonical: dir}}, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -64,4 +71,25 @@ func bindFilePolicyCall(tc core.ToolCallItem) (core.ToolCallItem, []boundFileTar
 	policyCall := tc
 	policyCall.Args = permission.SetFileTarget(tc.Args, permission.FileTarget{Key: "output_dir"}, canonical)
 	return policyCall, []boundFileTarget{{path: path, canonical: canonical}}, nil
+}
+
+// imageResumeOutputDir reports the destination saved with an image generation
+// receipt when args is a bare resume call. The registry lookup lets policy see
+// the resume destination even after the tool registry was rebuilt.
+func (e *Executor) imageResumeOutputDir(args map[string]any) (string, bool) {
+	id, _ := args["resume_id"].(string)
+	if id == "" || len(args) != 1 {
+		return "", false
+	}
+	entry, err := e.registry.Lookup("image_gen")
+	if err != nil {
+		return "", false
+	}
+	resume, ok := entry.Tool.(interface {
+		ResumeOutputDir(id string) (string, bool)
+	})
+	if !ok {
+		return "", false
+	}
+	return resume.ResumeOutputDir(id)
 }

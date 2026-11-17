@@ -12,6 +12,7 @@
 | [工作模式教学](users/INTERACTION_MODES.md) | Standard、Plan、Super Agent 的选择、操作和完整使用流程 |
 | [故障排查指南](users/TROUBLESHOOTING.md) | 启动、模型、扩展、权限与运行异常的定位步骤 |
 | [会话恢复、回退与备份](users/SESSION_GUIDE.md) | 恢复会话、检查点、导出、备份和清理 |
+| [A2A 使用指南](users/A2A_GUIDE.md) | 本地启用、反向代理部署、交互等待和故障排查 |
 | [数据目录](users/DATA_DIRECTORY.md) | 本机数据位置、磁盘布局和清理影响 |
 | [图片支持](users/IMAGES.md) | 各入口的图片能力和传输约定，含接入者可参考的处理链路 |
 | [更新日志](users/CHANGELOG.md) | 版本变化和升级影响，项目开发维护者也可查阅 |
@@ -33,6 +34,7 @@
 | [ACP 协议](developers/ACP.md) | 编辑器协议、能力协商与实现状态 |
 | [Headless 协议](developers/STREAM_JSON.md) | 双向 NDJSON 消息与控制契约（当前实现） |
 | [Runtime HTTP API](developers/RUNTIME_HTTP_API.md) | HTTP/SSE 对外接口与事件契约 |
+| [A2A 接入协议](developers/A2A.md) | Agent 发现、任务与 Context、审批回复、流式输出和订阅 |
 
 编写 Skill、Agent 或插件配置不要求修改 NekoCode 源码；编写 Go 工具或宿主应用需要相应的 Go 开发环境。各文档开头标注具体适用读者。
 
@@ -44,6 +46,7 @@
 | --- | --- |
 | [整体架构](maintainers/ARCHITECTURE.md) | 模块职责、Agent 循环和内部实现 |
 | [架构边界](maintainers/ARCHITECTURE_BOUNDARIES.md) | 分层约束、状态所有权与协作约定 |
+| [A2A 维护说明](maintainers/A2A.md) | Runtime 会话隔离、前后台交接、有界保留和回归检查 |
 | [CI/CD 流程](maintainers/CI_CD.md) | 本仓库自动化检查、发布流水线和产物校验 |
 | [发布操作指南](maintainers/RELEASING.md) | 准备、验证和发布 NekoCode 官方版本 |
 

@@ -166,7 +166,7 @@ func (m *Manager) spawn(spec ServerSpec) (*client, error) {
 	return startClient(m.root, bin, spec.Args, spec.Env, spec.LanguageID, m.wsRoot)
 }
 
-func (m *Manager) prepare(ctx context.Context, file string, line int, symbol string) (*client, string, Position, error) {
+func (m *Manager) prepare(ctx context.Context, file string, line int, symbol string, occurrence ...int) (*client, string, Position, error) {
 	path := m.abs(file)
 	c, err := m.resolve(path)
 	if err != nil {
@@ -180,7 +180,7 @@ func (m *Manager) prepare(ctx context.Context, file string, line int, symbol str
 	if err != nil {
 		return nil, "", Position{}, err
 	}
-	pos, err := locate(string(content), line, symbol, c.posEnc)
+	pos, err := locate(string(content), line, symbol, c.posEnc, occurrence...)
 	if err != nil {
 		return nil, "", Position{}, err
 	}
@@ -188,8 +188,8 @@ func (m *Manager) prepare(ctx context.Context, file string, line int, symbol str
 }
 
 // Definition resolves where a symbol on the given line is defined.
-func (m *Manager) Definition(ctx context.Context, file string, line int, symbol string) (string, error) {
-	c, uri, pos, err := m.prepare(ctx, file, line, symbol)
+func (m *Manager) Definition(ctx context.Context, file string, line int, symbol string, occurrence ...int) (string, error) {
+	c, uri, pos, err := m.prepare(ctx, file, line, symbol, occurrence...)
 	if err != nil {
 		return "", err
 	}
@@ -212,8 +212,8 @@ func indexingOr(err error) (string, error) {
 // References lists every reference to a symbol across the workspace. It waits
 // for a freshly started server's background index to settle so cross-file call
 // sites are not missed (see client.referencesSettled).
-func (m *Manager) References(ctx context.Context, file string, line int, symbol string) (string, error) {
-	c, uri, pos, err := m.prepare(ctx, file, line, symbol)
+func (m *Manager) References(ctx context.Context, file string, line int, symbol string, occurrence ...int) (string, error) {
+	c, uri, pos, err := m.prepare(ctx, file, line, symbol, occurrence...)
 	if err != nil {
 		return "", err
 	}
@@ -225,8 +225,8 @@ func (m *Manager) References(ctx context.Context, file string, line int, symbol 
 }
 
 // Hover returns the type signature and documentation for a symbol.
-func (m *Manager) Hover(ctx context.Context, file string, line int, symbol string) (string, error) {
-	c, uri, pos, err := m.prepare(ctx, file, line, symbol)
+func (m *Manager) Hover(ctx context.Context, file string, line int, symbol string, occurrence ...int) (string, error) {
+	c, uri, pos, err := m.prepare(ctx, file, line, symbol, occurrence...)
 	if err != nil {
 		return "", err
 	}
@@ -253,8 +253,18 @@ func (m *Manager) Diagnostics(ctx context.Context, file string) (string, error) 
 	if err := c.ensureSynced(uri, path); err != nil {
 		return "", err
 	}
-	diags := c.waitDiagnostics(ctx, uri, c.docVersion(uri), 3*time.Second)
-	return formatDiagnostics(m.rel(path), path, diags), nil
+	result, err := c.waitDiagnostics(ctx, uri, c.docVersion(uri), 3*time.Second)
+	if err != nil {
+		return "", err
+	}
+	if !result.versioned {
+		notice := "The language server did not provide a source version; diagnostic freshness is unverified. This does not confirm the current file is clean."
+		if len(result.items) == 0 {
+			return notice + "\nThe server reported no diagnostics for " + m.rel(path) + ".", nil
+		}
+		return notice + "\n" + formatDiagnostics(m.rel(path), path, result.items), nil
+	}
+	return formatDiagnostics(m.rel(path), path, result.items), nil
 }
 
 func (m *Manager) rel(path string) string {

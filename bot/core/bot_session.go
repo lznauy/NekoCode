@@ -104,6 +104,16 @@ func (b *Bot) registerSessionCommands(p *command.Parser) {
 }
 
 func (b *Bot) saveSession() error {
+	snapshot := b.captureCurrentSession()
+	snapshot.TranscriptLazy = true
+	if err := b.sess.SavePreservingDraft(snapshot); err != nil {
+		return protocol.MarkEvidenceIncomplete(err)
+	}
+	b.ctxMgr.AcknowledgeTranscript(snapshot.TranscriptBase, snapshot.TranscriptSeq)
+	return nil
+}
+
+func (b *Bot) captureCurrentSession() *session.Snapshot {
 	snapshot := b.sess.Current()
 	if snapshot == nil {
 		snapshot = b.sess.StartNew()
@@ -125,12 +135,25 @@ func (b *Bot) saveSession() error {
 		snapshot.CheckpointNext = b.checkpoints.Next(snapshot.ID)
 	}
 	snapshot.Ledger = b.ledgerSnapshot()
-	snapshot.TranscriptLazy = true
-	if err := b.sess.SavePreservingDraft(snapshot); err != nil {
-		return protocol.MarkEvidenceIncomplete(err)
+	return snapshot
+}
+
+// CaptureSessionDraft retains an empty conversation without creating saved
+// history. The returned callback restores the same identity and settings.
+// Call only while the bot is idle; the host owns the callback's lifetime.
+func (b *Bot) CaptureSessionDraft() (func() error, error) {
+	b.historyMu.Lock()
+	defer b.historyMu.Unlock()
+	snapshot := b.captureCurrentSession()
+	if len(snapshot.Messages) > 0 || len(snapshot.Transcript) > 0 || snapshot.TranscriptSeq > 0 || snapshot.TranscriptBase > 0 {
+		return nil, nil
 	}
-	b.ctxMgr.AcknowledgeTranscript(snapshot.TranscriptBase, snapshot.TranscriptSeq)
-	return nil
+	return func() error {
+		b.historyMu.Lock()
+		defer b.historyMu.Unlock()
+		_, err := b.activateSessionLocked(snapshot.Clone())
+		return err
+	}, nil
 }
 
 func (b *Bot) CurrentSessionID() string { return b.sess.CurrentID() }
@@ -167,11 +190,16 @@ func (b *Bot) resumeSession(id string) (*session.Snapshot, error) {
 }
 
 func (b *Bot) resumeSessionLocked(id string) (*session.Snapshot, error) {
-	oldID := b.sess.CurrentID()
 	snapshot, err := b.sess.LoadLazy(id)
 	if err != nil {
 		return nil, err
 	}
+	return b.activateSessionLocked(snapshot)
+}
+
+func (b *Bot) activateSessionLocked(snapshot *session.Snapshot) (*session.Snapshot, error) {
+	id := snapshot.ID
+	oldID := b.sess.CurrentID()
 	// A history must never silently resume against another project's tools.
 	if strings.TrimSpace(snapshot.CWD) == "" {
 		return nil, fmt.Errorf("session %s is missing cwd metadata; restore its original absolute cwd in session.json before resuming", id)

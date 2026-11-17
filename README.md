@@ -187,6 +187,17 @@ nekocode-tui --headless
 会话管理、模型选择、检查点回滚和运行控制。接入开发指南见 [headless/README.md](headless/README.md)，
 完整消息契约见 [STREAM_JSON.md](docs/developers/STREAM_JSON.md)。
 
+### 作为 A2A Agent 使用
+
+daemon 可通过 `-a2a` 显式启用 A2A 1.0 HTTP+JSON 接口；默认关闭，不改变已有 HTTP API 的行为。
+
+```bash
+NEKOCODE_DAEMON_TOKEN=change-me go run ./cmd/daemon -a2a
+curl http://127.0.0.1:8765/.well-known/agent-card.json
+```
+
+支持文本任务、流式输出、任务查询与取消、审批和问题回答。启动与部署见 [A2A 使用指南](docs/users/A2A_GUIDE.md)，编写客户端见 [A2A 接入协议](docs/developers/A2A.md)。
+
 ## 文档与教程
 
 从 [文档目录](docs/README.md) 按角色选择入口：

@@ -51,26 +51,40 @@ func TestImageGenTool_ResolveModel(t *testing.T) {
 	tool := &ImageGenTool{models: models}
 
 	// Match by name
-	cfg := tool.resolveModel(map[string]any{"model": "stable"})
+	cfg, err := tool.resolveModel(map[string]any{"model": "stable"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if cfg.Name != "stable" {
 		t.Errorf("expected stable, got %s", cfg.Name)
 	}
 
-	// Unknown name falls back to first
-	cfg = tool.resolveModel(map[string]any{"model": "unknown"})
-	if cfg.Name != "jimeng" {
-		t.Errorf("expected fallback to jimeng, got %s", cfg.Name)
+	// An explicit unknown model must not select another model.
+	cfg, err = tool.resolveModel(map[string]any{"model": "unknown"})
+	if err == nil || cfg.Name != "" || !strings.Contains(err.Error(), "jimeng") || !strings.Contains(err.Error(), "stable") {
+		t.Fatalf("unknown model silently changed: %+v %v", cfg, err)
+	}
+	for _, value := range []any{"", nil, 42} {
+		if _, err := tool.resolveModel(map[string]any{"model": value}); err == nil {
+			t.Fatalf("invalid model accepted: %v", value)
+		}
 	}
 
 	// No model arg uses first
-	cfg = tool.resolveModel(map[string]any{})
+	cfg, err = tool.resolveModel(map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if cfg.Name != "jimeng" {
 		t.Errorf("expected default jimeng, got %s", cfg.Name)
 	}
 
 	// No models returns empty
 	empty := &ImageGenTool{}
-	cfg = empty.resolveModel(map[string]any{})
+	cfg, err = empty.resolveModel(map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if cfg.Name != "" {
 		t.Errorf("expected empty config, got %s", cfg.Name)
 	}
@@ -101,5 +115,19 @@ func TestResolveOutputDirRequiresWorkspaceWriteAccess(t *testing.T) {
 	}
 	if got != filepath.Join(root, "generated") {
 		t.Fatalf("relative output directory = %q", got)
+	}
+}
+
+func TestUnknownImageModelFailsBeforeCreatingOutputDirectory(t *testing.T) {
+	root := t.TempDir()
+	destination := filepath.Join(root, "generated")
+	tool := NewImageGenTool([]config.ImageGenConfig{{Name: "available-model", Provider: "unsupported"}})
+	ctx := workspace.WithManager(context.Background(), workspace.New(root, nil))
+	_, err := tool.Execute(ctx, map[string]any{"prompt": "example", "model": "typo-model", "output_dir": destination})
+	if err == nil || !strings.Contains(err.Error(), "unknown image model") || !strings.Contains(err.Error(), "available-model") {
+		t.Fatalf("unknown model did not produce actionable error: %v", err)
+	}
+	if _, err := os.Stat(destination); !os.IsNotExist(err) {
+		t.Fatalf("invalid model created output directory: %v", err)
 	}
 }

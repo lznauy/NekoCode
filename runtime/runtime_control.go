@@ -68,8 +68,18 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 		return "", err
 	}
 	defer r.mutationMu.Unlock()
+	return r.startRunLocked(ctx, input, nil)
+}
+
+// startRunLocked preserves normal admission while the caller holds mutationMu.
+func (r *Runtime) startRunLocked(ctx context.Context, input Input, finishSession func() (bool, error)) (RunID, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
+	}
+	if ctx.Value(sessionRunKey{}) != nil && r.services.Modes.Current != nil && !sessionModeRecoveryCommand(input.Text) {
+		if err := validateSessionRunMode(ctx, r.services.Modes.Current()); err != nil {
+			return "", err
+		}
 	}
 	if sessionID, ok := ctx.Value(backgroundDemandKey{}).(string); ok {
 		if sessionID != r.CurrentSessionID() || r.services.Modes.Current == nil || r.services.Modes.Current() != mode.SuperAgent {
@@ -88,6 +98,10 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 	if r.mutating {
 		r.mu.Unlock()
 		return "", protocolError(ErrorBusy, "start_run", "runtime capability mutation in progress")
+	}
+	if r.sessionRestoreFailed {
+		r.mu.Unlock()
+		return "", protocolError(ErrorConflict, "start_run", "previous session restoration failed")
 	}
 	if r.status != RunIdle {
 		runID := r.currentRun
@@ -146,6 +160,7 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 	r.runDone = make(chan struct{})
 	lease := newRunLease()
 	execution := newRunExecution()
+	execution.finishSession = finishSession
 	r.runLease = lease
 	r.runExecution = execution
 	r.mu.Unlock()
@@ -356,6 +371,9 @@ func (r *Runtime) Close() error {
 			r.approvals.Close()
 			r.questions.Close()
 		}
+		r.mu.Lock()
+		clear(r.sessionDrafts)
+		r.mu.Unlock()
 		if r.connectors != nil {
 			if err := r.connectors.Close(); err != nil {
 				errs = append(errs, err)

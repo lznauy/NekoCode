@@ -88,3 +88,40 @@ func TestPreviewHeaders(t *testing.T) {
 		t.Fatalf("ToolHeader() = %q", got)
 	}
 }
+
+func TestDiffPreservesTerminalNewlineChanges(t *testing.T) {
+	for _, tc := range []struct{ old, new string }{
+		{"hello", "hello\n"}, {"hello\n", "hello"},
+		{"hello", "world\n"}, {"hello\n", "world"},
+		{strings.Repeat("line\n", 1100) + "last", strings.Repeat("line\n", 1100) + "last\n"},
+	} {
+		out := RenderTextChange(tc.old, tc.new, TextChangeOptions{Context: 3, NoChangeText: NoChanges})
+		if out == NoChanges || !strings.Contains(out, "\\ No newline at end of file") || !strings.Contains(out, "+") || !strings.Contains(out, "-") {
+			t.Errorf("terminal newline change lost: %q", out)
+		}
+	}
+}
+
+func TestDiffRejectsOversizeFileAndCancellation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "large.txt")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Sparse file: rejection should happen from metadata before allocating contents.
+	if err := f.Truncate(64<<20 + 1); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+	ctx := workspace.WithManager(t.Context(), workspace.New(dir, nil))
+	if _, err := NewTool().Execute(ctx, map[string]any{"old": "path:" + path, "new": ""}); err == nil {
+		t.Error("oversize file accepted")
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := NewTool().Execute(cancelled, map[string]any{"old": "path:" + path, "new": ""}); err == nil {
+		t.Error("cancellation ignored")
+	}
+}

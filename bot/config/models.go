@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"nekocode/bot/modelcatalog"
 	"nekocode/protocol"
 	"reflect"
 	"strings"
@@ -54,6 +55,9 @@ var configFieldNames = func() map[string]bool {
 	typ := reflect.TypeOf(Config{})
 	for i := 0; i < typ.NumField(); i++ {
 		name, _, _ := strings.Cut(typ.Field(i).Tag.Get("json"), ",")
+		if name == "" || name == "-" {
+			continue
+		}
 		allowed[name] = true
 	}
 	return allowed
@@ -110,9 +114,15 @@ func (p ProviderConfig) Resolve(m ModelDefinition) ModelConfig {
 
 func (c Config) AllModels() []ModelConfig {
 	var models []ModelConfig
+	catalog := c.Catalog
+	if catalog == nil {
+		catalog = modelcatalog.Bundled()
+	}
 	for _, provider := range c.Providers {
 		for _, model := range provider.Models {
-			models = append(models, provider.Resolve(model))
+			resolved := provider.Resolve(model)
+			resolved.catalog = catalog
+			models = append(models, resolved)
 		}
 	}
 	return models
@@ -174,7 +184,9 @@ func (c *Config) validateProviders() error {
 			if m.ContextWindow < 0 {
 				return fmt.Errorf("model %q context_window must not be negative", p.Name+"/"+name)
 			}
-			capability := ReasoningCapabilityFor(p.Resolve(*m))
+			resolved := p.Resolve(*m)
+			resolved.catalog = c.Catalog
+			capability := ReasoningCapabilityFor(resolved)
 			if !capability.Supports(m.ReasoningEffort) {
 				return fmt.Errorf("model %q reasoning_effort must be one of %s", p.Name+"/"+name, strings.Join(capability.Values(), ", "))
 			}

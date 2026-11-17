@@ -35,6 +35,28 @@ func TestBootstrapConnectorsDisabledWithoutConfiguration(t *testing.T) {
 	}
 }
 
+func TestValidateListenSecurity(t *testing.T) {
+	for _, test := range []struct {
+		addr    string
+		token   string
+		wantErr bool
+	}{
+		{addr: "127.0.0.1:8765"},
+		{addr: "[::1]:8765"},
+		{addr: "localhost:8765", wantErr: true},
+		{addr: "192.168.1.10:8765", wantErr: true},
+		{addr: "network-host.invalid:8765", wantErr: true},
+		{addr: "0.0.0.0:8765", wantErr: true},
+		{addr: ":8765", wantErr: true},
+		{addr: "[::]:8765", token: "secret"},
+	} {
+		err := validateListenSecurity(test.addr, test.token)
+		if (err != nil) != test.wantErr {
+			t.Errorf("validateListenSecurity(%q, %q) error = %v, wantErr %v", test.addr, test.token, err, test.wantErr)
+		}
+	}
+}
+
 func TestBootstrapConnectorsSelectsTelegram(t *testing.T) {
 	rt := &bootstrapRuntime{}
 	statuses, err := bootstrapConnectors(context.Background(), rt.Connect, env(map[string]string{

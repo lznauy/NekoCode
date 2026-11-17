@@ -18,7 +18,7 @@ type GrepTool struct {
 
 func (t *GrepTool) Name() string { return "grep" }
 func (t *GrepTool) Description() string {
-	return "Search file contents (rg or grep). Returns matching lines with line numbers. Supports regex, glob filtering, and context lines (-A/-B/-C)."
+	return "Search file contents (rg or grep). Returns matching lines with line numbers. Supports regex and glob filtering. Use context for surrounding lines, or before/after for separate counts."
 }
 
 func (t *GrepTool) Parameters() []core.Parameter {
@@ -26,7 +26,9 @@ func (t *GrepTool) Parameters() []core.Parameter {
 		{Name: "pattern", Type: "string", Required: true, Description: "Search pattern (regex)"},
 		{Name: "path", Type: "string", Required: false, Description: "Directory to search, default: current directory"},
 		{Name: "glob", Type: "string", Required: false, Description: "File filter pattern, e.g. *.go, *.py"},
-		{Name: "context_lines", Type: "string", Required: false, Description: "Context lines, e.g. -A3, -B2, -C5 or a number (default -C)"},
+		{Name: "context", Type: "integer", Description: "Non-negative number of lines before and after each match. Default 0. Cannot combine with before/after."},
+		{Name: "before", Type: "integer", Description: "Non-negative number of lines before each match. Default 0."},
+		{Name: "after", Type: "integer", Description: "Non-negative number of lines after each match. Default 0."},
 	}
 }
 
@@ -36,6 +38,17 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) (core.ToolO
 		return core.ToolOutput{}, err
 	}
 
+	for _, key := range []string{"path", "glob", "context_lines"} {
+		if _, supplied := args[key]; supplied {
+			if _, err := toolutil.StringArg(args, key); err != nil {
+				return core.ToolOutput{}, err
+			}
+		}
+	}
+	contextArgs, err := grepContextArgs(args)
+	if err != nil {
+		return core.ToolOutput{}, err
+	}
 	basePath := toolutil.OptStringArg(args, "path", ".")
 	safeBasePath, err := toolutil.ValidatePathReadableContext(ctx, basePath)
 	if err != nil {
@@ -59,13 +72,7 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) (core.ToolO
 		}
 	}
 
-	if ctxLines, ok := args["context_lines"].(string); ok && strings.TrimSpace(ctxLines) != "" {
-		contextArgs, err := parseContextLines(ctxLines)
-		if err != nil {
-			return core.ToolOutput{}, err
-		}
-		grepArgs = append(grepArgs, contextArgs...)
-	}
+	grepArgs = append(grepArgs, contextArgs...)
 
 	grepArgs = append(grepArgs, "--", pattern, safeBasePath)
 
@@ -84,6 +91,35 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) (core.ToolO
 
 	output.Text = toolutil.StripAnsi(output.Text)
 	return output, nil
+}
+
+func grepContextArgs(args map[string]any) ([]string, error) {
+	_, symmetric := args["context"]
+	_, before := args["before"]
+	_, after := args["after"]
+	_, legacy := args["context_lines"]
+	if symmetric && (before || after) || legacy && (symmetric || before || after) {
+		return nil, fmt.Errorf("use context, before/after, or legacy context_lines separately")
+	}
+	var flags []string
+	for _, field := range []struct{ key, flag string }{{"context", "-C"}, {"before", "-B"}, {"after", "-A"}} {
+		if _, supplied := args[field.key]; !supplied {
+			continue
+		}
+		n, err := toolutil.RequireIntArg(args, field.key)
+		if err != nil {
+			return nil, err
+		}
+		if n < 0 {
+			return nil, fmt.Errorf("%s must be non-negative", field.key)
+		}
+		flags = append(flags, field.flag, strconv.Itoa(n))
+	}
+	// Accept old calls from persisted conversations without advertising shell syntax.
+	if value, ok := args["context_lines"].(string); ok && strings.TrimSpace(value) != "" {
+		return parseContextLines(value)
+	}
+	return flags, nil
 }
 
 // Only context flags are allowed: other search options can execute programs.

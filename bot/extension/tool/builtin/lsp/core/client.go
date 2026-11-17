@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -31,7 +32,10 @@ type client struct {
 	docs    map[string]*docState
 	diags   map[string][]Diagnostic
 	diagVer map[string]int
-	settled bool // workspace index has settled at least once (see referencesSettled)
+	// Unversioned pushes retain the local document state at receipt for cache
+	// invalidation, but cannot prove which source version the server analyzed.
+	diagUnversioned map[string]bool
+	settled         bool // workspace index has settled at least once (see referencesSettled)
 }
 
 // Diagnostic is one published problem for a document.
@@ -132,6 +136,10 @@ func (c *client) handleNotify(method string, params json.RawMessage) {
 	}
 	c.mu.Lock()
 	c.diags[p.URI] = p.Diagnostics
+	if c.diagUnversioned == nil {
+		c.diagUnversioned = map[string]bool{}
+	}
+	c.diagUnversioned[p.URI] = p.Version == nil
 	if p.Version != nil {
 		c.diagVer[p.URI] = *p.Version
 	} else if d := c.docs[p.URI]; d != nil {
@@ -201,21 +209,35 @@ func (c *client) docVersion(uri string) int {
 	return 0
 }
 
-// waitDiagnostics blocks until a publishDiagnostics for uri at version >= minVer
-// arrives or the deadline elapses, returning the freshest cache either way.
-func (c *client) waitDiagnostics(ctx context.Context, uri string, minVer int, deadline time.Duration) []Diagnostic {
-	end := time.Now().Add(deadline)
+type diagnosticResult struct {
+	items     []Diagnostic
+	versioned bool
+}
+
+// waitDiagnostics waits for a matching publication. An unversioned server's
+// result remains usable, but its freshness must not be presented as verified.
+func (c *client) waitDiagnostics(ctx context.Context, uri string, minVer int, deadline time.Duration) (diagnosticResult, error) {
+	timer := time.NewTimer(deadline)
+	defer timer.Stop()
+	tick := time.NewTicker(40 * time.Millisecond)
+	defer tick.Stop()
 	for {
+		if err := ctx.Err(); err != nil {
+			return diagnosticResult{}, err
+		}
 		c.mu.Lock()
-		ver, d := c.diagVer[uri], c.diags[uri]
+		ver, published := c.diagVer[uri]
+		result := diagnosticResult{items: append([]Diagnostic(nil), c.diags[uri]...), versioned: !c.diagUnversioned[uri]}
 		c.mu.Unlock()
-		if ver >= minVer || time.Now().After(end) {
-			return d
+		if published && ver >= minVer {
+			return result, nil
 		}
 		select {
 		case <-ctx.Done():
-			return d
-		case <-time.After(40 * time.Millisecond):
+			return diagnosticResult{}, ctx.Err()
+		case <-timer.C:
+			return diagnosticResult{}, fmt.Errorf("language server did not publish current diagnostics before the observation deadline; file status is unknown, not clean: %w", context.DeadlineExceeded)
+		case <-tick.C:
 		}
 	}
 }

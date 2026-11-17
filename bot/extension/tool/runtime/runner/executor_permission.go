@@ -57,7 +57,7 @@ func (e *Executor) tryPermissionEscalation(ctx context.Context, privileged tools
 	boundFileTargets := preApproved.fileTargets
 	if boundFileTargets == nil {
 		var targetErr error
-		_, boundFileTargets, targetErr = bindFilePolicyCall(tc)
+		_, boundFileTargets, targetErr = e.bindFilePolicyCall(tc)
 		if targetErr != nil {
 			return core.ToolOutput{}, false, failFileTarget, targetErr
 		}

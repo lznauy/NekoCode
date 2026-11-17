@@ -82,6 +82,16 @@ describe('ConfigPanel', () => {
     expect(vi.mocked(SaveConfig).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(MCPAuthorizationAction).mock.invocationCallOrder[0])
   })
 
+  it('labels original provider effort as unconfirmed for the current service', async () => {
+    vi.mocked(ResolveModelProfile).mockResolvedValueOnce({
+      context_window: 400000, context_window_source: 'model',
+      reasoning_efforts: ['low', 'high', 'max'], reasoning_source: 'origin',
+      reasoning_reference: 'zhipuai/glm-5.3-flash',
+    } as never)
+    render(<ConfigPanel open initialTab="models" onClose={vi.fn()} onSaved={vi.fn()} />)
+    expect(await screen.findByText('原厂参考（zhipuai/glm-5.3-flash），当前服务未确认')).toBeInTheDocument()
+  })
+
   it('keeps focus while editing model name', async () => {
     const user = userEvent.setup()
     render(<ConfigPanel open initialTab="models" onClose={vi.fn()} onSaved={vi.fn()} />)

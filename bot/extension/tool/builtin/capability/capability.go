@@ -44,7 +44,10 @@ func ResolveTarget(args map[string]any) (tools.CallTarget, bool) {
 	if server == "" || toolName == "" {
 		return tools.CallTarget{}, false
 	}
-	callArgs, _ := args["args"].(map[string]any)
+	callArgs, err := callArguments(args)
+	if err != nil {
+		return tools.CallTarget{}, false
+	}
 	return tools.CallTarget{Name: TargetName(server, toolName), Args: callArgs}, true
 }
 
@@ -97,11 +100,31 @@ func (t *tool) Execute(ctx context.Context, args map[string]any) (core.ToolOutpu
 		if server == "" || toolName == "" {
 			return core.ToolOutput{}, fmt.Errorf("call requires server and tool")
 		}
-		callArgs, _ := args["args"].(map[string]any)
+		callArgs, err := callArguments(args)
+		if err != nil {
+			return core.ToolOutput{}, err
+		}
 		toolText, toolErr := t.mcp.CallServerTool(ctx, server, toolName, callArgs)
 		return core.ToolOutput{Text: toolText}, toolErr
 	}
 	return core.ToolOutput{}, fmt.Errorf("unknown action %q: must be list, inspect, or call", action)
+}
+
+func callArguments(args map[string]any) (map[string]any, error) {
+	raw, supplied := args["args"]
+	if !supplied {
+		return map[string]any{}, nil
+	}
+	value, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("args must be a JSON object, not a JSON-encoded string or array; use inspect for the tool schema. No tool was called")
+	}
+	// Native callers may use a typed nil map for omitted arguments. A JSON
+	// null arrives as an untyped nil above and remains invalid.
+	if value == nil {
+		return map[string]any{}, nil
+	}
+	return value, nil
 }
 
 // TargetName is the canonical authorization identity, including escaping.

@@ -30,8 +30,10 @@ export interface ModelConfig {
 
 export interface ModelProfile {
   context_window: number
-  context_window_source: 'override' | 'model' | 'default'
+  context_window_source: 'override' | 'catalog' | 'model' | 'default'
   reasoning_efforts?: string[]
+  reasoning_source?: 'catalog' | 'origin' | 'model'
+  reasoning_reference?: string
 }
 
 export interface ImageGenConfig {

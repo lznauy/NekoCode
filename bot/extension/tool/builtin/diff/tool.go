@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/toolutil"
-	"os"
+	utilfs "nekocode/util/fs"
 	"strings"
 )
 
@@ -18,7 +18,7 @@ func (t *Tool) Name() string                                    { return "diff" 
 func (t *Tool) ExecutionMode(map[string]any) core.ExecutionMode { return core.ModeParallel }
 
 func (t *Tool) Description() string {
-	return "Show unified diff between two texts or files. Useful for previewing changes before applying them, comparing file versions, or reviewing what an edit would change."
+	return "Show unified diff between two texts or files, including terminal newline changes. File inputs must be regular files of at most 64 MiB. Useful for previewing changes before applying them, comparing file versions, or reviewing what an edit would change."
 }
 
 func (t *Tool) Parameters() []core.Parameter {
@@ -37,7 +37,7 @@ func (t *Tool) Parameters() []core.Parameter {
 		},
 		{
 			Name:        "context",
-			Type:        "number",
+			Type:        "integer",
 			Required:    false,
 			Description: "Number of context lines around each hunk (default 3).",
 		},
@@ -67,22 +67,25 @@ func (t *Tool) Execute(ctx context.Context, args map[string]any) (core.ToolOutpu
 }
 
 func (t *Tool) computeDiff(ctx context.Context, args map[string]any) (string, error) {
-	old, _ := args["old"].(string)
-	new, _ := args["new"].(string)
+	old, err := toolutil.StringArg(args, "old")
+	if err != nil {
+		return "", err
+	}
+	new, err := toolutil.StringArg(args, "new")
+	if err != nil {
+		return "", err
+	}
 	path, _ := args["path"].(string)
-
-	contextLines := 3
-	if c, ok := args["context"].(float64); ok {
-		contextLines = int(c)
-	} else if c, ok := args["context"].(int); ok {
-		contextLines = c
+	contextLines, err := toolutil.OptIntArg(args, "context", 3)
+	if err != nil {
+		return "", err
 	}
 	if contextLines < 0 {
 		contextLines = 0
 	}
 
 	// Resolve file paths
-	old, err := resolveSource(ctx, old)
+	old, err = resolveSource(ctx, old)
 	if err != nil {
 		return "", fmt.Errorf("old: %w", err)
 	}
@@ -107,7 +110,7 @@ func resolveSource(ctx context.Context, s string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("validate %s: %w", path, err)
 		}
-		data, err := os.ReadFile(safePath)
+		data, err := utilfs.ReadRegularFile(ctx, safePath, 64<<20)
 		if err != nil {
 			return "", fmt.Errorf("read %s: %w", path, err)
 		}

@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"unicode"
 	"unicode/utf16"
+	"unicode/utf8"
 )
 
 // Position is a zero-based LSP position. Character is counted in the encoding
@@ -56,25 +58,67 @@ func uriToPath(uri string) string {
 // must land on the identifier after the last dot: pointing at the package or
 // module prefix makes gopls/pyright resolve the import line or module file
 // instead of the symbol.
-func locate(content string, line1 int, symbol, enc string) (Position, error) {
+func locate(content string, line1 int, symbol, enc string, occurrence ...int) (Position, error) {
 	lines := strings.Split(content, "\n")
 	if line1 < 1 || line1 > len(lines) {
 		return Position{}, fmt.Errorf("line %d out of range (file has %d lines)", line1, len(lines))
 	}
 	text := strings.TrimSuffix(lines[line1-1], "\r")
-	col := strings.Index(text, symbol)
-	if col >= 0 {
-		if i := strings.LastIndex(symbol, "."); i >= 0 {
-			col += i + 1 // hop past the qualifier to the identifier
-		}
-	} else if i := strings.LastIndex(symbol, "."); i >= 0 {
-		// Symbol not verbatim on the line; try its final identifier alone.
-		col = strings.Index(text, symbol[i+1:])
+	if strings.TrimSpace(symbol) == "" || strings.HasSuffix(symbol, ".") {
+		return Position{}, fmt.Errorf("symbol must contain a nonempty identifier")
 	}
-	if col < 0 {
+	columns := symbolColumns(text, symbol)
+	if len(columns) == 0 {
+		if i := strings.LastIndex(symbol, "."); i >= 0 {
+			// Symbol not verbatim on the line; try its final identifier alone.
+			columns = symbolColumns(text, symbol[i+1:])
+			symbol = symbol[i+1:]
+		}
+	}
+	if len(columns) == 0 {
 		return Position{}, fmt.Errorf("symbol %q not found on line %d", symbol, line1)
 	}
+	index := 0
+	if len(occurrence) > 0 && occurrence[0] != 0 {
+		if occurrence[0] < 1 || occurrence[0] > len(columns) {
+			return Position{}, fmt.Errorf("occurrence must be between 1 and %d for symbol %q on line %d", len(columns), symbol, line1)
+		}
+		index = occurrence[0] - 1
+	} else if len(columns) > 1 {
+		return Position{}, fmt.Errorf("symbol %q matches %d times on line %d; supply occurrence (1-based, left to right) or a more qualified symbol", symbol, len(columns), line1)
+	}
+	col := columns[index]
+	if i := strings.LastIndex(symbol, "."); i >= 0 {
+		col += i + 1
+	}
 	return Position{Line: line1 - 1, Character: encodeChar(text[:col], enc)}, nil
+}
+
+func symbolColumns(text, symbol string) []int {
+	var columns []int
+	first, _ := utf8.DecodeRuneInString(symbol)
+	last, _ := utf8.DecodeLastRuneInString(symbol)
+	for offset := 0; offset < len(text); {
+		i := strings.Index(text[offset:], symbol)
+		if i < 0 {
+			break
+		}
+		i += offset
+		end := i + len(symbol)
+		before, _ := utf8.DecodeLastRuneInString(text[:i])
+		after, _ := utf8.DecodeRuneInString(text[end:])
+		if !(identifierRune(first) && identifierRune(before)) && !(identifierRune(last) && identifierRune(after)) {
+			columns = append(columns, i)
+		}
+		// Qualified names can overlap (a.a appears twice in a.a.a).
+		_, width := utf8.DecodeRuneInString(text[i:])
+		offset = i + width
+	}
+	return columns
+}
+
+func identifierRune(r rune) bool {
+	return r == '_' || r == '$' || unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r)
 }
 
 func encodeChar(prefix, enc string) int {

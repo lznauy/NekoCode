@@ -1,63 +1,77 @@
 package shell
 
 import (
+	"fmt"
 	"nekocode/bot/extension/tool/runtime/netpolicy"
 	"strings"
 )
 
 func sandboxRequestFromArgs(args map[string]any) sandboxRequest {
-	r := sandboxRequest{
-		Mode:          optStringArg(args, "sandbox_mode"),
-		Network:       optBoolArg(args, "network"),
-		WritableRoots: optStringSliceArg(args, "writable_roots"),
+	r := sandboxRequest{}
+	if raw, supplied := args["sandbox_mode"]; supplied {
+		mode, ok := raw.(string)
+		if !ok {
+			r.validationErr = fmt.Errorf("sandbox_mode must be read-only, workspace-write, or host")
+			return r
+		}
+		r.Mode = strings.TrimSpace(mode)
+		if r.Mode != "read-only" && r.Mode != "workspace-write" && r.Mode != "host" {
+			r.validationErr = fmt.Errorf("sandbox_mode must be read-only, workspace-write, or host; omit it for workspace-write")
+			return r
+		}
 	}
-	if raw, ok := args["outbound_domains"]; ok {
-		r.OutboundDomains, r.domainErr = netpolicy.Parse(raw)
+	if raw, supplied := args["name"]; supplied {
+		if _, ok := raw.(string); !ok {
+			r.validationErr = fmt.Errorf("name must be a string; omit it for an automatically assigned process name")
+			return r
+		}
+	}
+	if raw, supplied := args["network"]; supplied {
+		var ok bool
+		r.Network, ok = raw.(bool)
+		if !ok {
+			r.validationErr = fmt.Errorf("network must be a boolean (true or false)")
+			return r
+		}
+	}
+	r.WritableRoots, r.validationErr = optStringSliceArg(args, "writable_roots")
+	if r.validationErr != nil {
+		return r
+	}
+	if raw, supplied := args["outbound_domains"]; supplied {
+		r.OutboundDomains, r.validationErr = netpolicy.Parse(raw)
 	}
 	return r
 }
 
-// optStringSliceArg extracts an optional []string from args[key]. Accepts
-// []any, []string, or nil/absent (returns nil).
-func optStringSliceArg(args map[string]any, key string) []string {
-	raw, ok := args[key]
-	if !ok || raw == nil {
-		return nil
+func optStringSliceArg(args map[string]any, key string) ([]string, error) {
+	raw, supplied := args[key]
+	if !supplied {
+		return nil, nil
 	}
-	switch v := raw.(type) {
+	var items []any
+	switch values := raw.(type) {
 	case []string:
-		return v
-	case []any:
-		var out []string
-		for _, item := range v {
-			if s, ok := item.(string); ok {
-				out = append(out, s)
-			}
+		for _, value := range values {
+			items = append(items, value)
 		}
-		return out
+	case []any:
+		items = values
+	default:
+		return nil, fmt.Errorf("%s must be an array of nonempty directory paths", key)
 	}
-	return nil
+	out := make([]string, 0, len(items))
+	for i, item := range items {
+		value, ok := item.(string)
+		if !ok || strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("%s[%d] must be a nonempty directory path; no command was started", key, i)
+		}
+		out = append(out, strings.TrimSpace(value))
+	}
+	return out, nil
 }
 
 func optStringArg(args map[string]any, key string) string {
-	raw, ok := args[key]
-	if !ok || raw == nil {
-		return ""
-	}
-	s, _ := raw.(string)
-	return strings.TrimSpace(s)
-}
-
-func optBoolArg(args map[string]any, key string) bool {
-	raw, ok := args[key]
-	if !ok || raw == nil {
-		return false
-	}
-	switch v := raw.(type) {
-	case bool:
-		return v
-	case string:
-		return strings.EqualFold(strings.TrimSpace(v), "true")
-	}
-	return false
+	value, _ := args[key].(string)
+	return strings.TrimSpace(value)
 }

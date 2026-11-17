@@ -15,7 +15,7 @@ go run ./cmd/daemon
 
 The server listens on `127.0.0.1:8765` by default. Use `-addr` to change the
 listen address. Set `NEKOCODE_DAEMON_TOKEN` or pass `-token` to require
-`Authorization: Bearer <token>` on every endpoint except `/health`:
+`Authorization: Bearer <token>` on every management endpoint except `/health`:
 
 ```bash
 NEKOCODE_DAEMON_TOKEN=replace-me go run ./cmd/daemon -addr 127.0.0.1:8765
@@ -24,6 +24,12 @@ NEKOCODE_DAEMON_TOKEN=replace-me go run ./cmd/daemon -addr 127.0.0.1:8765
 The daemon reads the same `~/.nekocode/config.json` model configuration as the
 TUI. Build a standalone binary with `go build -o nekocode-daemon ./cmd/daemon`;
 static cross-compilation targets are documented in [`build/README.md`](../../build/README.md).
+
+The optional A2A service requires `-a2a` and publishes a separate public Agent
+Card. Its message formats and body limits are described in the
+[A2A client protocol](A2A.md); startup and reverse-proxy setup are covered in
+the [A2A user guide](../users/A2A_GUIDE.md). The rules below describe the native
+Runtime HTTP API.
 
 ## Rules
 

@@ -51,15 +51,16 @@ func newTaskRegistry() *taskRegistry {
 }
 
 type startRequest struct {
-	name       string
-	owner      string
-	actor      string
-	command    string
-	directory  string
-	profile    sandbox.Profile
-	host       bool
-	timeout    time.Duration
-	sampleWait time.Duration
+	outputStore *core.OutputStore
+	name        string
+	owner       string
+	actor       string
+	command     string
+	directory   string
+	profile     sandbox.Profile
+	host        bool
+	timeout     time.Duration
+	sampleWait  time.Duration
 }
 
 // start launches a command and observes it for a short runtime-controlled
@@ -76,7 +77,7 @@ func (r *taskRegistry) start(ctx context.Context, req startRequest) (processResu
 	if reused {
 		t.mu.Lock()
 		t.managed = true
-		result := t.resultLocked("reused_running", tailCopy(t.logs, logsReturnBytes), true)
+		result := t.resultLocked("reused_running", tailCopy(t.logs, logsReturnBytes), true, false)
 		t.mu.Unlock()
 		return result, nil
 	}
@@ -172,6 +173,13 @@ func (r *taskRegistry) startOrReuse(ctx context.Context, req startRequest) (*she
 		done:        make(chan struct{}), changed: make(chan struct{}, 1),
 		drained: make(chan struct{}),
 	}
+	t.outputStore = req.outputStore
+	if t.outputStore == nil {
+		t.outputStore = core.NewOutputStore("")
+	}
+	// Keep draining after the storage cap. Logging limits never authorize
+	// terminating or replaying a command that may have external side effects.
+	t.capture = core.NewOutputCapture(t.outputStore, core.MaxCapturedOutputBytes, nil)
 	r.register(t)
 	drainProcessOutput(t, proc)
 	go func() {
@@ -634,6 +642,7 @@ func drainProcessOutput(t *shellTask, proc processHandle) {
 	}
 	go func() {
 		readers.Wait()
+		t.finishOutput()
 		close(t.drained)
 	}()
 }

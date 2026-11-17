@@ -167,8 +167,18 @@ func parseEditRequest(args map[string]any) (editRequest, error) {
 	if oldString == "" {
 		return editRequest{}, fmt.Errorf("oldString parameter is required")
 	}
-	newString, _ := args["newString"].(string)
-	replaceAll, _ := args["replaceAll"].(bool)
+	newString, err := toolutil.StringArg(args, "newString")
+	if err != nil {
+		return editRequest{}, err
+	}
+	replaceAll := false
+	if raw, exists := args["replaceAll"]; exists {
+		var ok bool
+		replaceAll, ok = raw.(bool)
+		if !ok {
+			return editRequest{}, fmt.Errorf("replaceAll must be a boolean")
+		}
+	}
 	return editRequest{Path: path, OldString: oldString, NewString: newString, ReplaceAll: replaceAll}, nil
 }
 

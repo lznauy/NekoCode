@@ -20,6 +20,10 @@ const recordedRunRestoreLimit = runstore.DefaultLimit
 type Connector = internalconnectors.Connector
 type ConnectorFactory = internalconnectors.ConnectorFactory
 
+// EventHistory returns the currently retained in-memory events. After WaitRun,
+// it includes cleanup messages published after the terminal run event.
+func (r *Runtime) EventHistory(filter EventFilter) []Event { return r.events.History(filter) }
+
 func (r *Runtime) Events(ctx context.Context, filter EventFilter) (<-chan Event, error) {
 	return r.events.Subscribe(ctx, filter)
 }

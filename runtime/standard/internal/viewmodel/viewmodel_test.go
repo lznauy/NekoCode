@@ -87,7 +87,7 @@ func TestModelProfileResolvesOverrideKnownAndDefaultWindows(t *testing.T) {
 		source string
 	}{
 		{config.ModelConfig{Model: "gpt-5", ContextWindow: 64_000}, 64_000, "override"},
-		{config.ModelConfig{Model: "deepseek-v4-flash"}, 1_048_576, "model"},
+		{config.ModelConfig{Model: "deepseek-v4-flash"}, 1_048_576, "catalog"},
 		{config.ModelConfig{Model: "custom-model"}, config.DefaultContextWindow, "default"},
 	}
 	for _, test := range tests {
@@ -141,5 +141,12 @@ func TestMemory(t *testing.T) {
 	}
 	if !got.Sections[2].Empty || got.Sections[4].Content != "- concise replies" {
 		t.Fatalf("optional memory sections = %+v", got.Sections)
+	}
+}
+
+func TestModelProfileShowsOriginReferenceForUnlistedRelay(t *testing.T) {
+	profile := ModelProfile(config.ModelConfig{Model: "glm-5.3-flash", BaseURL: "https://copilot.tencent.com/v2/chat/completions", Protocol: "openai"})
+	if profile.ReasoningSource != "origin" || profile.ReasoningReference != "zhipuai/glm-5.3-flash" || len(profile.ReasoningEfforts) != 3 {
+		t.Fatalf("reference not projected: %+v", profile)
 	}
 }

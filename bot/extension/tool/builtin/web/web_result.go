@@ -21,6 +21,9 @@ func webResult(ctx context.Context, source, method, content, prompt string, limi
 	}
 	content = strings.TrimSpace(toolutil.StripAnsi(content))
 	header := "retrieval_method: " + method + "\nsource_completeness: unverified\n"
+	if strings.TrimSpace(prompt) != "" {
+		header += "content_selection: literal keywords (matching paragraphs and adjacent context; omitted sections remain in the saved source)\n"
+	}
 	if fallback {
 		header += "[Fallback extraction: completeness is not independently verified.]\n"
 	}

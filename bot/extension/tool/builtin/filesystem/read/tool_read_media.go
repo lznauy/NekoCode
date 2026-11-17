@@ -3,6 +3,7 @@ package read
 import (
 	"context"
 	"fmt"
+	_ "golang.org/x/image/webp"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
@@ -12,6 +13,13 @@ import (
 	"os"
 	"path/filepath"
 )
+
+func (t *ReadTool) imageGuidance() string {
+	if t.ImageUnderstandingUnavailable {
+		return "Image pixels are not delivered. Visual inspection is unavailable because no image understanding model is configured; do not infer image contents from metadata."
+	}
+	return "Image pixels are not delivered; use image_understand for visual inspection."
+}
 
 func (t *ReadTool) readImage(ctx context.Context, path string) (string, error) {
 	f, err := utilfs.OpenRegularFile(path)
@@ -28,7 +36,7 @@ func (t *ReadTool) readImage(ctx context.Context, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("[Image metadata only; pixels not delivered. Use image_understand for visual inspection.] %s — %s, %dx%d", filepath.Base(path), format, cfg.Width, cfg.Height), nil
+	return fmt.Sprintf("[Image metadata only; pixels not delivered. %s] %s — %s, %dx%d", t.imageGuidance(), filepath.Base(path), format, cfg.Width, cfg.Height), nil
 }
 
 func (t *ReadTool) readPDF(path string) (string, error) {

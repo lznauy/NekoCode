@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"strings"
 
 	"nekocode/bot/command"
 	"nekocode/bot/config"
@@ -94,7 +95,8 @@ func (b *Bot) registerCommandMenus(p *command.Parser) {
 		}
 		model := b.cfg.ActiveModelConfig()
 		current := model.ReasoningEffort
-		levels := config.ReasoningCapabilityFor(model).Values()
+		capability := config.ReasoningCapabilityFor(model)
+		levels := capability.Values()
 		currentValue := current
 		if currentValue == "" {
 			currentValue = "auto"
@@ -110,7 +112,7 @@ func (b *Bot) registerCommandMenus(p *command.Parser) {
 			}
 			items = append(items, protocol.CommandMenuItem{
 				Value: "/effort " + level, Label: label,
-				Description: reasoningEffortDescription(level),
+				Description: strings.TrimSpace(reasoningEffortDescription(level) + " " + capability.ReferenceNotice()),
 				Submit:      true, Current: level == currentValue,
 			})
 		}

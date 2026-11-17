@@ -6,6 +6,7 @@ import (
 	"nekocode/bot/extension/tool/builtin/contextrefs"
 	"nekocode/bot/extension/tool/builtin/index"
 	"nekocode/bot/extension/tool/builtin/lsp"
+	"nekocode/bot/extension/tool/builtin/media"
 	"nekocode/bot/extension/tool/builtin/question"
 	"nekocode/bot/extension/tool/builtin/shell"
 	"nekocode/bot/extension/tool/builtin/task"
@@ -19,12 +20,13 @@ import (
 )
 
 // Toolbox owns the builtin registry and the stateful runtimes shared by tools
-// across registry rebuilds: the shell process registry and the LSP server pool.
+// across registry rebuilds, including shell processes, LSP servers and image receipts.
 type Toolbox struct {
 	Registry   *tools.Registry
 	shell      *shell.ShellTool
 	lsp        *lsp.LSPTool
 	index      *index.IndexTool
+	imageGen   *media.ImageGenTool
 	task       *task.TaskTool
 	taskSubmit *task.SubmitTool
 	taskCancel *task.CancelTool
@@ -85,6 +87,11 @@ func (e *Toolbox) RebuildRegistryWithConfig(cfg ToolboxConfig) {
 	if e.index == nil {
 		e.index = index.NewIndexTool()
 	}
+	if e.imageGen == nil {
+		e.imageGen = media.NewImageGenTool(cfg.ImageGenModels)
+	} else {
+		e.imageGen.SetModels(cfg.ImageGenModels)
+	}
 	if e.task == nil {
 		e.task = task.NewTaskTool()
 	}
@@ -118,7 +125,10 @@ func (e *Toolbox) RebuildRegistryWithConfig(cfg ToolboxConfig) {
 	}
 	e.Registry = tools.New()
 	e.Registry.SetWorkspace(e.workspace)
-	registerAll(e.Registry, cfg.ImageGenModels, cfg.ImageUnderstandModels, e.shell, e.lsp, e.index, e.task, e.taskList, e.question, e.todo, e.references, e.evidence)
+	registerAll(e.Registry, cfg.ImageUnderstandModels, e.shell, e.lsp, e.index, e.task, e.taskList, e.question, e.todo, e.references, e.evidence)
+	if len(cfg.ImageGenModels) > 0 {
+		e.Registry.RegisterWithOptions(e.imageGen, tools.RegistrationOptions{DelegationAllowed: true})
+	}
 	e.Registry.RegisterWithOptions(e.taskSubmit, tools.RegistrationOptions{CoordinatorAllowed: true, CoordinatorOnly: true})
 	e.Registry.RegisterWithOptions(e.taskCancel, tools.RegistrationOptions{CoordinatorAllowed: true, CoordinatorOnly: true})
 	e.Registry.RegisterWithOptions(e.taskResult, tools.RegistrationOptions{CoordinatorAllowed: true, PlanAllowed: true})

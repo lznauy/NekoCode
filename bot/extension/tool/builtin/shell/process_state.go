@@ -2,6 +2,8 @@ package shell
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -62,6 +64,10 @@ type shellTask struct {
 	observedOffset uint64
 	unchangedWaits int
 	removeAt       time.Time
+	capture        *core.OutputCapture
+	outputStore    *core.OutputStore
+	savedOutput    core.ToolOutput
+	captureErr     error
 
 	done    chan struct{}
 	drained chan struct{}
@@ -87,6 +93,11 @@ func (t *shellTask) appendLogs(chunk []byte) {
 		return
 	}
 	t.mu.Lock()
+	if t.capture != nil {
+		if _, err := t.capture.Write(chunk); err != nil && !errors.Is(err, core.ErrOutputLimit) && t.captureErr == nil {
+			t.captureErr = err
+		}
+	}
 	t.logEnd += uint64(len(chunk))
 	if len(chunk) >= logRingSize {
 		t.logs = append(t.logs[:0], chunk[len(chunk)-logRingSize:]...)
@@ -135,7 +146,31 @@ func (t *shellTask) completeObservation(max int) processResult {
 		t.managed = true
 		t.watchOffset = t.logEnd
 	}
-	return t.resultLocked("", tailCopy(t.logs, max), true)
+	// Keep an exited command discoverable until its pipes and saved output
+	// have finished draining; a timed observation must not discard recovery.
+	select {
+	case <-t.drained:
+	default:
+		t.managed = true
+	}
+	return t.resultLocked("", tailCopy(t.logs, max), true, false)
+}
+
+func (t *shellTask) finishOutput() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.capture == nil {
+		return
+	}
+	output, err := t.capture.Finish()
+	if output.Artifact.Path == "" && len(output.Text) > logsReturnBytes && err == nil {
+		output.Artifact.Path, err = t.outputStore.PreserveOutput(output.Text)
+	}
+	if err != nil && t.captureErr == nil {
+		t.captureErr = err
+	}
+	output.Artifact.Incomplete = output.Artifact.Incomplete || t.readFailed || t.captureErr != nil
+	t.savedOutput = output
 }
 
 func (t *shellTask) isRunning() bool {
@@ -194,7 +229,7 @@ func (t *shellTask) snapshotAndAcknowledge(max int, reason string) processResult
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.watchOffset = t.logEnd
-	return t.resultLocked(reason, tailCopy(t.logs, max), true)
+	return t.resultLocked(reason, tailCopy(t.logs, max), true, false)
 }
 
 func (t *shellTask) takeNewOutput(max int) (processResult, bool) {
@@ -209,18 +244,19 @@ func (t *shellTask) takeNewOutput(max int) (processResult, bool) {
 	}
 	output := tailCopy(t.logs[int(start-t.logStart):], max)
 	full := t.watchOffset == 0
+	clipped := t.logEnd-t.watchOffset > uint64(len(output))
 	t.watchOffset = t.logEnd
-	return t.resultLocked("output", output, full), true
+	return t.resultLocked("output", output, full, clipped), true
 }
 
 func (t *shellTask) result(reason string) processResult {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.resultLocked(reason, nil, true)
+	return t.resultLocked(reason, nil, true, false)
 }
 
 // Caller holds mu: output, state and completeness describe the same sample.
-func (t *shellTask) resultLocked(reason string, output []byte, fromStart bool) processResult {
+func (t *shellTask) resultLocked(reason string, output []byte, fromStart, clipped bool) processResult {
 	complete := false
 	select {
 	case <-t.drained:
@@ -240,7 +276,19 @@ func (t *shellTask) resultLocked(reason string, output []byte, fromStart bool) p
 	if t.status == taskExited {
 		observation.ExitCode, observation.ExitCodeKnown = t.exitCode, true
 	}
-	return processResult{info: t.summaryLocked(), output: toolutil.StripAnsi(string(output)), reason: reason, observation: observation}
+	text := toolutil.StripAnsi(string(output))
+	if t.captureErr != nil {
+		text += fmt.Sprintf("\n[Command ran, but output preservation failed: %v. Do not rerun automatically.]", t.captureErr)
+	} else if t.savedOutput.Artifact.Incomplete {
+		text += "\n[Output preview truncated. The saved capture is incomplete (capture limit or read failure); do not rerun automatically.]"
+	} else if clipped || fromStart && uint64(len(output)) < t.logEnd {
+		if t.savedOutput.Artifact.Path != "" {
+			text += "\n[Output preview truncated; use read on the result artifact to recover earlier output. Do not rerun the command.]"
+		} else {
+			text += "\n[Output preview truncated; the saved capture will be available after the process output drains (up to 8 MiB). Use process wait/watch, not a new shell launch.]"
+		}
+	}
+	return processResult{info: t.summaryLocked(), output: text, reason: reason, observation: observation, captured: t.savedOutput}
 }
 
 func tailCopy(data []byte, max int) []byte {
@@ -290,6 +338,7 @@ type processInfo struct {
 }
 
 type processResult struct {
+	captured    core.ToolOutput
 	observation core.ProcessObservation
 	info        processInfo
 	output      string

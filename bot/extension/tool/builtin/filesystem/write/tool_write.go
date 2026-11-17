@@ -33,7 +33,7 @@ func (t *WriteTool) Description() string {
 func (t *WriteTool) Parameters() []core.Parameter {
 	return []core.Parameter{
 		{Name: "path", Type: "string", Required: true, Description: "File path"},
-		{Name: "content", Type: "string", Required: true, Description: "Content to write"},
+		{Name: "content", Type: "string", Required: true, Description: "Content to write. An explicit empty string creates an empty file or clears an existing file."},
 	}
 }
 
@@ -44,7 +44,10 @@ func (t *WriteTool) Preview(args map[string]any) string {
 
 func (t *WriteTool) PreviewContext(ctx context.Context, args map[string]any) string {
 	path, _ := args["path"].(string)
-	content, _ := args["content"].(string)
+	content, err := toolutil.StringArg(args, "content")
+	if err != nil {
+		return ""
+	}
 	if path == "" {
 		return ""
 	}
@@ -62,7 +65,7 @@ func (t *WriteTool) Execute(ctx context.Context, args map[string]any) (core.Tool
 	if err != nil {
 		return core.ToolOutput{}, err
 	}
-	content, err := toolutil.RequireStringArg(args, "content")
+	content, err := toolutil.StringArg(args, "content")
 	if err != nil {
 		return core.ToolOutput{}, err
 	}

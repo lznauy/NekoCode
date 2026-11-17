@@ -33,6 +33,11 @@ func TestShellDescriptionExposesContractNotBackend(t *testing.T) {
 			t.Errorf("description missing capability contract %q: %s", want, description)
 		}
 	}
+	for _, want := range []string{"workspace paths", "shell-only", "private to each command", "ONE command"} {
+		if !strings.Contains(description, want) {
+			t.Errorf("description missing cross-call guidance %q", want)
+		}
+	}
 	for _, hidden := range []string{"native backend", "fallback", "/nix/store", "/home subdirs", "session_id", "poll"} {
 		if strings.Contains(description, hidden) {
 			t.Errorf("description leaked backend detail %q: %s", hidden, description)

@@ -57,13 +57,15 @@ func (t *TaskListTool) Execute(ctx context.Context, args map[string]any) (core.T
 	if t.list == nil {
 		return core.ToolOutput{}, fmt.Errorf("task_list: not wired")
 	}
-	query, ok := args["query"].(string)
-	if !ok {
-		query = ""
-	}
-	status, ok := args["status"].(string)
-	if !ok {
-		status = ""
+	var query, status string
+	for key, target := range map[string]*string{"query": &query, "status": &status} {
+		if _, supplied := args[key]; supplied {
+			value, err := toolutil.StringArg(args, key)
+			if err != nil {
+				return core.ToolOutput{}, err
+			}
+			*target = value
+		}
 	}
 	offset, err := taskListIntArg(args, "offset", 0)
 	if err != nil {

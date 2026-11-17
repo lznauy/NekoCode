@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 
+	"nekocode/bot/modelcatalog"
 	"nekocode/bot/reasoning"
 )
 
@@ -13,6 +14,8 @@ const ReasoningAuto = ""
 // configuration and interactive clients. Efforts contains provider-native
 // values only; Auto is always available and is represented by an empty value.
 type ReasoningCapability struct {
+	Source        string
+	Reference     string
 	Efforts       []string
 	DisableEffort string
 	ThinkingMode  string
@@ -38,21 +41,49 @@ func (c ReasoningCapability) Values() []string {
 }
 
 // ReasoningCapabilityFor resolves the values accepted by the configured
-// model. Matching is case-insensitive and permits provider-prefixed IDs.
+// model. Exact public endpoint/model metadata wins when available; local
+// fallback matching is case-insensitive and permits provider-prefixed IDs.
 func ReasoningCapabilityFor(model ModelConfig) ReasoningCapability {
-	profile, ok := findModelProfile(model.Model)
-	if !ok {
-		return ReasoningCapability{}
-	}
+	profile, _ := findModelProfile(model.Model)
 	known := profile.reasoning
 	thinkingMode := known.openAIThinking
 	if strings.EqualFold(strings.TrimSpace(model.Protocol), "anthropic") {
 		thinkingMode = known.anthropicThinking
 	}
-	return ReasoningCapability{
+	capability := ReasoningCapability{
+		Source:  "model",
 		Efforts: append([]string(nil), known.efforts...), DisableEffort: known.disableEffort,
 		ThinkingMode: thinkingMode, Replay: known.replay,
 	}
+	var metadata *modelcatalog.Reasoning
+	if limits, ok := model.catalogLimits(); ok && limits.Reasoning != nil {
+		metadata = limits.Reasoning
+		capability.Source = "catalog"
+	} else if origin, ok := model.catalog.OriginReasoning(model.Model); ok {
+		metadata = origin.Reasoning
+		capability.Source = "origin"
+		capability.Reference = origin.Provider + "/" + origin.ModelID
+	}
+	if metadata != nil {
+		capability.Efforts = nil
+		if !metadata.Supported {
+			capability.DisableEffort = ""
+			capability.ThinkingMode = ""
+			return capability
+		}
+		// Keep local wire switches and replay policy; the catalog supplies only
+		// exact endpoint/model capabilities, never protocol body fragments.
+		capability.Efforts = append([]string(nil), metadata.Efforts...)
+		if slices.Contains(capability.Efforts, "none") {
+			capability.DisableEffort = "none"
+		} else {
+			capability.DisableEffort = ""
+			if metadata.Toggle && thinkingMode != "" {
+				capability.Efforts = append([]string{"none"}, capability.Efforts...)
+			}
+		}
+	}
+	return capability
 }
 
 // ResolveReasoning validates and translates one model's portable setting into
@@ -71,4 +102,13 @@ func ResolveReasoning(model ModelConfig) (reasoning.Settings, bool) {
 		ThinkingMode:  capability.ThinkingMode,
 		Replay:        capability.Replay,
 	}, true
+}
+
+// ReferenceNotice is informational; inferred capability is never authority to
+// replay a rejected model request.
+func (c ReasoningCapability) ReferenceNotice() string {
+	if c.Source == "origin" {
+		return "原厂参考（" + c.Reference + "），当前服务未确认"
+	}
+	return ""
 }

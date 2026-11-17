@@ -41,24 +41,17 @@ func modelConfigToView(m config.ModelConfig) controlruntime.ModelConfig {
 }
 
 func ModelProfile(m config.ModelConfig) controlruntime.ModelProfile {
-	window, source := m.ContextWindow, "override"
-	if window <= 0 {
-		if known, ok := config.KnownContextWindow(m.Model); ok {
-			window, source = known, "model"
-		} else {
-			window = config.DefaultContextWindow
-			source = "default"
-		}
-	}
+	window, source := m.ResolveContextWindow()
+	capability := config.ReasoningCapabilityFor(m)
 	return controlruntime.ModelProfile{
 		ContextWindow: window, ContextWindowSource: source,
-		ReasoningEfforts: config.ReasoningCapabilityFor(m).Efforts,
+		ReasoningEfforts: capability.Efforts, ReasoningSource: capability.Source, ReasoningReference: capability.Reference,
 	}
 }
 
 func ModelProfileFromSpec(spec controlruntime.ModelSpec) controlruntime.ModelProfile {
 	return ModelProfile(config.ModelConfig{
-		Provider: spec.Provider, Model: spec.Model, Protocol: spec.Protocol, ContextWindow: spec.ContextWindow,
+		Provider: spec.Provider, BaseURL: spec.BaseURL, Model: spec.Model, Protocol: spec.Protocol, ContextWindow: spec.ContextWindow,
 	})
 }
 

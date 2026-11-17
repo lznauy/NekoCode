@@ -265,7 +265,17 @@ type understandingImage struct {
 }
 
 func (t *ImageUnderstandTool) resolveUnderstandModel(args map[string]any, mode imageUnderstandMode) (config.ImageUnderstandConfig, error) {
-	name := strings.TrimSpace(toolutil.OptStringArg(args, "model", ""))
+	name := ""
+	if _, supplied := args["model"]; supplied {
+		value, err := toolutil.StringArg(args, "model")
+		if err != nil {
+			return config.ImageUnderstandConfig{}, err
+		}
+		name = strings.TrimSpace(value)
+		if name == "" {
+			return config.ImageUnderstandConfig{}, fmt.Errorf("model must be a nonempty configured name; omit it to use the mode default")
+		}
+	}
 	if name != "" {
 		for _, model := range t.models {
 			if model.Name == name {

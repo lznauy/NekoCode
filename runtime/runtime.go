@@ -69,6 +69,9 @@ type Runtime struct {
 	closeErr      error
 	contextView   contextView
 	archivedRuns  map[RunID]recording.RecordedRun
+
+	sessionRestoreFailed bool
+	sessionDrafts        map[string]func() error
 }
 
 var (

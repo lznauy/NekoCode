@@ -47,7 +47,27 @@ func webContentLimit(args map[string]any) (int, error) {
 }
 
 func webContentLimitParameter() core.Parameter {
-	return core.Parameter{Name: "maxChars", Type: "number", Required: false, Description: "Maximum returned characters, default 12000, integer from 256 to 30000. A truncation notice is included when content exceeds this budget. Use prompt to focus on a specific section."}
+	return core.Parameter{Name: "maxChars", Type: "integer", Required: false, Description: "Maximum returned characters, default 12000, from 256 to 30000. A truncation notice is included when content exceeds this budget. Use keywords to filter sections."}
+}
+
+func webKeywordsParameter() core.Parameter {
+	return core.Parameter{Name: "keywords", Type: "string", Description: "Optional literal search terms separated by whitespace; matches any term, case-insensitively. Keeps matching paragraphs, headings and adjacent context. This is not a natural-language instruction or semantic search. For Chinese, supply short terms separated by spaces. Omit to retrieve all content within maxChars."}
+}
+
+func webKeywords(args map[string]any) (string, error) {
+	_, current := args["keywords"]
+	_, legacy := args["prompt"]
+	if current && legacy {
+		return "", fmt.Errorf("provide keywords only; legacy prompt cannot be combined with keywords")
+	}
+	key := "keywords"
+	if legacy {
+		key = "prompt"
+	}
+	if _, supplied := args[key]; supplied {
+		return toolutil.StringArg(args, key)
+	}
+	return "", nil
 }
 
 type WebFetchTool struct {
@@ -128,7 +148,7 @@ func (t *WebFetchTool) Description() string {
 func (t *WebFetchTool) Parameters() []core.Parameter {
 	return []core.Parameter{
 		{Name: "url", Type: "string", Required: true, Description: "Web page URL to fetch"},
-		{Name: "prompt", Type: "string", Required: false, Description: "Content extraction hint, e.g. 'extract API parameters'"},
+		webKeywordsParameter(),
 		webContentLimitParameter(),
 	}
 }
@@ -137,6 +157,10 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) (core.T
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	limit, err := webContentLimit(args)
+	if err != nil {
+		return core.ToolOutput{}, err
+	}
+	keywords, err := webKeywords(args)
 	if err != nil {
 		return core.ToolOutput{}, err
 	}
@@ -149,13 +173,11 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) (core.T
 		return core.ToolOutput{}, fmt.Errorf("URL validation failed: %w", err)
 	}
 
-	prompt := toolutil.OptStringArg(args, "prompt", "")
-
 	content, err := fetchPageDirect(ctx, t.client, rawURL)
 	if err != nil {
 		return core.ToolOutput{}, err
 	}
-	return webResult(ctx, rawURL, "direct-http", content, prompt, limit, false)
+	return webResult(ctx, rawURL, "direct-http", content, keywords, limit, false)
 }
 
 // fetchPageDirect fetches rawURL straight from the origin and converts HTML to

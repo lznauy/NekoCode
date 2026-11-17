@@ -39,15 +39,21 @@ func (t *TreeTool) Execute(ctx context.Context, args map[string]any) (core.ToolO
 		return core.ToolOutput{}, err
 	}
 
-	depth := toolutil.ClampIntArg(args, "depth", 3, 1, 6)
-	limit := toolutil.ClampIntArg(args, "limit", 400, 1, 800)
+	depth, err := toolutil.ClampIntArg(args, "depth", 3, 1, 6)
+	if err != nil {
+		return core.ToolOutput{}, err
+	}
+	limit, err := toolutil.ClampIntArg(args, "limit", 400, 1, 800)
+	if err != nil {
+		return core.ToolOutput{}, err
+	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s/\n", filepath.Base(safePath))
 
 	count, err := walkTree(safePath, "", depth, limit, &b)
 	if err != nil {
-		return core.ToolOutput{}, err
+		return core.ToolOutput{Text: b.String() + "\n[Tree incomplete: a directory could not be read.]"}, err
 	}
 	if count == 0 {
 		b.WriteString("(empty)")
@@ -91,8 +97,11 @@ func walkTree(dir, prefix string, depth, limit int, b *strings.Builder) (int, er
 
 		if it.isDir {
 			fmt.Fprintf(b, "%s%s%s/\n", prefix, conn, it.name)
-			n, _ := walkTree(filepath.Join(dir, it.name), next, depth-1, limit-count-1, b)
+			n, err := walkTree(filepath.Join(dir, it.name), next, depth-1, limit-count-1, b)
 			count += n
+			if err != nil {
+				return count + 1, err
+			}
 		} else {
 			fmt.Fprintf(b, "%s%s%s\n", prefix, conn, it.name)
 		}

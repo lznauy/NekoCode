@@ -23,6 +23,10 @@ func TestToolboxConditionallyRegistersImageUnderstand(t *testing.T) {
 	if _, err := without.Registry.Lookup("image_understand"); err == nil {
 		t.Fatal("image_understand should not be registered without configuration")
 	}
+	readWithout, _ := without.Registry.Get("read")
+	if strings.Contains(readWithout.Description(), "use image_understand") || !strings.Contains(readWithout.Description(), "Visual inspection is unavailable") {
+		t.Fatalf("read advertises unavailable vision tool: %s", readWithout.Description())
+	}
 
 	with := NewToolboxWithConfig(ToolboxConfig{ImageUnderstandModels: []config.ImageUnderstandConfig{{
 		Name: "vision", Provider: "openai", Model: "vision-1",
@@ -30,6 +34,10 @@ func TestToolboxConditionallyRegistersImageUnderstand(t *testing.T) {
 	t.Cleanup(func() { _ = with.Close() })
 	if _, err := with.Registry.Lookup("image_understand"); err != nil {
 		t.Fatalf("image_understand should be registered with configuration: %v", err)
+	}
+	readWith, _ := with.Registry.Get("read")
+	if !strings.Contains(readWith.Description(), "use image_understand") {
+		t.Fatalf("read does not advertise configured vision tool: %s", readWith.Description())
 	}
 }
 

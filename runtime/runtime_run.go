@@ -29,6 +29,7 @@ type runExecution struct {
 	settleOnce         sync.Once
 	withMetrics        bool
 	evidenceIncomplete bool
+	finishSession      func() (bool, error)
 }
 
 func newRunExecution() *runExecution {
@@ -288,6 +289,10 @@ func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runL
 			r.finishRun(runID, "", err, false)
 			return
 		}
+		if err := validateSessionRunMode(ctx, snapshot.ID); err != nil {
+			r.finishRun(runID, "", err, false)
+			return
+		}
 		ctx = mode.WithSnapshot(ctx, snapshot)
 		if snapshot.ID == mode.SuperAgent {
 			if err := r.background.load(r.CurrentSessionID()); err != nil {
@@ -475,12 +480,22 @@ func (r *Runtime) endRun(runID RunID) {
 	}
 	status := r.status
 	cancelDone := r.cancelDone
+	execution, closed := r.runExecution, r.closed
 	r.mu.Unlock()
 
 	if status == RunCancelled && cancelDone != nil {
 		<-cancelDone
 	}
 	r.releaseRecordedRun(runID)
+	if !closed && execution != nil && execution.finishSession != nil {
+		fellBack, err := execution.finishSession()
+		if err != nil {
+			r.events.Publish(Event{RunID: runID, Type: EventSystemMessage, Source: SourceRef{Kind: "runtime"}, Payload: MessagePayload{Role: "system", Content: "session restoration reported an error: " + err.Error()}})
+		} else if fellBack {
+			r.events.Publish(Event{RunID: runID, Type: EventSystemMessage, Source: SourceRef{Kind: "runtime"}, Payload: MessagePayload{Role: "system", Content: "previous session could not be restored; started a fresh session"}})
+		}
+		r.invalidateContext()
+	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -610,6 +610,8 @@ export namespace runtime {
 	    context_window: number;
 	    context_window_source: string;
 	    reasoning_efforts?: string[];
+	    reasoning_source?: string;
+	    reasoning_reference?: string;
 
 	    static createFrom(source: any = {}) {
 	        return new ModelProfile(source);
@@ -620,6 +622,8 @@ export namespace runtime {
 	        this.context_window = source["context_window"];
 	        this.context_window_source = source["context_window_source"];
 	        this.reasoning_efforts = source["reasoning_efforts"];
+	        this.reasoning_source = source["reasoning_source"];
+	        this.reasoning_reference = source["reasoning_reference"];
 	    }
 	}
 	export class ModelConfig {
@@ -967,6 +971,7 @@ export namespace runtime {
 
 	export class ModelSpec {
 	    provider: string;
+	    base_url?: string;
 	    model: string;
 	    protocol?: string;
 	    context_window?: number;
@@ -978,6 +983,7 @@ export namespace runtime {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.provider = source["provider"];
+	        this.base_url = source["base_url"];
 	        this.model = source["model"];
 	        this.protocol = source["protocol"];
 	        this.context_window = source["context_window"];

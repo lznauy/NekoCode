@@ -167,6 +167,9 @@ func (r *Runtime) ResumeSession(id string) error {
 		return r.services.Sessions.ResumeSession(id)
 	})
 	if err == nil || mutationCommitted(err) {
+		r.mu.Lock()
+		r.sessionRestoreFailed = false
+		r.mu.Unlock()
 		r.publishSessionChanged("resume", id, true)
 		r.background.signal()
 	}
@@ -179,6 +182,9 @@ func (r *Runtime) NewSession() (session SessionMeta, err error) {
 		return err
 	})
 	if err == nil || mutationCommitted(err) {
+		r.mu.Lock()
+		r.sessionRestoreFailed = false
+		r.mu.Unlock()
 		r.publishSessionChanged("new", session.ID, true)
 		r.background.signal()
 	}
@@ -191,7 +197,13 @@ func (r *Runtime) DeleteSession(id string) error {
 		if r.services.Sessions.CurrentSessionID != nil {
 			previousID = r.services.Sessions.CurrentSessionID()
 		}
-		return r.services.Sessions.DeleteSession(id)
+		err := r.services.Sessions.DeleteSession(id)
+		if err == nil || mutationCommitted(err) {
+			r.mu.Lock()
+			delete(r.sessionDrafts, id)
+			r.mu.Unlock()
+		}
+		return err
 	})
 	if err == nil || mutationCommitted(err) {
 		r.publishSessionChanged("delete", id, previousID == id)

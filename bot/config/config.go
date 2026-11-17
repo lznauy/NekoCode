@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"nekocode/bot/modelcatalog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,6 +25,7 @@ func Exists() bool {
 }
 
 type ModelConfig struct {
+	catalog         *modelcatalog.Catalog
 	Name            string `json:"name"`
 	Provider        string `json:"provider"`
 	APIKey          string `json:"api_key"`
@@ -32,7 +34,7 @@ type ModelConfig struct {
 	Protocol        string `json:"protocol,omitempty"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	// ContextWindow overrides the context window for this model. When 0,
-	// the window is resolved from the built-in model table, then Default.
+	// the window is resolved from the public catalog, built-in table, then Default.
 	ContextWindow int `json:"context_window,omitempty"`
 	// Vision controls native image input (multimodal). nil resolves from
 	// the built-in model table (false for unknown models); an explicit
@@ -97,6 +99,8 @@ type WorkspaceConfig struct {
 }
 
 type Config struct {
+	// Catalog is a runtime-only immutable snapshot, never saved as an override.
+	Catalog                *modelcatalog.Catalog      `json:"-"`
 	Active                 string                     `json:"active"`                     // name of the active model
 	CompactionModel        string                     `json:"compaction_model,omitempty"` // optional context-compaction model reference; empty uses the active model
 	AutoCompactPercent     int                        `json:"auto_compact_percent,omitempty"`
@@ -153,6 +157,7 @@ var Default = Config{
 
 func Load() (*Config, error) {
 	cfg := Default.Clone()
+	cfg.Catalog = modelcatalog.Load()
 
 	configPath := Path()
 	data, err := os.ReadFile(configPath)
@@ -176,18 +181,11 @@ func Load() (*Config, error) {
 }
 
 // EffectiveContextWindow resolves the context window for the active model:
-// the per-model override wins, then the built-in model table, and finally
-// DefaultContextWindow (128000). The window is a model property, so it is
-// resolved on read rather than stored.
+// the per-model override wins, then exact catalog metadata, the compatibility
+// table and DefaultContextWindow (128000). The catalog snapshot is fixed when
+// configuration is loaded; getters do not access the filesystem or network.
 func (c *Config) EffectiveContextWindow() int {
-	m := c.ActiveModelConfig()
-	if m.ContextWindow > 0 {
-		return m.ContextWindow
-	}
-	if w, ok := KnownContextWindow(m.Model); ok {
-		return w
-	}
-	return DefaultContextWindow
+	return c.ActiveModelConfig().EffectiveContextWindow()
 }
 
 func (c *Config) EffectiveAutoCompactPercent() int {

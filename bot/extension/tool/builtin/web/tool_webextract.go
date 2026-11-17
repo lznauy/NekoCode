@@ -97,7 +97,7 @@ func (t *WebExtractTool) Description() string {
 func (t *WebExtractTool) Parameters() []core.Parameter {
 	return []core.Parameter{
 		{Name: "url", Type: "string", Required: true, Description: "Web page URL to extract"},
-		{Name: "prompt", Type: "string", Required: false, Description: "Content extraction hint, e.g. 'extract API parameters'"},
+		webKeywordsParameter(),
 		webContentLimitParameter(),
 	}
 }
@@ -106,6 +106,10 @@ func (t *WebExtractTool) Execute(ctx context.Context, args map[string]any) (core
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	limit, err := webContentLimit(args)
+	if err != nil {
+		return core.ToolOutput{}, err
+	}
+	prompt, err := webKeywords(args)
 	if err != nil {
 		return core.ToolOutput{}, err
 	}
@@ -121,7 +125,6 @@ func (t *WebExtractTool) Execute(ctx context.Context, args map[string]any) (core
 		return core.ToolOutput{}, fmt.Errorf("URL validation failed: %w", err)
 	}
 
-	prompt := toolutil.OptStringArg(args, "prompt", "")
 	if t.reader != nil {
 		content, readerErr := t.readSource(ctx, rawURL)
 		if readerErr == nil {

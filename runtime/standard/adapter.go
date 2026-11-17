@@ -117,11 +117,12 @@ func (a *adapter) ModelOptions() ([]controlruntime.ModelOption, string) {
 	configuration := a.bot.Configuration()
 	options := make([]controlruntime.ModelOption, 0, len(configuration.AllModels()))
 	for _, model := range configuration.AllModels() {
+		capability := config.ReasoningCapabilityFor(model)
 		options = append(options, controlruntime.ModelOption{
 			Name:             model.Name,
 			Model:            model.Model,
 			ReasoningEffort:  model.ReasoningEffort,
-			ReasoningEfforts: config.ReasoningCapabilityFor(model).Efforts,
+			ReasoningEfforts: capability.Efforts, ReasoningSource: capability.Source, ReasoningReference: capability.Reference,
 		})
 	}
 	return options, configuration.Active
@@ -257,7 +258,7 @@ func (a *adapter) services() controlruntime.ServiceGroups {
 		},
 		Config: controlruntime.ConfigServices{
 			ConfigView:          a.ConfigView,
-			ResolveModelProfile: viewmodel.ModelProfileFromSpec,
+			ResolveModelProfile: a.ResolveModelProfile,
 			ApplyConfig:         a.ApplyConfig,
 		},
 		Sessions: controlruntime.SessionsServices{
@@ -272,6 +273,7 @@ func (a *adapter) services() controlruntime.ServiceGroups {
 			SubagentHistory:       a.SubagentHistory,
 			SubagentToolOutput:    a.SubagentToolOutput,
 			CurrentSessionID:      a.bot.CurrentSessionID,
+			CaptureDraft:          a.bot.CaptureSessionDraft,
 			ListSessions:          a.ListSessions,
 			SessionMessages:       a.SessionMessages,
 			SessionMessagesPage:   a.SessionMessagesPage,
@@ -309,4 +311,15 @@ func sessionMCPConfigs(servers []controlruntime.MCPServerSpec) map[string]mcp.Se
 		}
 	}
 	return configs
+}
+
+// ResolveModelProfile previews unsaved settings against the same immutable
+// catalog as the active bot, including the connection endpoint being edited.
+func (a *adapter) ResolveModelProfile(spec controlruntime.ModelSpec) controlruntime.ModelProfile {
+	configuration := a.bot.Configuration()
+	configuration.Providers = []config.ProviderConfig{{
+		Name: spec.Provider, BaseURL: spec.BaseURL, Protocol: spec.Protocol,
+		Models: []config.ModelDefinition{{Model: spec.Model, ContextWindow: spec.ContextWindow}},
+	}}
+	return viewmodel.ModelProfile(configuration.AllModels()[0])
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"log"
+	"nekocode/bot/modelcatalog"
 
 	"nekocode/interaction/gui/app"
 	controlruntime "nekocode/runtime"
@@ -143,6 +144,9 @@ func (a *App) ReplyQuestion(id string, answersJSON string, rejected bool) error 
 }
 
 func main() {
+	catalogCtx, cancelCatalog := context.WithCancel(context.Background())
+	defer cancelCatalog()
+	modelcatalog.RefreshInBackground(catalogCtx)
 	app, err := NewApp()
 	if err != nil {
 		log.Fatal(err)

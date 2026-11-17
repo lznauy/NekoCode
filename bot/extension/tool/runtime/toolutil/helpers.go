@@ -2,7 +2,9 @@ package toolutil
 
 import (
 	"fmt"
+	"math"
 	"os"
+	"strconv"
 
 	"nekocode/bot/extension/tool/runtime/core"
 )
@@ -33,14 +35,32 @@ func RequireStringArg(args map[string]any, key string) (string, error) {
 	return v, nil
 }
 
+// StringArg requires a string to be supplied, but permits explicit empty text.
+func StringArg(args map[string]any, key string) (string, error) {
+	if _, ok := args[key]; !ok {
+		return "", fmt.Errorf("missing %s parameter", key)
+	}
+	v, ok := args[key].(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string (use an explicit empty string for empty content)", key)
+	}
+	return v, nil
+}
+
 func RequireIntArg(args map[string]any, key string) (int, error) {
 	v, ok := args[key]
 	if !ok || v == nil {
 		return 0, fmt.Errorf("missing %s parameter", key)
 	}
+	if n, ok := v.(int); ok {
+		return n, nil
+	}
 	f, ok := v.(float64)
-	if !ok {
-		return 0, fmt.Errorf("invalid %s: expected number, got %T", key, v)
+	// The upper bound is exclusive: float64(maxInt) rounds up on 64-bit
+	// systems, and converting that rounded value would overflow.
+	bound := math.Ldexp(1, strconv.IntSize-1)
+	if !ok || math.IsNaN(f) || math.IsInf(f, 0) || math.Trunc(f) != f || f < -bound || f >= bound {
+		return 0, fmt.Errorf("%s must be an integer between %d and %d", key, -int(^uint(0)>>1)-1, int(^uint(0)>>1))
 	}
 	return int(f), nil
 }
@@ -52,26 +72,25 @@ func OptStringArg(args map[string]any, key, def string) string {
 	return def
 }
 
-func OptIntArg(args map[string]any, key string, def int) int {
-	if v, ok := args[key].(float64); ok {
-		return int(v)
+func OptIntArg(args map[string]any, key string, def int) (int, error) {
+	if _, supplied := args[key]; !supplied {
+		return def, nil
 	}
-	return def
+	return RequireIntArg(args, key)
 }
 
-func ClampIntArg(args map[string]any, key string, def, min, max int) int {
-	v, ok := args[key].(float64)
-	if !ok {
-		return def
+func ClampIntArg(args map[string]any, key string, def, min, max int) (int, error) {
+	n, err := OptIntArg(args, key, def)
+	if err != nil {
+		return 0, err
 	}
-	n := int(v)
 	if n < min {
-		return min
+		return min, nil
 	}
 	if n > max {
-		return max
+		return max, nil
 	}
-	return n
+	return n, nil
 }
 
 func GetFileMode(path string) os.FileMode {

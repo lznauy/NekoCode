@@ -11,18 +11,19 @@ import (
 
 type ReadTool struct {
 	toolutil.SafeReadOnlyTool
+	ImageUnderstandingUnavailable bool
 }
 
 func (t *ReadTool) Name() string { return "read" }
 func (t *ReadTool) Description() string {
-	return "Read text file contents; images return metadata only, PDFs return metadata and extraction guidance. Image pixels are not delivered by read: use image_understand for visual inspection. Absolute path required. Use startLine/endLine for range, max 500 lines. Text files are limited to 64 MiB. Text output includes [path#TAG] followed by lineNo:content lines. If output is truncated, read a smaller range before editing."
+	return "Read text file contents; images return metadata only, PDFs return metadata and extraction guidance. " + t.imageGuidance() + " Absolute path required. Omit startLine/endLine to read the first 500 lines; with startLine alone, read up to 500 lines from there. Range parameters apply only to text. Text files are limited to 64 MiB. Text output includes [path#TAG] followed by lineNo:content lines. If output is truncated, read a smaller range before editing."
 }
 
 func (t *ReadTool) Parameters() []core.Parameter {
 	return []core.Parameter{
 		{Name: "path", Type: "string", Required: true, Description: "File path (absolute)"},
-		{Name: "startLine", Type: "integer", Required: true, Description: "First line to read (1-based)"},
-		{Name: "endLine", Type: "integer", Required: true, Description: "Last line to read (inclusive, >= startLine)"},
+		{Name: "startLine", Type: "integer", Description: "First line to read (1-based, default 1)"},
+		{Name: "endLine", Type: "integer", Description: "Last line to read (inclusive, >= startLine). Default up to 500 lines from startLine."},
 	}
 }
 
@@ -41,7 +42,7 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) (core.ToolO
 		return core.ToolOutput{}, err
 	}
 	switch strings.ToLower(filepath.Ext(safePath)) {
-	case ".png", ".jpg", ".jpeg", ".gif":
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp":
 		toolText, toolErr := t.readImage(ctx, safePath)
 		return core.ToolOutput{Text: toolText}, toolErr
 	case ".pdf":

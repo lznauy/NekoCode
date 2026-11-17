@@ -111,6 +111,20 @@ func TestManagerSessionMutationsPublishCurrentSession(t *testing.T) {
 	}
 }
 
+func TestDeleteInactiveSessionRejectsCurrentSession(t *testing.T) {
+	runner := &sessionCommandRunner{current: "session_1"}
+	rt := New(runner, sessionRunnerServices(runner))
+	if err := rt.DeleteInactiveSession("session_1"); err == nil {
+		t.Fatal("current session was deleted")
+	}
+	if runner.current != "session_1" {
+		t.Fatalf("current session = %q", runner.current)
+	}
+	if err := rt.DeleteInactiveSession("session_2"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDeleteSessionPublishesCommittedStateWhenCleanupFails(t *testing.T) {
 	runner := &sessionCommandRunner{current: "session_1"}
 	services := sessionRunnerServices(runner)

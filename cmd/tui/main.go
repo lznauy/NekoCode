@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"nekocode/bot/modelcatalog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,6 +18,9 @@ func main() {
 	if handled, exitCode := tui.RunClipboardHelper(); handled {
 		os.Exit(exitCode)
 	}
+	catalogCtx, cancelCatalog := context.WithCancel(context.Background())
+	defer cancelCatalog()
+	modelcatalog.RefreshInBackground(catalogCtx)
 	if len(os.Args) >= 2 && os.Args[1] == "--acp" {
 		options := acp.ServerOptions{}
 		for _, arg := range os.Args[2:] {

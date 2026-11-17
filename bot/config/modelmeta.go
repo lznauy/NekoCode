@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 
+	"nekocode/bot/modelcatalog"
 	"nekocode/bot/reasoning"
 )
 
@@ -162,6 +163,29 @@ func KnownContextWindow(model string) (window int, ok bool) {
 	return 0, false
 }
 
+// ResolveContextWindow combines explicit configuration, exact public service
+// metadata, legacy compatibility profiles and the final default. No I/O occurs.
+func (m ModelConfig) ResolveContextWindow() (int, string) {
+	if m.ContextWindow > 0 {
+		return m.ContextWindow, "override"
+	}
+	if limits, ok := m.catalogLimits(); ok {
+		if limits.Input > 0 && limits.Input < limits.Context {
+			return limits.Input, "catalog"
+		}
+		return limits.Context, "catalog"
+	}
+	if window, ok := KnownContextWindow(m.Model); ok {
+		return window, "model"
+	}
+	return DefaultContextWindow, "default"
+}
+
+func (m ModelConfig) EffectiveContextWindow() int {
+	window, _ := m.ResolveContextWindow()
+	return window
+}
+
 // KnownVision reports whether the built-in model table knows the model to
 // accept native image input. Unknown models report false; an explicit
 // per-model vision config overrides this.
@@ -179,4 +203,27 @@ func (m ModelConfig) EffectiveVision() bool {
 		return *m.Vision
 	}
 	return KnownVision(m.Model)
+}
+
+// MaxOutputTokens caps the existing generation budget without increasing it.
+func (m ModelConfig) MaxOutputTokens(preferred int) int {
+	if preferred <= 0 {
+		preferred = 32768
+	}
+	preferred = min(preferred, max(1, m.EffectiveContextWindow()/4))
+	if limits, ok := m.catalogLimits(); ok && limits.Output > 0 {
+		preferred = min(preferred, limits.Output)
+	}
+	return preferred
+}
+func (m ModelConfig) catalogLimits() (modelcatalog.Limits, bool) {
+	endpoint := m.BaseURL
+	if endpoint == "" {
+		// Match the actual client defaults, not the user's provider display name.
+		endpoint = "https://api.deepseek.com/v1"
+		if m.Protocol == "anthropic" {
+			endpoint = "https://api.anthropic.com/v1"
+		}
+	}
+	return m.catalog.Lookup(endpoint, m.Model)
 }

@@ -104,7 +104,7 @@ type posTool struct {
 	owner *LSPTool
 	name  string
 	desc  string
-	query func(*lspcore.Manager, context.Context, string, int, string) (string, error)
+	query func(*lspcore.Manager, context.Context, string, int, string, ...int) (string, error)
 }
 
 func (t *posTool) Name() string        { return t.name }
@@ -118,6 +118,7 @@ func (t *posTool) Parameters() []core.Parameter {
 		{Name: "file", Type: "string", Required: true, Description: "Path to the source file, relative to the workspace root or absolute."},
 		{Name: "line", Type: "integer", Required: true, Description: "1-based line number the symbol appears on."},
 		{Name: "symbol", Type: "string", Required: true, Description: "The exact symbol text on that line, e.g. \"executeBatch\". Used to locate the column."},
+		{Name: "occurrence", Type: "integer", Description: "Optional 1-based match number, left to right, when the symbol appears more than once on the line. Omit only when its match is unique."},
 	}
 }
 
@@ -137,11 +138,18 @@ func (t *posTool) Execute(ctx context.Context, args map[string]any) (core.ToolOu
 	if err != nil {
 		return core.ToolOutput{}, err
 	}
+	occurrence, err := toolutil.OptIntArg(args, "occurrence", 0)
+	if err != nil {
+		return core.ToolOutput{}, err
+	}
+	if _, supplied := args["occurrence"]; supplied && occurrence < 1 {
+		return core.ToolOutput{}, fmt.Errorf("occurrence must be >= 1")
+	}
 	mgr, err := t.owner.ensureManager(ctx)
 	if err != nil {
 		return core.ToolOutput{}, err
 	}
-	toolText, toolErr := t.query(mgr, ctx, resolveFile(ctx, file), line, symbol)
+	toolText, toolErr := t.query(mgr, ctx, resolveFile(ctx, file), line, symbol, occurrence)
 	return core.ToolOutput{Text: toolText}, toolErr
 }
 
@@ -150,7 +158,7 @@ type diagTool struct{ owner *LSPTool }
 
 func (t *diagTool) Name() string { return "lsp_diagnostics" }
 func (t *diagTool) Description() string {
-	return "Report compiler/linter diagnostics (errors, warnings) for a file from its language server. Use after editing to check the change compiles."
+	return "Report current compiler/linter diagnostics (errors, warnings) for a file from its language server. A timeout means diagnostics are unavailable, not that the file is clean. This is file-level feedback; use project build/tests for compilation verification."
 }
 func (t *diagTool) ExecutionMode(map[string]any) core.ExecutionMode {
 	return core.ModeParallel

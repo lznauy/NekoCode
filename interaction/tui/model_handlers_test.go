@@ -118,7 +118,13 @@ func TestAutoCompactionCancellationStaysInFrame(t *testing.T) {
 type commandFakeBot struct {
 	tickFakeBot
 	commands []string
+	switches []string
 	menus    map[string]controlruntime.CommandMenu
+}
+
+func (b *commandFakeBot) SwitchModel(name string) (controlruntime.ModelSelection, error) {
+	b.switches = append(b.switches, name)
+	return controlruntime.ModelSelection{Provider: "test", Model: name}, nil
 }
 
 type statusFakeBot struct {
@@ -314,11 +320,11 @@ func TestEnterOpensCommandMenuAndSubmitsLeafChoice(t *testing.T) {
 	}
 
 	cmd := m.handleIdleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	if cmd == nil {
-		t.Fatal("selecting a leaf choice did not start a run")
+	if cmd != nil {
+		t.Fatal("model selection started a run")
 	}
-	if got := bot.submittedInputs(); len(got) != 1 || got[0] != "/model fast" {
-		t.Fatalf("submitted inputs = %#v", got)
+	if len(bot.switches) != 1 || bot.switches[0] != "fast" || len(bot.submittedInputs()) != 0 {
+		t.Fatalf("switches=%v runs=%v", bot.switches, bot.submittedInputs())
 	}
 }
 
@@ -349,7 +355,7 @@ func TestSubmitSuggestionPreservesImageDraftWithoutSendingAttachment(t *testing.
 	if m.Input.Value() != draft || len(m.Input.ImageAttachments()) != 1 {
 		t.Fatalf("suggestion submit discarded image draft: value=%q images=%#v", m.Input.Value(), m.Input.ImageAttachments())
 	}
-	if len(bot.inputs) != 1 || bot.inputs[0].Text != "/model fast" || len(bot.inputs[0].Images) != 0 {
+	if len(bot.inputs) != 0 || len(bot.switches) != 1 || bot.switches[0] != "fast" {
 		t.Fatalf("submitted inputs = %#v", bot.inputs)
 	}
 }
@@ -408,7 +414,7 @@ func TestProcessingSubmitSuggestionPreservesImageDraftWithoutSendingAttachment(t
 	if m.Input.Value() != draft || len(m.Input.ImageAttachments()) != 1 {
 		t.Fatalf("processing suggestion discarded image draft: value=%q images=%#v", m.Input.Value(), m.Input.ImageAttachments())
 	}
-	if len(bot.steered) != 1 || bot.steered[0].Text != "/model fast" || len(bot.steered[0].Images) != 0 {
+	if len(bot.steered) != 0 || len(bot.switches) != 0 {
 		t.Fatalf("steered inputs = %#v", bot.steered)
 	}
 }
@@ -458,8 +464,8 @@ func TestEnterOnCurrentMenuItemHighlightsWithoutSubmitting(t *testing.T) {
 		t.Fatalf("current model row should keep its check mark after moving:\n%s", view)
 	}
 	m.handleKeyPress(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	if got := bot.submittedInputs(); len(got) != 1 || got[0] != "/model pro" {
-		t.Fatalf("submitted inputs = %#v, want /model pro", got)
+	if len(bot.switches) != 1 || bot.switches[0] != "pro" || len(bot.submittedInputs()) != 0 {
+		t.Fatalf("switches=%v runs=%v", bot.switches, bot.submittedInputs())
 	}
 }
 

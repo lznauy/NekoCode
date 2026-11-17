@@ -225,7 +225,10 @@ func (m *Model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.QuestionBar.Toggle()
 		return m, nil
 	case "enter":
-		m.QuestionBar.Submit()
+		if !m.QuestionBar.Submit() {
+			m.resizeMessages()
+			return m, nil
+		}
 	case "esc", "ctrl+c":
 		m.QuestionBar.Reject()
 	default:
@@ -364,7 +367,7 @@ func (m *Model) handleProcessingKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.Messages.GotoBottom()
 			m.Input.SetFollow(true)
 			if handled, cmd := m.tryLocalCommand(value); handled {
-				m.finishLocalCommandInput()
+				m.finishLocalCommandInput(value)
 				return cmd
 			}
 			m.processingStart = time.Now()

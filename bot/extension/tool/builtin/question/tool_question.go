@@ -48,7 +48,7 @@ func (t *Tool) Parameters() []core.Parameter {
 						},
 					},
 					"multiple": {Type: "boolean", Description: "Allow selecting more than one option; defaults to false."},
-					"custom":   {Type: "boolean", Description: "Allow a free-form answer; defaults to true."},
+					"custom":   {Type: "boolean", Description: "Allow a free-form answer; defaults to true. If false, at least one valid option is required."},
 				},
 			},
 		},
@@ -87,9 +87,14 @@ func (t *Tool) Execute(ctx context.Context, args map[string]any) (core.ToolOutpu
 	req.SubAgentID = taskbridge.TaskIDFromCtx(ctx)
 	reply := fn(req)
 	if reply.Rejected {
-		return core.ToolOutput{}, fmt.Errorf("question rejected")
+		return core.ToolOutput{}, fmt.Errorf("question rejected by user; do not repeat the unchanged request automatically")
 	}
-	return core.ToolOutput{Text: formatAnswers(questions, reply.Answers)}, nil
+	output := core.ToolOutput{Text: formatAnswers(questions, reply.Answers)}
+	if err := validateAnswers(questions, reply.Answers); err != nil {
+		return output, err
+	}
+	output.Text += "\nContinue with these answers in mind."
+	return output, nil
 }
 
 func parseQuestions(args map[string]any) ([]protocol.QuestionItem, error) {
@@ -108,59 +113,131 @@ func parseQuestions(args map[string]any) ([]protocol.QuestionItem, error) {
 		if q == "" {
 			return nil, fmt.Errorf("questions[%d].question is required", i)
 		}
-		header, _ := m["header"].(string)
+		header, err := optionalText(m, "header")
+		if err != nil {
+			return nil, fmt.Errorf("questions[%d]: %w", i, err)
+		}
+		options, err := parseOptions(m["options"])
+		if err != nil {
+			return nil, fmt.Errorf("questions[%d]: %w", i, err)
+		}
+		multiple, err := optionalBool(m, "multiple", false)
+		if err != nil {
+			return nil, fmt.Errorf("questions[%d]: %w", i, err)
+		}
+		custom, err := optionalBool(m, "custom", true)
+		if err != nil {
+			return nil, fmt.Errorf("questions[%d]: %w", i, err)
+		}
+		if !custom && len(options) == 0 {
+			return nil, fmt.Errorf("questions[%d] needs at least one option when custom=false; no question was shown", i)
+		}
 		out = append(out, protocol.QuestionItem{
 			Header:   strings.TrimSpace(header),
 			Question: q,
-			Options:  parseOptions(m["options"]),
-			Multiple: boolArg(m["multiple"]),
-			Custom:   customArg(m["custom"]),
+			Options:  options,
+			Multiple: multiple,
+			Custom:   custom,
 		})
 	}
 	return out, nil
 }
 
-func parseOptions(raw any) []protocol.QuestionOption {
+func parseOptions(raw any) ([]protocol.QuestionOption, error) {
+	if raw == nil {
+		return nil, nil
+	}
 	items, ok := raw.([]any)
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("options must be an array of objects")
 	}
 	options := make([]protocol.QuestionOption, 0, len(items))
-	for _, item := range items {
+	seen := make(map[string]bool, len(items))
+	for i, item := range items {
 		m, ok := item.(map[string]any)
 		if !ok {
-			continue
+			return nil, fmt.Errorf("options[%d] must be an object with a label", i)
 		}
 		label, _ := m["label"].(string)
 		label = strings.TrimSpace(label)
 		if label == "" {
-			continue
+			return nil, fmt.Errorf("options[%d].label must be a nonempty string", i)
 		}
-		desc, _ := m["description"].(string)
-		options = append(options, protocol.QuestionOption{
-			Label:       label,
-			Description: strings.TrimSpace(desc),
-		})
+		if seen[label] {
+			return nil, fmt.Errorf("options[%d] repeats label %q; use distinct labels", i, label)
+		}
+		seen[label] = true
+		desc, err := optionalText(m, "description")
+		if err != nil {
+			return nil, fmt.Errorf("options[%d]: %w", i, err)
+		}
+		options = append(options, protocol.QuestionOption{Label: label, Description: desc})
 	}
-	return options
+	return options, nil
 }
 
-func boolArg(v any) bool {
-	b, _ := v.(bool)
-	return b
+func optionalText(args map[string]any, key string) (string, error) {
+	raw, supplied := args[key]
+	if !supplied {
+		return "", nil
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string", key)
+	}
+	return strings.TrimSpace(value), nil
 }
 
-func customArg(v any) bool {
-	if v == nil {
-		return true
+func optionalBool(args map[string]any, key string, fallback bool) (bool, error) {
+	raw, supplied := args[key]
+	if !supplied {
+		return fallback, nil
 	}
-	b, ok := v.(bool)
-	return ok && b
+	value, ok := raw.(bool)
+	if !ok {
+		return false, fmt.Errorf("%s must be a boolean", key)
+	}
+	return value, nil
+}
+
+func validateAnswers(questions []protocol.QuestionItem, answers [][]string) error {
+	if len(answers) != len(questions) {
+		return fmt.Errorf("question reply is incomplete or has an invalid answer count; do not infer decisions or automatically repeat unchanged questions")
+	}
+	for i, q := range questions {
+		if len(answers[i]) == 0 {
+			return fmt.Errorf("questions[%d] was unanswered; do not infer a decision or automatically repeat the unchanged question", i)
+		}
+		if !q.Multiple && len(answers[i]) != 1 {
+			return fmt.Errorf("questions[%d] accepts only one answer", i)
+		}
+		seen := make(map[string]bool, len(answers[i]))
+		for _, answer := range answers[i] {
+			answer = strings.TrimSpace(answer)
+			if answer == "" || seen[answer] {
+				return fmt.Errorf("questions[%d] has an empty or duplicate answer; do not infer a decision", i)
+			}
+			seen[answer] = true
+			if !q.Custom {
+				found := false
+				for _, option := range q.Options {
+					if answer == option.Label {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return fmt.Errorf("questions[%d] answer must match a supplied option", i)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func formatAnswers(questions []protocol.QuestionItem, answers [][]string) string {
 	var b strings.Builder
-	b.WriteString("User answered the questions:\n")
+	b.WriteString("Question responses:\n")
 	for i, q := range questions {
 		answer := "Unanswered"
 		if i < len(answers) && len(answers[i]) > 0 {
@@ -168,6 +245,5 @@ func formatAnswers(questions []protocol.QuestionItem, answers [][]string) string
 		}
 		fmt.Fprintf(&b, "- %s: %s\n", q.Question, answer)
 	}
-	b.WriteString("Continue with these answers in mind.")
 	return strings.TrimSpace(b.String())
 }

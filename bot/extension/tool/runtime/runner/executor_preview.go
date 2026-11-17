@@ -91,13 +91,13 @@ func (e *Executor) authorizedPreview(ctx context.Context, call core.ToolCallItem
 		}
 		sourceBindings = append(sourceBindings, effectiveBindings...)
 	}
-	policyCall, bindings, err := bindFilePolicyCall(checked)
+	policyCall, bindings, err := e.bindFilePolicyCall(checked)
 	if err != nil {
 		return "", false
 	}
 	bindings = append(bindings, sourceBindings...)
 	if checked.EffectiveName != "" {
-		effectivePolicy, effectiveBindings, err := bindFilePolicyCall(core.ToolCallItem{Name: checked.EffectiveName, Args: checked.EffectiveArgs})
+		effectivePolicy, effectiveBindings, err := e.bindFilePolicyCall(core.ToolCallItem{Name: checked.EffectiveName, Args: checked.EffectiveArgs})
 		if err != nil {
 			return "", false
 		}

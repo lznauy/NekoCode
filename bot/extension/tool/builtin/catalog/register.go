@@ -21,7 +21,7 @@ import (
 	"nekocode/bot/extension/tool/builtin/web"
 )
 
-func registerAll(r *tools.Registry, imageGenModels []config.ImageGenConfig, imageUnderstandModels []config.ImageUnderstandConfig, shellTool *shell.ShellTool, lspTool *lsp.LSPTool, indexTool *index.IndexTool, taskTool *task.TaskTool, taskListTool *task.TaskListTool, questionTool *question.Tool, todoTool *todo.TodoWriteTool, referencesTool, evidenceTool *contextrefs.Tool) {
+func registerAll(r *tools.Registry, imageUnderstandModels []config.ImageUnderstandConfig, shellTool *shell.ShellTool, lspTool *lsp.LSPTool, indexTool *index.IndexTool, taskTool *task.TaskTool, taskListTool *task.TaskListTool, questionTool *question.Tool, todoTool *todo.TodoWriteTool, referencesTool, evidenceTool *contextrefs.Tool) {
 	plan := tools.RegistrationOptions{PlanAllowed: true, DelegationAllowed: true}
 	r.RegisterWithOptions(shellTool, tools.RegistrationOptions{
 		DelegationAllowed: true,
@@ -29,7 +29,7 @@ func registerAll(r *tools.Registry, imageGenModels []config.ImageGenConfig, imag
 		PermissionPlan:    shellTool.PermissionPlan,
 	})
 	r.RegisterWithOptions(shell.NewProcessTool(shellTool), tools.RegistrationOptions{DelegationAllowed: true})
-	r.RegisterWithOptions(&read.ReadTool{}, plan)
+	r.RegisterWithOptions(&read.ReadTool{ImageUnderstandingUnavailable: len(imageUnderstandModels) == 0}, plan)
 	writeTool := &write.WriteTool{}
 	r.RegisterWithOptions(writeTool, tools.RegistrationOptions{Preview: writeTool.PreviewContext, DelegationAllowed: true})
 	r.RegisterWithOptions(&list.ListTool{}, plan)
@@ -59,9 +59,6 @@ func registerAll(r *tools.Registry, imageGenModels []config.ImageGenConfig, imag
 		r.RegisterWithOptions(t, options)
 	}
 
-	if len(imageGenModels) > 0 {
-		r.RegisterWithOptions(media.NewImageGenTool(imageGenModels), tools.RegistrationOptions{DelegationAllowed: true})
-	}
 	if len(imageUnderstandModels) > 0 {
 		imageUnderstandTool := media.NewImageUnderstandTool(imageUnderstandModels)
 		r.RegisterWithOptions(imageUnderstandTool, tools.RegistrationOptions{

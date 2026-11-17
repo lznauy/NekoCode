@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"nekocode/bot/modelcatalog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -27,6 +28,7 @@ func main() {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	modelcatalog.RefreshInBackground(ctx)
 	if err := headless.RunStdio(ctx, options); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(headless.ExitCode(err))

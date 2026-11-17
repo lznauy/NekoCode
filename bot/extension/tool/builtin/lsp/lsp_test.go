@@ -53,9 +53,9 @@ func TestToolFamilyInterface(t *testing.T) {
 	tool := NewLSPTool()
 	defer tool.Close()
 	want := map[string]int{
-		"lsp_definition":  3,
-		"lsp_references":  3,
-		"lsp_hover":       3,
+		"lsp_definition":  4,
+		"lsp_references":  4,
+		"lsp_hover":       4,
 		"lsp_diagnostics": 1,
 	}
 	tools := tool.Tools()
@@ -99,6 +99,31 @@ func TestExecuteRejectsMissingArgs(t *testing.T) {
 	_, err = tool.Tools()[0].Execute(ctx, map[string]any{"file": "main.go", "line": float64(0), "symbol": "greet"})
 	if err == nil || !strings.Contains(err.Error(), ">= 1") {
 		t.Errorf("bad line: got %v", err)
+	}
+}
+
+func TestPositionToolsForwardOccurrence(t *testing.T) {
+	ctx, _ := testCtx(t)
+	tool := NewLSPToolWithSpecs(missingSpecs)
+	defer tool.Close()
+	for _, candidate := range tool.Tools()[:3] {
+		positionTool := candidate.(*posTool)
+		positionTool.query = func(_ *lspcore.Manager, _ context.Context, _ string, _ int, _ string, occurrence ...int) (string, error) {
+			if len(occurrence) != 1 || occurrence[0] != 2 {
+				t.Fatalf("occurrence not forwarded: %v", occurrence)
+			}
+			return "selected second match", nil
+		}
+		args := map[string]any{"file": "main.go", "line": 3, "symbol": "greet", "occurrence": 2.0}
+		if _, err := positionTool.Execute(ctx, args); err != nil {
+			t.Fatal(err)
+		}
+		for _, value := range []any{0, -1, 1.5, "2", nil} {
+			args["occurrence"] = value
+			if _, err := positionTool.Execute(ctx, args); err == nil {
+				t.Errorf("invalid occurrence accepted: %#v", value)
+			}
+		}
 	}
 }
 

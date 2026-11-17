@@ -11,10 +11,12 @@ NekoCode 保持模块化单体。新增能力优先放入现有职责层，不�
 | `bot/core` | 标准产品的领域组装、会话和配置 | 渠道协议与消息投影 |
 | `runtime`、`runtime/internal` | Run 生命周期、审批、事件、录制及应用操作 | 依赖具体 Bot 或交互适配器 |
 | `runtime/standard`、`runtime/agentrunner` | 领域对象与 Runtime 的显式适配 | 成为底层模块的依赖 |
-| ACP、headless、HTTP、TUI、GUI、Connector | 输入校验及协议投影 | 自行实现领域状态转换 |
+| ACP、A2A、headless、HTTP、TUI、GUI、Connector | 输入校验及协议投影 | 自行实现领域状态转换 |
 
 `go test ./internal/architecture` 检查核心依赖方向，包括非当前平台源文件；该测试随 `go test ./...` 进入 CI。
 新模块应先确定所属层与负责人，再定义输入、输出、生命周期及失败行为。现有 CODEOWNERS 的实际负责人保持不变，不预设尚未加入的协作者。
+
+A2A 适配器的会话恢复、前后台交接、Task Store 保留与失败清理约束见 [A2A 维护说明](A2A.md)。
 
 ## 能力与状态所有权
 

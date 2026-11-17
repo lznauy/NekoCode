@@ -85,6 +85,10 @@ type SessionsServices struct {
 	SubagentAttempts   func(sessionID, id string, before, limit int) (SubagentAttemptPage, error)
 	SubagentHistory    func(sessionID, id string, before, limit int) (SubagentHistoryPage, error)
 
+	// CaptureDraft optionally preserves an unsaved session in memory. A nil
+	// callback means the current session is durable and can be resumed by ID.
+	CaptureDraft func() (restore func() error, err error)
+
 	CurrentSessionID    func() string
 	ListSessions        func() []SessionMeta
 	SessionMessages     func() []DisplayMessage

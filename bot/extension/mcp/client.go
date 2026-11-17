@@ -195,27 +195,36 @@ func (c *client) CallTool(ctx context.Context, name string, args map[string]any)
 	return parseToolCallResult(result)
 }
 
-// parseToolCallResult extracts the text content of a tools/call result,
-// folding a protocol-level tool error into the returned error.
+// parseToolCallResult preserves structured data and non-text content as JSON
+// alongside text. Resource locations are data, never grants to read them.
 func parseToolCallResult(result []byte) (string, error) {
 	var resp struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-		IsError bool `json:"isError"`
+		Content           []json.RawMessage `json:"content"`
+		StructuredContent json.RawMessage   `json:"structuredContent"`
+		IsError           bool              `json:"isError"`
 	}
 	if err := json.Unmarshal(result, &resp); err != nil {
 		return "", fmt.Errorf("parse tools/call: %w", err)
 	}
-
-	var texts []string
-	for _, item := range resp.Content {
+	var blocks []string
+	for _, raw := range resp.Content {
+		var item struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(raw, &item); err != nil {
+			return "", fmt.Errorf("parse tools/call content: %w", err)
+		}
 		if item.Type == "text" {
-			texts = append(texts, item.Text)
+			blocks = append(blocks, item.Text)
+		} else {
+			blocks = append(blocks, "MCP content (JSON; binary media remains encoded):\n"+string(raw))
 		}
 	}
-	text := strings.Join(texts, "")
+	if len(resp.StructuredContent) > 0 && string(resp.StructuredContent) != "null" {
+		blocks = append(blocks, "Structured result (JSON):\n"+string(resp.StructuredContent))
+	}
+	text := strings.Join(blocks, "\n\n")
 	if resp.IsError {
 		return text, fmt.Errorf("tool error: %s", text)
 	}

@@ -19,6 +19,7 @@ type QuestionBar struct {
 	selected  map[int]map[int]bool
 	custom    []string
 	customPos []int
+	answers   [][]string
 	respond   func(controlruntime.QuestionReply)
 }
 
@@ -31,6 +32,7 @@ func (q *QuestionBar) SetRequest(req *controlruntime.QuestionRequest, respond fu
 	q.activeQ = 0
 	q.activeOpt = 0
 	q.selected = make(map[int]map[int]bool)
+	q.answers = make([][]string, len(req.Questions))
 	q.custom = make([]string, len(req.Questions))
 	q.customPos = make([]int, len(req.Questions))
 	q.respond = respond
@@ -160,36 +162,51 @@ func (q *QuestionBar) CustomActive() bool {
 	return item.Custom && q.activeOpt == len(item.Options)
 }
 
-func (q *QuestionBar) Submit() {
-	if q.req == nil {
-		return
+// Submit confirms only the displayed question. It returns true once all
+// questions have explicit answers and the reply has been delivered.
+func (q *QuestionBar) Submit() bool {
+	if q.req == nil || len(q.req.Questions) == 0 {
+		return false
 	}
-	answers := make([][]string, len(q.req.Questions))
-	for i, item := range q.req.Questions {
-		selected := q.selected[i]
-		if len(selected) == 0 && len(item.Options) > 0 {
+	item := q.req.Questions[q.activeQ]
+	var answer []string
+	if !item.Multiple && q.CustomActive() {
+		if text := strings.TrimSpace(q.custom[q.activeQ]); text != "" {
+			answer = append(answer, text)
+		}
+	} else {
+		selected := q.selected[q.activeQ]
+		if len(selected) == 0 && q.activeOpt < len(item.Options) {
 			selected = map[int]bool{q.activeOpt: true}
 		}
-		for idx, ok := range selected {
-			if !ok {
-				continue
-			}
-			if idx >= 0 && idx < len(item.Options) {
-				answers[i] = append(answers[i], item.Options[idx].Label)
+		// Preserve option order rather than map iteration order.
+		for i, option := range item.Options {
+			if selected[i] {
+				answer = append(answer, option.Label)
 			}
 		}
-		if item.Custom {
-			if extra := strings.TrimSpace(q.custom[i]); extra != "" {
-				answers[i] = append(answers[i], extra)
+		if item.Multiple && item.Custom {
+			if text := strings.TrimSpace(q.custom[q.activeQ]); text != "" {
+				answer = append(answer, text)
 			}
 		}
 	}
-	reply := controlruntime.QuestionReply{Answers: answers}
-	if q.respond != nil {
-		q.respond(reply)
+	if len(answer) == 0 {
+		return false
 	}
-	q.req = nil
-	q.respond = nil
+	q.answers[q.activeQ] = answer
+	if q.activeQ+1 < len(q.req.Questions) {
+		q.activeQ++
+		q.activeOpt = 0
+		return false
+	}
+	reply := controlruntime.QuestionReply{Answers: q.answers}
+	respond := q.respond
+	q.Clear()
+	if respond != nil {
+		respond(reply)
+	}
+	return true
 }
 
 func (q *QuestionBar) Reject() {
@@ -229,7 +246,11 @@ func (q *QuestionBar) View(width, termHeight int) string {
 	bottom := q.sty.Border.Render("└" + strings.Repeat(styles.Horizontal, barW-2) + "┘")
 
 	lines, _ := q.contentLines(contentW, maxLines)
-	help := "  " + q.sty.Muted.Render("[↑/↓] option  [space] select  [enter] answer  [esc] dismiss")
+	enter := "answer"
+	if q.activeQ+1 < len(q.req.Questions) {
+		enter = "next question"
+	}
+	help := "  " + q.sty.Muted.Render("[↑/↓] option  [space] select  [enter] "+enter+"  [esc] dismiss")
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n", titleBar)
@@ -247,6 +268,8 @@ func (q *QuestionBar) contentLines(contentW, maxLines int) ([]string, int) {
 	header := strings.TrimSpace(item.Header)
 	if header == "" {
 		header = fmt.Sprintf("Question %d/%d", q.activeQ+1, len(q.req.Questions))
+	} else if len(q.req.Questions) > 1 {
+		header = fmt.Sprintf("%s (%d/%d)", header, q.activeQ+1, len(q.req.Questions))
 	}
 	lines := []string{}
 	for _, line := range wrapText("  "+header, contentW) {

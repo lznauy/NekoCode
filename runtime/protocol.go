@@ -101,10 +101,12 @@ type ModelSelection struct {
 // config surfaces. ReasoningEfforts lists the effort values the model
 // accepts; it is empty for models without controllable reasoning.
 type ModelOption struct {
-	Name             string   `json:"name"`
-	Model            string   `json:"model"`
-	ReasoningEffort  string   `json:"reasoning_effort,omitempty"`
-	ReasoningEfforts []string `json:"reasoning_efforts,omitempty"`
+	Name               string   `json:"name"`
+	Model              string   `json:"model"`
+	ReasoningEffort    string   `json:"reasoning_effort,omitempty"`
+	ReasoningEfforts   []string `json:"reasoning_efforts,omitempty"`
+	ReasoningSource    string   `json:"reasoning_source,omitempty"`
+	ReasoningReference string   `json:"reasoning_reference,omitempty"`
 }
 
 // ContextSegment describes one visible part of the active context window.
@@ -224,11 +226,14 @@ type ModelProfile struct {
 	ContextWindow       int      `json:"context_window"`
 	ContextWindowSource string   `json:"context_window_source"`
 	ReasoningEfforts    []string `json:"reasoning_efforts,omitempty"`
+	ReasoningSource     string   `json:"reasoning_source,omitempty"`
+	ReasoningReference  string   `json:"reasoning_reference,omitempty"`
 }
 
 // ModelSpec contains only the fields needed to resolve derived model metadata.
 type ModelSpec struct {
 	Provider      string `json:"provider"`
+	BaseURL       string `json:"base_url,omitempty"`
 	Model         string `json:"model"`
 	Protocol      string `json:"protocol,omitempty"`
 	ContextWindow int    `json:"context_window,omitempty"`
