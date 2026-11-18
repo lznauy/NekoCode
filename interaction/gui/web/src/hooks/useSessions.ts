@@ -22,7 +22,7 @@ export interface SessionChangeEvent {
 }
 
 export function shouldReloadSessionMessages(change: SessionChangeEvent): boolean {
-  if (change.attachmentDraft) return false
+  if (change.attachmentDraft || change.reason === 'rename') return false
 	return change.reason !== 'delete' || change.currentChanged === true
 }
 
@@ -81,6 +81,10 @@ export function useSessions(): UseSessionsReturn {
 
   useEffect(() => {
     return safeEventsOn('session:changed', (event: unknown) => {
+      if ((event as SessionChangeEvent).reason === 'rename') {
+        void refresh()
+        return
+      }
       const id = typeof (event as { id?: unknown })?.id === 'string'
         ? (event as { id: string }).id
         : ''
@@ -104,7 +108,7 @@ export function useSessions(): UseSessionsReturn {
         if (generation === syncGenerationRef.current) setLoading(false)
       })
     })
-  }, [])
+  }, [refresh])
 
   const createSession = useCallback(async () => {
     const operation = ++operationRef.current

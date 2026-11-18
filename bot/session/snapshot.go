@@ -21,6 +21,7 @@ import (
 )
 
 type Snapshot struct {
+	Name               string              `json:"name,omitempty"`
 	TodoGroup          string              `json:"todo_group,omitempty"`
 	TodoPlans          ctxmgr.TodoPlans    `json:"todo_plans,omitempty"`
 	Todos              []protocol.TodoItem `json:"todos,omitempty"`
@@ -84,6 +85,7 @@ type Snapshot struct {
 }
 
 type Meta struct {
+	Name              string `json:"name,omitempty"`
 	ID                string `json:"id"`
 	CWD               string `json:"cwd"`
 	CreatedAt         int64  `json:"created_at"`
@@ -117,6 +119,7 @@ type messageRef struct {
 }
 
 type snapshotHeader struct {
+	Name          string          `json:"name"`
 	FormatVersion int             `json:"format_version"`
 	UpdatedAt     int64           `json:"updated_at"`
 	Messages      json.RawMessage `json:"messages"`
@@ -335,6 +338,8 @@ func (s *Snapshot) saveAt(root string) error {
 		if oldHeader.FormatVersion > currentSnapshotVersion {
 			return fmt.Errorf("unsupported session format v%d", oldHeader.FormatVersion)
 		}
+		// Rename owns the name of an existing session. Detached snapshots may predate it.
+		s.Name = oldHeader.Name
 	}
 
 	messagesData, err := json.MarshalIndent(s.Messages, "", "  ")
@@ -396,6 +401,7 @@ func (s *Snapshot) saveAt(root string) error {
 // sessionMeta is a lightweight struct for deserializing only metadata from
 // session.json, avoiding the cost of unmarshaling the full Messages array.
 type sessionMeta struct {
+	Name          string          `json:"name,omitempty"`
 	ID            string          `json:"id"`
 	CWD           string          `json:"cwd"`
 	CreatedAt     int64           `json:"created_at"`
@@ -426,7 +432,7 @@ func decodeMeta(data []byte) (Meta, error) {
 		messageCount = len(messages)
 	}
 	return Meta{
-		ID: sm.ID, CWD: sm.CWD,
+		ID: sm.ID, Name: sm.Name, CWD: sm.CWD,
 		CreatedAt: sm.CreatedAt, UpdatedAt: sm.UpdatedAt,
 		MsgCount: max(messageCount, sm.TranscriptSeq), ForkedFrom: sm.ForkedFrom,
 	}, nil

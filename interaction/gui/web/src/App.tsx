@@ -349,6 +349,7 @@ export default function App() {
   useEffect(() => {
 	return safeEventsOn('session:changed', (event: unknown) => {
 	  const change = event as Parameters<typeof shouldReloadSessionMessages>[0]
+      if (change.reason === 'rename') return
       sessionActionRef.current++
 	  if (change.attachmentDraft || change.reason === 'new') attachmentDraftSessionRef.current = change.id ?? null
 	  else attachmentDraftSessionRef.current = null

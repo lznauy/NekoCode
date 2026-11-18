@@ -37,7 +37,7 @@ export function SessionItem({ session, active, onClick, onDelete }: SessionItemP
         onClick={(e) => e.stopPropagation()}
       >
         <p className="text-[12px] text-text mb-2">
-          删除 <span className="text-text font-medium">{session.id}</span>？
+          删除 <span className="text-text font-medium">{session.id}{session.name ? ` [${session.name}]` : ''}</span>？
         </p>
         <p className="text-[10px] text-text-3 mb-3">操作不可撤销。</p>
         <div className="flex gap-2">
@@ -73,6 +73,7 @@ export function SessionItem({ session, active, onClick, onDelete }: SessionItemP
       <div className="flex items-center justify-between gap-2">
         <span className={cn('truncate text-[13px] font-medium', active ? 'text-primary' : 'text-text-2 group-hover:text-text')}>
           {session.id}
+          {session.name && <span className="ml-2 text-[11px] font-normal text-text-3">[{session.name}]</span>}
         </span>
         <button
           type="button"

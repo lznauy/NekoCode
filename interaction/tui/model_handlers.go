@@ -423,6 +423,12 @@ func (m *Model) handleProcessingKey(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (m *Model) handleIdleKey(msg tea.KeyPressMsg) tea.Cmd {
+	if msg.String() == "r" || msg.String() == "R" {
+		cmd := m.requestSessionRename()
+		if m.sessionName != nil {
+			return cmd
+		}
+	}
 	if (msg.String() == "d" || msg.String() == "D") && m.requestSessionDelete() {
 		return nil
 	}
@@ -579,6 +585,7 @@ func inputImageAttachments(images []components.InputImageAttachment) []controlru
 // --- suggestions ---
 
 func (m *Model) refreshSuggestions() {
+	m.sessionMenu = ""
 	// Draft edits (including asynchronous paste) return focus to the input.
 	m.modePicker = false
 	m.commandMenuBack = nil
@@ -632,22 +639,25 @@ func (m *Model) openCommandMenu(input string) bool {
 		return false
 	}
 	m.Suggestions.OpenMenu(menu.Title, menu.Empty, menu.Items)
-	if input == "/sessions" {
-		if _, ok := m.Runtime.(sessionDeleter); ok {
-			for _, item := range menu.Items {
-				if item.Key != "" {
-					m.Suggestions.SetActionHint("d delete")
-					break
-				}
-			}
+	m.sessionMenu = ""
+	if sessionMenuInput(input) {
+		m.sessionMenu = input
+		var hints []string
+		if _, ok := m.Runtime.(sessionRenamer); ok {
+			hints = append(hints, "r tag")
 		}
+		if _, ok := m.Runtime.(sessionDeleter); ok {
+			hints = append(hints, "d delete")
+		}
+		m.Suggestions.SetActionHint(strings.Join(hints, "  "))
 	}
+
 	m.resizeMessages()
 	return true
 }
 
 func (m *Model) requestSessionDelete() bool {
-	if strings.TrimSpace(m.Input.Value()) != "/sessions" || !m.Suggestions.IsMenu() {
+	if !sessionMenuInput(m.Input.Value()) || !m.Suggestions.IsMenu() {
 		return false
 	}
 	deleter, ok := m.Runtime.(sessionDeleter)
@@ -662,6 +672,7 @@ func (m *Model) requestSessionDelete() bool {
 		return false
 	}
 	sessionID := selected.Key
+	menuInput := strings.TrimSpace(m.Input.Value())
 	m.Suggestions.Hide()
 	m.preConfirmState = m.state
 	m.state = stateConfirming
@@ -671,7 +682,7 @@ func (m *Model) requestSessionDelete() bool {
 		"删除",
 		func(confirmed bool) {
 			if !confirmed {
-				m.openCommandMenu("/sessions")
+				m.openCommandMenu(menuInput)
 				return
 			}
 			if err := deleter.DeleteSession(sessionID); err != nil {
@@ -684,7 +695,7 @@ func (m *Model) requestSessionDelete() bool {
 				}
 				m.Messages.GotoBottom()
 			}
-			m.openCommandMenu("/sessions")
+			m.openCommandMenu(menuInput)
 		},
 	)
 	m.resizeMessages()
@@ -777,7 +788,9 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) (cmd tea.Cmd) {
 	switch ev.Type {
 	case controlruntime.EventInteractionModeChanged:
 		m.modePicker = false
-		m.Suggestions.Hide()
+		if m.sessionName == nil {
+			m.Suggestions.Hide()
+		}
 		m.refreshRuntimeStatus()
 		m.resizeMessages()
 	case controlruntime.EventCompaction:
@@ -839,6 +852,11 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) (cmd tea.Cmd) {
 		m.refreshRuntimeStatus()
 		return clipboard
 	case controlruntime.EventRunStarted:
+		if m.sessionName != nil {
+			m.Suggestions.Hide()
+		}
+		m.sessionName = nil
+		m.sessionMenu = ""
 		m.activeMode, m.activeModeOneShot = mode.Snapshot{}, false
 		super := false
 		if source, ok := m.Runtime.(modeRuntime); ok {
@@ -975,10 +993,25 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) (cmd tea.Cmd) {
 	case controlruntime.EventRunCancelled:
 		return m.handleDone(doneMsg{metrics: m.metrics, err: errors.New("cancelled")})
 	case controlruntime.EventSessionChanged:
+		if p, ok := ev.Payload.(controlruntime.SessionPayload); ok && p.Reason == "rename" {
+			m.refreshOpenSessionMenu()
+			return nil
+		}
 		if p, ok := ev.Payload.(controlruntime.SessionPayload); ok && p.Reason == "delete" && p.ChangedID != "" && !p.CurrentChanged {
 			// Modern deletion events identify the deleted session explicitly. Legacy
 			// ID-only notifications still require a reload of the current session.
+			if m.sessionName != nil && m.sessionName.id == p.ChangedID {
+				m.closeSessionNameEditor()
+			} else {
+				m.refreshOpenSessionMenu()
+			}
 			return nil
+		}
+		if m.sessionName != nil {
+			m.sessionName = nil
+			m.Suggestions.Hide()
+			m.sessionMenu = ""
+			m.resizeMessages()
 		}
 		m.taskStates = nil
 		m.taskSummarySyncedAt = time.Time{}

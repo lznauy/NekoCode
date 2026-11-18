@@ -13,6 +13,7 @@ import (
 	"nekocode/interaction"
 	"nekocode/interaction/tui/components/block"
 	"nekocode/interaction/tui/components/message"
+	"nekocode/protocol"
 	controlruntime "nekocode/runtime"
 
 	tea "charm.land/bubbletea/v2"
@@ -37,7 +38,7 @@ func (m *Model) startChat(value string, images []controlruntime.ImageAttachment)
 	}
 	m.setPhase(status)
 	m.Messages.SetProcessingStatus(status)
-	if _, err := m.Runtime.StartRun(context.Background(), controlruntime.Input{
+	if _, err := m.Runtime.StartRun(protocol.WithCommandStatusDisplay(context.Background()), controlruntime.Input{
 		Source: controlruntime.SourceRef{Kind: "tui"},
 		Text:   value,
 		Images: images,
@@ -97,7 +98,7 @@ func (m *Model) tryLocalCommand(value string) (bool, tea.Cmd) {
 	if handled, cmd := m.taskCommand(value); handled {
 		return true, cmd
 	}
-	out, status := m.Runtime.ExecuteLocalCommand(context.Background(), value)
+	out, status := m.Runtime.ExecuteLocalCommand(protocol.WithCommandStatusDisplay(context.Background()), value)
 	addSystem := func(content string) {
 		m.Messages.AddMessage(message.ChatMessage{Role: "system", Content: content, RenderedContent: content})
 		m.Messages.GotoBottom()

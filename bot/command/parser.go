@@ -356,7 +356,7 @@ func RegisterDefaults(p *Parser, deps Deps) {
 		return result, true
 	})
 
-	p.RegisterInfo("model", "Choose the active model", func(_ context.Context, cmd *Command) (string, bool) {
+	p.RegisterInfo("model", "Choose the active model", func(ctx context.Context, cmd *Command) (string, bool) {
 		if len(cmd.Args) == 0 {
 			var sb strings.Builder
 			fmt.Fprintf(&sb, "Current: %s\n", getConfig())
@@ -377,10 +377,10 @@ func RegisterDefaults(p *Parser, deps Deps) {
 		if err := deps.SwitchModel(name); err != nil {
 			return err.Error(), true
 		}
-		return "Switched to " + getConfig(), true
+		return settingFeedback(ctx, "Switched to "+getConfig()), true
 	})
 
-	p.RegisterInfo("effort", "Choose the reasoning effort", func(_ context.Context, cmd *Command) (string, bool) {
+	p.RegisterInfo("effort", "Choose the reasoning effort", func(ctx context.Context, cmd *Command) (string, bool) {
 		model := deps.GetConfigFn()
 		values := config.ReasoningCapabilityFor(model).Values()
 		usage := "/effort [" + strings.Join(values, "|") + "]"
@@ -401,7 +401,7 @@ func RegisterDefaults(p *Parser, deps Deps) {
 		if err := deps.SetReasoningEffort(effort); err != nil {
 			return "Failed to switch reasoning effort: " + err.Error(), true
 		}
-		return "Effort: " + displayReasoningEffort(effort), true
+		return settingFeedback(ctx, "Effort: "+displayReasoningEffort(effort)), true
 	})
 
 	// /permission: show or switch the permission mode. "manual" (the default)
@@ -409,7 +409,7 @@ func RegisterDefaults(p *Parser, deps Deps) {
 	// shell commands (confidently safe → run, else prompt); "full" is the
 	// full-takeover mode that runs everything without approval. Local: it
 	// only flips an atomic switch, so it may run while a task is in progress.
-	p.RegisterLocalInfo("permission", "Show or switch the permission mode", func(_ context.Context, cmd *Command) (string, bool) {
+	p.RegisterLocalInfo("permission", "Show or switch the permission mode", func(ctx context.Context, cmd *Command) (string, bool) {
 		if deps.GetFullAccess == nil || deps.SetFullAccess == nil {
 			return "Permission mode is unavailable.", true
 		}
@@ -422,7 +422,7 @@ func RegisterDefaults(p *Parser, deps Deps) {
 			if deps.SetBashAuto != nil {
 				deps.SetBashAuto(false)
 			}
-			return "已切回手动审批模式。", true
+			return settingFeedback(ctx, "已切回手动审批模式。"), true
 		case "auto":
 			if deps.SetBashAuto == nil || deps.GetBashAuto == nil || deps.CanBashAuto == nil || !deps.CanBashAuto() {
 				return "auto 模式不可用（未接入判定引擎）。", true
@@ -432,13 +432,13 @@ func RegisterDefaults(p *Parser, deps Deps) {
 			if !deps.GetBashAuto() {
 				return "auto 模式不可用（判定引擎已关闭）。", true
 			}
-			return autoModeWarning(), true
+			return settingFeedback(ctx, autoModeWarning()), true
 		case "full":
 			deps.SetFullAccess(true)
 			if deps.SetBashAuto != nil {
 				deps.SetBashAuto(false)
 			}
-			return fullAccessWarning(), true
+			return settingFeedback(ctx, fullAccessWarning()), true
 		default:
 			return "Usage: /permission [manual|auto|full]", true
 		}
@@ -461,6 +461,13 @@ func permissionModeStatus(full bool, getAuto func() bool) string {
 	default:
 		return "Permission: manual · /permission [manual|auto|full] 切换"
 	}
+}
+
+func settingFeedback(ctx context.Context, message string) string {
+	if protocol.HasCommandStatusDisplay(ctx) {
+		return ""
+	}
+	return message
 }
 
 // autoModeWarning is the note shown on entering auto mode. Jev judging is

@@ -152,7 +152,7 @@ func TestModelCommandRefusesReselectingActiveModel(t *testing.T) {
 		},
 	})
 
-	out, handled := p.Execute(context.Background(), "/model flash", nil)
+	out, handled := p.Execute(protocol.WithCommandStatusDisplay(context.Background()), "/model flash", nil)
 	if !handled || !strings.Contains(out, "Already using model 'flash'") {
 		t.Fatalf("reselect active model: output=%q handled=%v", out, handled)
 	}
@@ -160,8 +160,8 @@ func TestModelCommandRefusesReselectingActiveModel(t *testing.T) {
 		t.Fatal("SwitchModel should not run when re-selecting the active model")
 	}
 
-	out, handled = p.Execute(context.Background(), "/model pro", nil)
-	if !handled || switched != "pro" || !strings.Contains(out, "Switched to") {
+	out, handled = p.Execute(protocol.WithCommandStatusDisplay(context.Background()), "/model pro", nil)
+	if !handled || switched != "pro" || out != "" {
 		t.Fatalf("switch model: output=%q handled=%v switched=%q", out, handled, switched)
 	}
 }
@@ -178,15 +178,19 @@ func TestReasoningEffortCommand(t *testing.T) {
 		},
 	})
 
-	out, handled := p.Execute(context.Background(), "/effort high", nil)
-	if !handled || out != "Effort: high" || current != "high" {
+	out, handled := p.Execute(protocol.WithCommandStatusDisplay(context.Background()), "/effort high", nil)
+	if !handled || out != "" || current != "high" {
 		t.Fatalf("set effort: output=%q handled=%v current=%q", out, handled, current)
 	}
-	out, handled = p.Execute(context.Background(), "/effort auto", nil)
-	if !handled || out != "Effort: Auto" || current != "" {
+	out, handled = p.Execute(protocol.WithCommandStatusDisplay(context.Background()), "/effort auto", nil)
+	if !handled || out != "" || current != "" {
 		t.Fatalf("reset effort: output=%q handled=%v current=%q", out, handled, current)
 	}
-	out, handled = p.Execute(context.Background(), "/effort extreme", nil)
+	out, handled = p.Execute(protocol.WithCommandStatusDisplay(context.Background()), "/effort", nil)
+	if !handled || out != "Effort: Auto" {
+		t.Fatalf("query effort: output=%q handled=%v", out, handled)
+	}
+	out, handled = p.Execute(protocol.WithCommandStatusDisplay(context.Background()), "/effort extreme", nil)
 	if !handled || !strings.HasPrefix(out, "Usage: /effort") || current != "" {
 		t.Fatalf("invalid effort: output=%q handled=%v current=%q", out, handled, current)
 	}

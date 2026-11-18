@@ -39,3 +39,14 @@ it('ignores a skill selection acknowledgment from the previous session', async (
   await act(async () => finish());
   expect(screen.getByRole('button', {name:'Selected:'})).toBeTruthy();
 });
+
+it('keeps the selected skill and scroll position when session metadata is renamed', async () => {
+  render(createElement(App)); await act(async () => {});
+  fireEvent.click(screen.getByRole('button', {name:'Selected:'}));
+  await act(async () => {});
+  const before = state.follow.mock.calls.length;
+  act(() => emit('session:changed', {id:'current', reason:'rename', changedId:'current', currentChanged:false, messages:[]}));
+  await act(async () => {});
+  expect(screen.getByRole('button', {name:'Selected:hunt'})).toBeTruthy();
+  expect(state.follow.mock.calls.length).toBe(before);
+});

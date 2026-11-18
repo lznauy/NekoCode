@@ -173,6 +173,7 @@ type CommandMenu struct {
 }
 
 type CommandMenuItem struct {
+	Tag         string `json:"tag,omitempty"`
 	Key         string `json:"key,omitempty"`
 	Value       string `json:"value"`
 	Label       string `json:"label"`

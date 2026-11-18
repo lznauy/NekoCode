@@ -80,8 +80,9 @@ func (m *Model) View() tea.View {
 
 	parts = append(parts, historyHint)
 	parts = append(parts, m.Input.View())
-
-	if sug := m.Suggestions.View(m.Width); sug != "" {
+	if m.sessionName != nil && m.state == stateReady {
+		parts = append(parts, m.Suggestions.ViewWithFooter(m.Width, m.sessionName.view(m.Width)))
+	} else if sug := m.Suggestions.View(m.Width); sug != "" {
 		parts = append(parts, sug)
 	}
 
@@ -122,6 +123,9 @@ func (m *Model) View() tea.View {
 				c.Y += lipgloss.Height(p)
 			}
 		}
+	}
+	if m.sessionName != nil && m.state == stateReady {
+		c = nil
 	}
 	v.Cursor = c
 

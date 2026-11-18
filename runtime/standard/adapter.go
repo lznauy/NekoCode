@@ -281,6 +281,7 @@ func (a *adapter) services() controlruntime.ServiceGroups {
 			ResumeSession:         a.bot.ResumeSession,
 			NewSession:            a.NewSession,
 			DeleteSession:         a.bot.DeleteSession,
+			RenameSession:         a.bot.RenameSession,
 		},
 		Tools: controlruntime.ToolsServices{
 			Checkpoints: a.bot.Checkpoints,

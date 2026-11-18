@@ -60,7 +60,7 @@ func SessionMetas(list []session.Meta) []controlruntime.SessionMeta {
 
 func SessionMeta(meta session.Meta) controlruntime.SessionMeta {
 	return controlruntime.SessionMeta{
-		ID: meta.ID, CWD: meta.CWD, CreatedAt: meta.CreatedAt,
+		ID: meta.ID, Name: meta.Name, CWD: meta.CWD, CreatedAt: meta.CreatedAt,
 		UpdatedAt: meta.UpdatedAt, MsgCount: meta.MsgCount,
 		ForkedFrom: meta.ForkedFrom, ForkSourceDeleted: meta.ForkSourceDeleted,
 	}
@@ -71,7 +71,7 @@ func SessionSnapshot(snapshot *session.Snapshot) controlruntime.SessionMeta {
 		return controlruntime.SessionMeta{}
 	}
 	return controlruntime.SessionMeta{
-		ID: snapshot.ID, CWD: snapshot.CWD,
+		ID: snapshot.ID, Name: snapshot.Name, CWD: snapshot.CWD,
 		CreatedAt: snapshot.CreatedAt, UpdatedAt: snapshot.UpdatedAt,
 		MsgCount: len(snapshot.Messages), ForkedFrom: snapshot.ForkedFrom,
 	}

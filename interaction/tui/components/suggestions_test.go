@@ -6,6 +6,8 @@ import (
 
 	"nekocode/interaction/tui/styles"
 	controlruntime "nekocode/runtime"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestSuggestionsSeparateSlashAndDollarCommands(t *testing.T) {
@@ -82,4 +84,48 @@ func TestSuggestionsCycleWrapsNestedMenu(t *testing.T) {
 	if !ok || got.Label != "two" {
 		t.Fatalf("wrapped selection = %+v, %v", got, ok)
 	}
+}
+
+func TestSuggestionsRenderTagAfterStableLabelAndInlineFooter(t *testing.T) {
+	sty := styles.DefaultStyles()
+	s := NewSuggestions(&sty)
+	s.OpenMenu("Sessions", "", []controlruntime.CommandMenuItem{{Key: "20261118T150405-123456789", Label: "20261118T150405-123456789", Tag: "认证修复", Description: "11-18 · 12 messages"}})
+	view := ansi.Strip(s.ViewWithFooter(100, "tag › 新标签\nEnter 保存 · Esc 取消"))
+	idAt, tagAt, footerAt := strings.Index(view, "20261118T150405-123456789"), strings.Index(view, "[认证修复]"), strings.Index(view, "tag ›")
+	if idAt < 0 || tagAt <= idAt || footerAt <= tagAt {
+		t.Fatalf("tag or footer not after ID:\n%s", view)
+	}
+	if strings.Contains(view, "enter select") {
+		t.Fatal("editor retained select hints")
+	}
+	t.Log("\n" + view)
+}
+
+func TestSessionSuggestionsKeepActionsAndFitNarrowTerminal(t *testing.T) {
+	sty := styles.DefaultStyles()
+	s := NewSuggestions(&sty)
+	s.OpenMenu("Sessions", "", []controlruntime.CommandMenuItem{
+		{Key: "first", Label: "first", Current: true},
+		{Key: "second", Label: "20261118T150405-123456789", Tag: "认证修复与登录检查"},
+	})
+	s.SetActionHint("r tag  d delete")
+	s.Accept()
+	s.Cycle(1)
+	view := ansi.Strip(s.View(32))
+	for _, want := range []string{"r tag  d delete", "↑↓  enter  esc", "[认证修复与登录…]"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "already current") || strings.Count(view, "✓") != 1 {
+		t.Fatalf("stale status or duplicate marker:\n%s", view)
+	}
+	for _, width := range []int{1, 10, 16, 32, 80} {
+		for _, line := range strings.Split(s.View(width), "\n") {
+			if ansi.StringWidth(line) > width {
+				t.Fatalf("line exceeds %d columns: %q", width, ansi.Strip(line))
+			}
+		}
+	}
+	t.Log("\n" + view)
 }

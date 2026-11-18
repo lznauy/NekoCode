@@ -261,3 +261,14 @@ func (r *Runtime) MCPAuthorizationAction(name, action string) error {
 	}
 	return r.services.MCP.MCPAuthorizationAction(name, action)
 }
+
+// RenameSession only changes the display name of a saved session.
+func (r *Runtime) RenameSession(id, name string) error {
+	err := r.mutation("rename_session", r.services.Sessions.RenameSession != nil, func() error {
+		return r.services.Sessions.RenameSession(id, name)
+	})
+	if err == nil {
+		r.publishSessionChanged("rename", id, false)
+	}
+	return err
+}

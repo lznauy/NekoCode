@@ -1,10 +1,13 @@
 package tui
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	controlruntime "nekocode/runtime"
 )
@@ -80,5 +83,55 @@ func TestSettingCommandPreservesImageDraftWithoutNotice(t *testing.T) {
 	m.startChat("/model next", nil)
 	if m.Input.Value() != draft || len(m.Input.ImageAttachments()) != 1 || len(m.Messages.Items()) != before {
 		t.Fatal("setting lost image draft or added notification")
+	}
+}
+
+type silentPermissionRuntime struct{ settingsFakeRuntime }
+
+func (*silentPermissionRuntime) ExecuteLocalCommand(_ context.Context, input string) (string, controlruntime.LocalCommandResult) {
+	if input == "/permission full" {
+		return "", controlruntime.LocalCommandExecuted
+	}
+	return "", controlruntime.LocalCommandRequiresIdle
+}
+
+func TestPermissionSwitchPreservesImageDraftWithoutNotice(t *testing.T) {
+	for _, processing := range []bool{false, true} {
+		t.Run(fmt.Sprint(processing), func(t *testing.T) {
+			m, err := NewModel(&silentPermissionRuntime{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if processing {
+				m.transitionTo(stateProcessing)
+			}
+			m.Input.SetValue("/permission full")
+			if !m.Input.AddImage("/tmp/permission-draft.png") {
+				t.Fatal("cannot add image")
+			}
+			draft, before := m.Input.Value(), len(m.Messages.Items())
+			if processing {
+				m.Suggestions.OpenMenu("Permission", "", []controlruntime.CommandMenuItem{{Value: "/permission full", Submit: true}})
+				m.handleProcessingKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+			} else {
+				m.startChat("/permission full", nil)
+			}
+			if m.Input.Value() != draft || len(m.Input.ImageAttachments()) != 1 || len(m.Messages.Items()) != before {
+				t.Fatal("permission switch lost image draft or added notification")
+			}
+		})
+	}
+}
+
+func TestSettingCommandIncludesAllFooterSettings(t *testing.T) {
+	for _, input := range []string{"/model next", "/effort high", "/mode plan", "/permission full"} {
+		if !settingCommand(input) {
+			t.Errorf("setting not recognized: %q", input)
+		}
+	}
+	for _, input := range []string{"/model", "/effort", "/mode", "/permission", "/local"} {
+		if settingCommand(input) {
+			t.Errorf("query classified as mutation: %q", input)
+		}
 	}
 }

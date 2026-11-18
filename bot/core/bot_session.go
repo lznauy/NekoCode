@@ -57,7 +57,7 @@ func (b *Bot) registerSessionCommands(p *command.Parser) {
 		}
 		return fmt.Sprintf("Forked session %s from %s (%d history messages). Workspace files are shared. /sessions %s to return.", snapshot.ID, snapshot.ForkedFrom, snapshot.ForkedAtSeq, snapshot.ForkedFrom), true
 	})
-	p.RegisterInfo("sessions", "Resume a saved session", func(ctx context.Context, cmd *command.Command) (string, bool) {
+	resume := func(ctx context.Context, cmd *command.Command) (string, bool) {
 		if err := ctx.Err(); err != nil {
 			return "Session command cancelled: " + err.Error(), true
 		}
@@ -70,7 +70,8 @@ func (b *Bot) registerSessionCommands(p *command.Parser) {
 			return fmt.Sprintf("Failed to resume session %s: %v", id, err), true
 		}
 		return fmt.Sprintf("Resumed session %s (%d messages restored).", id, snapshot.TranscriptSeq+len(snapshot.Transcript)), true
-	})
+	}
+	p.RegisterInfo("sessions", "Resume a saved session", resume)
 	p.RegisterInfo("export", "Export conversation context", func(ctx context.Context, _ *command.Command) (string, bool) {
 		if err := ctx.Err(); err != nil {
 			return "Export cancelled: " + err.Error(), true
@@ -82,7 +83,7 @@ func (b *Bot) registerSessionCommands(p *command.Parser) {
 		}
 		return fmt.Sprintf("Context exported to %s (%d messages)", path, count), true
 	})
-	p.RegisterMenu("sessions", func(_ context.Context, cmd *command.Command) (protocol.CommandMenu, bool) {
+	menu := func(_ context.Context, cmd *command.Command) (protocol.CommandMenu, bool) {
 		if len(cmd.Args) != 0 {
 			return protocol.CommandMenu{}, false
 		}
@@ -94,13 +95,14 @@ func (b *Bot) registerSessionCommands(p *command.Parser) {
 				time.Unix(item.CreatedAt, 0).Local().Format("01-02 15:04"), item.MsgCount, filepath.Base(item.CWD), formatSessionSource(item))
 			items = append(items, protocol.CommandMenuItem{
 				Key:   item.ID,
-				Value: "/sessions " + item.ID, Label: item.ID,
+				Value: "/sessions " + item.ID, Label: item.ID, Tag: item.Name,
 				Description: description, Submit: true,
 				Current: item.ID == current,
 			})
 		}
 		return protocol.CommandMenu{Title: "Resume session", Empty: "No saved sessions", Items: items}, true
-	})
+	}
+	p.RegisterMenu("sessions", menu)
 }
 
 func (b *Bot) saveSession() error {
@@ -536,7 +538,11 @@ func formatSessionList(sessions []session.Meta) string {
 	var out strings.Builder
 	out.WriteString("Saved sessions:\n")
 	for _, item := range sessions {
-		fmt.Fprintf(&out, "  %s  %s  %d msgs  %s%s\n", item.ID, item.Age(), item.MsgCount, item.CWD, formatSessionSource(item))
+		label := item.ID
+		if item.Name != "" {
+			label += " [" + item.Name + "]"
+		}
+		fmt.Fprintf(&out, "  %s  %s  %d msgs  %s%s\n", label, item.Age(), item.MsgCount, item.CWD, formatSessionSource(item))
 	}
 	out.WriteString("\n/sessions <id> to resume")
 	return out.String()
@@ -641,4 +647,11 @@ func (b *Bot) checkpointInfos() ([]protocol.CheckpointInfo, error) {
 		})
 	}
 	return points, nil
+}
+
+// RenameSession updates display metadata without activating the target session.
+func (b *Bot) RenameSession(id, name string) error {
+	b.historyMu.Lock()
+	defer b.historyMu.Unlock()
+	return b.sess.Rename(id, name)
 }

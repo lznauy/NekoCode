@@ -8,8 +8,7 @@ import (
 	"nekocode/interaction/tui/styles"
 	controlruntime "nekocode/runtime"
 
-	"charm.land/lipgloss/v2"
-	runewidth "github.com/mattn/go-runewidth"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const maxVisibleSuggestions = 6
@@ -23,6 +22,7 @@ type Suggestions struct {
 	visible     bool
 	menu        bool
 	actionHint  string
+	statusHint  string
 	sty         *styles.Styles
 }
 
@@ -94,7 +94,7 @@ func (s *Suggestions) Accept() (controlruntime.CommandMenuItem, bool) {
 	if item.Current {
 		// Already active: keep the picker open and tell the user why nothing
 		// happened instead of submitting a redundant switch.
-		s.actionHint = "already current"
+		s.statusHint = "already current"
 		return item, false
 	}
 	s.Hide()
@@ -116,7 +116,7 @@ func (s *Suggestions) Cycle(delta int) {
 	if !s.visible || len(s.items) == 0 {
 		return
 	}
-	s.actionHint = ""
+	s.statusHint = ""
 	s.selectedIdx += delta
 	if s.selectedIdx < 0 {
 		s.selectedIdx = len(s.items) - 1
@@ -145,6 +145,7 @@ func (s *Suggestions) reset() {
 	s.visible = false
 	s.menu = false
 	s.actionHint = ""
+	s.statusHint = ""
 }
 
 func (s *Suggestions) Height() int {
@@ -162,10 +163,15 @@ func (s *Suggestions) Height() int {
 }
 
 func (s *Suggestions) View(width int) string {
+	return s.ViewWithFooter(width, "")
+}
+
+// ViewWithFooter replaces the menu hints with a contextual inline editor.
+func (s *Suggestions) ViewWithFooter(width int, footer string) string {
 	if !s.visible {
 		return ""
 	}
-	width = max(width, 12)
+	width = max(width, 1)
 	title := s.title
 	if title == "" {
 		title = "Choices"
@@ -174,7 +180,7 @@ func (s *Suggestions) View(width int) string {
 	if len(s.items) > 0 {
 		header += fmt.Sprintf(" · %d", len(s.items))
 	}
-	header += " " + strings.Repeat(styles.Horizontal, max(2, width-runewidth.StringWidth(header)-2))
+	header += " " + strings.Repeat(styles.Horizontal, max(0, width-ansi.StringWidth(header)-1))
 
 	var b strings.Builder
 	b.WriteString(s.sty.Subtle.Render(truncateSuggestion(header, width)))
@@ -183,40 +189,53 @@ func (s *Suggestions) View(width int) string {
 		if empty == "" {
 			empty = "No choices available"
 		}
-		fmt.Fprintf(&b, "\n%s %s", s.sty.Border.Render(styles.Vertical), s.sty.Muted.Render(truncateSuggestion(empty, width-2)))
+		row := s.sty.Border.Render(styles.Vertical) + " " + s.sty.Muted.Render(truncateSuggestion(empty, width-2))
+		b.WriteString("\n" + ansi.Truncate(row, width, "…"))
 	} else {
 		end := min(s.scrollOff+maxVisibleSuggestions, len(s.items))
 		labelWidth := s.visibleLabelWidth(end, width)
 		for i := s.scrollOff; i < end; i++ {
 			b.WriteByte('\n')
-			b.WriteString(s.renderRow(s.items[i], i == s.selectedIdx, labelWidth, width))
+			b.WriteString(ansi.Truncate(s.renderRow(s.items[i], i == s.selectedIdx, labelWidth, width), width, "…"))
 		}
 	}
 
+	if footer != "" {
+		fmt.Fprintf(&b, "\n\n%s", footer)
+		return b.String()
+	}
+	b.WriteString("\n\n")
+	b.WriteString(s.renderHints(width))
+	return b.String()
+}
+
+func (s *Suggestions) renderHints(width int) string {
 	hints := "↑↓ move  enter select  esc close"
-	if s.actionHint != "" {
-		hints = s.actionHint + "  " + hints
+	if s.statusHint != "" {
+		hints = s.sty.Yellow.Render(s.statusHint) + "  " + hints
+	}
+	if item, ok := s.Selected(); ok && item.Key != "" && s.actionHint != "" {
+		context := s.sty.Primary.Render(s.actionHint) + "  "
+		if ansi.StringWidth(context+hints) > width && s.statusHint == "" {
+			hints = "↑↓  enter  esc"
+		}
+		hints = context + hints
 	}
 	if s.scrollOff > 0 || s.scrollOff+maxVisibleSuggestions < len(s.items) {
-		hints = fmt.Sprintf("%d/%d  ", s.selectedIdx+1, len(s.items)) + hints
+		position := fmt.Sprintf("  %d/%d", s.selectedIdx+1, len(s.items))
+		if ansi.StringWidth(hints+position) <= width {
+			hints += position
+		}
 	}
-	hints = truncateSuggestion(hints, width)
-	// Colorize the contextual action hint (e.g. "d delete") so it stands out
-	// from the passive navigation hints. Applied after truncation because
-	// runewidth cannot count embedded ANSI escapes.
-	if s.actionHint != "" && strings.HasPrefix(hints, s.actionHint) {
-		hints = s.sty.Red.Render(s.actionHint) + hints[len(s.actionHint):]
-	}
-	fmt.Fprintf(&b, "\n\n%s", s.sty.Subtle.Render(hints))
-	return b.String()
+	return ansi.Truncate(s.sty.Subtle.Render(hints), width, "…")
 }
 
 func (s *Suggestions) visibleLabelWidth(end, width int) int {
 	labelWidth := 0
 	for i := s.scrollOff; i < end; i++ {
-		labelWidth = max(labelWidth, runewidth.StringWidth(s.items[i].Label))
+		labelWidth = max(labelWidth, ansi.StringWidth(s.items[i].Label))
 	}
-	return min(labelWidth, max(8, width/3))
+	return min(labelWidth, max(0, min(width-6, max(8, width/3))))
 }
 
 func (s *Suggestions) renderRow(item controlruntime.CommandMenuItem, selected bool, labelWidth, width int) string {
@@ -225,19 +244,26 @@ func (s *Suggestions) renderRow(item controlruntime.CommandMenuItem, selected bo
 	suffix := ""
 	if item.Current {
 		marker, labelStyle = "✓ ", s.sty.Green
-		suffix = " ✓"
 	}
 	if selected {
 		rail, marker = styles.HeavyVert, "▸ "
 		railStyle, labelStyle = s.sty.Primary.Bold(true), s.sty.Primary.Bold(true)
+		if item.Current {
+			suffix = " ✓"
+		}
 	}
 	label := truncateSuggestion(item.Label, labelWidth)
-	label += strings.Repeat(" ", max(0, labelWidth-runewidth.StringWidth(label)))
+	label += strings.Repeat(" ", max(0, labelWidth-ansi.StringWidth(label)))
 	prefix := railStyle.Render(rail) + " " + labelStyle.Render(marker+label)
 	used := 1 + 1 + 2 + labelWidth
 	if suffix != "" {
 		prefix += s.sty.Green.Render(suffix)
-		used += runewidth.StringWidth(suffix)
+		used += ansi.StringWidth(suffix)
+	}
+	if item.Tag != "" && width-used >= 4 {
+		tag := "[" + truncateSuggestion(item.Tag, width-used-3) + "]"
+		prefix += " " + s.sty.Muted.Render(tag)
+		used += 1 + ansi.StringWidth(tag)
 	}
 	if item.Description == "" || width-used < 8 {
 		return prefix
@@ -247,11 +273,5 @@ func (s *Suggestions) renderRow(item controlruntime.CommandMenuItem, selected bo
 }
 
 func truncateSuggestion(value string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	if lipgloss.Width(value) <= width {
-		return value
-	}
-	return runewidth.Truncate(value, width, "…")
+	return ansi.Truncate(value, max(0, width), "…")
 }

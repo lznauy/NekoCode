@@ -4,6 +4,10 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"nekocode/protocol"
+
+	"nekocode/mode"
 )
 
 func TestPermissionCommandSwitchesMode(t *testing.T) {
@@ -13,7 +17,7 @@ func TestPermissionCommandSwitchesMode(t *testing.T) {
 		SetFullAccess: func(on bool) { full = on },
 		GetFullAccess: func() bool { return full },
 	})
-	ctx := context.Background()
+	ctx := protocol.WithCommandStatusDisplay(context.Background())
 
 	// Default: manual.
 	out, handled := p.Execute(ctx, p.Parse("/permission"))
@@ -21,13 +25,13 @@ func TestPermissionCommandSwitchesMode(t *testing.T) {
 		t.Fatalf("status = %q", out)
 	}
 
-	// Switch to full: flag flips and the risk warning is shown.
+	// Successful switches update state without emitting a system message.
 	out, _ = p.Execute(ctx, p.Parse("/permission full"))
 	if !full {
 		t.Fatal("SetFullAccess(true) was not applied")
 	}
-	if !strings.Contains(out, "全接管") || !strings.Contains(out, "/permission manual") {
-		t.Fatalf("full mode must come back with a risk warning, got %q", out)
+	if out != "" {
+		t.Fatalf("successful full switch must be silent, got %q", out)
 	}
 
 	// Status now reports the full-takeover mode.
@@ -37,7 +41,7 @@ func TestPermissionCommandSwitchesMode(t *testing.T) {
 
 	// Back to manual.
 	out, _ = p.Execute(ctx, p.Parse("/permission manual"))
-	if full || !strings.Contains(out, "手动审批") {
+	if full || out != "" {
 		t.Fatalf("switch back failed: full=%v out=%q", full, out)
 	}
 
@@ -65,13 +69,45 @@ func TestPermissionAutoRequiresAvailableJudge(t *testing.T) {
 		SetBashAuto: func(on bool) { auto = on }, GetBashAuto: func() bool { return auto },
 		CanBashAuto: func() bool { return available },
 	})
-	out, _ := p.Execute(context.Background(), p.Parse("/permission auto"))
+	out, _ := p.Execute(protocol.WithCommandStatusDisplay(context.Background()), p.Parse("/permission auto"))
 	if auto || !strings.Contains(out, "不可用") {
 		t.Fatalf("auto enabled without judge: auto=%v output=%q", auto, out)
 	}
 	available = true
-	out, _ = p.Execute(context.Background(), p.Parse("/permission auto"))
-	if !auto || !strings.Contains(out, "已切换 auto") {
+	out, _ = p.Execute(protocol.WithCommandStatusDisplay(context.Background()), p.Parse("/permission auto"))
+	if !auto || out != "" {
 		t.Fatalf("auto did not enable with judge: auto=%v output=%q", auto, out)
+	}
+}
+
+func TestModeCommandSwitchIsSilent(t *testing.T) {
+	var selected mode.ID
+	h := New(Deps{SetInteractionMode: func(id mode.ID) error {
+		if _, err := mode.Resolve(id); err != nil {
+			return err
+		}
+		selected = id
+		return nil
+	}})
+	out, handled := h.Execute(protocol.WithCommandStatusDisplay(context.Background()), "/mode plan", nil)
+	if !handled || selected != mode.Plan || out != "" {
+		t.Fatalf("switch: handled=%v selected=%q output=%q", handled, selected, out)
+	}
+	out, handled = h.Execute(protocol.WithCommandStatusDisplay(context.Background()), "/mode invalid", nil)
+	if !handled || out == "" || selected != mode.Plan {
+		t.Fatalf("invalid switch: handled=%v selected=%q output=%q", handled, selected, out)
+	}
+}
+
+func TestPermissionFullReportsRiskWithoutStatusDisplay(t *testing.T) {
+	var full bool
+	p := NewParser()
+	RegisterDefaults(p, Deps{
+		GetFullAccess: func() bool { return full },
+		SetFullAccess: func(value bool) { full = value },
+	})
+	out, handled := p.Execute(context.Background(), p.Parse("/permission full"))
+	if !handled || !full || !strings.Contains(out, "免审批") || !strings.Contains(out, "/permission manual") {
+		t.Fatalf("full access risk feedback = %q, handled=%v, full=%v", out, handled, full)
 	}
 }

@@ -17,7 +17,7 @@ type effortSwitcher interface{ SetReasoningEffort(string) error }
 // visible in the input footer. Queries and usage feedback keep their normal UI.
 func settingCommand(value string) bool {
 	fields := strings.Fields(value)
-	return len(fields) > 1 && (fields[0] == "/model" || fields[0] == "/effort")
+	return len(fields) > 1 && (fields[0] == "/model" || fields[0] == "/effort" || fields[0] == "/mode" || fields[0] == "/permission")
 }
 
 func (m *Model) changeModelSetting(value string) bool {
@@ -48,6 +48,8 @@ func (m *Model) changeModelSetting(value string) bool {
 			}
 			return source.SetReasoningEffort(effort)
 		}
+	default:
+		return false
 	}
 	if m.state == stateProcessing {
 		m.Messages.AddMessage(message.ChatMessage{Role: "error", Content: "命令 " + value + " 需在任务结束后执行"})

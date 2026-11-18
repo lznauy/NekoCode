@@ -97,6 +97,7 @@ type SessionsServices struct {
 	ResumeSession       func(string) error
 	NewSession          func() (SessionMeta, error)
 	DeleteSession       func(string) error
+	RenameSession       func(string, string) error
 }
 
 // ToolsServices contains optional tools callbacks supplied by the application.

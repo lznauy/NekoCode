@@ -387,9 +387,14 @@ func (a *App) dispatchRuntimeEvent(ev controlruntime.Event) {
 		wailsruntime.EventsEmit(a.ctx, "agent:todos", map[string]any{"items": ev.Payload})
 	case controlruntime.EventSessionChanged:
 		if p, ok := ev.Payload.(controlruntime.SessionPayload); ok {
-			attachmentDraft := a.consumeAttachmentDraftSession(p.ID)
+			attachmentDraft := false
+			var messages []controlruntime.DisplayMessage
+			if p.Reason != "rename" {
+				attachmentDraft = a.consumeAttachmentDraftSession(p.ID)
+				messages = a.rt.SessionMessages()
+			}
 			wailsruntime.EventsEmit(a.ctx, "session:changed", map[string]any{
-				"id": p.ID, "messages": a.rt.SessionMessages(), "attachmentDraft": attachmentDraft,
+				"id": p.ID, "messages": messages, "attachmentDraft": attachmentDraft,
 				"reason": p.Reason, "changedId": p.ChangedID, "currentChanged": p.CurrentChanged,
 			})
 		}

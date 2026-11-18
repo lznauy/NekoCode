@@ -26,6 +26,16 @@ func writeAtomic(path string, data []byte, perm os.FileMode) error {
 		_ = tmp.Close()
 		return err
 	}
+	if err := writeAndSync(tmp, data); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(path))
+}
+
+func writeAndSync(tmp *os.File, data []byte) error {
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		return err
@@ -37,10 +47,7 @@ func writeAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return err
-	}
-	return syncDir(filepath.Dir(path))
+	return nil
 }
 
 func syncDir(path string) error {
@@ -210,6 +217,8 @@ func (m *Manager) Exists(id string) (bool, error) {
 }
 
 func (m *Manager) Delete(id string) error {
+	m.persistMu.Lock()
+	defer m.persistMu.Unlock()
 	return deleteSnapshot(id)
 }
 

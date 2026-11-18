@@ -47,7 +47,7 @@ type Deps struct {
 func registerAll(p *Parser, deps Deps, st *skillState) {
 	RegisterDefaults(p, deps)
 
-	p.RegisterInfo("mode", "Select the session work mode", func(_ context.Context, cmd *Command) (string, bool) {
+	p.RegisterInfo("mode", "Select the session work mode", func(ctx context.Context, cmd *Command) (string, bool) {
 		if deps.SetInteractionMode == nil {
 			return "Interaction modes are unavailable.", true
 		}
@@ -61,7 +61,7 @@ func registerAll(p *Parser, deps Deps, st *skillState) {
 		if err := deps.SetInteractionMode(mode.ID(cmd.Args[0])); err != nil {
 			return "Mode unchanged: " + err.Error(), true
 		}
-		return "Mode: " + cmd.Args[0], true
+		return settingFeedback(ctx, "Mode: "+cmd.Args[0]), true
 	})
 	p.RegisterMenu("mode", func(_ context.Context, cmd *Command) (protocol.CommandMenu, bool) {
 		if len(cmd.Args) != 0 || deps.SetInteractionMode == nil {

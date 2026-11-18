@@ -19,10 +19,10 @@ func TestExecuteLocalCommandFork(t *testing.T) {
 		SetFullAccess: func(on bool) { full = on },
 		GetFullAccess: func() bool { return full },
 	})
-	ctx := context.Background()
+	ctx := protocol.WithCommandStatusDisplay(context.Background())
 
 	out, status := b.ExecuteLocalCommand(ctx, "/permission full")
-	if status != protocol.LocalCommandExecuted || !full || out == "" {
+	if status != protocol.LocalCommandExecuted || !full || out != "" {
 		t.Fatalf("local command: status=%v full=%v out=%q", status, full, out)
 	}
 

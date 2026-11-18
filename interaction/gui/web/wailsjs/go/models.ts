@@ -117,6 +117,7 @@ export namespace protocol {
 
 	export class CommandMenuItem {
 	    key?: string;
+        tag?: string;
 	    value: string;
 	    label: string;
 	    description?: string;
@@ -130,6 +131,7 @@ export namespace protocol {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.key = source["key"];
+            this.tag = source["tag"];
 	        this.value = source["value"];
 	        this.label = source["label"];
 	        this.description = source["description"];
@@ -1034,6 +1036,7 @@ export namespace runtime {
 
 	export class SessionMeta {
 	    id: string;
+        name?: string;
 	    cwd: string;
 	    createdAt: number;
 	    updatedAt: number;
@@ -1048,6 +1051,7 @@ export namespace runtime {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
+            this.name = source["name"];
 	        this.cwd = source["cwd"];
 	        this.createdAt = source["createdAt"];
 	        this.updatedAt = source["updatedAt"];

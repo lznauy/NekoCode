@@ -308,3 +308,20 @@ describe('useSessions', () => {
     ])
   })
 })
+
+it('refreshes renamed metadata without changing the active session or interrupting a pending switch', async () => {
+  mockSafeListSessions.mockResolvedValue([meta('current')])
+  const { result } = renderHook(() => useSessions())
+  await waitFor(() => expect(result.current.currentId).toBe('current'))
+  let finish!: (value: []) => void
+  mockSafeLoadSession.mockReturnValueOnce(new Promise<[]>((resolve) => { finish = resolve }))
+  let pending!: Promise<unknown>
+  act(() => { pending = result.current.switchSession('next') })
+  mockSafeListSessions.mockResolvedValue([{ ...meta('current'), name: 'Custom name' }])
+  await act(async () => sessionChanged?.({ id: 'current', reason: 'rename', changedId: 'current', currentChanged: false }))
+  expect(result.current.currentId).toBe('current')
+  expect(result.current.sessions[0].name).toBe('Custom name')
+  expect(shouldReloadSessionMessages({ reason: 'rename', currentChanged: false })).toBe(false)
+  await act(async () => { finish([]); expect(await pending).toEqual([]) })
+  expect(result.current.currentId).toBe('next')
+})
