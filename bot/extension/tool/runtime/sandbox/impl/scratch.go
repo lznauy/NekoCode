@@ -28,8 +28,8 @@ func commandEnvironment(env []string, profile Profile) []string {
 	return setEnv(env, "GOCACHE", filepath.Join(directory, "cache", "go-build"))
 }
 
-// Landlock and its descendants use the host's pinned descriptor, never the
-// original replaceable directory name. Native children use a private mount.
+// Host-side setup can address the pinned directory directly. Each backend supplies
+// its own child-visible path before constructing the command environment.
 func scratchAccessPath(profile Profile) string {
 	if profile.ScratchFile != nil {
 		return fmt.Sprintf("/proc/%d/fd/%d", os.Getpid(), profile.ScratchFile.Fd())

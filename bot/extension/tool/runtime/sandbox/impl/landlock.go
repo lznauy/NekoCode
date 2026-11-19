@@ -98,6 +98,18 @@ func landlockSelfTest() bool {
 	return err == nil
 }
 
+// The helper and shell inherit the pinned directory at fd 3. Accessing a
+// parent process's /proc/PID/fd may be denied by the kernel's ptrace policy.
+func landlockScratch(profile Profile) (Profile, []*os.File) {
+	if profile.ScratchFile == nil {
+		return profile, nil
+	}
+	files := []*os.File{profile.ScratchFile}
+	profile.ScratchFile = nil
+	profile.ScratchDir = "/proc/self/fd/3"
+	return profile, files
+}
+
 // runLandlockBash runs command under the tbsb Landlock backend.
 //
 // Writable paths are the workspace plus allowed cache paths; everything else
@@ -124,8 +136,9 @@ func runLandlockBash(ctx context.Context, command string, profile Profile, timeo
 		return "", err
 	}
 	writable = append(writable, writePaths...)
-	if profile.ScratchFile != nil {
-		writable = append(writable, scratchAccessPath(profile))
+	profile, files := landlockScratch(profile)
+	if len(files) != 0 {
+		writable = append(writable, profile.ScratchDir)
 	}
 
 	// helperConfig mirrors tbsb's unexported helperConfig{WritableDirs `json:"w"`}.
@@ -164,7 +177,7 @@ func runLandlockBash(ctx context.Context, command string, profile Profile, timeo
 	var out string
 	spawnErr := withNoNewPrivs(func() error {
 		var err error
-		out, err = runChild(ctx, self, args, env, ws, timeout, sysproc, unavail, "landlock restrict failed")
+		out, err = runChild(ctx, self, args, env, ws, timeout, sysproc, unavail, "landlock restrict failed", files)
 		return err
 	})
 	return out, spawnErr
@@ -187,8 +200,9 @@ func startLandlockBash(ctx context.Context, command string, profile Profile) (*P
 		return nil, err
 	}
 	writable = append(writable, writePaths...)
-	if profile.ScratchFile != nil {
-		writable = append(writable, scratchAccessPath(profile))
+	profile, files := landlockScratch(profile)
+	if len(files) != 0 {
+		writable = append(writable, profile.ScratchDir)
 	}
 
 	cfg := struct {
@@ -213,7 +227,7 @@ func startLandlockBash(ctx context.Context, command string, profile Profile) (*P
 	var p *Process
 	spawnErr := withNoNewPrivs(func() error {
 		var err error
-		p, err = startCommand(ctx, self, args, env, ws, &syscall.SysProcAttr{Setpgid: true}, nil)
+		p, err = startCommand(ctx, self, args, env, ws, &syscall.SysProcAttr{Setpgid: true}, nil, files)
 		return err
 	})
 	return p, spawnErr

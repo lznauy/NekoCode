@@ -59,7 +59,7 @@ func TestSharedShellSeparatesSubagentScratchFromParentAndSiblings(t *testing.T) 
 	ctx := workspace.WithManager(t.Context(), workspace.New(t.TempDir(), nil))
 	paths := map[string]string{}
 	for _, actor := range []string{"", "child-a", "child-b", "child-a"} {
-		out, err := tool.Execute(taskbridge.WithTaskID(ctx, actor), map[string]any{"command": `printf '%s' "$NEKOCODE_SCRATCH"`})
+		out, err := tool.Execute(taskbridge.WithTaskID(ctx, actor), map[string]any{"command": `stat -Lc '%d:%i' "$NEKOCODE_SCRATCH"`})
 		if err != nil || out.Process.State != "exited" || out.Process.ExitCode != 0 {
 			t.Fatalf("actor %q failed: %+v, %v", actor, out, err)
 		}
@@ -94,8 +94,8 @@ func TestShellReportsMissingCrossCallInputEvenWhenLastCommandSucceeds(t *testing
 		}
 		return out.Text
 	}
-	run("printf saved > /tmp/cross-call-check")
-	if output := run("cat /tmp/cross-call-check; echo finished"); !strings.Contains(output, "temp_hint:") || !strings.Contains(output, "finished") {
+	missing := filepath.Join("/tmp", filepath.Base(filepath.Dir(t.TempDir()))+"-missing-cross-call-input")
+	if output := run("cat " + missing + "; echo finished"); !strings.Contains(output, "temp_hint:") || !strings.Contains(output, "finished") {
 		t.Fatalf("missing diagnostic or original output: %q", output)
 	}
 	run(`printf saved > "$NEKOCODE_SCRATCH/cross-call-check"`)

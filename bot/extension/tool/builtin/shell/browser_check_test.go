@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -24,10 +25,15 @@ func TestBrowserCheckInLocalShell(t *testing.T) {
 	if err != nil || !prior.Process.ExitCodeKnown || prior.Process.ExitCode != 0 {
 		t.Fatalf("prepare scratch fixture: %+v, %v", prior, err)
 	}
+	// Chrome requires the namespace backend's private writable device and temp mounts.
+	if os.Getenv("NEKOCODE_DISABLE_NATIVE_SANDBOX") != "" || exec.Command("unshare", "--user", "--map-root-user", "true").Run() != nil {
+		t.Skip("scratch write verified; full Chrome integration requires user namespaces")
+	}
 	const command = `set -eu
 browser_check() { node --input-type=module -e "${NEKOCODE_BROWSER_CHECK:?Linux sandbox required}" -- "$@"; }
-fixture=$(mktemp -d)
-cd "$fixture"
+fixture=$(mktemp -d "$NEKOCODE_SCRATCH/browser-test.XXXXXXXX")
+cd -P "$fixture"
+export TMPDIR="$PWD" CHROME_CONFIG_HOME="$PWD/chrome-config" XDG_CACHE_HOME="$PWD/cache"
 echo '<button onclick="this.textContent=Number(this.textContent)+1">0</button>' > index.html
 python3 -u -c 'from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 class Handler(SimpleHTTPRequestHandler):
