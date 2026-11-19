@@ -11,6 +11,7 @@ import (
 
 	"nekocode/bot/provider/types"
 	"nekocode/protocol"
+	httputil "nekocode/util/http"
 )
 
 func summaryTestHistory(old string) []types.Message {
@@ -152,6 +153,9 @@ type batchUsageClient struct {
 func (c *batchUsageClient) ChatStream(ctx context.Context, messages []types.Message, tools []types.ToolDef) (<-chan types.StreamToken, <-chan error) {
 	c.calls++
 	c.requests = append(c.requests, append([]types.Message(nil), messages...))
+	if c.err != nil {
+		return c.usageTestClient.ChatStream(ctx, messages, tools)
+	}
 	content := "<summary>carry summary</summary>"
 	if c.retryEmpty && c.calls%2 == 1 {
 		content = ""
@@ -212,5 +216,17 @@ func TestCompactionBatchesCountPhysicalCallsAndUsageOnce(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestStreamingSummaryRetriesOnlyTransientErrors(t *testing.T) {
+	for status, calls := range map[int]int{402: 1, 503: 2} {
+		cause := httputil.NewHTTPError(status, "upstream error")
+		client := &batchUsageClient{usageTestClient: usageTestClient{err: cause}}
+		manager := New(Config{ContextWindow: 128000, CompactionModel: client})
+		_, err := manager.streamingSummarizer(context.Background(), client, nil)(summaryTestHistory("old"), "")
+		if !errors.Is(err, cause) || client.calls != calls {
+			t.Fatalf("calls=%d error=%v", client.calls, err)
+		}
 	}
 }

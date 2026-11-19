@@ -56,7 +56,7 @@ func (t *ResultTool) Execute(ctx context.Context, args map[string]any) (core.Too
 	read := t.read
 	t.mu.Unlock()
 	if read == nil {
-		return core.ToolOutput{}, fmt.Errorf("task_result is available to the parent coordinator only")
+		return core.ToolOutput{}, fmt.Errorf("task_result reader is unavailable in this execution context")
 	}
 	q := taskbridge.ResultQuery{}
 	if raw, supplied := args["cursor"]; supplied {
@@ -72,7 +72,7 @@ func (t *ResultTool) Execute(ctx context.Context, args map[string]any) (core.Too
 		}
 		t.mu.Unlock()
 		if !ok {
-			return core.ToolOutput{}, fmt.Errorf("unknown or expired result cursor; reread offset 0 with the saved id and exact attempt_id, then use next_call")
+			return core.ToolOutput{}, fmt.Errorf("unknown or expired result cursor; restart at offset 0 using the saved id and exact attempt_id (coordinator) or the explicitly shared result_ref (worker), then use next_call")
 		}
 		for name, expected := range map[string]string{"id": q.ID, "attempt_id": q.AttemptID, "result_ref": q.Ref} {
 			if raw, exists := args[name]; exists {
@@ -178,10 +178,23 @@ func pendingResultOutput(err error) (core.ToolOutput, bool) {
 	if !errors.As(err, &pending) {
 		return core.ToolOutput{}, false
 	}
+	message := "当前状态还没有最终结果；等待状态变更通知。"
+	switch pending.Status {
+	case "queued":
+		message = "任务已排队；等待调度通知。"
+	case "running":
+		message = "任务仍在运行；等待完成通知。"
+	case "waiting_dependencies":
+		message = "任务正在等待依赖任务完成。"
+	case "waiting_approval":
+		message = "任务正在等待审批；请处理已有的审批请求。"
+	case "waiting_question":
+		message = "任务正在等待用户回答；请查看已有的问题。"
+	}
 	raw, marshalErr := json.Marshal(struct {
 		Status  string `json:"status"`
 		Message string `json:"message"`
-	}{Status: pending.Status, Message: "任务仍在运行；等待完成通知，不要重复读取 task_result。"})
+	}{Status: pending.Status, Message: message + " 无需重复读取 task_result。"})
 	if marshalErr != nil {
 		return core.ToolOutput{}, false
 	}

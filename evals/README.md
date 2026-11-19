@@ -4,6 +4,12 @@
 
 这里有两条评测路径：`agent_eval/` 通过 headless 二进制执行完整任务，本文主要介绍这条路径；`prompt_evals/` 是独立的 Go 提示词行为评测，使用方法见 [prompt_evals/README.md](prompt_evals/README.md)。
 
+## 验收运行环境
+
+`run`、`verify`、`reverify` 以及调用验收器的自检使用 Linux、Python 3 和支持 `--disable-userns` 的 Bubblewrap。安装发行版的 `bubblewrap` 软件包，或在 Nix 环境执行 `nix shell nixpkgs#bubblewrap`；用 `bwrap --version` 检查。也可设置 `NEKOCODE_EVAL_BWRAP` 为受信任的 bwrap 可执行文件绝对路径。内核须允许创建用户、挂载、PID 和网络命名空间。正式运行在调用模型前检测隔离环境；验收环境不可用会报告失败原因。Linux 以外的开发机可在满足这些条件的 Linux 虚拟机中验收。
+
+验收器在私有网络（含回环）、私有 HOME 和临时目录中执行，只读加载冻结题目、待验产品及运行时依赖。代码题使用临时可写副本，宿主接收普通结果文件和浏览器截图。Python 验收启动时隔离 `PYTHONOPTIMIZE`、`PYTHONPATH` 等外部设置。浏览器题沿用下文的 `CHROME_BIN` 与 `NODE_PATH` 配置，Nix 环境通过 `nix-store --query --requisites` 取得所需运行时闭包。
+
 ## 目录结构
 
 ```text
@@ -41,6 +47,38 @@ evals/
 | `snake` | 实现并验证贪吃蛇网页 | Node、Chrome、Playwright | `smoke` |
 | `pelican-bicycle` | 绘制鹈鹕骑自行车的 SVG | Node、Chrome、Playwright；画面需要另行复核 | `visual` |
 | `grafana-anonymous-review` | 大型 Grafana 仓库的只读审查 | 执行时拉取固定版本，使用 `super-agent` 模式 | `review-large` |
+| `release-handoff` | 两位子代理分别写工程、客服草稿，再按签署决定合成发布手册 | `super-agent`，验收读取 运行时工具完成事件 | `capabilities` |
+| `go-embed-path` | 跨 Go 构建器、编译器、标准库追踪 embed 数据流 | 执行时拉取 Go 1.24.0 固定提交 | `capabilities` |
+| `ledger-resume` | 定位 SQLite 投影同时间分页漏计与故障重启多计 | Python 标准库 | `capabilities` |
+| `inventory-release` | 接手 CSV 原型，验证汇总、异常退出与发布清单 | Python 标准库 | `capabilities` |
+| `catalog-recovery` | 迁移 v1 归档、重放日志、处理冲突与墓碑并原子发布 v2 快照 | Python 标准库 | `capabilities` |
+| `depot-ledger` | 从 v1 查看器交付多仓预留服务，黑盒检查迁移、跨进程重试、并发争抢、库存与审计一致性 | Python 标准库，预算上限 200 次模型调用 | `capabilities` |
+| `unittest-triage` | 运行固定失败的 Python 测试，沿回溯核查计费字段，只读报告根因 | Python 标准库 | 单独用 `--case unittest-triage` |
+| `retry-settings` | 单文件重试配置修改，检查目标值和无关改动 | Python 标准库 | `short-tasks` |
+| `round-robin-card` | 制作六队五轮赛程卡，校验对阵、同轮冲突、场地轮换 | Python 标准库 | `short-tasks` |
+| `dispatch-window` | 合并两份班表，核实站点、开闭边界、排序和原件 | Python 标准库 | `tool-efficiency` |
+| `effective-limit` | 核实继承后的生效配置，避免添加无意义的显式覆盖 | Python 标准库 | `tool-efficiency` |
+| `active-routing` | 从发布指针追到当前路由表，区分旧版本干扰项 | Python 标准库 | `tool-efficiency` |
+| `inline-handoff` | 仅用消息内最新记录交付可解析 JSON；工作区含过期同名档案 | Python 标准库 | `tool-efficiency` |
+| `approval-reconcile` | 对照工单与签收表，区分有效批准、旧修订和缺失证据 | Python 标准库 | `tool-efficiency` |
+| `current-roster-tsv` | 从实际文件筛选有效名单，以可直接导入的 TSV 回复 | Python 标准库 | `tool-efficiency` |
+| `wiki-json-example` | 撰写给读者的 Wiki 示例，保留指定的 Markdown 代码围栏 | Python 标准库 | `tool-efficiency` |
+| `queue-paused` / `queue-open` | 同一派送请求的两种状态，检验提前结束和继续读取目的地 | Python 标准库 | `tool-efficiency` |
+| `rollout-apply` / `rollout-done` / `rollout-conflict` | 同一上线单在旧版、目标版、意外版本下分别检验精确修改、幂等和冲突停止 | Python 标准库 | `tool-efficiency` |
+| `invoice-close` | 多源月结，检验重复支付、超付、无支付订单及异常分流两份交付物 | Python 标准库 | `tool-efficiency` |
+| `latest-sample-sql` | 按表结构和业务契约编写可复用查询，用两组独立数据执行验收 | SQLite（Python 标准库） | `tool-efficiency` |
+| `rail-rebooking` | 96 张团体票的改签结算；重建截止快照，按优先级跨段占座，分别验收四张表及输入保全 | Python 标准库 | `tool-efficiency` |
+| `edit-recovery` | 刷新已读配置，检查版本变化后的长文件定向读取与重试；按轨迹复核调用链 | Python 标准库 | `tool-efficiency` |
+
+短任务套件可用 `python3 -m agent_eval validate --suite short-tasks` 离线校验，真实运行使用 `--suite short-tasks --mode standard`。
+
+效率对照使用 `--suite tool-efficiency --mode standard --repeat 3`，同一对照保持二进制以外的参数一致。先按题看独立验收，再比较成功配对的模型调用、总 token、未缓存 token 和工具轮数。`tool_rounds` 从主任务协议轨迹统计，同一批并行调用计一轮；`repeated_tool_requests` 统计同一 run 内工具名和参数完全相同的请求，可能包含合理的复核。模型调用和工具轮数分别计量，一条 shell 命令也可能包含多个操作。
+
+派送分支对照固定请求、文件名和目的地，只改变入口文件中的状态。核对轨迹时，暂停分支读完入口就有足够证据；开放分支还需要入口指定的目的地内容。即使重复请求计数为零，暂停时读取目的地也属于多余工作。
+
+在 `evals/` 中可用 `python3 -m agent_eval validate --suite capabilities` 离线校验清单。整组运行时使用 `--suite capabilities --mode super-agent`；若要分别计量协作与单代理成本，单独用 `--case release-handoff --mode super-agent`，其余题可用 `--mode standard`。其余运行参数与下方示例相同。
+
+协作题的独立 `verify` 没有运行轨迹时会把分工标为 `not_run`；保存的 trial 可通过 `reverify` 核对原始轨迹。写作自动检查覆盖事实、操作次序与草稿来源，行文质量需人工复核。源码分析核验场景答案、关键实现行与只读状态，完整论证质量需结合最终回答复核。
 
 ## 环境准备
 
@@ -307,7 +345,7 @@ python3 -m agent_eval compare \
 
 默认写入新的 `comparisons/<comparison-id>/`，打开其中的 `report.md`，机器结果在 `comparison.json`。也可以指定 `--output /tmp/nekocode-eval-comparison-new`。
 
-比较按 case ID 与重复序号配对。缺少题目显示 `unmatched`，题目、模型、配置或评测契约等条件不同会显示 `incomparable`。先看 `regression`、`new_success`、`both_success` 和 `both_failure`；成本只对双方都成功且具有必要计量的配对计算差值。少量样本不足以证明稳定提升，正式结论建议重复 3–5 次并人工复核产物。
+比较按 case ID 与重复序号配对。缺少题目显示 `unmatched`，题目、模型、配置或评测契约等条件不同会显示 `incomparable`。先看 `regression`、`new_success`、`both_success` 和 `both_failure`；逐对成本差值只使用双方均成功且计量完整的样本。每题另列「每次成功交付成本」：同侧全部可比尝试（含失败）的模型调用或总 token 除以成功次数；没有成功或计量缺失时为空。少量样本不足以证明稳定提升，正式结论建议重复 3–5 次并人工复核产物。
 
 ## 验证评测器本身
 
@@ -335,4 +373,4 @@ NEKOCODE_EVAL_BROWSER_TESTS=1 python3 -m unittest discover -s tests -v
 
 cases、suites、执行器、测试与文档进 Git；runs 与 comparisons 是本地运行档案，Git 忽略。没有额外复制的 history/latest 目录，历史索引可从 run 元数据重建。
 
-运行只记录当前源码 commit、dirty 状态和二进制摘要，不自动打包项目源码；dirty 状态无法重建工作区，也不能证明二进制来自该 checkout。配置指纹不复制配置原文。原始协议与产品仍可能含项目内容。分享运行目录前检查具体文件。Agent 与验收器运行在同一宿主用户下，验收副本用于保护原产品，不能视为安全隔离环境。
+运行只记录当前源码 commit、dirty 状态和二进制摘要，不自动打包项目源码；dirty 状态无法重建工作区，也不能证明二进制来自该 checkout。配置指纹不复制配置原文。原始协议与产品仍可能含项目内容。分享运行目录前检查具体文件。成品验收使用上述 Linux 命名空间隔离。模型与工具执行阶段仍使用 headless 自身的权限策略，验收脚本及依赖应来自受信任的题库。

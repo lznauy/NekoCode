@@ -1,0 +1,4 @@
+{
+  "north": {"retries": 1},
+  "south": {"parallelism": 4}
+}

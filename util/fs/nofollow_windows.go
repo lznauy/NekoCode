@@ -1,6 +1,6 @@
 //go:build windows
 
-package media
+package fs
 
 import (
 	"fmt"
@@ -13,25 +13,25 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func openImageFile(path string) (*os.File, error) {
+func OpenRegularNoFollow(path string) (*os.File, error) {
 	expected, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
 	}
 	lower := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(expected), "/", `\`))
 	if strings.HasPrefix(lower, `\\`) || strings.HasPrefix(lower, `\??\`) {
-		return nil, fmt.Errorf("image path must be on a local filesystem")
+		return nil, fmt.Errorf("path must be on a local filesystem")
 	}
 	volume := filepath.VolumeName(expected)
 	if len(volume) != 2 || volume[1] != ':' {
-		return nil, fmt.Errorf("image path must use a local drive")
+		return nil, fmt.Errorf("path must use a local drive")
 	}
 	root, err := windows.UTF16PtrFromString(volume + `\`)
 	if err != nil {
 		return nil, err
 	}
 	if windows.GetDriveType(root) == windows.DRIVE_REMOTE {
-		return nil, fmt.Errorf("image path must not use a mapped network drive")
+		return nil, fmt.Errorf("path must not use a mapped network drive")
 	}
 	objectName, err := windows.NewNTUnicodeString(`\??\` + expected)
 	if err != nil {
@@ -57,7 +57,7 @@ func openImageFile(path string) (*os.File, error) {
 	file := os.NewFile(uintptr(handle), expected)
 	if file == nil {
 		_ = windows.CloseHandle(handle)
-		return nil, fmt.Errorf("open image file")
+		return nil, fmt.Errorf("open regular file")
 	}
 	actual, err := finalWindowsPath(windows.Handle(file.Fd()))
 	if err != nil {
@@ -66,7 +66,7 @@ func openImageFile(path string) (*os.File, error) {
 	}
 	if !strings.EqualFold(filepath.Clean(expected), filepath.Clean(actual)) {
 		_ = file.Close()
-		return nil, fmt.Errorf("image path changed during secure open")
+		return nil, fmt.Errorf("path changed during secure open")
 	}
 	info, err := file.Stat()
 	if err != nil {
@@ -75,7 +75,7 @@ func openImageFile(path string) (*os.File, error) {
 	}
 	if !info.Mode().IsRegular() {
 		_ = file.Close()
-		return nil, fmt.Errorf("image path is not a regular file")
+		return nil, fmt.Errorf("path is not a regular file")
 	}
 	return file, nil
 }

@@ -39,6 +39,7 @@ func (s taskStatus) String() string {
 }
 
 type shellTask struct {
+	directory   string
 	name        string
 	owner       string
 	cmd         string
@@ -156,6 +157,10 @@ func (t *shellTask) completeObservation(max int) processResult {
 	return t.resultLocked("", tailCopy(t.logs, max), true, false)
 }
 
+// Completed commands have a recoverable transcript, so their default preview
+// can be smaller than the live watch window.
+const completedPreviewBytes = 2048
+
 func (t *shellTask) finishOutput() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -163,7 +168,7 @@ func (t *shellTask) finishOutput() {
 		return
 	}
 	output, err := t.capture.Finish()
-	if output.Artifact.Path == "" && len(output.Text) > logsReturnBytes && err == nil {
+	if output.Artifact.Path == "" && len(output.Text) > completedPreviewBytes && err == nil {
 		output.Artifact.Path, err = t.outputStore.PreserveOutput(output.Text)
 	}
 	if err != nil && t.captureErr == nil {
@@ -281,6 +286,9 @@ func (t *shellTask) resultLocked(reason string, output []byte, fromStart, clippe
 		text += fmt.Sprintf("\n[Command ran, but output preservation failed: %v. Do not rerun automatically.]", t.captureErr)
 	} else if t.savedOutput.Artifact.Incomplete {
 		text += "\n[Output preview truncated. The saved capture is incomplete (capture limit or read failure); do not rerun automatically.]"
+	} else if fromStart && len(output) > 0 && reason != "output" && t.status != taskRunning && t.savedOutput.Artifact.Path != "" && len(t.savedOutput.Text) > completedPreviewBytes {
+		text = core.LimitOutput(toolutil.StripAnsi(t.savedOutput.Text), completedPreviewBytes)
+		observation.OutputComplete = false
 	} else if clipped || fromStart && uint64(len(output)) < t.logEnd {
 		if t.savedOutput.Artifact.Path != "" {
 			text += "\n[Output preview truncated; use read on the result artifact to recover earlier output. Do not rerun the command.]"
@@ -319,22 +327,26 @@ func (t *shellTask) summaryLocked() processInfo {
 		status = "failed"
 	}
 	return processInfo{
-		name:     t.name,
-		command:  t.cmd,
-		status:   status,
-		duration: formatDuration(duration),
-		exitCode: t.exitCode,
-		managed:  t.managed,
+		directory:  t.directory,
+		name:       t.name,
+		command:    t.cmd,
+		status:     status,
+		duration:   formatDuration(duration),
+		exitCode:   t.exitCode,
+		managed:    t.managed,
+		hasScratch: t.scratchFile != nil,
 	}
 }
 
 type processInfo struct {
-	name     string
-	command  string
-	status   string
-	duration string
-	exitCode int
-	managed  bool
+	hasScratch bool
+	directory  string
+	name       string
+	command    string
+	status     string
+	duration   string
+	exitCode   int
+	managed    bool
 }
 
 type processResult struct {

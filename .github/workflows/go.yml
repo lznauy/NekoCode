@@ -55,6 +55,12 @@ jobs:
       - name: Test standalone evals Go module
         working-directory: evals
         run: CC=/tmp/zigcc-linux-amd64 go test -count=1 ./...
+      - name: Install evaluator sandbox
+        run: |
+          if ! command -v bwrap >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y bubblewrap
+          fi
       - name: Test offline evals
         working-directory: evals
         env:

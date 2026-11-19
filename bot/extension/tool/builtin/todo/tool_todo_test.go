@@ -3,6 +3,7 @@ package todo
 import (
 	"context"
 	"nekocode/protocol"
+	"strings"
 	"testing"
 )
 
@@ -18,13 +19,13 @@ func TestTodoWriteTool(t *testing.T) {
 	}
 
 	out, err := tw.Execute(context.Background(), map[string]any{
-		"todos": []any{map[string]any{"content": "task 1", "status": "completed", "result": "fixture result"}},
+		"todos": []any{map[string]any{"content": "task 1", "status": "completed", "result": strings.Repeat("测", 24)}},
 	})
 	if err != nil {
 		t.Fatalf("todo_write: %v", err)
 	}
-	if out.Render() == "" {
-		t.Error("empty output")
+	if !strings.Contains(out.Render(), "[result: "+strings.Repeat("测", 21)+"…]") || !strings.Contains(out.Render(), "marked completed") {
+		t.Fatalf("missing saved result or status: %s", out.Render())
 	}
 
 	_, err = tw.Execute(context.Background(), nil)

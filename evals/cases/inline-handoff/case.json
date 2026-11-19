@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "inline-handoff",
+  "version": 1,
+  "title": "根据用户已给的交班记录回答",
+  "tags": [
+    "efficiency",
+    "evidence"
+  ],
+  "kind": "review",
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "handoff",
+      "description": "使用消息内最新交接，而非旧文件",
+      "required": true
+    },
+    {
+      "id": "scope",
+      "description": "归档及工作区保持原样",
+      "required": true
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 150,
+    "model_calls": 12,
+    "total_tokens": 180000,
+    "verifier_seconds": 15
+  },
+  "source": "Original evidence-sufficiency evaluation"
+}

@@ -2,13 +2,18 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
 	"nekocode/bot/provider/types"
 )
+
+// Includes the JSONL delimiter. Keep append, recovery and indexed reads in sync.
+const maxTranscriptRecordBytes = 32 << 20
 
 const transcriptFileName = "transcript.jsonl"
 
@@ -17,6 +22,22 @@ var syncTranscriptDir = syncDir
 type transcriptRecord struct {
 	Seq     int           `json:"seq"`
 	Message types.Message `json:"message"`
+}
+
+// Keep CR in CRLF records: offsets and checksums include every on-disk byte.
+func transcriptScanner(r io.Reader) *bufio.Scanner {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 64<<10), maxTranscriptRecordBytes)
+	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			return i + 1, data[:i], nil
+		}
+		if atEOF && len(data) > 0 {
+			return len(data), data, nil
+		}
+		return 0, nil, nil
+	})
+	return scanner
 }
 
 func loadTranscript(sessionDir string, confirmed int) ([]types.Message, error) {
@@ -35,9 +56,7 @@ func loadTranscript(sessionDir string, confirmed int) ([]types.Message, error) {
 	// beyond it was never acknowledged by the session.json watermark and can be
 	// discarded as a crash-truncated tail.
 	var good int64
-	scanner := bufio.NewScanner(file)
-	buffer := make([]byte, 64*1024)
-	scanner.Buffer(buffer, 16<<20)
+	scanner := transcriptScanner(file)
 	for scanner.Scan() {
 		raw := scanner.Bytes()
 		var record transcriptRecord
@@ -149,9 +168,15 @@ func appendTranscriptFrom(sessionDir string, persisted, base int, messages []typ
 		_ = file.Close()
 		return persisted, cause
 	}
-	encoder := json.NewEncoder(file)
 	for i := persisted - base; i < len(messages); i++ {
-		if err := encoder.Encode(transcriptRecord{Seq: base + i + 1, Message: messages[i]}); err != nil {
+		record, err := json.Marshal(transcriptRecord{Seq: base + i + 1, Message: messages[i]})
+		if err == nil && len(record) >= maxTranscriptRecordBytes {
+			err = fmt.Errorf("record exceeds %d bytes", maxTranscriptRecordBytes)
+		}
+		if err == nil {
+			_, err = file.Write(append(record, '\n'))
+		}
+		if err != nil {
 			return rollback(fmt.Errorf("append transcript record %d: %w", i+1, err))
 		}
 	}

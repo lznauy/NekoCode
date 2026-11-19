@@ -11,7 +11,7 @@ func TestSandboxFailureRecoveryForShellAndManagedProcesses(t *testing.T) {
 	for _, managed := range []bool{false, true} {
 		for _, output := range []string{
 			"mkdir: Read-only file system", "npm ERR! EACCES: permission denied",
-			"curl: (6) Could not resolve host: example.com", "connect: Network is unreachable",
+			"curl: (6) Could not resolve host: example.com", "connect: Network is unreachable", "getaddrinfo ENOTFOUND api.example",
 		} {
 			result := processResult{info: processInfo{status: "failed", exitCode: 1, managed: managed, name: "build"}, output: output}
 			text := processToolOutput(result).Text
@@ -27,6 +27,7 @@ func TestSandboxFailureRecoveryForShellAndManagedProcesses(t *testing.T) {
 		{info: processInfo{status: "running"}, output: "permission denied"},
 		{info: processInfo{status: "failed", exitCode: 1}, output: "syntax error near unexpected token"},
 		{info: processInfo{status: "failed", exitCode: 1}, output: "assertion failed"},
+		{info: processInfo{status: "failed", exitCode: 1}, output: "FileNotFoundError: [Errno 2] No such file or directory: 'archive/recovered.json'"},
 	} {
 		if text := processToolOutput(result).Text; strings.Contains(text, "recovery_hint:") {
 			t.Errorf("unexpected escalation hint: %s", text)
@@ -148,5 +149,35 @@ func TestBoundedProcessWaitReturnsAtEarlierRealExit(t *testing.T) {
 	result, err := process.Execute(ctx, map[string]any{"action": "wait", "task": "finishes"})
 	if err != nil || result.Process.State != "exited" || !strings.Contains(result.Text, "finished") {
 		t.Fatalf("wait did not return final outcome: %+v %v", result, err)
+	}
+}
+
+func TestProcessRejectsFieldsForOtherActions(t *testing.T) {
+	tool := NewProcessTool(&ShellTool{})
+	for _, action := range []string{"wait", "stop", "list"} {
+		if _, err := tool.Execute(t.Context(), map[string]any{"action": action, "event": "output"}); err == nil || !strings.Contains(err.Error(), "only valid for watch") {
+			t.Fatalf("%s: %v", action, err)
+		}
+	}
+	if _, err := tool.Execute(t.Context(), map[string]any{"action": "list", "task": "build"}); err == nil {
+		t.Fatal("list silently ignored task")
+	}
+}
+
+func TestTempHintForMissingCrossCallInput(t *testing.T) {
+	for _, tc := range []struct {
+		output        string
+		scratch, want bool
+	}{
+		{"md5sum: /tmp/orig.md5: No such file or directory", true, true},
+		{"FileNotFoundError: [Errno 2] No such file or directory: '/tmp/tmp.A1/a.json'", true, true},
+		{"cat: /tmp/workspace/file: No such file or directory", true, false},
+		{"created /tmp/snapshot\ncat: archive/output: No such file or directory", true, false},
+		{"md5sum: /tmp/orig.md5: No such file or directory", false, false},
+	} {
+		text := formatProcessResult(processResult{info: processInfo{directory: "/tmp/workspace", status: "failed", hasScratch: tc.scratch}, output: tc.output})
+		if strings.Contains(text, "temp_hint:") != tc.want {
+			t.Fatalf("unexpected hint: %s", text)
+		}
 	}
 }

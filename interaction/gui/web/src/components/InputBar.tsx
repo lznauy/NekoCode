@@ -158,14 +158,22 @@ export function InputBar({
     })
   }, [imageAttachments, onPasteImages, onTextareaChange, replaceAtomicSelection, text])
 
-  const handleBeforeInput = useCallback((e: React.FormEvent<HTMLTextAreaElement>) => {
-	const native = e.nativeEvent as InputEvent
-	if (!native.inputType.startsWith('insert') && !native.inputType.startsWith('delete')) return
-	const start = e.currentTarget.selectionStart
-	const end = e.currentTarget.selectionEnd
-	const inserted = native.inputType === 'insertText' || native.inputType === 'insertCompositionText' ? (native.data ?? '') : ''
-	if (replaceAtomicSelection(start, end, inserted)) e.preventDefault()
-  }, [replaceAtomicSelection])
+  useEffect(() => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    const handleBeforeInput = (event: InputEvent) => {
+      if (!event.cancelable) return
+      const type = event.inputType
+      if (!type?.startsWith('insert') && !type?.startsWith('delete')) return
+      const lineBreak = type === 'insertLineBreak' || type === 'insertParagraph'
+      const inserted = lineBreak ? '\n' : (event.data ?? '')
+      if (replaceAtomicSelection(textarea.selectionStart, textarea.selectionEnd, inserted)) {
+        event.preventDefault()
+      }
+    }
+    textarea.addEventListener('beforeinput', handleBeforeInput)
+    return () => textarea.removeEventListener('beforeinput', handleBeforeInput)
+  }, [replaceAtomicSelection, textareaRef])
 
   const displayMode = busy && activeMode ? activeMode.replace(/\*$/, '') : interactionMode?.selected
   const oneShotMode = busy && activeMode.endsWith('*')
@@ -206,7 +214,6 @@ export function InputBar({
           value={text}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
-          onBeforeInput={handleBeforeInput}
           onPaste={handlePaste}
           disabled={busy || modeChanging || pastingImages}
           rows={1}

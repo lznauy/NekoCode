@@ -216,6 +216,7 @@ func TestSubagentListFiltersAndPaginatesHundredTasks(t *testing.T) {
 		for i := range items {
 			items[i] = SubagentSummary{ID: fmt.Sprintf("agent-%03d", i), SessionID: parent, Profile: "explore", Prompt: "inspect module", Status: "completed", CreatedAt: time.Unix(int64(i), 0)}
 		}
+		items[99].Title = "Release audit"
 		return items, nil
 	}}}
 	rt := New(&testBot{}, services)
@@ -227,6 +228,10 @@ func TestSubagentListFiltersAndPaginatesHundredTasks(t *testing.T) {
 	page, err = rt.Subagents(SubagentFilter{SessionID: "parent", Query: "AGENT-099", Limit: 10})
 	if err != nil || page.Total != 1 || page.Items[0].ID != "agent-099" {
 		t.Fatalf("search=%+v err=%v", page, err)
+	}
+	page, err = rt.Subagents(SubagentFilter{SessionID: "parent", Query: "RELEASE AUDIT", Limit: 10})
+	if err != nil || page.Total != 1 || page.Items[0].ID != "agent-099" {
+		t.Fatalf("title search=%+v err=%v", page, err)
 	}
 }
 

@@ -120,7 +120,7 @@ func (o ToolOutput) Render() string {
 	if o.Artifact.Path == "" {
 		return o.Text
 	}
-	return OutputReferenceHeader(o.Artifact.Path, !o.Artifact.Incomplete) + o.Text
+	return ArtifactHeader(o.Artifact) + o.Text
 }
 
 // BoundOutput preserves an existing artifact when narrowing its preview.
@@ -141,7 +141,7 @@ func (s *OutputStore) BoundOutput(output ToolOutput, limit int) (ToolOutput, err
 		}
 		output.Artifact = protocol.ToolOutputArtifact{Path: path}
 	}
-	header := OutputReferenceHeader(output.Artifact.Path, !output.Artifact.Incomplete)
+	header := ArtifactHeader(output.Artifact)
 	if len(header) > limit {
 		return ToolOutput{}, fmt.Errorf("output budget %d cannot hold a complete result reference", limit)
 	}
@@ -166,6 +166,13 @@ func (s *OutputStore) CheckArtifact(artifact protocol.ToolOutputArtifact) error 
 // DeferredOutput is a complete status even when no content budget remains.
 const DeferredOutput = "[Tool result deferred: insufficient context budget. Run /compact or start a new session before continuing.]"
 const DeferredOutputSource = "tool_output_deferred"
+
+func ArtifactHeader(artifact protocol.ToolOutputArtifact) string {
+	if artifact.FullDiff && !artifact.Incomplete {
+		return fmt.Sprintf("[Full diff: %s]\n", artifact.Path)
+	}
+	return OutputReferenceHeader(artifact.Path, !artifact.Incomplete)
+}
 
 func OutputReferenceHeader(path string, complete bool) string {
 	label := "Full result"

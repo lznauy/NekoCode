@@ -1,0 +1,7 @@
+payment_id,order,currency,amount,status
+p3,B,USD,60,posted
+p1,A,CNY,35,posted
+p2,A,CNY,65,pending
+p1,A,CNY,35,posted
+p5,D,CNY,9,posted
+p4,A,USD,3,posted

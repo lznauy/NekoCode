@@ -23,7 +23,7 @@ func (t *TreeTool) Description() string {
 
 func (t *TreeTool) Parameters() []core.Parameter {
 	return []core.Parameter{
-		{Name: "path", Type: "string", Required: true, Description: "Directory to show (absolute path)"},
+		{Name: "path", Type: "string", Required: true, Description: "Directory to show, relative to the workspace root or absolute."},
 		{Name: "depth", Type: "integer", Required: false, Description: "Levels deep (default 3, max 6)"},
 		{Name: "limit", Type: "integer", Required: false, Description: "Max entries to show (default 400, max 800)"},
 	}
@@ -51,26 +51,26 @@ func (t *TreeTool) Execute(ctx context.Context, args map[string]any) (core.ToolO
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s/\n", filepath.Base(safePath))
 
-	count, err := walkTree(safePath, "", depth, limit, &b)
+	count, truncated, err := walkTree(safePath, "", depth, limit, &b)
 	if err != nil {
 		return core.ToolOutput{Text: b.String() + "\n[Tree incomplete: a directory could not be read.]"}, err
 	}
 	if count == 0 {
-		b.WriteString("(empty)")
+		b.WriteString("(no visible entries; use list to include dotfiles)")
 	}
-	if count >= limit {
-		fmt.Fprintf(&b, "\n... [reached limit of %d entries]", limit)
+	if truncated {
+		fmt.Fprintf(&b, "\n... [more visible entries omitted at limit %d; narrow path or increase limit]", limit)
 	}
 	return core.ToolOutput{Text: b.String()}, nil
 }
 
-func walkTree(dir, prefix string, depth, limit int, b *strings.Builder) (int, error) {
+func walkTree(dir, prefix string, depth, limit int, b *strings.Builder) (int, bool, error) {
 	if depth <= 0 {
-		return 0, nil
+		return 0, false, nil
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return 0, fmt.Errorf("read dir %s: %w", dir, err)
+		return 0, false, fmt.Errorf("read dir %s: %w", dir, err)
 	}
 
 	type item struct {
@@ -88,7 +88,7 @@ func walkTree(dir, prefix string, depth, limit int, b *strings.Builder) (int, er
 	count := 0
 	for i, it := range items {
 		if count >= limit {
-			break
+			return count, true, nil
 		}
 		conn, next := "├── ", prefix+"│   "
 		if i == len(items)-1 {
@@ -97,15 +97,15 @@ func walkTree(dir, prefix string, depth, limit int, b *strings.Builder) (int, er
 
 		if it.isDir {
 			fmt.Fprintf(b, "%s%s%s/\n", prefix, conn, it.name)
-			n, err := walkTree(filepath.Join(dir, it.name), next, depth-1, limit-count-1, b)
+			n, truncated, err := walkTree(filepath.Join(dir, it.name), next, depth-1, limit-count-1, b)
 			count += n
-			if err != nil {
-				return count + 1, err
+			if err != nil || truncated {
+				return count + 1, truncated, err
 			}
 		} else {
 			fmt.Fprintf(b, "%s%s%s\n", prefix, conn, it.name)
 		}
 		count++
 	}
-	return count, nil
+	return count, false, nil
 }

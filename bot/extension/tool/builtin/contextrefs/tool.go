@@ -90,6 +90,9 @@ func (t *Tool) Execute(ctx context.Context, args map[string]any) (core.ToolOutpu
 	}
 	switch action {
 	case "list":
+		if _, supplied := args["id"]; supplied {
+			return core.ToolOutput{}, fmt.Errorf("id selects one reference: use inspect with id, or omit id to list references")
+		}
 		var err error
 		q.Before, err = integer(args, "before", 0)
 		if err != nil {
@@ -103,6 +106,11 @@ func (t *Tool) Execute(ctx context.Context, args map[string]any) (core.ToolOutpu
 			return core.ToolOutput{}, fmt.Errorf("limit must be between 1 and 20")
 		}
 	case "inspect":
+		for _, key := range []string{"before", "limit"} {
+			if _, supplied := args[key]; supplied {
+				return core.ToolOutput{}, fmt.Errorf("%s is for list pagination; omit it to inspect one reference", key)
+			}
+		}
 		q.ID, _ = args["id"].(string)
 		if q.ID == "" || len(q.ID) > 128 {
 			return core.ToolOutput{}, fmt.Errorf("inspect requires a reference ID")

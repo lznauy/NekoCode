@@ -48,12 +48,12 @@ func (t *TaskTool) Wire(run taskbridge.TaskRunner) {
 
 func (t *TaskTool) Name() string { return "task" }
 func (t *TaskTool) Description() string {
-	return "Delegate independent, multi-step work to an isolated general-purpose sub-agent. Give the task a short title; the prompt is detailed instructions, not its display name. Choose a capability profile, then compose task-scoped skills: coder may modify the workspace; explore is strictly read-only. Custom plugin profiles are also accepted. Skills define workflow only and cannot expand the profile's tools. Include the exact goal, scope, relevant paths, constraints, and expected evidence. Follow the active work mode when choosing delegation or direct execution, and verify returned claims before relying on them. Sub-agents cannot delegate further tasks: when parallel fan-out is needed, invoke multiple task tools directly from the parent agent instead of asking one sub-agent to dispatch child tasks."
+	return "Delegate independent, multi-step work to a sub-agent with its own conversation. Give the task a short title; the prompt is detailed instructions, not its display name. Choose a capability profile, then compose task-scoped skills: coder may modify the workspace; explore is strictly read-only. Custom plugin profiles are also accepted. Skills define workflow only and cannot expand the profile's tools. Include the exact goal, scope, relevant paths, constraints, and expected evidence. Follow the active work mode when choosing delegation or direct execution, and verify returned claims before relying on them. Sub-agents cannot delegate further tasks: when parallel fan-out is needed, invoke multiple task tools directly from the parent agent instead of asking one sub-agent to dispatch child tasks."
 }
 
 func (t *TaskTool) Parameters() []core.Parameter {
 	return []core.Parameter{
-		{Name: "isolation", Type: "string", Description: "Optional shared or worktree. worktree creates a private Git HEAD checkout (excludes uncommitted parent changes). Results stay there until the user applies them with /worktree. Omit on resume to reuse saved mode. Cannot weaken a worktree profile to shared."},
+		{Name: "isolation", Type: "string", Enum: []string{"shared", "worktree"}, Description: "shared uses the original workspace; writes are visible to the parent. worktree creates a private Git HEAD checkout (excludes uncommitted parent changes). Results stay there until the user applies them with /worktree. Omit on resume to reuse saved mode. Cannot weaken a worktree profile to shared."},
 		{Name: "title", Type: "string", Description: "Short task display name, at most 80 characters. Do not copy the full prompt."},
 		{Name: "resume_id", Type: "string", Description: "Continue a saved subagent in the current parent session using the full task_list items[].id or the returned [Subagent ID]. Never use latest_attempt.id: it identifies an execution attempt, not a subagent. Omit profile and skills to reuse the saved capability profile and skills. Never resume a task that is still running."},
 		{Name: "profile", Type: "string",
@@ -154,6 +154,9 @@ func (t *TaskTool) execute(ctx context.Context, args map[string]any, readOnly bo
 		v, valid := raw.(string)
 		snapshot, super := mode.FromContext(ctx)
 		if !valid || (v != "shared" && v != "worktree" && !(v == "snapshot" && super && snapshot.ID == mode.SuperAgent)) {
+			if super && snapshot.ID == mode.SuperAgent {
+				return core.ToolOutput{}, fmt.Errorf("isolation must be shared, worktree, or snapshot")
+			}
 			return core.ToolOutput{}, fmt.Errorf("isolation must be shared or worktree")
 		}
 	}

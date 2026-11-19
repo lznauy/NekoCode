@@ -23,7 +23,7 @@ func TestToolValidatesQueryWithoutAcceptingCallerPathsOrScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, args := range []map[string]any{
-		{"action": "list", "limit": float64(21)}, {"action": "list", "limit": float64(0)}, {"action": "list", "before": float64(-1)}, {"action": "list", "before": 1.5}, {"action": "list", "before": math.NaN()}, {"action": "list", "before": math.Inf(1)}, {"action": "list", "before": 1e100}, {"action": "inspect"}, {"action": "inspect", "id": string(make([]byte, 129))}, {"action": "unknown"},
+		{"action": "list", "limit": float64(21)}, {"action": "list", "limit": float64(0)}, {"action": "list", "before": float64(-1)}, {"action": "list", "before": 1.5}, {"action": "list", "before": math.NaN()}, {"action": "list", "before": math.Inf(1)}, {"action": "list", "before": 1e100}, {"action": "inspect"}, {"action": "inspect", "id": string(make([]byte, 129))}, {"action": "unknown"}, {"action": "list", "id": "ref"}, {"action": "inspect", "id": "ref", "before": float64(0)}, {"action": "inspect", "id": "ref", "limit": float64(1)},
 	} {
 		if _, err := tool.Execute(t.Context(), args); err == nil {
 			t.Fatalf("accepted malformed query: %+v", args)

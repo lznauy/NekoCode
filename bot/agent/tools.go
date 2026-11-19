@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"nekocode/bot/agent/internal/toolpolicy"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/taskbridge"
@@ -179,7 +178,7 @@ func (r *toolRunner) filterToolCalls(calls []core.ToolCallItem) filteredCalls {
 			}
 			continue
 		}
-		decision := toolpolicy.Check(r.agent.deps.gov, effectiveToolCall(c), r.agent.getCtx())
+		decision := r.agent.run.writeDrafts.Check(r.agent.getCtx(), r.agent.deps.gov, r.agent.deps.toolRegistry.Workspace(), &c)
 		for j := range decision.Hints {
 			hint := decision.Hints[j]
 			out.PreToolHints = append(out.PreToolHints, &hint)

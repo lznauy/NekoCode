@@ -3,7 +3,6 @@ import json
 import os
 from pathlib import Path
 import sys
-import tempfile
 
 from .catalog import ROOT, load_case, load_suite
 from .compare import compare
@@ -82,22 +81,21 @@ def main():
         print(json.dumps(result["counts"]))
         return 0
     if args.command == "reverify":
-        TrialLayout.read(args.trial)
+        layout = TrialLayout.read(args.trial)
         receipt = read_json(args.trial / "receipt.json")
         case = load_case(receipt["case_id"], case_dir=args.trial / "case")
         if case["fingerprint"] != receipt["case_fingerprint"]:
             raise ValueError("frozen case content changed")
-        from .storage import copy_tree, tree_hash
+        from .storage import tree_hash
         original = read_json(args.trial / "outcome.json")
         if original.get('product_retained') is False:
             raise ValueError('this trial retained reports only; temporary review source was cleaned. Rerun the pinned case to review it again')
         if tree_hash(args.trial / "product") != original["product_sha256"]:
             raise ValueError("saved product changed")
         args.output = new_verification(args.trial, args.output)
-        with tempfile.TemporaryDirectory(prefix="nekocode-eval-verify-") as temporary:
-            workspace = Path(temporary) / "workspace"
-            copy_tree(args.trial / "product", workspace)
-            result = verify(case, workspace, args.output.resolve() / "results", (args.trial / "answer.txt").read_text())
+        result = verify(case, args.trial / "product", args.output.resolve() / "results",
+                        (args.trial / "answer.txt").read_text(), events_path=layout.trace("events.jsonl"),
+                        original_workspace=receipt.get("workspace"))
         write_json(args.output / "source.json", {"trial": str(args.trial.resolve()), "case_fingerprint": case["fingerprint"], "product_sha256": original["product_sha256"]})
         print(str(args.output.resolve()))
         return 0 if result["product_passed"] else 1

@@ -149,7 +149,8 @@ func (e *Engine) executeToolBatch(ctx context.Context, cfg RunConfig, ctxMgr *ct
 			blocked[i] = core.NotExecuted(ctx, c, "profile", fmt.Sprintf("tool %q is disabled by sub-agent profile %q", name, profile.Name))
 			continue
 		}
-		guardDecision := toolpolicy.Check(cfg.guard, c, ctx)
+		guardDecision := state.writeDrafts.Check(ctx, cfg.guard, e.toolRegistry.Workspace(), &c)
+		calls[i] = c
 		preToolHints = append(preToolHints, guardDecision.Hints...)
 		if guardDecision.Terminated {
 			terminal = fmt.Errorf("subagent stopped by hook: %s", guardDecision.BlockReason)

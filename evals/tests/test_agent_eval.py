@@ -295,6 +295,18 @@ class EvalTests(unittest.TestCase):
         incomplete=self.make_run('incomplete');(incomplete/'trials/one/outcome.json').unlink()
         self.assertEqual(compare(base,incomplete,self.root/'compare-incomplete')['counts'],{'incomparable':1})
 
+    def test_delivery_cost_counts_failed_attempts_without_imputing_unknown_cost(self):
+        from agent_eval.compare import delivery_cost
+        ok = read_json(self.make_run("good") / "trials/one/outcome.json")
+        fail = read_json(self.make_run("failure", success=False, tokens=60) / "trials/one/outcome.json")
+        self.assertEqual(delivery_cost([ok, fail]), {"attempts": 2, "deliveries": 1,
+                         "model_calls_per_delivery": 8, "total_tokens_per_delivery": 160})
+        self.assertIsNone(delivery_cost([fail])["model_calls_per_delivery"])
+        fail["cost"]["total_tokens"] = None
+        self.assertIsNone(delivery_cost([ok, fail])["total_tokens_per_delivery"])
+        fail["integrity"]["all_call_ids_present"] = False
+        self.assertIsNone(delivery_cost([ok, fail])["model_calls_per_delivery"])
+
     def test_comparison_uses_contract_not_presentation_source_identity(self):
         base = self.make_run('contract-base')
         candidate = self.make_run('contract-candidate')
@@ -324,6 +336,27 @@ class EvalTests(unittest.TestCase):
 
 
 class ToolCostTests(unittest.TestCase):
+    def test_image_rechecks_follow_content_across_prompts_and_paths(self):
+        from agent_eval.telemetry import protocol_tool_cost
+        rows = []
+        for index, digest in enumerate(["a"*64, "a"*64, "b"*64]):
+            call = str(index)
+            rows.append(dict(type="control_request", request=dict(tool_name="image_understand",
+                             tool_use_id=call, input={"_nekocode_approved_image_sha256": digest})))
+            rows.append(dict(type="assistant", session_id="s", user_message_uuid="task",
+                        message=dict(content=[dict(type="tool_use", id=call, name="image_understand",
+                                                   input=dict(path=call, prompt=call))])))
+            rows.append(dict(type="user", session_id="s", user_message_uuid="task",
+                        message=dict(content=[dict(type="tool_result", tool_use_id=call,
+                                                   is_error=index == 0, content="API error (HTTP 429)" if index == 0 else "ok")])))
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "protocol.jsonl"
+            for frames, expected in [(rows, 1), (rows[1:], None)]:
+                path.write_text("".join(json.dumps(dict(direction="agent", message=f)) + "\n" for f in frames))
+                cost = protocol_tool_cost(path, "s")
+                self.assertEqual(cost["same_image_rechecks"], expected)
+                self.assertEqual(cost["image_rate_limits"], 1)
+
     def test_protocol_requests_deduplicate_and_exclude_setup_children(self):
         from agent_eval.telemetry import protocol_tool_cost
         with tempfile.TemporaryDirectory() as d:
@@ -344,7 +377,24 @@ class ToolCostTests(unittest.TestCase):
                     frame('user', [{'type': 'tool_result', 'tool_use_id': 'b', 'is_error': False,
                                     'content': 'process exited with status 1'}])]
             path.write_text(''.join(json.dumps(r) + '\n' for r in rows))
-            self.assertEqual(protocol_tool_cost(path, 's'), {'tool_requests': 2, 'tool_result_errors': 1, 'context_snapshot_polls': 0})
+            self.assertEqual(protocol_tool_cost(path, 's'), {'tool_rounds': 1, 'tool_rounds_before_first_read': None, 'tool_requests': 2, 'repeated_tool_requests': None, 'tool_result_errors': 1, 'context_snapshot_polls': 0, 'same_image_rechecks': 0, 'image_rate_limits': 0})
+            request['message']['message']['id'] = 'parallel-batch'
+            for block in request['message']['message']['content']:
+                block.update(name='read', input={'path': 'example.py'})
+            path.write_text(''.join(json.dumps(r) + '\n' for r in rows))
+            self.assertEqual(protocol_tool_cost(path, 's')['repeated_tool_requests'], 1)
+            self.assertEqual(protocol_tool_cost(path, 's')['tool_rounds_before_first_read'], 0)
+            # Production headless splits parallel starts into distinct message IDs.
+            first = frame('assistant', [{'type': 'tool_use', 'id': 'a', 'name': 'list', 'input': {}}])
+            first['message']['message']['id'] = 'first-frame'
+            second = frame('assistant', [{'type': 'tool_use', 'id': 'b', 'name': 'read', 'input': {'path': 'file'}}])
+            second['message']['message']['id'] = 'second-frame'
+            for sequence, expected in [([first, second, error, rows[-1]], 0),
+                                       ([first, error, second, rows[-1]], 1)]:
+                path.write_text(''.join(json.dumps(r) + '\n' for r in sequence))
+                cost = protocol_tool_cost(path, 's')
+                self.assertEqual(cost['tool_rounds_before_first_read'], expected)
+                self.assertEqual(cost['tool_rounds'], expected + 1)
             rows.append({'direction': 'host', 'message': {'type': 'control_request', 'request': {'subtype': 'context.snapshot'}}})
             path.write_text(''.join(json.dumps(r) + '\n' for r in rows))
             self.assertEqual(protocol_tool_cost(path, 's')['context_snapshot_polls'], 1)

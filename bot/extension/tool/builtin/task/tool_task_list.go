@@ -30,8 +30,8 @@ func (t *TaskListTool) Description() string {
 
 func (t *TaskListTool) Parameters() []core.Parameter {
 	return []core.Parameter{
-		{Name: "query", Type: "string", Description: "Optional case-insensitive search over task ID, profile, and prompt."},
-		{Name: "status", Type: "string", Description: "Optional exact task status filter, such as running, failed, completed, partial, or interrupted."},
+		{Name: "query", Type: "string", Description: "Optional case-insensitive search over task ID, title, profile, and prompt preview."},
+		{Name: "status", Type: "string", Description: "Optional exact task status filter, such as queued, running, waiting_dependencies, waiting_approval, waiting_question, completed, failed, partial, or interrupted."},
 		{Name: "offset", Type: "integer", Description: "Zero-based result offset. Default 0."},
 		{Name: "limit", Type: "integer", Description: "Maximum tasks to return, from 1 to 100. Default 20."},
 	}

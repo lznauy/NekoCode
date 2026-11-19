@@ -230,3 +230,43 @@ func TestRunDurationIsFixedBeforeSummary(t *testing.T) {
 		t.Fatalf("summary duration = %v, completed duration = %v", elapsedAtSummary, a.life.Duration())
 	}
 }
+
+func TestMentionedFileHint(t *testing.T) {
+	for input, want := range map[string]string{
+		"请审查 cache.py 中的函数":                   "cache.py",
+		"inspect ./src/cache.py":              "src/cache.py",
+		"compare a.py and b.py":               "",
+		"open https://example.org/main.py":    "",
+		"read ../outside.py":                  "",
+		"compare cache.py with version 1.2.3": "cache.py",
+		"check 127.0.0.1":                     "",
+		"visit example.org":                   "",
+		"explain v1.2.3":                      "",
+		"check 127.0.0.1 and example.org":     "",
+		"inspect ./archive.001":               "archive.001",
+		"inspect src/cache.custom":            "src/cache.custom",
+		"compare cache.py with example.org":   "cache.py",
+		"find **/nested.py":                   "",
+	} {
+		if got := mentionedFile(input); got != want {
+			t.Errorf("mentionedFile(%q)=%q want %q", input, got, want)
+		}
+	}
+
+	a := preservedTestAgent(t, t.TempDir())
+	model := &executionLLM{}
+	a.deps.llmClient = model
+	for step := 0; step < 2; step++ {
+		a.run.step = step
+		if _, err := a.modelRunner.callLLMForTool("inspect absent.py"); err != nil {
+			t.Fatal(err)
+		}
+		if got := messagesContain(model.messages[step], `User-supplied path: "absent.py"`); got != (step == 0) {
+			t.Fatalf("step %d: user-supplied path hint present=%v", step, got)
+		}
+	}
+	snapshot := a.deps.ctxMgr.Snapshot()
+	if messagesContain(snapshot.Messages, "User-supplied path:") || messagesContain(snapshot.Transcript, "User-supplied path:") {
+		t.Fatal("first-turn path hint persisted in history")
+	}
+}

@@ -10,6 +10,7 @@ import time
 
 from .storage import copy_tree, digest, tree_hash, write_json, evaluator_fingerprint, json_hash, EVALUATION_CONTRACT_VERSION
 from .telemetry import coordination_audit, Telemetry, protocol_tool_cost
+from . import verifier_sandbox
 from .verification import verify, stop_process
 from .layout import TrialLayout
 from .repository import prepare_repository, run_git
@@ -299,7 +300,7 @@ def _run_trial(case, binary, model, mode, telemetry_root, directory, repeat, pol
     prompt = case["paths"]["prompt"].read_text()
     receipt = {"schema_version": 1, "layout_version": 2, "trial_id": directory.name, "case_id": case["manifest"]["id"],
                "case_version": case["manifest"]["version"], "case_fingerprint": case["fingerprint"],
-               "case_receipt": case["receipt"], "repeat": repeat, "model_requested": model, "mode": mode,
+               "case_receipt": case["receipt"], "workspace": str(workspace.resolve()), "repeat": repeat, "model_requested": model, "mode": mode,
                "interaction_policy": policy, "external_config_fingerprint": config_fingerprint,
                "binary_sha256": digest(Path(binary).read_bytes()), "environment": environment_receipt(),
                "budgets": case["manifest"]["budgets"], "telemetry_adapter": "nekocode-local-journal-v1", "evaluator_fingerprint": evaluator_fingerprint(),
@@ -308,6 +309,7 @@ def _run_trial(case, binary, model, mode, telemetry_root, directory, repeat, pol
     write_json(directory / 'state.json', {'status': 'preparing'})
     preparation_started = time.monotonic()
     try:
+        verifier_sandbox.preflight(case)
         if repository:
             receipt['repository'] = prepare_repository(case, workspace, layout.trace('preparation.log'))
         else:
@@ -348,10 +350,8 @@ def _run_trial(case, binary, model, mode, telemetry_root, directory, repeat, pol
         # Products stay frozen; generated code is verified in a disposable copy.
         copy_tree(workspace, directory / 'product')
         product_hash = tree_hash(directory / 'product')
-        with tempfile.TemporaryDirectory(prefix='nekocode-eval-verify-') as temporary:
-            verification_workspace = Path(temporary) / 'workspace'
-            copy_tree(directory / 'product', verification_workspace)
-            verification = verify(case, verification_workspace, layout.verification, execution['final_text'])
+        verification = verify(case, directory / 'product', layout.verification, execution['final_text'],
+                              events_path=layout.trace('events.jsonl'), original_workspace=workspace)
     background_snapshot = telemetry.background()
     write_json(layout.trace("tasks.json"), background_snapshot if background_snapshot is not None else {"available": False})
     coordination = coordination_audit(list(telemetry.events.values()), background_snapshot)
@@ -360,11 +360,11 @@ def _run_trial(case, binary, model, mode, telemetry_root, directory, repeat, pol
     completeness = {"calls_observed": bool(telemetry.calls), "events_observed": bool(telemetry.events),
                     "public_task_result": execution['task_result_seen'], "background_state_observed": telemetry.background() is not None,
                     "all_call_ids_present": bool(telemetry.calls) and all(c.get("call_id") for c in telemetry.calls.values()),
-                    "tool_counter_scope": {"tool_requests": "root task protocol, unique run/call IDs", "tool_result_errors": "root task protocol is_error results", "tool_started": "local session runtime events", "tool_blocked": "local session runtime events", "tool_calls": "compatibility alias of tool_started"},
+                    "tool_counter_scope": {"repeated_tool_requests": "same name and JSON arguments with a distinct call ID in the same root run; includes legitimate rechecks", "tool_requests": "root task protocol, unique run/call IDs", "tool_result_errors": "root task protocol is_error results", "tool_started": "local session runtime events", "tool_blocked": "local session runtime events", "tool_calls": "compatibility alias of tool_started"},
                     "limitations": ["image_understand attempts are logged; providers can omit usage. Unknown usage is not zero, and token caps use the observed subtotal as a lower bound. Other uninstrumented model tools may still be absent.", "Local journal/calllog adapter; rotating or disabled logs can undercount.",
                                     ("Native model admission counts in-flight requests; admitted work settles under the wall-clock budget. Token cap still polls observed usage and can overshoot." if execution['native_budget'] else "Call/token caps are checked after completed physical calls; in-flight calls can overshoot."),
                                     "External configuration is not isolated; an explicit config fingerprint is required for strict comparison.",
-                                    "Verifier executes locally; disposable workspaces are not a security boundary."]}
+                                    "Verifier and product checks run under Linux bubblewrap in private namespaces. This does not isolate the model execution stage or adjudicate malicious grading manipulation."]}
     outcome = {"schema_version": 1, "layout_version": 2, "trial_id": directory.name, "session": telemetry.session, "stop_reason": execution['stop'],
                "error": execution['failure'], "elapsed_s": round(execution['execution_elapsed'], 3), "verification_elapsed_s": round(time.monotonic() - verification_started, 3), "cost": cost,
                "verification": verification, "success": execution['stop'] == "settled" and verification["product_passed"] and not execution['failure'],
@@ -378,6 +378,10 @@ def _run_trial(case, binary, model, mode, telemetry_root, directory, repeat, pol
               f"- Model calls: {cost['model_calls']}; total tokens: {cost['total_tokens']}; fresh: {cost['fresh_tokens']}",
               f"- Tool model calls: {cost['tool_model_calls']}; calls with unknown usage: {cost['usage_unknown_calls']}; observed token subtotal (lower bound): {cost['observed_total_tokens']}",
               f"- Tool requests (root wire): {cost['tool_requests']}; started (session runtime): {cost['tool_started']}; blocked: {cost['tool_blocked']}; error results (root wire): {cost['tool_result_errors']}",
+              f"- Root tool-call rounds: {cost['tool_rounds']}",
+              f"- Root tool-call rounds before first successful read: {cost['tool_rounds_before_first_read']}",
+              f"- Repeated root requests (same tool and arguments, includes legitimate rechecks): {cost['repeated_tool_requests']}",
+              f"- Same-image rechecks (identical ordered image bytes): {cost['same_image_rechecks']}; image HTTP 429 results: {cost['image_rate_limits']}",
               f"- Context snapshot polls (harness control traffic): {cost['context_snapshot_polls']}",
               f"- Execution seconds (including shutdown, excluding verification): {outcome['elapsed_s']}",
               f"- Host-mode requests denied: {execution['interactions']['host_requests']}", "", "## Independent checks", ""]

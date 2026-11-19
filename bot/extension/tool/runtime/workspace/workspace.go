@@ -181,7 +181,7 @@ func (m *Manager) CheckWrite(path string) (string, Root, bool, error) {
 }
 
 func (m *Manager) check(path string, need Access) (string, Root, bool, error) {
-	resolved, err := Resolve(m.anchor(path))
+	resolved, err := m.Resolve(path)
 	if err != nil {
 		return "", Root{}, false, err
 	}
@@ -199,6 +199,11 @@ func (m *Manager) check(path string, need Access) (string, Root, bool, error) {
 		}
 	}
 	return resolved, Root{}, false, nil
+}
+
+// Resolve canonicalizes a tool target relative to this workspace, without granting access.
+func (m *Manager) Resolve(path string) (string, error) {
+	return Resolve(m.anchor(path))
 }
 
 func (m *Manager) anchor(path string) string {

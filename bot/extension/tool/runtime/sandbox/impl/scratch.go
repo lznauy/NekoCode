@@ -1,11 +1,15 @@
 package impl
 
 import (
+	_ "embed"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+//go:embed browser-check.mjs
+var browserCheckSource string
 
 // commandEnvironment changes only sandbox commands. Shell exports still take
 // precedence; the user's HOME and module cache configuration are preserved.
@@ -16,6 +20,10 @@ func commandEnvironment(env []string, profile Profile) []string {
 	}
 	env = append([]string(nil), env...)
 	env = setEnv(env, "NEKOCODE_SCRATCH", directory)
+	// Supply the embedded helper afresh for each command across permission grants.
+	env = setEnv(env, "NEKOCODE_BROWSER_CHECK", browserCheckSource)
+	// Headless Chrome creates its temporary profile beneath the config root.
+	env = setEnv(env, "CHROME_CONFIG_HOME", filepath.Join(directory, "chrome-config"))
 	env = setEnv(env, "XDG_CACHE_HOME", filepath.Join(directory, "cache"))
 	return setEnv(env, "GOCACHE", filepath.Join(directory, "cache", "go-build"))
 }

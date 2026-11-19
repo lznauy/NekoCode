@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "id": "inventory-release",
+  "version": 1,
+  "title": "库存导出工具交付",
+  "tags": [
+    "completion",
+    "cli"
+  ],
+  "kind": "product",
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "aggregate",
+      "description": "跨文件汇总及排序",
+      "required": true
+    },
+    {
+      "id": "csv",
+      "description": "合法 CSV 往返和表头",
+      "required": true
+    },
+    {
+      "id": "atomic",
+      "description": "拒绝错误输入并保留既有输出",
+      "required": true
+    },
+    {
+      "id": "handover",
+      "description": "运行手册与真实验收状态",
+      "required": true
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 600,
+    "model_calls": 75,
+    "total_tokens": 2400000,
+    "verifier_seconds": 90
+  },
+  "source": "Original NekoCode capability evaluation"
+}

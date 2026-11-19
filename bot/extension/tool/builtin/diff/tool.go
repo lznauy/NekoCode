@@ -18,7 +18,7 @@ func (t *Tool) Name() string                                    { return "diff" 
 func (t *Tool) ExecutionMode(map[string]any) core.ExecutionMode { return core.ModeParallel }
 
 func (t *Tool) Description() string {
-	return "Show unified diff between two texts or files, including terminal newline changes. File inputs must be regular files of at most 64 MiB. Useful for previewing changes before applying them, comparing file versions, or reviewing what an edit would change."
+	return "Compare two texts or files without modifying them. Output is a numbered review preview (+newLine:text, -oldLine:text), including terminal newline changes. Use the original source text when editing; the preview is not a patch for git apply. File inputs must be regular files of at most 64 MiB. Useful for previewing changes before applying them, comparing file versions, or reviewing what an edit would change."
 }
 
 func (t *Tool) Parameters() []core.Parameter {
@@ -39,13 +39,13 @@ func (t *Tool) Parameters() []core.Parameter {
 			Name:        "context",
 			Type:        "integer",
 			Required:    false,
-			Description: "Number of context lines around each hunk (default 3).",
+			Description: "Number of surrounding unchanged lines. Default 3; zero or a negative value shows only changes.",
 		},
 		{
 			Name:        "path",
 			Type:        "string",
 			Required:    false,
-			Description: "Optional file path for display in the diff header.",
+			Description: "Optional display label in the header. To read a file, pass path:<filename> in old or new.",
 		},
 	}
 }

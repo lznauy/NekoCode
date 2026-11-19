@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "approval-reconcile",
+  "version": 1,
+  "title": "区分有效签收与归档签收",
+  "tags": [
+    "efficiency",
+    "evidence"
+  ],
+  "kind": "review",
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "positive",
+      "description": "匹配当前版本及有效签收标识",
+      "required": true
+    },
+    {
+      "id": "gap",
+      "description": "缺失批准不得当作批准或拒绝",
+      "required": true
+    },
+    {
+      "id": "scope",
+      "description": "登记表和签收记录完整",
+      "required": true
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 150,
+    "model_calls": 12,
+    "total_tokens": 180000,
+    "verifier_seconds": 15
+  },
+  "source": "Original evidence-sufficiency evaluation"
+}

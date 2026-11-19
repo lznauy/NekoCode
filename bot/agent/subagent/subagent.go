@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"nekocode/bot/agent/internal/kernel"
+	"nekocode/bot/agent/internal/toolpolicy"
 	"nekocode/bot/calllog"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/extension/agentprofile"
@@ -49,6 +50,7 @@ type Config struct {
 }
 
 type runState struct {
+	writeDrafts       toolpolicy.WriteDrafts
 	startTime         time.Time
 	toolUseCount      int
 	totalTokens       int

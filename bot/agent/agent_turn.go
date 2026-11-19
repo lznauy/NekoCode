@@ -107,6 +107,9 @@ func (r *turnRunner) handleText(reasoning *reasoningResult, callback RunCallback
 	if recordable && a.run.todoUpdateError == "" && r.continueUnfinishedPlan() {
 		return a.run.err != nil
 	}
+	if recordable && r.reviewPreservedFiles(&reasoning.ActionInput, true) {
+		return false
+	}
 	r.completeWithText(reasoning, recordable, callback)
 	return true
 }
@@ -201,6 +204,7 @@ func (r *turnRunner) applyStopHint(reasoning *reasoningResult, hint *policy.Hint
 			a.clearFinalState()
 		} else {
 			if recordable {
+				r.reviewPreservedFiles(&reasoning.ActionInput, false)
 				reasoning.ActionInput += r.todoDispositionSummary(false)
 			}
 			r.recordReasoningText(reasoning, recordable)
@@ -270,6 +274,7 @@ func (r *turnRunner) applyStopOutcome(out policy.Outcome, reasoning *reasoningRe
 			a.clearFinalState()
 		} else {
 			if recordable {
+				r.reviewPreservedFiles(&reasoning.ActionInput, false)
 				reasoning.ActionInput += r.todoDispositionSummary(true)
 			}
 			r.recordReasoningText(reasoning, recordable)

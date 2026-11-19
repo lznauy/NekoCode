@@ -40,7 +40,7 @@ func (t *WebSearchTool) Description() string {
 func (t *WebSearchTool) Parameters() []core.Parameter {
 	return []core.Parameter{
 		{Name: "query", Type: "string", Required: true, Description: "Search query"},
-		{Name: "numResults", Type: "number", Required: false, Description: "Number of results, default 8, max 15"},
+		{Name: "numResults", Type: "integer", Required: false, Description: "Positive result count. Defaults to 8; values above 15 are capped."},
 		{Name: "provider", Type: "string", Enum: []string{"auto", "exa", "tavily"}, Description: "Default auto; explicit providers disable cross-provider fallback. Search queries are sent to the selected service(s)."},
 		{Name: "domains", Type: "array", Items: &core.Schema{Type: "string"}, Description: "Optional 1–20 DNS domains to restrict sources, including their subdomains. Requires EXA_API_KEY or TAVILY_API_KEY. Omit for unrestricted search."},
 	}

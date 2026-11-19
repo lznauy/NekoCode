@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "id": "catalog-recovery",
+  "version": 2,
+  "title": "历史目录迁移与日志恢复",
+  "tags": [
+    "migration",
+    "replay",
+    "atomicity",
+    "delivery"
+  ],
+  "kind": "product",
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "archive",
+      "description": "真实归档交付并保留原件",
+      "required": true
+    },
+    {
+      "id": "migration",
+      "description": "旧版空日志升级",
+      "required": true
+    },
+    {
+      "id": "replay",
+      "description": "墓碑、过时事件、重复执行与复活",
+      "required": true
+    },
+    {
+      "id": "conflict",
+      "description": "同版本冲突整批回滚",
+      "required": true
+    },
+    {
+      "id": "invalid",
+      "description": "非法日志和未来版本保留原件",
+      "required": true
+    },
+    {
+      "id": "publish",
+      "description": "已有文件读者保留旧快照",
+      "required": true
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 600,
+    "model_calls": 75,
+    "total_tokens": 2400000,
+    "verifier_seconds": 90
+  },
+  "source": "Original mixed-version catalog recovery task"
+}

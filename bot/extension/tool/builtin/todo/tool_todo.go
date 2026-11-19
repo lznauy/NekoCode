@@ -113,16 +113,27 @@ func (t *TodoWriteTool) Execute(ctx context.Context, args map[string]any) (core.
 
 	done := protocol.CountCompleted(items)
 	for i, it := range items {
-		fmt.Fprintf(&b, "%d. [%s] %s %s %s", i+1, it.ID, todoStatusIcon(it.Status), it.Status, protocol.SubagentTextPreview(it.Content, 64))
+		fmt.Fprintf(&b, "%d. [%s] %s %s %s", i+1, it.ID, todoStatusIcon(it.Status), it.Status, todoPreview(it.Content))
+		if it.Result != "" {
+			fmt.Fprintf(&b, " [result: %s]", todoPreview(it.Result))
+		}
 		if it.Reason != "" {
-			fmt.Fprintf(&b, " (%s)", protocol.SubagentTextPreview(it.Reason, 64))
+			fmt.Fprintf(&b, " (%s)", todoPreview(it.Reason))
 		}
 		b.WriteByte('\n')
 	}
 	if len(items) > 0 && done == len(items) {
-		fmt.Fprintf(&b, "All %d tasks complete.", done)
+		fmt.Fprintf(&b, "All %d checklist items are marked completed.", done)
 	}
 	return core.ToolOutput{Text: b.String()}, nil
+}
+
+func todoPreview(text string) string {
+	preview := protocol.SubagentTextPreview(text, 64)
+	if len(preview) < len(text) {
+		return preview + "…"
+	}
+	return preview
 }
 
 func todoStatusIcon(status string) string {

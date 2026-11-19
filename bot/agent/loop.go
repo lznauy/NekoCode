@@ -214,6 +214,9 @@ func (r *loopRunner) startRun(input string, images []types.MessageImage) {
 		a.deps.ctxMgr.Add("user", input, types.MessageSourceRuntimeEvent)
 	} else {
 		a.deps.ctxMgr.AddUser(input, images)
+		if a.deps.toolRegistry != nil {
+			a.run.preserved = a.capturePreservedFiles(input)
+		}
 	}
 }
 

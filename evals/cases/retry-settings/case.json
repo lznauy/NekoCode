@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "retry-settings",
+  "version": 1,
+  "title": "更新客户端重试配置",
+  "tags": [
+    "short-task",
+    "configuration"
+  ],
+  "kind": "product",
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "active",
+      "description": "生产配置的新重试策略",
+      "required": true
+    },
+    {
+      "id": "preserved",
+      "description": "保留其他已有配置",
+      "required": true
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 240,
+    "model_calls": 25,
+    "total_tokens": 500000,
+    "verifier_seconds": 15
+  },
+  "source": "Original short-task evaluation"
+}

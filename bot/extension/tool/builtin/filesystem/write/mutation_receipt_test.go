@@ -60,6 +60,9 @@ func TestCompactWritePreservesDiffAndRevokesOnMissingReceipt(t *testing.T) {
 	if strings.Contains(out.Text, "unique-source-line") || len(out.Render()) >= 2048 {
 		t.Fatal("full new source repeated", len(out.Render()))
 	}
+	if strings.Contains(out.Render(), "truncated") || !strings.Contains(out.Render(), "[Full diff:") {
+		t.Fatal("misleading write receipt", out.Render())
+	}
 	if out.Artifact.Path == "" {
 		t.Fatal("full diff lost")
 	}

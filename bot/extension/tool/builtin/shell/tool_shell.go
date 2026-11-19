@@ -74,19 +74,19 @@ func (t *ShellTool) ExecutionMode(map[string]any) core.ExecutionMode {
 }
 
 func (t *ShellTool) Description() string {
-	return "Execute a shell command in a permission-managed sandbox; default workspace-write, network disabled. " +
-		"Quick commands return output; longer commands return a task name. Use the process tool to wait/watch/list/stop. Observation expiry leaves the command running; timeout_ms is a separate hard lifetime. Identical anonymous live launches reuse the process; use distinct names for intentional copies. " +
-		"Files: use authorized workspace paths to share files across shell/read/edit/image tools. On Linux, /tmp is private to each command. $NEKOCODE_SCRATCH survives shell calls in this actor/workspace but is shell-only and removed when the toolbox closes; GOCACHE and XDG_CACHE_HOME are writable there unless overridden. " +
-		"Local services: isolated localhost is private to each command. Run server, bounded readiness probe, client/browser and trap-based cleanup in ONE command. Chrome may need --user-data-dir under $NEKOCODE_SCRATCH. For separate calls needing host-network listening/access, request network=true; configured domain restrictions still apply. " +
-		"Results: status: failed and exit_code indicate command failure. Preserve upstream pipeline failures with pipefail or separate commands. Large output has a saved artifact: read it instead of rerunning. Capture is capped at 8 MiB and marked incomplete on capture limits/errors. " +
-		"Network, extra writable roots and host execution require minimal permission requests; see parameters. Host files outside authorized writable roots are read-only. On likely sandbox failures, inspect partial side effects and retry with the smallest outbound_domains/network/writable_roots/sandbox_mode request; respect denials. host mode cannot combine with outbound_domains, including inherited restrictions."
+	return "Run commands in a permission-managed sandbox (workspace-write, network off). For files you may edit, use read first; shell output gives no version receipt. " +
+		"Long commands return a task for the process tool. Observation timeout leaves it running; timeout_ms kills the group. Identical anonymous live commands reuse a task. " +
+		"Share files with other tools via workspace paths. In the Linux sandbox /tmp and isolated localhost are private to each command; $NEKOCODE_SCRATCH persists across calls in this actor/workspace with writable GOCACHE and XDG_CACHE_HOME, shell-only until toolbox close. " +
+		"Start server and client in ONE command with cleanup: server_command & pid=$!; trap 'kill $pid' EXIT; node --input-type=module -e \"${NEKOCODE_BROWSER_CHECK:?Linux sandbox required}\" -- http://127.0.0.1:PORT/ 'predicate' 'do:action()' 'predicate'. Requires Chrome; actions run once, assertions retry. " +
+		"Check exit_code; run tests directly or use pipefail. Long output has a head/tail preview and readable transcript (8 MiB cap; incomplete captures marked). " +
+		"Network, extra writable roots and host execution require approval. Check partial side effects before retrying with minimal permissions; respect denials and domain restrictions."
 }
 
 func (t *ShellTool) Parameters() []core.Parameter {
 	return []core.Parameter{
-		{Name: "command", Type: "string", Required: true, Description: "Shell command to execute."},
-		{Name: "name", Type: "string", Required: false, Description: "Optional stable name for a command that may keep running; otherwise the runtime assigns one."},
-		{Name: "timeout_ms", Type: "number", Required: false, Description: "Optional hard lifetime. When reached, the runtime terminates the process group. Omit when the duration is unknown."},
+		{Name: "command", Type: "string", Required: true, Description: "Linux sandbox SVG/HTML screenshot (Node + Chrome): node --input-type=module -e \"${NEKOCODE_BROWSER_CHECK:?Linux sandbox required}\" -- --screenshot art.svg preview.png 900x640 (optional final argument X,Y,W,H crops the viewport; workspace PNG can be refreshed)."},
+		{Name: "name", Type: "string", Required: false, Description: "Optional task name; use distinct names for intentional concurrent copies."},
+		{Name: "timeout_ms", Type: "number", Required: false, Description: "Hard command lifetime in milliseconds. Omit if unknown."},
 		{Name: "sandbox_mode", Type: "string", Required: false, Enum: []string{"read-only", "workspace-write", "host"}, Description: "Defaults to workspace-write; read-only also prevents workspace writes. host requests unsandboxed execution and cannot be combined with outbound_domains, including an empty array or domains inherited from configuration."},
 		{Name: "network", Type: "boolean", Required: false, Description: "Default false. Set true for broad outbound network access or host-network listening. For isolated HTTP/HTTPS to known domains, use outbound_domains instead; a domain list enables its allowed egress without network=true, and network=true cannot widen that list."},
 		{Name: "outbound_domains", Type: "array", Items: &core.Schema{Type: "string"}, Description: "Optional exact DNS names, e.g. [\"example.com\"], for HTTP port 80 / HTTPS port 443 through the Linux native sandbox proxy. No URLs, IPs, ports or wildcards; list subdomains separately. Omit to use the network boolean; [] requires isolated networking with no egress. Use workspace-write or read-only, never host. Requested domains are intersected with matching permissions.sandbox rules; omitting this argument does not remove configured restrictions."},
@@ -198,7 +198,7 @@ func (t *ShellTool) run(ctx context.Context, args map[string]any, grant core.Per
 		return core.ToolOutput{Text: formatManagedShellRun(info.name, initial.output), Process: initial.observation, Artifact: initial.captured.Artifact}, nil
 	}
 	if info.status == "done" {
-		return core.ToolOutput{Text: initial.output, Process: initial.observation, Artifact: initial.captured.Artifact}, nil
+		return core.ToolOutput{Text: initial.output + shellCompletionHints(initial), Process: initial.observation, Artifact: initial.captured.Artifact}, nil
 	}
 	return processToolOutput(initial), nil
 }
@@ -249,7 +249,7 @@ func optionalDurationArg(args map[string]any, key string) (time.Duration, error)
 func formatManagedShellRun(task, output string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "task: %s\n", task)
-	b.WriteString("status: running\nlaunch_hint: A running process is not necessarily ready. For a persistent service, do not wait for its exit. Under isolated networking, perform server readiness checks and client requests in the same shell command; separate commands have separate localhost networks.\n")
+	b.WriteString("status: running\nlaunch_hint: Use process to wait for completion. For persistent services, probe readiness and run clients in the same shell command (isolated localhost).\n")
 	appendProcessOutput(&b, output)
 	return b.String()
 }

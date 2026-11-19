@@ -1,0 +1,1 @@
+为 Atlas 发布写一份中文值班手册。委派两位不同子代理分别依据 engineering.md 和 support.md，用 write 工具交付 ops.md 和 support-draft.md 两份独立草稿。主代理结合签署决定 decision.md，编辑成可独立使用的 HANDBOOK.md。最终手册应包含值班流程和可直接发送的客户通知，给出当前窗口、范围、提升阈值和持续时长、回退命令、客户影响和升级联系方式。窗口只给出了 UTC 时刻，勿自行补上日期。保留原始材料与草稿供复核。

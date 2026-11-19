@@ -6,6 +6,7 @@ import (
 	"flag"
 	"log"
 	"nekocode/bot/modelcatalog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -41,22 +42,31 @@ func main() {
 		log.Printf("connector %s: %s", status.name, status.message)
 	}
 
-	handler, err := newDaemonHandler(rt, *addr, httpapi.Options{Token: *token, AllowOrigin: *cors}, *enableA2A, *a2aURL)
+	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
 		_ = rt.Close()
+		log.Fatalf("listen: %v", err)
+	}
+	host, _, _ := net.SplitHostPort(*addr)
+	_, port, _ := net.SplitHostPort(listener.Addr().String())
+	boundAddr := net.JoinHostPort(host, port)
+	handler, err := newDaemonHandler(rt, boundAddr, httpapi.Options{Token: *token, AllowOrigin: *cors}, *enableA2A, *a2aURL)
+	if err != nil {
+		_ = rt.Close()
+		_ = listener.Close()
 		log.Fatalf("initialize HTTP server: %v", err)
 	}
 	srv := &http.Server{
-		Addr:              *addr,
+		Addr:              boundAddr,
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
-		printStartup(*addr, strings.TrimSpace(*token) != "", strings.TrimSpace(*cors) != "")
+		printStartup(boundAddr, strings.TrimSpace(*token) != "", strings.TrimSpace(*cors) != "")
 		if *enableA2A {
 			log.Print("A2A Agent Card: /.well-known/agent-card.json; A2A REST: /a2a")
 		}
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("daemon failed: %v", err)
 		}
 	}()

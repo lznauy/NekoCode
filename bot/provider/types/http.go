@@ -42,14 +42,19 @@ func DoJSONRequest(ctx context.Context, url string, headers map[string]string, b
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
 	if resp.StatusCode != nethttp.StatusOK {
-		return nil, utilhttp.NewHTTPError(resp.StatusCode, string(data))
+		return nil, responseError(resp)
 	}
-	return data, nil
+	return io.ReadAll(resp.Body)
+}
+
+func responseError(resp *nethttp.Response) error {
+	const limit = 64 << 10
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if len(body) > limit {
+		return utilhttp.NewHTTPError(resp.StatusCode, string(body[:limit])+" [truncated]")
+	}
+	return utilhttp.NewHTTPError(resp.StatusCode, string(body))
 }
 
 // StreamSSE reads an SSE stream from resp, extracts data payloads, and calls
@@ -80,8 +85,7 @@ func StreamSSE(
 	}()
 
 	if resp.StatusCode != nethttp.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		errCh <- utilhttp.NewHTTPError(resp.StatusCode, string(body))
+		errCh <- responseError(resp)
 		return
 	}
 

@@ -64,7 +64,21 @@ func TestQuestionToolReject(t *testing.T) {
 	_, err := tool.Execute(context.Background(), map[string]any{
 		"questions": []any{map[string]any{"question": "Continue?"}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "rejected") {
+	if err == nil || !strings.Contains(err.Error(), "without an answer") || strings.Contains(err.Error(), "by user") {
 		t.Fatalf("expected rejected error, got %v", err)
+	}
+}
+
+func TestQuestionCancelledWhileWaiting(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	tool := NewTool()
+	tool.SetQuestionFunc(func(protocol.QuestionRequest) protocol.QuestionReply {
+		cancel()
+		return protocol.QuestionReply{Rejected: true}
+	})
+	out, err := tool.Execute(ctx, map[string]any{"questions": []any{map[string]any{"question": "Continue?"}}})
+	if err != context.Canceled || out.Text != "" {
+		t.Fatalf("cancelled question: %q %v", out.Text, err)
 	}
 }

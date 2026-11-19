@@ -1,7 +1,6 @@
 package session
 
 import (
-	"bufio"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -81,12 +80,15 @@ func readHistoryEntry(f *os.File, seq int64) (historyEntry, error) {
 	var b [historyEntrySize]byte
 	_, err := f.ReadAt(b[:], historyHeaderSize+(seq-1)*historyEntrySize)
 	e := historyEntry{int64(binary.LittleEndian.Uint64(b[:8])), int64(binary.LittleEndian.Uint64(b[8:16])), int64(binary.LittleEndian.Uint64(b[16:24])), binary.LittleEndian.Uint32(b[24:28]), int64(binary.LittleEndian.Uint64(b[28:36]))}
-	if err == nil && (e.offset < 0 || e.length < 1 || e.length > 16<<20 || e.owner < 0 || e.owner > seq || e.reference < 0 || e.reference > seq || crc32.ChecksumIEEE(b[:36]) != binary.LittleEndian.Uint32(b[36:40])) {
+	if err == nil && (e.offset < 0 || e.length < 1 || e.owner < 0 || e.owner > seq || e.reference < 0 || e.reference > seq || crc32.ChecksumIEEE(b[:36]) != binary.LittleEndian.Uint32(b[36:40])) {
 		err = errors.New("invalid history index entry")
 	}
 	return e, err
 }
 func readHistoryRecord(f *os.File, e historyEntry, seq int64) (types.Message, error) {
+	if e.length < 1 || e.length > maxTranscriptRecordBytes {
+		return types.Message{}, fmt.Errorf("invalid history record length %d", e.length)
+	}
 	data := make([]byte, e.length)
 	if _, err := f.ReadAt(data, e.offset); err != nil {
 		return types.Message{}, err
@@ -159,8 +161,7 @@ func (s *HistoryStore) ensureContext(ctx context.Context, confirmed int, repair 
 	if _, err := source.Seek(m.size, io.SeekStart); err != nil {
 		return m, err
 	}
-	scanner := bufio.NewScanner(source)
-	scanner.Buffer(make([]byte, 64<<10), 16<<20)
+	scanner := transcriptScanner(source)
 	for scanner.Scan() {
 		if err := ctx.Err(); err != nil {
 			return m, err
@@ -449,8 +450,7 @@ func (m *Manager) WalkHistory(through int, visit func(types.Message) error) erro
 		return err
 	}
 	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64<<10), 16<<20)
+	scanner := transcriptScanner(f)
 	for seq := 1; seq <= through; seq++ {
 		if !scanner.Scan() {
 			if scanner.Err() != nil {

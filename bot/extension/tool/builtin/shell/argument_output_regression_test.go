@@ -109,3 +109,22 @@ func TestShellCaptureFailureDoesNotHideCommandExecution(t *testing.T) {
 		t.Fatalf("capture failure hid execution facts: %+v", result.observation)
 	}
 }
+
+func TestCompletedShellPreviewPreservesMiddleForLaterRead(t *testing.T) {
+	log := "first\n" + strings.Repeat("setup\n", 320) + "middle failure\n" + strings.Repeat("detail\n", 320) + "last\n"
+	task := observedTask(taskExited, 1, "", false)
+	task.outputStore = core.NewOutputStore(t.TempDir())
+	task.capture = core.NewOutputCapture(task.outputStore, core.MaxCapturedOutputBytes, nil)
+	task.appendLogs([]byte(log))
+	task.finishOutput()
+	close(task.drained)
+	result := task.completeObservation(logsReturnBytes)
+	if !strings.HasPrefix(result.output, "first\n") || !strings.HasSuffix(result.output, "last\n") || strings.Contains(result.output, "middle failure") || len(result.output) > completedPreviewBytes || result.observation.OutputComplete || result.observation.ExitCode != 1 {
+		t.Fatalf("incorrect preview or process result: %q %+v", result.output, result.observation)
+	}
+	t.Logf("transcript=%d preview=%d rendered=%d", len(log), len(result.output), len(processToolOutput(result).Render()))
+	full, err := os.ReadFile(result.captured.Artifact.Path)
+	if err != nil || string(full) != log || result.captured.Artifact.Incomplete {
+		t.Fatalf("transcript mismatch: %v", err)
+	}
+}

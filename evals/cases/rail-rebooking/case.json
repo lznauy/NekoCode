@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "id": "rail-rebooking",
+  "version": 1,
+  "title": "铁路中断改签：截止快照、候补分配与逐段核销",
+  "tags": [
+    "efficiency",
+    "product"
+  ],
+  "kind": "product",
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "snapshot",
+      "description": "版本与冲突判定",
+      "required": true
+    },
+    {
+      "id": "decisions",
+      "description": "按优先级逐团选择路径",
+      "required": true
+    },
+    {
+      "id": "capacity-final",
+      "description": "逐段容量核销",
+      "required": true
+    },
+    {
+      "id": "reconciliation",
+      "description": "分类对账",
+      "required": true
+    },
+    {
+      "id": "scope",
+      "description": "输入及工作区范围",
+      "required": true
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 360,
+    "model_calls": 30,
+    "total_tokens": 600000,
+    "verifier_seconds": 15
+  },
+  "source": "Original harness efficiency evaluation"
+}

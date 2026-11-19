@@ -180,6 +180,20 @@ func TestRecordToolResultsUsesEffectiveDelegatedIdentity(t *testing.T) {
 	}
 }
 
+func TestDraftForExistingFileRelativeToActiveWorkspace(t *testing.T) {
+	a := newTestAgent()
+	dir := t.TempDir()
+	a.deps.toolRegistry.Workspace().Configure(dir, nil)
+	const name = "relative_draft_target.txt"
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	filtered := a.toolRunner.filterToolCalls([]core.ToolCallItem{{Name: "write", Args: map[string]any{"path": name, "content": "replacement"}}})
+	if len(filtered.Allowed) != 0 || !strings.Contains(filtered.Blocked[0], "reuse=") {
+		t.Fatalf("expected blocked write with draft: %+v", filtered)
+	}
+}
+
 func TestFilterToolCallsReadBeforeWriteBlockComesFromHook(t *testing.T) {
 	a := newTestAgent()
 	path := filepath.Join(t.TempDir(), "main.go")

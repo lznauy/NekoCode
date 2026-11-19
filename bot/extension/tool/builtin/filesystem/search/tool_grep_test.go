@@ -5,6 +5,7 @@ import (
 	"nekocode/bot/extension/tool/runtime/core"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -81,5 +82,20 @@ func TestGrepAcceptsContextOptions(t *testing.T) {
 		if _, err := (&GrepTool{}).Execute(testutil.Context(td), map[string]any{"pattern": "func", "path": td, "context_lines": value}); err != nil {
 			t.Errorf("%q: %v", value, err)
 		}
+	}
+}
+
+func TestGrepKeepsNoMatchDiagnostic(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX command fixture")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "rg"), []byte("#!/bin/sh\necho 'No files were searched' >&2\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	out, err := (&GrepTool{}).Execute(testutil.Context(dir), map[string]any{"path": dir, "pattern": "needle"})
+	if err != nil || !strings.Contains(out.Text, "No files were searched") {
+		t.Fatalf("lost diagnostic: %q %v", out.Text, err)
 	}
 }

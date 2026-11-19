@@ -2,13 +2,59 @@ package edit
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"nekocode/bot/extension/tool/builtin/filesystem/read"
+	"nekocode/bot/extension/tool/runtime/execution"
 	"nekocode/bot/extension/tool/runtime/workspace"
 )
+
+func TestEditRecoversWithOneTargetedRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "large.txt")
+	before := strings.Repeat("unrelated\n", 600) + "old value\nsecond line\n"
+	writeFile(t, path, before)
+	state := execution.NewExecutionState()
+	ctx := execution.WithExecutionState(editTestContext(dir), state)
+	args := map[string]any{"path": path, "oldString": "old value\nsecond line", "newString": "updated"}
+	edit := &EditTool{}
+	checkRejection := func(reason string, start, end int, want string) {
+		t.Helper()
+		_, err := edit.Execute(ctx, args)
+		hint := fmt.Sprintf("startLine=%d, endLine=%d", start, end)
+		if err == nil || !strings.Contains(err.Error(), reason) || !strings.Contains(err.Error(), hint) {
+			t.Fatalf("expected %q and %q, got %v", reason, hint, err)
+		}
+		if readFile(t, path) != want {
+			t.Fatal("rejected edit modified the file")
+		}
+	}
+	deliverRead := func(start, end int) {
+		t.Helper()
+		out, err := (&read.ReadTool{}).Execute(ctx, map[string]any{"path": path, "startLine": start, "endLine": end})
+		if err != nil {
+			t.Fatal(err)
+		}
+		state.Reads.Observe(map[string]string{out.ReadID: out.Text})
+	}
+
+	checkRejection("no current read", 601, 602, before)
+	deliverRead(601, 602)
+	changed := "external update\n" + before
+	writeFile(t, path, changed)
+	checkRejection("file changed", 602, 603, changed)
+	deliverRead(602, 603)
+	if _, err := edit.Execute(ctx, args); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, path); got != strings.Replace(changed, args["oldString"].(string), "updated", 1) {
+		t.Fatal("edit did not preserve the external update")
+	}
+}
 
 func TestEditV2ExactUniqueReplacement(t *testing.T) {
 	td := t.TempDir()

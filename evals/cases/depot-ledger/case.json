@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "id": "depot-ledger",
+  "version": 3,
+  "title": "Depot Ledger 多仓持久化预留服务",
+  "tags": [
+    "product",
+    "migration",
+    "concurrency",
+    "idempotency"
+  ],
+  "kind": "product",
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "migration",
+      "description": "历史库原地升级和旧 CLI",
+      "required": true
+    },
+    {
+      "id": "cli_path",
+      "description": "新旧入口打开同一字面数据库路径",
+      "required": true
+    },
+    {
+      "id": "bootstrap",
+      "description": "新建和未来版本保护",
+      "required": true
+    },
+    {
+      "id": "allocation",
+      "description": "合并预留、多仓原子性和失败重试",
+      "required": true
+    },
+    {
+      "id": "lifecycle",
+      "description": "发货、取消、到期及库存守恒",
+      "required": true
+    },
+    {
+      "id": "replay",
+      "description": "跨进程幂等及响应重放",
+      "required": true
+    },
+    {
+      "id": "audit",
+      "description": "审计分页、失败与重放不占序号",
+      "required": true
+    },
+    {
+      "id": "validation",
+      "description": "非法输入不变更状态",
+      "required": true
+    },
+    {
+      "id": "race",
+      "description": "多个进程竞争库存与幂等键",
+      "required": true
+    },
+    {
+      "id": "delivery",
+      "description": "交付文档及可执行测试",
+      "required": true
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 1800,
+    "model_calls": 200,
+    "total_tokens": 5500000,
+    "verifier_seconds": 120
+  },
+  "source": "Original project benchmark"
+}

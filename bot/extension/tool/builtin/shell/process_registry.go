@@ -167,7 +167,8 @@ func (r *taskRegistry) startOrReuse(ctx context.Context, req startRequest) (*she
 	}
 
 	t := &shellTask{
-		name: name, owner: req.owner, cmd: req.command, launchKey: launchKey,
+		directory: req.directory,
+		name:      name, owner: req.owner, cmd: req.command, launchKey: launchKey,
 		startedAt: time.Now(), status: taskRunning, proc: proc, cancel: cancel,
 		scratchFile: req.profile.ScratchFile,
 		done:        make(chan struct{}), changed: make(chan struct{}, 1),

@@ -15,7 +15,7 @@ type ListTool struct {
 
 func (t *ListTool) Name() string { return "list" }
 func (t *ListTool) Description() string {
-	return "List directory contents, including hidden dotfiles. ALWAYS use List — NEVER invoke ls or ls -al as Bash. Returns files and subdirectories sorted by name."
+	return "List the immediate entries of one directory, including dotfiles, sorted by name. Use tree for a nested overview or glob to find paths by pattern."
 }
 
 func (t *ListTool) Parameters() []core.Parameter {

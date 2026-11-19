@@ -54,3 +54,21 @@ func TestWritePreviewNoChangesIsPlain(t *testing.T) {
 		t.Fatalf("preview = %q, want empty no-change preview", out)
 	}
 }
+
+func TestWrittenJSONSyntaxReceipt(t *testing.T) {
+	for _, tc := range []struct{ content, diagnostic string }{
+		{`{"ok":true}`, "JSON syntax: valid."},
+		{`{"missing":}`, "JSON syntax: invalid (file saved)."},
+	} {
+		root := testutil.SetupTemp(t)
+		path := filepath.Join(root, "config.json")
+		out, err := (&WriteTool{}).Execute(testutil.Context(root), map[string]any{"path": path, "content": tc.content})
+		if err != nil || !strings.Contains(out.Render(), tc.diagnostic) {
+			t.Fatalf("receipt %q; error %v", out.Render(), err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil || string(data) != tc.content {
+			t.Fatalf("saved %q; error %v", data, err)
+		}
+	}
+}

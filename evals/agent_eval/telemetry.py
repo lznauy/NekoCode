@@ -122,10 +122,22 @@ def protocol_tool_cost(path, session):
     Missing traces are unknown. Child-agent and setup frames are excluded;
     tool-internal model calls and process exit status are outside this metric.
     """
-    unknown = {"tool_requests": None, "tool_result_errors": None, "context_snapshot_polls": None}
+    unknown = {"tool_rounds": None, "tool_rounds_before_first_read": None, "repeated_tool_requests": None, "tool_requests": None, "tool_result_errors": None, "context_snapshot_polls": None, "same_image_rechecks": None, "image_rate_limits": None}
     if not session:
         return unknown
     requests, errors = set(), set()
+    signatures = set()
+    # The root runtime emits every tool start in a batch before its results.
+    # Headless assigns a separate assistant message ID to each start.
+    active_batch = set()
+    batch_run = None
+    batch_count = 0
+    read_rounds = {}
+    successful_read_round = None
+    repeated = 0
+    signatures_complete = True
+    image_requests, image_limits = set(), set()
+    approval_digests = {}
     context_snapshot_polls = 0
     observed = False
     try:
@@ -133,6 +145,14 @@ def protocol_tool_cost(path, session):
         for line in lines:
             row = json.loads(line)
             frame = row.get("message", {})
+            # Permission frames carry a digest of the ordered approved image bytes.
+            # Some policies produce no approval frame; keep that measurement unknown.
+            if row.get("direction") == "agent" and frame.get("type") == "control_request":
+                req = frame.get("request", {})
+                if req.get("tool_name") == "image_understand" and not req.get("nekocode_subagent_id"):
+                    digest = req.get("input", {}).get("_nekocode_approved_image_sha256", "")
+                    if isinstance(digest, str) and len(digest) == 64:
+                        approval_digests[req.get("tool_use_id")] = digest
             if (row.get("direction") == "host" and frame.get("type") == "control_request"
                     and frame.get("request", {}).get("subtype") == "context.snapshot"):
                 context_snapshot_polls += 1
@@ -149,14 +169,42 @@ def protocol_tool_cost(path, session):
                 if not isinstance(block, dict):
                     continue
                 if frame.get("type") == "assistant" and block.get("type") == "tool_use" and block.get("id"):
-                    requests.add((frame.get("run_id"), block["id"]))
+                    identity = (frame.get("run_id"), block["id"])
+                    if identity in requests:
+                        continue
+                    requests.add(identity)
+                    if not active_batch or batch_run != identity[0]:
+                        active_batch.clear()
+                        batch_run = identity[0]
+                        batch_count += 1
+                    active_batch.add(identity)
+                    if not block.get("name") or not isinstance(block.get("input"), dict):
+                        signatures_complete = False
+                        continue
+                    if block["name"] == "image_understand":
+                        image_requests.add(block["id"])
+                    if block["name"] == "read":
+                        read_rounds[identity] = batch_count - 1
+                    signature = (identity[0], block["name"], json.dumps(block["input"], sort_keys=True))
+                    if signature in signatures:
+                        repeated += 1
+                    signatures.add(signature)
+                if frame.get("type") == "user" and block.get("type") == "tool_result":
+                    active_batch.discard((frame.get("run_id"), block.get("tool_use_id")))
+                if frame.get("type") == "user" and block.get("type") == "tool_result" and not block.get("is_error"):
+                    read_round = read_rounds.get((frame.get("run_id"), block.get("tool_use_id")))
+                    if read_round is not None and successful_read_round is None:
+                        successful_read_round = read_round
                 if (frame.get("type") == "user" and block.get("type") == "tool_result"
                         and block.get("is_error") is True and block.get("tool_use_id")):
                     errors.add((frame.get("run_id"), block["tool_use_id"]))
+                    if block["tool_use_id"] in image_requests and "HTTP 429" in str(block.get("content", "")):
+                        image_limits.add(block["tool_use_id"])
     except (OSError, ValueError, TypeError, AttributeError):
         return unknown
-    return {"tool_requests": len(requests), "tool_result_errors": len(errors),
-            "context_snapshot_polls": context_snapshot_polls} if observed else unknown
+    return {"tool_rounds": batch_count, "tool_rounds_before_first_read": successful_read_round, "repeated_tool_requests": repeated if signatures_complete else None, "tool_requests": len(requests), "tool_result_errors": len(errors),
+            "same_image_rechecks": len(image_requests) - len({approval_digests[k] for k in image_requests}) if image_requests <= approval_digests.keys() else None,
+            "image_rate_limits": len(image_limits), "context_snapshot_polls": context_snapshot_polls} if observed else unknown
 
 
 def coordination_audit(events, background):

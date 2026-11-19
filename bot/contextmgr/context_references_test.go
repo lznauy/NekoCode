@@ -147,3 +147,22 @@ func TestSkillAndArtifactReferencesShareExistingRequestBudget(t *testing.T) {
 		t.Fatal("combined reference budget grew")
 	}
 }
+
+func TestEmptyRequestReferencesOnlyReportActionableState(t *testing.T) {
+	if msg := (TaskReferences{SessionID: "s"}).message(); msg.Content != "" {
+		t.Fatal(msg.Content)
+	}
+	if msgs := referenceMessages(refbridge.Page{SessionID: "s"}, refbridge.Page{SessionID: "s"}); len(msgs) != 0 {
+		t.Fatalf("unexpected empty references: %+v", msgs)
+	}
+	for _, page := range []refbridge.Page{{SessionID: "s", HasMore: true}, {SessionID: "s", Unavailable: true}} {
+		if contextReferencesMessage(page).Content == "" {
+			t.Fatal("lost reference status")
+		}
+	}
+	for _, refs := range []TaskReferences{{SessionID: "s", Total: 1}, {SessionID: "s", Unavailable: true}} {
+		if refs.message().Content == "" {
+			t.Fatal("lost task status")
+		}
+	}
+}

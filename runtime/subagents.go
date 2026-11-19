@@ -315,7 +315,7 @@ func (r *Runtime) Subagents(filter SubagentFilter) (SubagentPage, error) {
 		if filter.Status != "" && item.Status != filter.Status {
 			continue
 		}
-		if query != "" && !strings.Contains(strings.ToLower(item.ID+" "+item.Profile+" "+item.Prompt), query) {
+		if query != "" && !strings.Contains(strings.ToLower(item.ID+" "+item.Profile+" "+item.Prompt+" "+item.Title), query) {
 			continue
 		}
 		selected = append(selected, item)

@@ -1,0 +1,7 @@
+INC-27 / two alerts from nightly reconciliation (independent jobs)
+east  input rows (ts,id,delta): (5,1,+7) (5,2,-4) (6,1,+12)
+east  limit=1; clean shutdown; drained reported count=2; observed amount=19; expected=15
+west  input rows (ts,id,delta): (20,1,+9) (21,1,+2)
+west  limit=1; transient failure in post-apply callback on first page
+west  fresh process connected to same database; drained; observed amount=20; expected=11
+north limit=20; no callback failure; counts balanced

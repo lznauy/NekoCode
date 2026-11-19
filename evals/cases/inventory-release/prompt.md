@@ -1,0 +1,1 @@
+接手库存导出原型并完成发布。保持命令 python inventory.py --out OUTPUT INPUT [INPUT ...]。输入为 UTF-8 CSV，表头严格为 sku,delta；sku 非空，delta 为有符号或无符号十进制整数。跨文件按 SKU 汇总，按 SKU 升序输出 UTF-8 CSV，列为 sku,total，保留零总量；仅有表头是合法输入。支持引号、逗号和非 ASCII。对错误表头、缺列、多列、空 SKU、非法整数或缺失文件返回非零并保持已有输出的字节不变。补齐 README.md 的可执行示例；在 STATUS.md 中对 aggregate、csv、atomic 三项各写一行 PASS 或 FAIL 以及实测命令/观察，按实际结果交接。

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "round-robin-card",
+  "version": 1,
+  "title": "制作循环赛赛程卡",
+  "tags": [
+    "short-task",
+    "scheduling"
+  ],
+  "kind": "product",
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "rounds",
+      "description": "五轮六队赛程完整",
+      "required": true
+    },
+    {
+      "id": "pairs",
+      "description": "每队每轮一次且所有对阵唯一",
+      "required": true
+    },
+    {
+      "id": "rotation",
+      "description": "各轮场地分配符合要求",
+      "required": true
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 240,
+    "model_calls": 25,
+    "total_tokens": 500000,
+    "verifier_seconds": 15
+  },
+  "source": "Original short-task evaluation"
+}

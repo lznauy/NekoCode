@@ -1,0 +1,1 @@
+{"schema_version": 1, "id": "tool-efficiency", "version": 7, "cases": ["dispatch-window", "effective-limit", "active-routing", "inline-handoff", "approval-reconcile", "current-roster-tsv", "wiki-json-example", "queue-paused", "queue-open", "rollout-apply", "rollout-done", "rollout-conflict", "invoice-close", "latest-sample-sql", "rail-rebooking", "edit-recovery"]}

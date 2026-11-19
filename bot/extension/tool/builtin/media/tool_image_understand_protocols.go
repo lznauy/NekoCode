@@ -14,11 +14,7 @@ import (
 
 const imageUnderstandingTruncated = "\n[Image result truncated at max_tokens; increase max_tokens (up to 4096) or narrow the question.]"
 
-func (t *ImageUnderstandTool) executeOpenAIUnderstanding(ctx context.Context, cfg config.ImageUnderstandConfig, prompt string, images []understandingImage, maxTokens int, onText func()) (string, error) {
-	endpoint, err := imageUnderstandEndpoint(cfg.BaseURL, "openai")
-	if err != nil {
-		return "", fmt.Errorf("invalid image understand base URL: %w", err)
-	}
+func (t *ImageUnderstandTool) executeOpenAIUnderstanding(ctx context.Context, cfg config.ImageUnderstandConfig, endpoint, prompt string, images []understandingImage, maxTokens int, onText func()) (string, error) {
 	content := []any{map[string]any{"type": "text", "text": prompt}}
 	for i, img := range images {
 		if len(images) > 1 {
@@ -186,11 +182,7 @@ func openAIContentText(content json.RawMessage) (string, error) {
 	return strings.Join(output, "\n"), nil
 }
 
-func (t *ImageUnderstandTool) executeAnthropicUnderstanding(ctx context.Context, cfg config.ImageUnderstandConfig, prompt string, images []understandingImage, maxTokens int) (string, error) {
-	endpoint, err := imageUnderstandEndpoint(cfg.BaseURL, "anthropic")
-	if err != nil {
-		return "", fmt.Errorf("invalid image understand base URL: %w", err)
-	}
+func (t *ImageUnderstandTool) executeAnthropicUnderstanding(ctx context.Context, cfg config.ImageUnderstandConfig, endpoint, prompt string, images []understandingImage, maxTokens int) (string, error) {
 	content := []any{map[string]any{"type": "text", "text": prompt}}
 	for i, img := range images {
 		if len(images) > 1 {

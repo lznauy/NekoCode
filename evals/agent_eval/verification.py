@@ -3,9 +3,11 @@ import os
 from pathlib import Path
 import signal
 import subprocess
-import sys
+import shutil
+import tempfile
 
-from .storage import write_json
+from .storage import tree_hash, write_json
+from . import verifier_sandbox
 
 
 def stop_process(proc):
@@ -30,28 +32,52 @@ def stop_process(proc):
         pass
 
 
-def verify(case, workspace, output, final_text="", input_sha256=None):
+def verify(case, workspace, output, final_text="", input_sha256=None, events_path=None, original_workspace=None):
     workspace, output = Path(workspace).resolve(), Path(output).resolve()
     if output.is_relative_to(workspace) or workspace.is_relative_to(output):
         raise ValueError('verification input and output must not overlap')
     output.mkdir(parents=True, exist_ok=False)
     (output / "answer.txt").write_text(final_text)
     if input_sha256 is not None:
-        write_json(output / "input.json", {"sha256": input_sha256})
+        info = {"sha256": input_sha256}
+        if "architecture" in case["manifest"]["tags"]:
+            info["unchanged"] = tree_hash(workspace) == input_sha256
+        write_json(output / "input.json", info)
     result_path = output / "result.json"
-    env = {k: v for k, v in os.environ.items() if not any(x in k.upper() for x in ["API_KEY", "TOKEN", "SECRET", "PASSWORD"])}
-    with (output / "stdout.log").open("w") as stdout, (output / "stderr.log").open("w") as stderr:
-        proc = subprocess.Popen([sys.executable, str(case["paths"]["verifier"]), str(Path(workspace).resolve()), str(output.resolve())],
-                                cwd=output, stdout=stdout, stderr=stderr, env=env, start_new_session=True)
+    # The sandbox gets a private output directory. Never let a candidate plant
+    # links or device files in the host directory used for normalized reports.
+    with tempfile.TemporaryDirectory(prefix="nekocode-verifier-output-") as temp:
+        staging = Path(temp)
+        for name in ("answer.txt", "input.json"):
+            if (output / name).is_file():
+                shutil.copyfile(output / name, staging / name)
+        error = None
         try:
-            code = proc.wait(timeout=case["manifest"]["budgets"]["verifier_seconds"])
-            error = None if code == 0 else f"verifier exit {code}"
-        except subprocess.TimeoutExpired:
-            stop_process(proc)
-            error = "verifier timeout"
-        finally:
-            stop_process(proc)
+            args = verifier_sandbox.command(case, workspace, staging, events_path, original_workspace)
+            # Only Bubblewrap itself sees this environment; --clearenv sets up the guest.
+            with (output / "stdout.log").open("w") as stdout, (output / "stderr.log").open("w") as stderr:
+                proc = subprocess.Popen(args, cwd=staging, stdout=stdout, stderr=stderr, env={},
+                                        stdin=subprocess.DEVNULL, start_new_session=True)
+                try:
+                    code = proc.wait(timeout=case["manifest"]["budgets"]["verifier_seconds"])
+                    if code:
+                        error = f"isolated verifier exit {code}; inspect stderr.log"
+                except subprocess.TimeoutExpired:
+                    error = "verifier timeout"
+                finally:
+                    stop_process(proc)
+            if not error:
+                for name in ("result.json", "render.json", "desktop.png", "mobile.png", "product.png"):
+                    source = staging / name
+                    if source.is_symlink() or (source.exists() and not source.is_file()):
+                        raise ValueError("invalid verifier output: " + name)
+                    if source.is_file():
+                        shutil.copyfile(source, output / name)
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            error = "verifier sandbox setup/export failed: " + str(exc)
     try:
+        if error:
+            raise ValueError(error)
         result = json.loads(result_path.read_text())
         expected = {r["id"] for r in case["manifest"]["requirements"]}
         checks = result["checks"]
@@ -59,8 +85,8 @@ def verify(case, workspace, output, final_text="", input_sha256=None):
             raise ValueError("invalid verification schema")
         if {c["id"] for c in checks} != expected or any(c.get("status") not in {"passed", "failed", "not_run"} or not isinstance(c.get("evidence"), str) for c in checks):
             raise ValueError("verification requirements/status mismatch")
-        if error or result.get("error"):
-            raise ValueError(error or result["error"])
+        if result.get("error"):
+            raise ValueError(result["error"])
         result["error"] = None
     except (OSError, ValueError, KeyError, TypeError) as exc:
         result = {"schema_version": 1, "error": error or str(exc), "checks": [

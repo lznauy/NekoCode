@@ -1,0 +1,13 @@
+{
+  "schema": 2,
+  "profiles": {
+    "production": {
+      "retry": {"attempts": 2, "delays_ms": [100]},
+      "connect_ms": 2500
+    },
+    "preview": {
+      "retry": {"attempts": 2, "delays_ms": [100]},
+      "connect_ms": 800
+    }
+  }
+}

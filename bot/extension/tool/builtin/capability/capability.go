@@ -69,7 +69,7 @@ func (t *tool) Description() string {
 func (t *tool) Parameters() []core.Parameter {
 	return []core.Parameter{
 		{Name: "action", Type: "string", Required: true, Enum: []string{"list", "inspect", "call"},
-			Description: "list: show servers and tools; inspect: show one tool's schema; call: invoke a tool."},
+			Description: "list: omit all other fields to show servers and tools; inspect: show one tool's schema; call: invoke a tool."},
 		{Name: "server", Type: "string", Required: false,
 			Description: "Server name from the list output; required for inspect and call."},
 		{Name: "tool", Type: "string", Required: false,
@@ -89,8 +89,16 @@ func (t *tool) Execute(ctx context.Context, args map[string]any) (core.ToolOutpu
 	toolName, _ := args["tool"].(string)
 	switch action {
 	case "list":
+		for _, key := range []string{"server", "tool", "args"} {
+			if _, supplied := args[key]; supplied {
+				return core.ToolOutput{}, fmt.Errorf("list takes only action; omit %s to list all capabilities, or use inspect with server and tool", key)
+			}
+		}
 		return core.ToolOutput{Text: t.mcp.ListCapabilities()}, nil
 	case "inspect":
+		if _, supplied := args["args"]; supplied {
+			return core.ToolOutput{}, fmt.Errorf("inspect takes server and tool; omit args to view the schema. Supply args only with call")
+		}
 		if server == "" || toolName == "" {
 			return core.ToolOutput{}, fmt.Errorf("inspect requires server and tool")
 		}

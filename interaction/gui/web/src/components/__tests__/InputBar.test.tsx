@@ -196,3 +196,27 @@ it('shows the actual one-shot Plan policy while the saved selection is Standard'
  expect(screen.getByRole('combobox')).toBeDisabled()
  expect(screen.getByRole('option', {name: 'Plan*'})).toBeInTheDocument()
 })
+
+it.each(['insertText', 'insertCompositionText'])('replaces the whole attachment on native %s', (inputType) => {
+  const label = '[Image #1]'
+  const { props } = setup({ text: label, imageAttachments: [{ label, path: '/draft.png' }] })
+  const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+  textarea.setSelectionRange(2, 5)
+  fireEvent(textarea, new Event('beforeinput', { cancelable: true }))
+  expect(props.onChange).not.toHaveBeenCalled()
+  const event = new InputEvent('beforeinput', { cancelable: true, inputType, data: '中' })
+  fireEvent(textarea, event)
+  expect(event.defaultPrevented).toBe(true)
+  expect(props.onChange).toHaveBeenCalledWith('中')
+})
+
+it.each(['insertLineBreak', 'insertParagraph'])('preserves a newline replacing an attachment with %s', (inputType) => {
+  const label = '[Image #1]'
+  const { props } = setup({ text: 'A' + label + 'B', imageAttachments: [{ label, path: '/draft.png' }] })
+  const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+  textarea.setSelectionRange(3, 5)
+  const event = new InputEvent('beforeinput', { cancelable: true, inputType, data: null })
+  fireEvent(textarea, event)
+  expect(event.defaultPrevented).toBe(true)
+  expect(props.onChange).toHaveBeenCalledWith('A\nB')
+})

@@ -114,7 +114,7 @@ func (m *Manager) checkpointWorkingSet() (changed bool) {
 			break
 		}
 		msg := &m.state.ctx.Messages[i]
-		header := core.OutputReferenceHeader(msg.ToolOutput.Path, true)
+		header := core.ArtifactHeader(msg.ToolOutput)
 		body := strings.TrimPrefix(msg.Content, header)
 		output, err := m.state.outputStore.BoundOutput(core.ToolOutput{Text: body, Artifact: msg.ToolOutput}, workingSetPreviewBytes)
 		if err != nil {

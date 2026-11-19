@@ -30,7 +30,7 @@ type TaskReference struct {
 }
 
 func (refs TaskReferences) message() types.Message {
-	if refs.SessionID == "" {
+	if refs.SessionID == "" || (len(refs.Items) == 0 && refs.Total == 0 && !refs.Unavailable) {
 		return types.Message{}
 	}
 	refs.Total = max(refs.Total, len(refs.Items))

@@ -1,7 +1,6 @@
 package session
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -227,8 +226,7 @@ func walkSubagentOutputs(ctx context.Context, parentID, id string, after int, vi
 		return 0, err
 	}
 	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64<<10), 16<<20)
+	scanner := transcriptScanner(f)
 	seq := 0
 	for seq < info.TranscriptSeq && scanner.Scan() {
 		if err := ctx.Err(); err != nil {

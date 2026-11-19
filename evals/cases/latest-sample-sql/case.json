@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "latest-sample-sql",
+  "version": 1,
+  "title": "实现并验证设备最新有效读数查询",
+  "tags": [
+    "efficiency",
+    "product"
+  ],
+  "kind": "product",
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "query",
+      "description": "查询在不同数据集均符合契约",
+      "required": true
+    },
+    {
+      "id": "scope",
+      "description": "输入未变且无额外文件",
+      "required": true
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 180,
+    "model_calls": 15,
+    "total_tokens": 225000,
+    "verifier_seconds": 15
+  },
+  "source": "Original harness efficiency evaluation"
+}

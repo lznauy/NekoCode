@@ -78,3 +78,28 @@ func TestSharedShellSeparatesSubagentScratchFromParentAndSiblings(t *testing.T) 
 		paths[actor] = path
 	}
 }
+
+func TestShellReportsMissingCrossCallInputEvenWhenLastCommandSucceeds(t *testing.T) {
+	if runtime.GOOS != "linux" || !sandbox.IsAvailable() {
+		t.Skip("Linux sandbox required")
+	}
+	tool := &ShellTool{initialWait: time.Second}
+	cleanupShellTool(t, tool)
+	ctx := workspace.WithManager(t.Context(), workspace.New(t.TempDir(), nil))
+	run := func(command string) string {
+		t.Helper()
+		out, err := tool.Execute(ctx, map[string]any{"command": command})
+		if err != nil || out.Process.State != "exited" || out.Process.ExitCode != 0 {
+			t.Fatalf("unexpected process outcome: %+v, %v", out, err)
+		}
+		return out.Text
+	}
+	run("printf saved > /tmp/cross-call-check")
+	if output := run("cat /tmp/cross-call-check; echo finished"); !strings.Contains(output, "temp_hint:") || !strings.Contains(output, "finished") {
+		t.Fatalf("missing diagnostic or original output: %q", output)
+	}
+	run(`printf saved > "$NEKOCODE_SCRATCH/cross-call-check"`)
+	if output := run(`cat "$NEKOCODE_SCRATCH/cross-call-check"`); output != "saved" {
+		t.Fatalf("scratch recovery output: %q", output)
+	}
+}

@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "queue-open",
+  "version": 1,
+  "title": "派送状态分支（open）",
+  "tags": [
+    "efficiency",
+    "evidence"
+  ],
+  "kind": "review",
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "decision",
+      "description": "按当前派送状态交付正确结果",
+      "required": true
+    },
+    {
+      "id": "scope",
+      "description": "输入名单及工作区保持原样",
+      "required": true
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 150,
+    "model_calls": 12,
+    "total_tokens": 180000,
+    "verifier_seconds": 15
+  },
+  "source": "Original evidence-sufficiency evaluation"
+}

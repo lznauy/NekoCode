@@ -86,8 +86,11 @@ func (t *Tool) Execute(ctx context.Context, args map[string]any) (core.ToolOutpu
 	req := protocol.NewQuestionRequest(questions)
 	req.SubAgentID = taskbridge.TaskIDFromCtx(ctx)
 	reply := fn(req)
+	if err := ctx.Err(); err != nil {
+		return core.ToolOutput{}, err
+	}
 	if reply.Rejected {
-		return core.ToolOutput{}, fmt.Errorf("question rejected by user; do not repeat the unchanged request automatically")
+		return core.ToolOutput{}, fmt.Errorf("question rejected or closed without an answer; do not infer a user decision or repeat the unchanged request automatically")
 	}
 	output := core.ToolOutput{Text: formatAnswers(questions, reply.Answers)}
 	if err := validateAnswers(questions, reply.Answers); err != nil {

@@ -497,3 +497,61 @@ func transcriptDirFor(t *testing.T, id string) string {
 	}
 	return d
 }
+
+func TestLargeCRLFTranscriptRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	want := strings.Repeat("a", 16<<20)
+	messages := []types.Message{{Role: "user", Content: want}, {Role: "assistant", Content: "done"}}
+	if _, err := appendTranscript(dir, 0, messages); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, transcriptFileName)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crlf := strings.ReplaceAll(string(raw), "\n", "\r\n")
+	if err := os.WriteFile(path, []byte(crlf), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store := &HistoryStore{dir: dir}
+	if _, err := store.Count(2, true); err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.Page(0, 2, 32<<20, 2)
+	if err != nil || len(page.Messages) != 2 || page.Messages[0].Content != want {
+		t.Fatalf("indexed read: %v", err)
+	}
+	got, err := loadTranscript(dir, 2)
+	if err != nil || len(got) != 2 || got[0].Content != want {
+		t.Fatalf("full read: %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != crlf {
+		t.Fatal("valid transcript changed", err)
+	}
+}
+
+func TestOversizedTranscriptRecordRollsBackBatch(t *testing.T) {
+	dir := t.TempDir()
+	messages := []types.Message{{Role: "user", Content: "saved"}}
+	if _, err := appendTranscript(dir, 0, messages); err != nil {
+		t.Fatal(err)
+	}
+	before := string(mustReadTranscript(t, dir))
+	messages = append(messages, types.Message{Role: "assistant", Content: "pending"}, types.Message{Role: "user", Content: strings.Repeat("x", maxTranscriptRecordBytes)})
+	if count, err := appendTranscript(dir, 1, messages); err == nil || count != 1 {
+		t.Fatalf("oversized append: count=%d err=%v", count, err)
+	}
+	if string(mustReadTranscript(t, dir)) != before {
+		t.Fatal("partial batch persisted")
+	}
+	// A damaged on-disk record may bypass the writer.
+	path := filepath.Join(dir, transcriptFileName)
+	if err := os.Truncate(path, int64(len(before)+maxTranscriptRecordBytes+1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadTranscript(dir, 1); err == nil {
+		t.Fatal("oversized record was accepted")
+	}
+}

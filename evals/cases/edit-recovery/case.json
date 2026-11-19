@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "edit-recovery",
+  "version": 2,
+  "title": "生成配置刷新后的定向编辑恢复",
+  "tags": [
+    "efficiency",
+    "product"
+  ],
+  "kind": "product",
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "edit",
+      "description": "精确修改目标行",
+      "required": true
+    },
+    {
+      "id": "scope",
+      "description": "无额外文件",
+      "required": true
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 180,
+    "model_calls": 15,
+    "total_tokens": 225000,
+    "verifier_seconds": 15
+  },
+  "source": "Original harness efficiency evaluation"
+}

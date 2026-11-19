@@ -1,0 +1,1 @@
+根据 orders.csv 与 payments.csv 完成月结。每个订单只计同币种且已入账（posted）的支付；同一 payment_id 的重复行只计一次。按订单号排序写入 balance.csv（order,due,paid,balance，balance 为 due 减 paid，可为负数）。另将已入账但无法匹配的支付单独写入 exceptions.csv（payment_id,reason；订单不存在为 unknown_order，币种不符为 currency，按 payment_id 排序）。保留输入，勿生成其他文件。

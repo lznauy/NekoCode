@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "invoice-close",
+  "version": 1,
+  "title": "月结对账与异常分流",
+  "tags": [
+    "efficiency",
+    "product"
+  ],
+  "kind": "product",
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "balance",
+      "description": "逐单余额正确",
+      "required": true
+    },
+    {
+      "id": "exceptions",
+      "description": "异常支付完整且分类正确",
+      "required": true
+    },
+    {
+      "id": "scope",
+      "description": "输入未变且无额外文件",
+      "required": true
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 180,
+    "model_calls": 15,
+    "total_tokens": 225000,
+    "verifier_seconds": 15
+  },
+  "source": "Original harness efficiency evaluation"
+}

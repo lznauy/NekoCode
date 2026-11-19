@@ -16,7 +16,7 @@ func contextReferencesMessage(page refbridge.Page) types.Message {
 }
 
 func boundedContextReferencesMessage(page refbridge.Page, budget int) types.Message {
-	if page.SessionID == "" {
+	if page.SessionID == "" || (len(page.Items) == 0 && !page.HasMore && !page.Unavailable) {
 		return types.Message{}
 	}
 	// Only reference values enter the cache prefix. Source-page scan counts

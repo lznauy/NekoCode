@@ -31,7 +31,7 @@ func (t *EditTool) Description() string {
 func (t *EditTool) Parameters() []core.Parameter {
 	return []core.Parameter{
 		{Name: "path", Type: "string", Required: true,
-			Description: "Absolute path to the file to edit."},
+			Description: "File to edit, relative to the workspace root or absolute."},
 		{Name: "oldString", Type: "string", Required: true,
 			Description: "Exact text to replace."},
 		{Name: "newString", Type: "string", Required: true,

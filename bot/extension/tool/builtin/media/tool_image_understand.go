@@ -7,12 +7,15 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"nekocode/bot/calllog"
@@ -43,10 +46,16 @@ const (
 	imageUnderstandModeAccurate imageUnderstandMode = "accurate"
 )
 
+type imageQuotaKey struct {
+	endpoint, model, apiKey string
+}
+
 type ImageUnderstandTool struct {
 	toolutil.SequentialSafeTool
-	client *http.Client
-	models []config.ImageUnderstandConfig
+	client     *http.Client
+	models     []config.ImageUnderstandConfig
+	cooldownMu sync.Mutex
+	cooldowns  map[imageQuotaKey]time.Time
 }
 
 func NewImageUnderstandTool(models []config.ImageUnderstandConfig) *ImageUnderstandTool {
@@ -59,12 +68,12 @@ func NewImageUnderstandTool(models []config.ImageUnderstandConfig) *ImageUnderst
 func (t *ImageUnderstandTool) Name() string { return "image_understand" }
 
 func (t *ImageUnderstandTool) Description() string {
-	return "Inspect 1–4 local images. Start with fast for ordinary screenshots; accurate preserves small text/resolution. Batch related views and ask a focused question. Reuse findings for unchanged source; additional inspection should resolve a specific remaining issue. Available model names: " + strings.Join(t.modelNames(), ", ") + ". Omit model to select the configured default for mode; never read application configuration to discover models. Use the model enum below. A quota failure needs a changed model/mode or a later retry, not blind repetition."
+	return "Inspect 1–4 local images. Start with fast for ordinary screenshots; accurate preserves small text/resolution. Check all requested visual criteria together. For an unclear detail, supply a real crop or report uncertainty. Reuse findings for unchanged images. Available model names: " + strings.Join(t.modelNames(), ", ") + ". Omit model to select the configured default for mode; never read application configuration to discover models. Use the model enum below. A quota failure needs a changed model/mode or a later retry, not blind repetition."
 }
 
 func (t *ImageUnderstandTool) Parameters() []core.Parameter {
 	return []core.Parameter{
-		{Name: "path", Type: "string", Description: "Single local PNG, JPEG, WebP, or GIF image. Provide either path or paths."},
+		{Name: "path", Type: "string", Description: "Local PNG, JPEG, WebP, or GIF. For shell-generated previews/crops, use a workspace path; shell-private /tmp is inaccessible. Provide either path or paths."},
 		{Name: "paths", Type: "array", Items: &core.Schema{Type: "string"}, Description: "1–4 related local images in order. Combined source size must not exceed 20 MiB. Provide either path or paths."},
 		{Name: "prompt", Type: "string", Required: false, Description: "Focused question or analysis instruction. A concise mode-specific prompt is used when omitted."},
 		{Name: "mode", Type: "string", Required: false, Enum: []string{string(imageUnderstandModeFast), string(imageUnderstandModeAccurate)}, Description: "fast (default) resizes large images and limits output; accurate preserves the original image and uses the configured accurate model."},
@@ -101,13 +110,7 @@ func (t *ImageUnderstandTool) PermissionPlan(args map[string]any, workspaceRoot 
 	cfg, resolveErr := t.resolveUnderstandModel(args, mode)
 	destination := "invalid configured endpoint"
 	if resolveErr == nil {
-		protocol := strings.ToLower(strings.TrimSpace(cfg.Protocol))
-		if protocol == "" && strings.EqualFold(cfg.Provider, "anthropic") {
-			protocol = "anthropic"
-		}
-		if protocol == "" {
-			protocol = "openai"
-		}
+		protocol := imageUnderstandProtocol(cfg)
 		if resolved, endpointErr := imageUnderstandEndpoint(cfg.BaseURL, protocol); endpointErr == nil {
 			destination = resolved
 		}
@@ -140,6 +143,18 @@ func (t *ImageUnderstandTool) Execute(ctx context.Context, args map[string]any) 
 	cfg, err := t.resolveUnderstandModel(args, mode)
 	if err != nil {
 		return core.ToolOutput{}, err
+	}
+	protocol := imageUnderstandProtocol(cfg)
+	endpoint, err := imageUnderstandEndpoint(cfg.BaseURL, protocol)
+	if err != nil {
+		return core.ToolOutput{}, fmt.Errorf("invalid image understand base URL: %w", err)
+	}
+	quota := imageQuotaKey{endpoint: endpoint, model: cfg.Model, apiKey: cfg.APIKey}
+	t.cooldownMu.Lock()
+	until := t.cooldowns[quota]
+	t.cooldownMu.Unlock()
+	if time.Now().Before(until) {
+		return core.ToolOutput{}, fmt.Errorf("image model %q rate limited until %s; use another available model or report the unverified detail", cfg.Name, until.UTC().Format(time.RFC3339))
 	}
 	if approved, planned := args[approvedImageDigestArg].(string); planned && approved == unavailableImageDigest {
 		return core.ToolOutput{}, fmt.Errorf("image was unavailable during approval; choose a regular local file and approve it again")
@@ -179,14 +194,6 @@ func (t *ImageUnderstandTool) Execute(ctx context.Context, args map[string]any) 
 	}()
 	prompt := toolutil.OptStringArg(args, "prompt", defaultImagePrompt(mode))
 
-	protocol := strings.ToLower(strings.TrimSpace(cfg.Protocol))
-	if protocol == "" {
-		protocol = strings.ToLower(strings.TrimSpace(cfg.Provider))
-		if protocol != "anthropic" {
-			protocol = "openai"
-		}
-	}
-
 	if err := modelbudget.Admit(modelbudget.WithRole(ctx, modelbudget.Work, "")); err != nil {
 		return core.ToolOutput{}, err
 	}
@@ -204,12 +211,25 @@ func (t *ImageUnderstandTool) Execute(ctx context.Context, args map[string]any) 
 		record.SetOutcome(usage.usage, &providertypes.RequestMeta{Model: cfg.Model, Protocol: protocol, BaseURL: cfg.BaseURL}, returnErr)
 		writeImageCallRecord(record)
 	}()
+	defer func() {
+		var limited *imageRateLimit
+		if errors.As(returnErr, &limited) {
+			t.cooldownMu.Lock()
+			if t.cooldowns == nil {
+				t.cooldowns = make(map[imageQuotaKey]time.Time)
+			}
+			if limited.until.After(t.cooldowns[quota]) {
+				t.cooldowns[quota] = limited.until
+			}
+			t.cooldownMu.Unlock()
+		}
+	}()
 	switch protocol {
 	case "openai":
-		toolText, toolErr := t.executeOpenAIUnderstanding(ctx, cfg, prompt, images, maxTokens, onText)
+		toolText, toolErr := t.executeOpenAIUnderstanding(ctx, cfg, endpoint, prompt, images, maxTokens, onText)
 		return core.ToolOutput{Text: toolText}, toolErr
 	case "anthropic":
-		toolText, toolErr := t.executeAnthropicUnderstanding(ctx, cfg, prompt, images, maxTokens)
+		toolText, toolErr := t.executeAnthropicUnderstanding(ctx, cfg, endpoint, prompt, images, maxTokens)
 		if toolErr == nil {
 			onText()
 		}
@@ -388,9 +408,30 @@ func (t *ImageUnderstandTool) post(ctx context.Context, endpoint string, headers
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
-		return nil, imageHTTPError(resp.StatusCode, resp.Body)
+		failure := imageHTTPError(resp.StatusCode, resp.Body)
+		if resp.StatusCode == http.StatusTooManyRequests {
+			until := time.Now().Add(time.Minute)
+			raw := strings.TrimSpace(resp.Header.Get("Retry-After"))
+			if seconds, err := strconv.ParseUint(raw, 10, 31); err == nil {
+				until = time.Now().Add(time.Duration(seconds) * time.Second)
+			} else if date, err := http.ParseTime(raw); err == nil {
+				until = date
+			}
+			failure = &imageRateLimit{cause: failure, until: until}
+		}
+		return nil, failure
 	}
 	return resp, nil
+}
+
+type imageRateLimit struct {
+	cause error
+	until time.Time
+}
+
+func (e *imageRateLimit) Unwrap() error { return e.cause }
+func (e *imageRateLimit) Error() string {
+	return fmt.Sprintf("%v; retry this model after %s or choose another available model", e.cause, e.until.UTC().Format(time.RFC3339))
 }
 
 // Provider messages may echo credentials or request contents. Expose only known
@@ -428,6 +469,17 @@ func newImageUnderstandHTTPClient() *http.Client {
 }
 
 func encodedImage(data []byte) string { return base64.StdEncoding.EncodeToString(data) }
+
+func imageUnderstandProtocol(cfg config.ImageUnderstandConfig) string {
+	protocol := strings.ToLower(strings.TrimSpace(cfg.Protocol))
+	if protocol == "" {
+		protocol = strings.ToLower(strings.TrimSpace(cfg.Provider))
+		if protocol != "anthropic" {
+			protocol = "openai"
+		}
+	}
+	return protocol
+}
 
 func imageUnderstandEndpoint(baseURL, protocol string) (string, error) {
 	var err error

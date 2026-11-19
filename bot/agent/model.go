@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
+	"unicode"
 
 	"nekocode/bot/agent/internal/llmstream"
 	"nekocode/bot/agent/internal/toolpolicy"
@@ -41,7 +43,7 @@ func (r *modelRunner) reason(input string) *reasoningResult {
 		return commandResult()
 	}
 
-	result, err := r.callLLMForTool()
+	result, err := r.callLLMForTool(input)
 	if err != nil {
 		a.stream.discardText()
 		var budgetErr *contextmgr.RequestBudgetError
@@ -59,7 +61,36 @@ func (r *modelRunner) reason(input string) *reasoningResult {
 	return reasoning
 }
 
-func (r *modelRunner) callLLMForTool() (*llmstream.LLMCallResult, error) {
+// This hint repeats a literal from the request. Only read determines whether it exists.
+// An explicit directory distinguishes an arbitrary filename from a version or host.
+// For bare names, restrict this optional hint to familiar project file types.
+var projectFileSuffix = regexp.MustCompile(`(?i)[.](go|mod|sum|py|js|jsx|ts|tsx|rs|java|kt|c|cc|cpp|h|hpp|cs|rb|php|sh|bash|sql|html|css|vue|json|jsonl|ya?ml|toml|ini|xml|csv|tsv|md|txt|log)$`)
+var relativeFile = regexp.MustCompile(`^([[:alnum:]_-]+/)*[[:alnum:]_-]+([.][[:alnum:]_-]+)+$`)
+
+func mentionedFile(input string) string {
+	if len(input) > 8192 {
+		return ""
+	}
+	var candidate string
+	for _, word := range strings.FieldsFunc(input, func(r rune) bool {
+		return unicode.IsSpace(r) || strings.ContainsRune("，。！？、；：‘’“”「」（）()`\"'", r)
+	}) {
+		path := strings.TrimPrefix(word, "./")
+		if len(path) > 240 || !relativeFile.MatchString(path) {
+			continue
+		}
+		if !strings.ContainsRune(word, '/') && !projectFileSuffix.MatchString(path) {
+			continue
+		}
+		if candidate != "" && candidate != path {
+			return ""
+		}
+		candidate = path
+	}
+	return candidate
+}
+
+func (r *modelRunner) callLLMForTool(input string) (*llmstream.LLMCallResult, error) {
 	a := r.agent
 	toolDefs := core.ToToolDefs(a.deps.toolExecutor.ToolDescriptors())
 	ctx := a.getCtx()
@@ -71,6 +102,11 @@ func (r *modelRunner) callLLMForTool() (*llmstream.LLMCallResult, error) {
 	ctx = protocol.WithProfileConfiguration(ctx, "")
 	ctx = protocol.WithAccessObservation(ctx, a.deps.toolExecutor.AccessObservation())
 	reminder := a.todoProgressReminder()
+	if a.run.step == 0 && !protocol.CoordinationFromContext(ctx).Notification && a.deps.toolExecutor.CheckToolPolicy("read") == nil && a.deps.toolRegistry != nil && a.deps.toolRegistry.Has("read") {
+		if path := mentionedFile(input); path != "" {
+			reminder = append(reminder, types.Message{Role: "user", Source: types.MessageSourceHint, Content: fmt.Sprintf("User-supplied path: %q. If inspecting this file, call read with this exact path first. Locate it with glob only if read reports it missing.", path)})
+		}
+	}
 	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{TaskReferences: r.taskReferences(ctx), ContextReferences: r.contextReferences(ctx, ""), EvidenceReferences: r.contextReferences(ctx, refbridge.EvidenceKind), Tools: toolDefs, PolicyHints: policyHints, ExtraMessages: reminder, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient)})
 	if err != nil {
 		return nil, err
@@ -166,6 +202,7 @@ func (r *modelRunner) synthesize() string {
 			}
 		}
 	}
+	a.turnRunner.reviewPreservedFiles(&text, false)
 	text += a.turnRunner.todoDispositionSummary(true)
 	if usable {
 		a.deps.ctxMgr.AddAssistant(types.Message{Role: "assistant", Content: text})

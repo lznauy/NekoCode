@@ -18,13 +18,13 @@ type GrepTool struct {
 
 func (t *GrepTool) Name() string { return "grep" }
 func (t *GrepTool) Description() string {
-	return "Search file contents (rg or grep). Returns matching lines with line numbers. Supports regex and glob filtering. Use context for surrounding lines, or before/after for separate counts."
+	return "Search file contents (rg or grep). Returns matching lines with line numbers. During directory searches rg normally skips hidden and ignored paths; the grep fallback uses recursive text search with its own filtering rules. Use context for surrounding lines, or before/after for separate counts."
 }
 
 func (t *GrepTool) Parameters() []core.Parameter {
 	return []core.Parameter{
 		{Name: "pattern", Type: "string", Required: true, Description: "Search pattern (regex)"},
-		{Name: "path", Type: "string", Required: false, Description: "Directory to search, default: current directory"},
+		{Name: "path", Type: "string", Required: false, Description: "File or directory to search. Defaults to the current directory."},
 		{Name: "glob", Type: "string", Required: false, Description: "File filter pattern, e.g. *.go, *.py"},
 		{Name: "context", Type: "integer", Description: "Non-negative number of lines before and after each match. Default 0. Cannot combine with before/after."},
 		{Name: "before", Type: "integer", Description: "Non-negative number of lines before each match. Default 0."},
@@ -84,6 +84,10 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) (core.ToolO
 
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			if strings.TrimSpace(output.Text) != "" {
+				output.Text = "No matches reported. Search diagnostic:\n" + toolutil.StripAnsi(output.Text)
+				return output, nil
+			}
 			return core.ToolOutput{Text: "No matches found"}, nil
 		}
 		return output, fmt.Errorf("grep failed: %w", err)

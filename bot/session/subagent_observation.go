@@ -1,7 +1,6 @@
 package session
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -303,8 +302,7 @@ func subagentHistory(ctx context.Context, parentID, id string, before, limit int
 		}
 		idx.Close()
 	}
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64<<10), 16<<20)
+	scanner := transcriptScanner(f)
 	page := HistoryPage{End: end, Total: info.TranscriptSeq}
 	bytes := 0
 	var sizes []int

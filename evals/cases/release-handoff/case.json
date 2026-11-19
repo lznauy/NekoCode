@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "release-handoff",
+  "version": 2,
+  "title": "双作者发布手册",
+  "tags": [
+    "multi-agent-writing",
+    "synthesis"
+  ],
+  "kind": "product",
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "workers",
+      "description": "两名子代理分别交付指定草稿",
+      "required": true
+    },
+    {
+      "id": "drafts",
+      "description": "技术与客服草稿对应各自材料",
+      "required": true
+    },
+    {
+      "id": "handbook",
+      "description": "合稿包含最新决策、操作顺序与升级渠道",
+      "required": true
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 600,
+    "model_calls": 75,
+    "total_tokens": 2400000,
+    "verifier_seconds": 90
+  },
+  "source": "Original NekoCode capability evaluation"
+}

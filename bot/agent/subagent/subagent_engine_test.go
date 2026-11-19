@@ -16,6 +16,7 @@ import (
 	"nekocode/bot/extension/tool/runtime/execution"
 	"nekocode/bot/extension/tool/runtime/permission"
 	"nekocode/bot/extension/tool/runtime/runner"
+	"nekocode/bot/extension/tool/runtime/workspace"
 	"nekocode/bot/policy"
 	"nekocode/bot/policy/builtin"
 	"nekocode/bot/prompt"
@@ -459,18 +460,20 @@ func TestExecuteToolBatchAllowsOwnReadWithSharedAuditPolicy(t *testing.T) {
 }
 
 func TestSubagentPolicyBlockRequiresReadBeforeEdit(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "existing.go")
-	if err := os.WriteFile(path, []byte("package existing\n"), 0o644); err != nil {
+	dir := t.TempDir()
+	const path = "existing.go"
+	if err := os.WriteFile(filepath.Join(dir, path), []byte("package existing\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	gov := policy.New()
 	builtin.Register(gov)
 	call := core.ToolCallItem{Name: "edit", Args: map[string]any{"path": path}}
-	if reason := toolpolicy.Check(gov, call).BlockReason; !strings.Contains(reason, "请先 Read") {
+	manager := workspace.New(dir, nil)
+	if reason := toolpolicy.Check(t.Context(), gov, manager, call).BlockReason; !strings.Contains(reason, "请先 Read") {
 		t.Fatalf("reason = %q, want read-before-write block", reason)
 	}
 	gov.RecordTool(policy.ToolResult{Name: "read", Args: map[string]any{"path": path}, Output: "ok"})
-	if reason := toolpolicy.Check(gov, call).BlockReason; reason != "" {
+	if reason := toolpolicy.Check(t.Context(), gov, manager, call).BlockReason; reason != "" {
 		t.Fatalf("reason after dedicated read = %q, want allow", reason)
 	}
 }

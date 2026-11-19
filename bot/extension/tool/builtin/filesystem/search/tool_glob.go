@@ -23,7 +23,7 @@ type GlobTool struct {
 func (t *GlobTool) Name() string { return "glob" }
 
 func (t *GlobTool) Description() string {
-	return "Find files matching a glob pattern. Supports ** for recursive directory search (e.g. \"src/**/*.go\"). Returns newline-separated file paths."
+	return "Find file and directory paths matching a pattern relative to path, including dotfiles. Supports ** for recursive directory search (e.g. \"src/**/*.go\"). Returns newline-separated absolute paths."
 }
 
 func (t *GlobTool) Parameters() []core.Parameter {

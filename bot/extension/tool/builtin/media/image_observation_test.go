@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -120,5 +121,34 @@ func TestImageCallRecordsUsageIdentityAndUnknownFailures(t *testing.T) {
 				t.Fatal("credential/provider body persisted")
 			}
 		})
+	}
+}
+
+func TestImage429CooldownBeforeSecondRequest(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Retry-After", "120")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	ctx, path := imageUnderstandTestContext(t)
+	tool := NewImageUnderstandTool([]config.ImageUnderstandConfig{
+		{Name: "fast", Model: "one", BaseURL: server.URL},
+		{Name: "accurate", Protocol: "openai", Model: "one", BaseURL: server.URL + "/v1"},
+		{Name: "other-model", Model: "two", BaseURL: server.URL},
+		{Name: "other-account", APIKey: "other", Model: "one", BaseURL: server.URL},
+	})
+	for _, step := range []struct {
+		model     string
+		wantCalls int32
+	}{{"fast", 1}, {"fast", 1}, {"accurate", 1}, {"other-model", 2}, {"other-account", 3}} {
+		_, err := tool.Execute(ctx, map[string]any{"path": path, "model": step.model})
+		if err == nil {
+			t.Fatal("expected rate limit")
+		}
+		if got := calls.Load(); got != step.wantCalls {
+			t.Fatalf("after %s got %d provider requests, want %d", step.model, got, step.wantCalls)
+		}
 	}
 }

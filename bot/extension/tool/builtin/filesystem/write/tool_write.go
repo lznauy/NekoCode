@@ -33,7 +33,8 @@ func (t *WriteTool) Description() string {
 func (t *WriteTool) Parameters() []core.Parameter {
 	return []core.Parameter{
 		{Name: "path", Type: "string", Required: true, Description: "File path"},
-		{Name: "content", Type: "string", Required: true, Description: "Content to write. An explicit empty string creates an empty file or clears an existing file."},
+		{Name: "content", Type: "string", Description: "Complete file content, including empty string to clear. Supply content or reuse."},
+		{Name: "reuse", Type: "string", Description: "Draft ID from a blocked write in this run. After reading the same path, use instead of content if the proposed replacement still fits."},
 	}
 }
 
@@ -61,6 +62,9 @@ func (t *WriteTool) PreviewContext(ctx context.Context, args map[string]any) str
 }
 
 func (t *WriteTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
+	if _, unresolved := args["reuse"]; unresolved {
+		return core.ToolOutput{}, fmt.Errorf("unresolved write draft; supply full content")
+	}
 	path, err := toolutil.RequireStringArg(args, "path")
 	if err != nil {
 		return core.ToolOutput{}, err
@@ -90,6 +94,9 @@ func (t *WriteTool) Execute(ctx context.Context, args map[string]any) (core.Tool
 	data, readErr := os.ReadFile(safePath)
 	if readErr != nil && !os.IsNotExist(readErr) {
 		return core.ToolOutput{}, fmt.Errorf("cannot inspect write target: %w", readErr)
+	}
+	if args["_existing_draft"] == true && os.IsNotExist(readErr) {
+		return core.ToolOutput{}, fmt.Errorf("draft target no longer exists; review the path before creating a file")
 	}
 	reads := execution.FileReadsFromContext(ctx)
 	if readErr == nil {
@@ -129,7 +136,7 @@ func (t *WriteTool) Execute(ctx context.Context, args map[string]any) (core.Tool
 		// content. On preservation failure retain the original inline diff.
 		if state := execution.ExecutionStateFromContext(ctx); state != nil && state.OutputStore != nil && len(output.Text) > writeEchoLimitBytes {
 			if artifact, err := state.OutputStore.PreserveOutput(output.Text); err == nil {
-				output = core.ToolOutput{Text: confirmation + " Full diff saved in the result artifact.", Artifact: protocol.ToolOutputArtifact{Path: artifact}}
+				output = core.ToolOutput{Text: confirmation, Artifact: protocol.ToolOutputArtifact{Path: artifact, FullDiff: true}}
 			}
 		}
 	}

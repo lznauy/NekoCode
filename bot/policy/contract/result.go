@@ -16,7 +16,7 @@ func Control(r Result) (Decision, error) {
 		set(Decision{Action: Terminate, StopReason: *r.Stop})
 	}
 	if r.BlockTool != nil {
-		set(Decision{Action: Reject, Reason: r.BlockTool.Reason})
+		set(Decision{Action: Reject, Reason: r.BlockTool.Reason, ReasonCode: r.BlockTool.ReasonCode})
 	}
 	if r.BlockFinal != nil {
 		set(Decision{Action: Reject, Reason: r.BlockFinal.Reason})
@@ -74,11 +74,15 @@ func Merge(results []Result) (Result, error) {
 		}
 		if rank(d.Action) > rank(selected.Action) {
 			selected = d
-		} else if d.Action == selected.Action && d.Reason != "" {
-			if selected.Reason != "" {
-				selected.Reason += "; "
+		} else if d.Action == selected.Action {
+			// An aggregate denial has no single cause.
+			selected.ReasonCode = ""
+			if d.Reason != "" {
+				if selected.Reason != "" {
+					selected.Reason += "; "
+				}
+				selected.Reason += d.Reason
 			}
-			selected.Reason += d.Reason
 		}
 		// A terminal denial must survive subsequent merges with completed stops.
 		if d.Action == Terminate && selected.Action == Terminate && terminalPriority(d.StopReason) > terminalPriority(selected.StopReason) {

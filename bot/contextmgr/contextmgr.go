@@ -3,7 +3,6 @@ package contextmgr
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -133,12 +132,9 @@ func (m *Manager) streamingSummarizer(ctx context.Context, client provider.LLM, 
 			}
 			remaining--
 			summary, err = m.summarizeStreamOnce(ctx, client, msgs, prevSummary, delta)
-			// Any non-empty result is final: its deltas were already streamed
-			// to the UI, so a retry would duplicate them. Only a fully empty
-			// response (provider closed the stream without content — often
-			// transient) is retried once. A cancelled context ends the loop.
-			var budgetErr *RequestBudgetError
-			if strings.TrimSpace(summary) != "" || ctx.Err() != nil || errors.As(err, &budgetErr) || errors.Is(err, modelbudget.ErrExhausted) {
+			// Never replay streamed deltas. Retry an empty response or a
+			// transient failure before the first token, within the call budget.
+			if strings.TrimSpace(summary) != "" || ctx.Err() != nil || (err != nil && !provider.IsRetryable(err)) {
 				return summary, err
 			}
 		}

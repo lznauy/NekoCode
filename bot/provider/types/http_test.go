@@ -144,3 +144,11 @@ func TestStreamSSEBoundsMultilineEvent(t *testing.T) {
 		t.Fatal("missing size error")
 	}
 }
+
+func TestResponseErrorBoundsDiagnostic(t *testing.T) {
+	body := strings.NewReader(strings.Repeat("x", 128<<10))
+	err := responseError(&http.Response{StatusCode: 502, Body: io.NopCloser(body)})
+	if body.Len() == 0 || !strings.HasSuffix(err.Error(), "[truncated]") || !strings.Contains(err.Error(), "502") {
+		t.Fatal("missing bounded HTTP diagnostic")
+	}
+}

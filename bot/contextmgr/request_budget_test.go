@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"nekocode/bot/provider/types"
+	httputil "nekocode/util/http"
 )
 
 func requireRequestBudgetError(t *testing.T, err error) *RequestBudgetError {
@@ -240,5 +241,19 @@ func TestCompactionRejectsActualOutputOverflowBeforeCommit(t *testing.T) {
 		if before.Messages[i].Content != after.Messages[i].Content {
 			t.Fatal("output overflow changed source history")
 		}
+	}
+}
+
+func TestPrepareRequestReportsSummaryPaymentFailure(t *testing.T) {
+	upstream := httputil.NewHTTPError(402, "Insufficient Balance")
+	m := New(Config{ContextWindow: 4000, Summarizer: func([]types.Message, string) (string, error) { return "", upstream }})
+	for i := 0; i < 8; i++ {
+		m.Add("user", strings.Repeat("q", 800))
+		m.Add("assistant", strings.Repeat("a", 800))
+	}
+	_, err := m.PrepareRequest(context.Background(), ModelRequest{OutputTokens: 1500})
+	budget := requireRequestBudgetError(t, err)
+	if !errors.Is(err, upstream) || !strings.HasPrefix(err.Error(), "automatic compaction failed: summary provider requires payment") || !strings.Contains(err.Error(), budget.details()) || strings.Contains(err.Error(), "compact history") {
+		t.Fatalf("unexpected payment failure: %v", err)
 	}
 }

@@ -8,18 +8,19 @@ import (
 // printStartup prints the daemon's listen URLs and auth hints.
 func printStartup(addr string, hasToken, hasCORS bool) {
 	fmt.Println("NekoCode daemon listening")
-	for _, u := range accessURLs(addr) {
+	urls := accessURLs(addr)
+	for _, u := range urls {
 		fmt.Println("  " + u)
 	}
 	if hasToken {
 		fmt.Println("Auth: enabled")
-		fmt.Println(`Example: curl -H "Authorization: Bearer $NEKOCODE_DAEMON_TOKEN" http://127.0.0.1:8765/runs`)
+		fmt.Printf("Example: curl -H \"Authorization: Bearer $NEKOCODE_DAEMON_TOKEN\" %s/runs\n", urls[0])
 	} else {
 		fmt.Println("Auth: disabled")
 		if isWideBind(addr) {
 			fmt.Println("Warning: this address is reachable from your network. Use -token or NEKOCODE_DAEMON_TOKEN for shared WiFi.")
 		}
-		fmt.Println(`Example: curl -X POST http://127.0.0.1:8765/input -d '{"text":"hello"}'`)
+		fmt.Printf("Example: curl -X POST %s/input -d '{\"text\":\"hello\"}'\n", urls[0])
 	}
 	if hasCORS {
 		fmt.Println("CORS: enabled for configured origins")

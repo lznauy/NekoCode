@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+
+	httputil "nekocode/util/http"
 
 	"nekocode/bot/contextmgr/token"
 	"nekocode/bot/extension/tool/runtime/core"
@@ -34,8 +37,30 @@ func (e *RequestBudgetError) Error() string {
 	if e.Total() <= e.Window {
 		status = "request preparation blocked"
 	}
-	return fmt.Sprintf("%s: estimated %d tokens of %d window (messages=%d, tools=%d, calibration=%d, output reserve=%d, safety=%d); compact history, reduce request content, or select a larger context window",
-		status, e.Total(), e.Window, e.Messages, e.Tools, e.Calibration, e.Output, e.Safety)
+	return status + ": " + e.details() + "; compact history, reduce request content, or select a larger context window"
+}
+
+func (e *RequestBudgetError) details() string {
+	return fmt.Sprintf("estimated %d tokens of %d window (messages=%d, tools=%d, calibration=%d, output reserve=%d, safety=%d)",
+		e.Total(), e.Window, e.Messages, e.Tools, e.Calibration, e.Output, e.Safety)
+}
+
+type compactionFailure struct {
+	budget *RequestBudgetError
+	cause  error
+}
+
+func (e *compactionFailure) Error() string {
+	var upstream *httputil.HTTPError
+	hint := ""
+	if errors.As(e.cause, &upstream) && upstream.StatusCode == http.StatusPaymentRequired {
+		hint = "summary provider requires payment (HTTP 402). Restore credit or switch provider credentials, then resume the session. "
+	}
+	return fmt.Sprintf("automatic compaction failed: %s%v\nRequest budget: %s", hint, e.cause, e.budget.details())
+}
+
+func (e *compactionFailure) Unwrap() []error {
+	return []error{e.cause, e.budget}
 }
 
 // PrepareRequest is the last context boundary before an inference call. It
@@ -90,7 +115,7 @@ func (m *Manager) PrepareRequest(ctx context.Context, request ModelRequest) ([]t
 				// A sibling may consume the last ordinary admission after our
 				// snapshot. Keep an already fitting request usable in that race.
 				if !errors.Is(err, modelbudget.ErrExhausted) || budget.Total() > budget.Window {
-					return nil, fmt.Errorf("%w; compaction failed: %w", budget, err)
+					return nil, &compactionFailure{budget: budget, cause: err}
 				}
 			}
 			if applied {

@@ -55,8 +55,11 @@ func (t *ReadTool) readTextCached(ctx context.Context, path string, args map[str
 	if fullLines == nil {
 		fullLines = strings.Split(toolutil.NormalizeText(string(data)), "\n")
 	}
-	if endLine < startLine || startLine > len(fullLines) {
-		return core.ToolOutput{}, fmt.Errorf("invalid read range %d..%d (total %d)", startLine, endLine, len(fullLines))
+	if startLine > len(fullLines) {
+		return core.ToolOutput{}, fmt.Errorf("startLine %d is past the end of the file; choose a line from 1 to %d", startLine, len(fullLines))
+	}
+	if endLine < startLine {
+		return core.ToolOutput{}, fmt.Errorf("endLine %d must be at least startLine %d", endLine, startLine)
 	}
 	result := formatReadOutput(ctx, path, fullLines, startLine, endLine)
 	if cache != nil {
@@ -109,8 +112,10 @@ func formatReadOutput(ctx context.Context, path string, lines []string, startLin
 		lineNo := startLine + i
 		fmt.Fprintf(&out, "%d:%s\n", lineNo, lines[idx])
 	}
-	if end < total {
+	if end < min(endLine, total) {
 		fmt.Fprintf(&out, "... (next startLine=%d, total=%d)", end+1, total)
+	} else if end < total {
+		fmt.Fprintf(&out, "(requested range complete; total=%d)", total)
 	}
 	return strings.TrimRight(out.String(), "\n")
 }

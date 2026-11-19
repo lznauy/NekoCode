@@ -3,6 +3,8 @@ package shell
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -35,9 +37,9 @@ func (t *ProcessTool) Description() string {
 func (t *ProcessTool) Parameters() []core.Parameter {
 	return []core.Parameter{
 		{Name: "action", Type: "string", Required: true, Enum: []string{"list", "wait", "watch", "stop"}, Description: "Operation to perform."},
-		{Name: "task", Type: "string", Required: false, Description: "Task name returned by shell. Required for wait, watch, and stop."},
+		{Name: "task", Type: "string", Required: false, Description: "Managed process name from shell or process(action=list). Required for wait, watch, and stop; omit for list. Delegated task IDs belong to task_list/task_result."},
 		{Name: "wait_timeout_ms", Type: "number", Required: false, Description: "Optional positive observation budget in milliseconds; values over 120000 are capped. Default 30000. Only wait/watch. Expiry returns running state without terminating the process. This is separate from shell.timeout_ms, which is a hard lifetime."},
-		{Name: "event", Type: "string", Required: false, Enum: []string{"output", "exit"}, Description: "Event for watch; omit for other actions."},
+		{Name: "event", Type: "string", Required: false, Enum: []string{"output", "exit"}, Description: "Required for watch: output waits for new output or termination; exit waits for termination. Omit for other actions."},
 	}
 }
 
@@ -54,6 +56,12 @@ func (t *ProcessTool) Execute(ctx context.Context, args map[string]any) (core.To
 		return core.ToolOutput{}, err
 	}
 	action = strings.ToLower(strings.TrimSpace(action))
+	if _, supplied := args["event"]; supplied && action != "watch" {
+		return core.ToolOutput{}, fmt.Errorf("event is only valid for watch; omit it for %s", action)
+	}
+	if _, supplied := args["task"]; supplied && action == "list" {
+		return core.ToolOutput{}, fmt.Errorf("list shows all managed processes; omit task, or use wait/watch with task to observe one process")
+	}
 	observationWait := t.waitDuration()
 	waitCapped := false
 	if raw, supplied := args["wait_timeout_ms"]; supplied {
@@ -152,8 +160,46 @@ func formatProcessResult(result processResult) string {
 	if result.info.status == "failed" && possibleSandboxRestriction(result.output) {
 		b.WriteString("recovery_hint: This failure may be caused by sandbox restrictions. Inspect the command and error, then retry shell with the minimal required outbound_domains, network, writable_roots, or sandbox_mode request to let the runtime obtain approval. Check partial side effects before retrying. Respect explicit denials and configured domain restrictions; do not assume host execution is required or stop at reporting the restriction.\n")
 	}
+	b.WriteString(shellCompletionHints(result))
 	return b.String()
 }
+
+func shellCompletionHints(result processResult) string {
+	if result.info.status != "done" && result.info.status != "failed" {
+		return ""
+	}
+	if result.info.hasScratch && missingTempInput(result.output, result.info.directory) {
+		return "\ntemp_hint: A /tmp input was reported missing. If created in an earlier isolated command, recreate it under $NEKOCODE_SCRATCH and use that path in later calls.\n"
+	}
+	return ""
+}
+
+// Match a reported missing /tmp operand, not paths from unrelated command output.
+var missingTmpPath = regexp.MustCompile(`(?:^|[[:space:]'"])(/tmp/[^[:space:]:'"]+)`)
+
+func missingTempInput(output, workspace string) bool {
+	if !strings.Contains(output, "No such file or directory") {
+		return false
+	}
+	for line := range strings.SplitSeq(output, "\n") {
+		if !strings.Contains(line, "No such file or directory") {
+			continue
+		}
+		for _, match := range missingTmpPath.FindAllStringSubmatch(line, -1) {
+			path := filepath.Clean(match[1])
+			if !strings.HasPrefix(path, "/tmp/") {
+				continue
+			}
+			relative, err := filepath.Rel(workspace, path)
+			if err == nil && !filepath.IsLocal(relative) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+var sandboxErrno = regexp.MustCompile(`\b(?:eacces|eperm|erofs|eai_again|enotfound)\b`)
 
 // These diagnostics are evidence for the agent to investigate, not authority
 // to widen permissions or automatically replay a partially executed command.
@@ -161,16 +207,16 @@ func possibleSandboxRestriction(output string) bool {
 	output = strings.ToLower(output)
 	for _, diagnostic := range []string{
 		"read-only file system", "readonly filesystem", "permission denied",
-		"operation not permitted", "eacces", "eperm", "erofs",
+		"operation not permitted",
 		"network is unreachable", "network is down", "temporary failure in name resolution",
-		"could not resolve host", "could not resolve proxy", "eai_again", "enotfound",
+		"could not resolve host", "could not resolve proxy",
 		"sandbox denied", "sandbox violation",
 	} {
 		if strings.Contains(output, diagnostic) {
 			return true
 		}
 	}
-	return false
+	return sandboxErrno.MatchString(output)
 }
 
 func formatProcessList(tasks []processInfo) string {

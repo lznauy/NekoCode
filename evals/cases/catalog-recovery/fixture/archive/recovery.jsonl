@@ -1,0 +1,3 @@
+{"code":"red","rev":3,"op":"delete"}
+{"code":"blue","rev":5,"op":"put","name":"靛蓝"}
+{"code":"red","rev":2,"op":"put","name":"朱红"}

@@ -83,3 +83,13 @@ func TestManualContinuationCannotSwitchToLatestAttempt(t *testing.T) {
 		}
 	}
 }
+
+func TestPendingResultGuidanceMatchesStatus(t *testing.T) {
+	for status, hint := range map[string]string{"queued": "排队", "running": "运行", "waiting_dependencies": "依赖", "waiting_approval": "审批", "waiting_question": "回答", "other": "状态变更"} {
+		out, ok := pendingResultOutput(&taskbridge.ResultNotReadyError{Status: status})
+		var payload struct{ Status, Message string }
+		if !ok || json.Unmarshal([]byte(out.Text), &payload) != nil || payload.Status != status || !strings.Contains(payload.Message, hint) {
+			t.Fatalf("%s: %s", status, out.Text)
+		}
+	}
+}

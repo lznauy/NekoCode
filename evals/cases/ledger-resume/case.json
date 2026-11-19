@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "id": "ledger-resume",
+  "version": 1,
+  "title": "流水投影中断恢复",
+  "tags": [
+    "debugging",
+    "persistence"
+  ],
+  "kind": "product",
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "ties",
+      "description": "同时间多页无遗漏",
+      "required": true
+    },
+    {
+      "id": "restart",
+      "description": "故障后的持久重试",
+      "required": true
+    },
+    {
+      "id": "streams",
+      "description": "多账户隔离",
+      "required": true
+    },
+    {
+      "id": "diagnosis",
+      "description": "回归测试复现初始故障并在修复后通过",
+      "required": true
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 600,
+    "model_calls": 75,
+    "total_tokens": 2400000,
+    "verifier_seconds": 90
+  },
+  "source": "Original NekoCode capability evaluation"
+}

@@ -7,7 +7,7 @@ import (
 	"os"
 
 	"nekocode/bot/extension/tool/runtime/core"
-	"nekocode/bot/extension/tool/runtime/toolutil"
+	"nekocode/bot/extension/tool/runtime/workspace"
 	"nekocode/bot/policy"
 )
 
@@ -18,21 +18,23 @@ type Decision struct {
 	Terminated  bool
 	StopReason  policy.StopReason
 	BlockReason string
+	ReasonCode  string
 	Hints       []policy.Hint
 }
 
 // Check evaluates one governance handle using the call's effective identity.
-func Check(gov *policy.Policy, call core.ToolCallItem, contexts ...context.Context) Decision {
+func Check(ctx context.Context, gov *policy.Policy, manager *workspace.Manager, call core.ToolCallItem) Decision {
 	if gov == nil {
 		return Decision{}
 	}
 	name, args := call.Effective()
-	request := policy.ToolRequest{Name: name, Args: args, TargetExists: targetExists(name, args)}
-	results := gov.BeforeTool(request, contexts...)
+	request := policy.ToolRequest{Name: name, Args: args, TargetExists: targetExists(manager, name, args)}
+	results := gov.BeforeTool(request, ctx)
 
 	outcome := policy.Resolve(results)
 	decision := Decision{Hints: outcome.Hints, Terminated: outcome.Action == policy.Terminate, StopReason: outcome.StopReason}
 	if outcome.Action != policy.Continue {
+		decision.ReasonCode = outcome.ReasonCode
 		decision.BlockReason = outcome.Reason
 		if decision.BlockReason == "" {
 			decision.BlockReason = defaultBlockReason
@@ -42,7 +44,7 @@ func Check(gov *policy.Policy, call core.ToolCallItem, contexts ...context.Conte
 	return decision
 }
 
-func targetExists(name string, args map[string]any) bool {
+func targetExists(manager *workspace.Manager, name string, args map[string]any) bool {
 	if name != "write" && name != "edit" {
 		return false
 	}
@@ -50,7 +52,7 @@ func targetExists(name string, args map[string]any) bool {
 	if path == "" {
 		return false
 	}
-	resolved, err := toolutil.ValidatePath(path)
+	resolved, err := manager.Resolve(path)
 	if err != nil {
 		return false
 	}

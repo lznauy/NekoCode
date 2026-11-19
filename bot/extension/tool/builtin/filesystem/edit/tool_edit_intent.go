@@ -95,7 +95,8 @@ func (t *EditTool) executeEdit(ctx context.Context, args map[string]any) (core.T
 	}
 	reads := execution.FileReadsFromContext(ctx)
 	if err := reads.Check(plan.SafePath, plan.RawBefore); err != nil {
-		return core.ToolOutput{}, err
+		first := plan.Hunks[0]
+		return core.ToolOutput{}, fmt.Errorf("%w; read the first match with startLine=%d, endLine=%d", err, first.OldStart, min(first.OldEnd, first.OldStart+7))
 	}
 	finalText := toolutil.RestoreLineEndings(plan.NormalizedAfter, plan.LineEnding)
 	if err := writeEditFile(plan.SafePath, []byte(finalText), plan.OrigMode); err != nil {

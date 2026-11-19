@@ -16,14 +16,14 @@ type ReadTool struct {
 
 func (t *ReadTool) Name() string { return "read" }
 func (t *ReadTool) Description() string {
-	return "Read text file contents; images return metadata only, PDFs return metadata and extraction guidance. " + t.imageGuidance() + " Absolute path required. Omit startLine/endLine to read the first 500 lines; with startLine alone, read up to 500 lines from there. Range parameters apply only to text. Text files are limited to 64 MiB. Text output includes [path#TAG] followed by lineNo:content lines. If output is truncated, read a smaller range before editing."
+	return "Read text file contents; images return metadata only, PDFs return metadata and extraction guidance. " + t.imageGuidance() + " Read known workspace-relative or absolute paths directly; batch independent read calls before edit/write to obtain current-version receipts. Use glob to locate it if the path is unknown. Text: up to 500 lines per call, 64 MiB per file. Text output includes [path#TAG] followed by lineNo:content lines. If output is truncated, read a smaller range before editing."
 }
 
 func (t *ReadTool) Parameters() []core.Parameter {
 	return []core.Parameter{
-		{Name: "path", Type: "string", Required: true, Description: "File path (absolute)"},
+		{Name: "path", Type: "string", Required: true, Description: "File path, relative to the workspace root or absolute."},
 		{Name: "startLine", Type: "integer", Description: "First line to read (1-based, default 1)"},
-		{Name: "endLine", Type: "integer", Description: "Last line to read (inclusive, >= startLine). Default up to 500 lines from startLine."},
+		{Name: "endLine", Type: "integer", Description: "Last line to read (inclusive, >= startLine). At most 500 lines per call, even with an explicit endLine."},
 	}
 }
 

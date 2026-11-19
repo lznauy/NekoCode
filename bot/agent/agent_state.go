@@ -3,6 +3,7 @@ package agent
 import (
 	"sync/atomic"
 
+	"nekocode/bot/agent/internal/toolpolicy"
 	"nekocode/bot/contextmgr"
 	"nekocode/bot/policy"
 	"nekocode/bot/provider/types"
@@ -15,7 +16,10 @@ const defaultMaxRetries = 2
 
 // runState holds the mutable state of a single Run.
 type runState struct {
-	identity protocol.ExecutionIdentity
+	preserved           []preservedFile
+	preservationChecked bool
+	writeDrafts         toolpolicy.WriteDrafts
+	identity            protocol.ExecutionIdentity
 	// Keep only the first persistence failure until this run returns.
 	evidenceErr error
 	// Request projection only; reset each run and invalidated after task tools.

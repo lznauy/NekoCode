@@ -29,13 +29,15 @@ func Register(p *policy.Policy) {
 	}
 }
 
+const ReadBeforeWrite = "read_before_write"
+
 // ReadBeforeWriteHook requires a successful dedicated read before modifying an
 // existing file. It deliberately does not infer reads from shell command text
 // or accept an edit anchor as equivalent evidence.
 func ReadBeforeWriteHook() policy.Hook {
 	return policy.Hook{Guard: true,
 		BehaviorVersion: "1",
-		Name:            "read_before_write", Point: policy.PreToolUse,
+		Name:            ReadBeforeWrite, Point: policy.PreToolUse,
 		On: func(s policy.State) *policy.Result {
 			tool := s.Facts().Tool
 			name := tool.Name
@@ -47,8 +49,9 @@ func ReadBeforeWriteHook() policy.Hook {
 				return nil
 			}
 			return &policy.Result{BlockTool: &policy.BlockTool{
-				Tool:   name,
-				Reason: "你正在修改 " + path + "，但 ledger 中没有该文件的读取记录。请先 Read 确认当前内容，确认差异后再 edit/write。",
+				Tool:       name,
+				ReasonCode: ReadBeforeWrite,
+				Reason:     "你正在修改 " + path + "，但 ledger 中没有该文件的读取记录。请先 Read 确认当前内容，确认差异后再 edit/write。",
 			}}
 		},
 		DescribeTrigger: func(s policy.State) string {

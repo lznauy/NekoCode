@@ -1,0 +1,1 @@
+incident.log 记录了两次夜间对账告警，现有冒烟测试通过。请还原两条异常执行路径。修复现有 SQLite 投影器，保留 connect(path)、advance(db, stream, limit, after_apply=...) 接口和既有数据库。事件按 (ts,id) 排序，每次最多处理 limit 行，返回行数。每个 stream 独立；非空页应用后应调用故障注入回调，异常向上传播。修复需保证关闭连接再打开后重试可恢复。编写可通过 python -m unittest discover 运行的回归测试，并说明两种症状各自的触发条件与原因。

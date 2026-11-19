@@ -28,7 +28,7 @@ func TestTodoReminderFollowsExecutedBatchesAndIsTransient(t *testing.T) {
 		if a.toolRunner.executeAndFeedback(calls, "", nil) {
 			t.Fatal("reminder must not terminate the run")
 		}
-		if _, err := a.modelRunner.callLLMForTool(); err != nil {
+		if _, err := a.modelRunner.callLLMForTool(""); err != nil {
 			t.Fatal(err)
 		}
 		messages := model.messages[len(model.messages)-1]
@@ -82,7 +82,7 @@ func TestTodoReminderNotConsumedByFailedModelRequest(t *testing.T) {
 	a := newTestAgent()
 	a.run.todoBatches = 6
 	a.deps.llmClient = &failingLLM{}
-	if _, err := a.modelRunner.callLLMForTool(); err == nil {
+	if _, err := a.modelRunner.callLLMForTool(""); err == nil {
 		t.Fatal("expected model failure")
 	}
 	if a.run.todoBatches != 6 {

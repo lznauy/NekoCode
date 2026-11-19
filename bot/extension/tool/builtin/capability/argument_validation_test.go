@@ -34,3 +34,15 @@ func TestCapabilityRejectsInvalidArgumentsBeforeInvocation(t *testing.T) {
 		}
 	}
 }
+
+func TestDiscoveryRejectsFieldsForOtherActions(t *testing.T) {
+	tool := New(nil) // Any backend access would panic.
+	for _, args := range []map[string]any{
+		{"action": "list", "server": "s"}, {"action": "list", "tool": "t"}, {"action": "list", "args": map[string]any{}},
+		{"action": "inspect", "server": "s", "tool": "t", "args": map[string]any{}},
+	} {
+		if _, err := tool.Execute(t.Context(), args); err == nil {
+			t.Fatalf("accepted %v", args)
+		}
+	}
+}

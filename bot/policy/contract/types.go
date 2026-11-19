@@ -35,6 +35,7 @@ const (
 )
 
 type Decision struct {
+	ReasonCode string     `json:"-"`
 	Action     Action     `json:"action"`
 	Reason     string     `json:"reason,omitempty"`
 	StopReason StopReason `json:"stop_reason,omitempty"`
@@ -107,8 +108,9 @@ type Result struct {
 }
 
 type BlockTool struct {
-	Tool   string `json:"tool,omitempty"`
-	Reason string `json:"reason"`
+	ReasonCode string `json:"-"`
+	Tool       string `json:"tool,omitempty"`
+	Reason     string `json:"reason"`
 }
 
 type RequireTool struct {

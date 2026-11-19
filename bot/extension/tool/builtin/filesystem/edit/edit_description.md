@@ -1,11 +1,5 @@
 Edit a file by replacing text anchored to the file's current content.
 
-Parameters:
-- path: absolute file path.
-- oldString: exact text currently in the file.
-- newString: required replacement text. Explicitly pass an empty string to delete oldString; omission is an error.
-- replaceAll: optional. Defaults to false.
-
 Default behavior:
 - oldString must match exactly once.
 - If oldString matches multiple times, include more surrounding context.

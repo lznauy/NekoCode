@@ -507,6 +507,7 @@ type FileDeliverer interface {
 // ToolOutputArtifact references framework-preserved tool output. Incomplete
 // means the producer stopped before its full result was captured.
 type ToolOutputArtifact struct {
+	FullDiff   bool   `json:"full_diff,omitempty"`
 	Path       string `json:"path,omitempty"`
 	Incomplete bool   `json:"incomplete,omitempty"`
 }

@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "id": "go-embed-path",
+  "version": 1,
+  "title": "Go 工具链 embed 数据流",
+  "tags": [
+    "architecture",
+    "large-repository"
+  ],
+  "kind": "review",
+  "prompt": "prompt.md",
+  "fixture": null,
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "matching",
+      "description": "目录匹配与隐藏文件处理",
+      "required": true
+    },
+    {
+      "id": "handoff",
+      "description": "打包数据如何传入编译器",
+      "required": true
+    },
+    {
+      "id": "compile",
+      "description": "字符串与文件系统的编译差异",
+      "required": true
+    },
+    {
+      "id": "lookup",
+      "description": "运行时缺失条目的结果",
+      "required": true
+    },
+    {
+      "id": "unchanged",
+      "description": "完整输入树保持原状",
+      "required": true
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 600,
+    "model_calls": 75,
+    "total_tokens": 2400000,
+    "verifier_seconds": 90
+  },
+  "source": "Original NekoCode capability evaluation",
+  "repository": {
+    "url": "https://github.com/golang/go",
+    "base": "3901409b5d0fb7c85a3e6730a59943cc93b2835c",
+    "head": "3901409b5d0fb7c85a3e6730a59943cc93b2835c"
+  }
+}
