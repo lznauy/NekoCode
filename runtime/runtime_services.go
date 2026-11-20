@@ -264,11 +264,27 @@ func (r *Runtime) MCPAuthorizationAction(name, action string) error {
 
 // RenameSession only changes the display name of a saved session.
 func (r *Runtime) RenameSession(id, name string) error {
-	err := r.mutation("rename_session", r.services.Sessions.RenameSession != nil, func() error {
-		return r.services.Sessions.RenameSession(id, name)
-	})
-	if err == nil {
-		r.publishSessionChanged("rename", id, false)
+	if err := r.renameSessionMetadata(id, name); err != nil {
+		return err
 	}
-	return err
+	// Observers can reenter the runtime after the metadata write commits.
+	r.publishSessionChanged("rename", id, false)
+	return nil
+}
+
+func (r *Runtime) renameSessionMetadata(id, name string) error {
+	// Serialize with session changes and shutdown. Updating a saved label
+	// does not change the resources owned by an active run.
+	r.mutationMu.Lock()
+	defer r.mutationMu.Unlock()
+	r.mu.Lock()
+	closed := r.closed
+	r.mu.Unlock()
+	if closed {
+		return protocolError(ErrorClosed, "rename_session", "closed")
+	}
+	if r.services.Sessions.RenameSession == nil {
+		return protocolError(ErrorUnsupported, "rename_session", "capability unavailable")
+	}
+	return r.services.Sessions.RenameSession(id, name)
 }

@@ -5,7 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"os"
+	"nekocode/util/fs"
 	"path/filepath"
 	"strings"
 	"time"
@@ -67,7 +67,7 @@ func (s *server) loadSession(ctx context.Context, params json.RawMessage) (any, 
 		return nil, rpcErr
 	}
 	for index, item := range s.backend.SessionMessages() {
-		for _, update := range historyUpdates(index, item) {
+		for _, update := range historyUpdates(ctx, index, item) {
 			if err := s.notifySession(request.SessionID, update); err != nil {
 				return nil, backendError("replay session", err)
 			}
@@ -90,7 +90,7 @@ func (s *server) loadSession(ctx context.Context, params json.RawMessage) (any, 
 // historyUpdates projects one persisted display message onto ACP session
 // updates: reasoning, tool blocks, text content and images are replayed so a
 // loaded session matches what the live stream would have delivered.
-func historyUpdates(index int, item controlruntime.DisplayMessage) []map[string]any {
+func historyUpdates(ctx context.Context, index int, item controlruntime.DisplayMessage) []map[string]any {
 	messageID := fmt.Sprintf("history-%d", index)
 	var updates []map[string]any
 	chunk := func(kind string, content map[string]any) map[string]any {
@@ -127,7 +127,7 @@ func historyUpdates(index int, item controlruntime.DisplayMessage) []map[string]
 			updates = append(updates, chunk("agent_message_chunk", map[string]any{"type": "text", "text": item.Content}))
 		}
 		for _, ref := range item.Images {
-			if content := imageContent(ref); content != nil {
+			if content := imageContent(ctx, ref); content != nil {
 				updates = append(updates, chunk("agent_message_chunk", content))
 			}
 		}
@@ -337,22 +337,37 @@ func (s *server) findSession(id string) (controlruntime.SessionMeta, bool) {
 
 func (s *server) hasActiveTurn() bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.active) != 0
+	// The admission path holds sessionMu, so another turn cannot be admitted
+	// while we check a previous prompt whose cleanup deadline elapsed.
+	for id, turn := range s.active {
+		if !turn.awaitingSettlement {
+			s.mu.Unlock()
+			return true
+		}
+		runID := turn.runID
+		s.mu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		err := s.backend.WaitRun(ctx, runID)
+		cancel()
+		if err != nil {
+			return true
+		}
+		s.mu.Lock()
+		delete(s.active, id)
+	}
+	s.mu.Unlock()
+	return false
 }
 
 // imageContent converts a persisted image reference into an ACP image content
 // block. Images that cannot be read (or exceed the replay cap) are skipped.
-func imageContent(ref controlruntime.ImageRef) map[string]any {
-	if ref.Path == "" {
-		return nil
-	}
-	data, err := os.ReadFile(ref.Path)
-	if err != nil || len(data) == 0 || len(data) > maxReplayImageBytes {
-		return nil
-	}
+func imageContent(ctx context.Context, ref controlruntime.ImageRef) map[string]any {
 	mime := imageMIME(ref.Path)
 	if mime == "" {
+		return nil
+	}
+	data, err := fs.ReadRegularFile(ctx, ref.Path, maxReplayImageBytes)
+	if err != nil || len(data) == 0 {
 		return nil
 	}
 	content := map[string]any{

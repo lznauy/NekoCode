@@ -2,6 +2,7 @@ package llmstream
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 
 	"nekocode/bot/extension/tool/runtime/core"
@@ -9,9 +10,9 @@ import (
 )
 
 // CollectToolCalls converts accumulated tool call deltas into ToolCallItems.
-func (s *StreamResult) CollectToolCalls() []core.ToolCallItem {
+func (s *StreamResult) CollectToolCalls() ([]core.ToolCallItem, error) {
 	if len(s.TcAccum) == 0 {
-		return nil
+		return nil, nil
 	}
 	indices := make([]int, 0, len(s.TcAccum))
 	for idx := range s.TcAccum {
@@ -23,15 +24,15 @@ func (s *StreamResult) CollectToolCalls() []core.ToolCallItem {
 	for _, idx := range indices {
 		acc := s.TcAccum[idx]
 		if acc == nil {
-			continue
+			return nil, fmt.Errorf("%w: missing tool call at index %d", ErrIncompleteResponse, idx)
 		}
 		var args map[string]any
-		if err := json.Unmarshal([]byte(acc.Args.String()), &args); err != nil {
-			continue
+		if err := json.Unmarshal([]byte(acc.Args.String()), &args); err != nil || args == nil {
+			return nil, fmt.Errorf("%w: tool call %d arguments must be a JSON object", ErrIncompleteResponse, idx)
 		}
 		items = append(items, core.ToolCallItem{ID: acc.ID, Name: acc.Name, Args: args})
 	}
-	return items
+	return items, nil
 }
 
 // ToLLMToolCalls converts ToolCallItems to the LLM types.ToolCall format.

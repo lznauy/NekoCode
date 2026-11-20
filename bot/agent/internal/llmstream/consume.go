@@ -1,6 +1,7 @@
 package llmstream
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -29,6 +30,12 @@ func ConsumeStream(tokenCh <-chan types.StreamToken, s *StreamResult, cb StreamC
 				s.Request = token.Request
 				continue
 			}
+			if token.Refused {
+				s.refused = true
+			}
+			if token.FinishReason != "" {
+				s.finishReason = token.FinishReason
+			}
 			if token.ReasoningSignature != "" {
 				s.ReasoningSignature = token.ReasoningSignature
 			}
@@ -44,11 +51,7 @@ func ConsumeStream(tokenCh <-chan types.StreamToken, s *StreamResult, cb StreamC
 			timer.Reset(idleTimeout)
 
 			if checkDone != nil && checkDone() {
-				go func() {
-					for range tokenCh {
-					}
-				}()
-				return nil
+				return context.Canceled
 			}
 			if token.ReasoningContent != "" && firstReasoning {
 				firstReasoning = false
@@ -112,10 +115,6 @@ func ConsumeStream(tokenCh <-chan types.StreamToken, s *StreamResult, cb StreamC
 			}
 
 		case <-timer.C:
-			go func() {
-				for range tokenCh {
-				}
-			}()
 			return fmt.Errorf("stream idle timeout: no tokens for %v", idleTimeout)
 		}
 	}

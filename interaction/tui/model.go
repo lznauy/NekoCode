@@ -176,7 +176,7 @@ func loadWorkspaceChanges(rt RuntimeClient) tea.Cmd {
 func (m *Model) resizeMessages() {
 	follow := m.Messages.Follow
 	extra := 0
-	if m.sessionName != nil && m.state == stateReady {
+	if m.sessionNameFocused() {
 		extra += sessionNameHeight - 1 // Replace the menu's one-line hints with a two-line editor.
 	}
 	if m.state == stateConfirming {

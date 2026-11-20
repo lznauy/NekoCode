@@ -22,7 +22,7 @@ func TestSummaryRejectsMalformedOutputWithoutDroppingHistory(t *testing.T) {
 		t.Run(raw, func(t *testing.T) {
 			rc := newReplacementCompactor(func([]types.Message, string) (string, error) { return raw, nil }, 80)
 			history := summaryTestHistory("old request")
-			archive, recent, trimmed, err := rc.summarize(history, "old archive", 64000, nil)
+			archive, recent, trimmed, err := rc.summarize(history, "old archive", 64000, nil, nil)
 			if err == nil || archive != "" || recent != nil || trimmed != 0 {
 				t.Fatalf("invalid result accepted: archive=%q trimmed=%d err=%v", archive, trimmed, err)
 			}
@@ -35,7 +35,7 @@ func TestSummaryRejectsMalformedOutputWithoutDroppingHistory(t *testing.T) {
 
 func TestSummarizeKeepsShortWrappedSummary(t *testing.T) {
 	rc := newReplacementCompactor(func([]types.Message, string) (string, error) { return "<summary>完成</summary>", nil }, 80)
-	archive, _, trimmed, err := rc.summarize(summaryTestHistory("old request"), "", 64000, nil)
+	archive, _, trimmed, err := rc.summarize(summaryTestHistory("old request"), "", 64000, nil, nil)
 	if err != nil || archive != "完成" || trimmed == 0 {
 		t.Fatalf("short valid summary = %q, %d, %v", archive, trimmed, err)
 	}

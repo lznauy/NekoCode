@@ -15,6 +15,8 @@ import type {
   TodoItem,
   ToolStep,
   InputAcceptedEvent,
+  StatusEvent,
+  DoneEvent,
   ToolPreviewPayload,
 } from '../types/events'
 import type { UIImageRef } from '../types/events'
@@ -423,7 +425,11 @@ export function useChat(): UseChatReturn {
     void e
   }, [])
 
-  const onDone = useCallback((e: { output?: string; error: string }) => {
+  const onDone = useCallback((e: DoneEvent) => {
+    const notice: Msg | undefined = e.evidence_incomplete
+      ? { id: genId(), role: 'system', text: '本次运行的记录不完整，部分操作无法核验。', streaming: false }
+      : undefined
+    if (abortedRef.current && notice) setMsgs(prev => [...prev, notice])
     if (abortedRef.current) return
     flushBuffers()
     // A run error is unrelated to an in-flight compaction: settle with the
@@ -458,6 +464,7 @@ export function useChat(): UseChatReturn {
         }
       })
       if (failure) next.push(failure)
+      if (notice) next.push(notice)
       return next
     })
     // Until acceptance, this local user turn belongs to the pending RPC, not
@@ -477,7 +484,37 @@ export function useChat(): UseChatReturn {
     }
   }, [flushBuffers, settlePendingSubmission])
 
-  const onStatus = useCallback((e: { status: string }) => {
+  // A goal continuation starts without a local draft or an input-accepted event.
+  const beginExternalTurn = useCallback((e?: InputAcceptedEvent) => {
+    const replacesLocal = !e || e?.source?.kind === 'gui' || e?.source?.kind === 'gui_queue' || e?.source?.kind === 'task_completion'
+    const optimistic = replacesLocal ? optimisticTurnRef.current : null
+    if (replacesLocal) optimisticTurnRef.current = null
+    // Replace unaccepted local placeholders with the admitted turn. This also
+    // removes them when an automatic review runs before the queued local input.
+    if (optimistic) {
+      setMsgs(prev => prev.filter(message => message.id !== optimistic.userSid && (optimistic.replySettled || message.id !== optimistic.sid)))
+    }
+    const sid = genId()
+    if (e?.source?.kind === 'gui' || e?.source?.kind === 'gui_queue') {
+      if (submissionRef.current) submissionRef.current.sid = sid
+      const pending = pendingSubmissionRef.current
+      for (const image of e.images ?? []) pending?.acceptedImagePaths.add(image.path)
+    }
+    sidRef.current = sid
+    userSidRef.current = null
+    abortedRef.current = false
+    setBusy(true)
+    textBufferRef.current = ''
+    reasoningBufferRef.current = ''
+    responseTextRef.current = { sid, length: 0 }
+    hasStreamTextRef.current = false
+    streamBreakPendingRef.current = false
+    textDoneRef.current = false
+    reasoningDoneRef.current = false
+    setMsgs(prev => [...prev, ...(e?.queued || e?.source?.kind === 'gui_queue' ? [{ id: genId(), role: 'user' as const, text: e?.content ?? '', streaming: false }] : []), emptyRunMsg(sid)])
+  }, [])
+
+  const onStatus = useCallback((e: StatusEvent) => {
     if (abortedRef.current) {
       if (e.status === 'idle') {
         if (cancellationRef.current) cancellationRef.current.terminal = true
@@ -485,37 +522,13 @@ export function useChat(): UseChatReturn {
       }
       return
     }
+    if (e.status === 'running' && e.source === 'goal_continuation') beginExternalTurn()
     setBusy(e.status !== 'idle')
-  }, [finishCancellation])
+  }, [beginExternalTurn, finishCancellation])
 
   const onInputAccepted = useCallback((e: InputAcceptedEvent) => {
     if (e.queued || e.source?.kind === 'task_completion' || e.source?.kind === 'gui_queue') {
-      const replacesLocal = e.source?.kind === 'gui' || e.source?.kind === 'gui_queue' || e.source?.kind === 'task_completion'
-      const optimistic = replacesLocal ? optimisticTurnRef.current : null
-      if (replacesLocal) optimisticTurnRef.current = null
-      // Replace unaccepted local placeholders with the admitted turn. This also
-      // removes them when an automatic review runs before the queued local input.
-      if (optimistic) {
-        setMsgs(prev => prev.filter(message => message.id !== optimistic.userSid && (optimistic.replySettled || message.id !== optimistic.sid)))
-      }
-      const sid = genId()
-      if (e.source?.kind === 'gui' || e.source?.kind === 'gui_queue') {
-        if (submissionRef.current) submissionRef.current.sid = sid
-        const pending = pendingSubmissionRef.current
-        for (const image of e.images ?? []) pending?.acceptedImagePaths.add(image.path)
-      }
-      sidRef.current = sid
-      userSidRef.current = null
-      abortedRef.current = false
-      setBusy(true)
-      textBufferRef.current = ''
-      reasoningBufferRef.current = ''
-      responseTextRef.current = { sid, length: 0 }
-      hasStreamTextRef.current = false
-      streamBreakPendingRef.current = false
-      textDoneRef.current = false
-      reasoningDoneRef.current = false
-      setMsgs(prev => [...prev, ...(e.queued || e.source?.kind === 'gui_queue' ? [{ id: genId(), role: 'user' as const, text: e.content ?? '', streaming: false }] : []), emptyRunMsg(sid)])
+      beginExternalTurn(e)
       return
     }
 
@@ -524,7 +537,7 @@ export function useChat(): UseChatReturn {
 	const pending = pendingSubmissionRef.current
 	if (!pending) return
 	for (const image of e.images ?? []) pending.acceptedImagePaths.add(image.path)
-  }, [])
+  }, [beginExternalTurn])
 
   // onSystem 处理命令输出（/devices、/config 等）：作为独立 system 消息展示。
   // 手动 /compact 的统计已由 CompactionDetails 卡片渲染，命令的文本回显

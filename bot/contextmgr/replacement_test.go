@@ -25,7 +25,7 @@ func TestSummarizeReplacesHistoryWithArchiveAndRecentMessages(t *testing.T) {
 		return "<summary>This is a compacted project summary with enough detail to pass the quality floor.</summary>", nil
 	}, 0)
 
-	archive, recent, trimmed, err := s.summarize(ctx.Messages, "", budget, nil)
+	archive, recent, trimmed, err := s.summarize(ctx.Messages, "", budget, nil, nil)
 	if err != nil {
 		t.Fatalf("Summarize() error: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestSummarizeRefusesInputBeyondSummarizerWindow(t *testing.T) {
 	}, 0)
 	s.modelWindow = 16384
 
-	_, _, _, err := s.summarize(ctx.Messages, strings.Repeat("archive ", 16000), 64000, nil)
+	_, _, _, err := s.summarize(ctx.Messages, strings.Repeat("archive ", 16000), 64000, nil, nil)
 	if err == nil {
 		t.Fatal("oversized summary input was not refused")
 	}
@@ -169,7 +169,7 @@ func TestSummarizeAllowsInputWithinSummarizerWindow(t *testing.T) {
 	}, 0)
 	s.modelWindow = 64000
 
-	_, recent, _, err := s.summarize(ctx.Messages, "", 64000, nil)
+	_, recent, _, err := s.summarize(ctx.Messages, "", 64000, nil, nil)
 	if err != nil {
 		t.Fatalf("in-window summary failed: %v", err)
 	}

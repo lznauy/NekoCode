@@ -2,8 +2,10 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -83,5 +85,58 @@ func TestBackgroundCoordinatorReleaseAlwaysWakes(t *testing.T) {
 	case <-b.wake:
 	default:
 		t.Fatal("released reservation lost pending work wake")
+	}
+}
+
+func TestCoordinatorRetriesTransientClaimWrite(t *testing.T) {
+	for _, demand := range []bool{false, true} {
+		t.Run(fmt.Sprintf("queued-demand-%t", demand), func(t *testing.T) {
+			root := t.TempDir()
+			tmpFile := filepath.Join(root, "file")
+			if err := os.WriteFile(tmpFile, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			services := backgroundServices(root)
+			path := services.Sessions.BackgroundStatePath
+			var failNext atomic.Bool
+			services.Sessions.BackgroundStatePath = func(id string) string {
+				if failNext.CompareAndSwap(true, false) {
+					return filepath.Join(tmpFile, "background.json")
+				}
+				return path(id)
+			}
+			ran := make(chan struct{}, 1)
+			rt := New(RunnerFunc(func(context.Context, string, RunHost) (string, error) { ran <- struct{}{}; return "ok", nil }), services)
+			defer rt.Close()
+			b := rt.background
+			if err := b.load("session"); err != nil {
+				t.Fatal(err)
+			}
+			if demand {
+				// Hold admission so the input is queued before the failing claim.
+				rt.mutationMu.Lock()
+				_, err := rt.queueBackgroundInput(t.Context(), Input{Text: "queued"})
+				failNext.Store(true)
+				rt.mutationMu.Unlock()
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				b.mu.Lock()
+				b.entries["result"] = &backgroundEntry{BackgroundTask: BackgroundTask{ID: "result", SessionID: "session", Status: "completed", Result: "ready"}}
+				b.order = append(b.order, "result")
+				failNext.Store(true)
+				b.mu.Unlock()
+				b.signal()
+			}
+			select {
+			case <-ran:
+			case <-time.After(2 * time.Second):
+				t.Fatal("ready work stranded after one failed claim write")
+			}
+			if failNext.Load() {
+				t.Fatal("failure was not exercised")
+			}
+		})
 	}
 }

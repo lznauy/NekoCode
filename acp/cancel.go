@@ -25,7 +25,7 @@ func (s *server) cancel(ctx context.Context, params json.RawMessage) *wireError 
 		runID = turn.runID
 	}
 	s.mu.Unlock()
-	if turn == nil {
+	if runID == "" {
 		return nil
 	}
 	if err := s.backend.CancelRun(ctx, runID); err != nil {

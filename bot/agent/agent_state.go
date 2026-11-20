@@ -19,6 +19,7 @@ type runState struct {
 	preserved           []preservedFile
 	preservationChecked bool
 	writeDrafts         toolpolicy.WriteDrafts
+	lastShellFailure    shellFailure
 	identity            protocol.ExecutionIdentity
 	// Keep only the first persistence failure until this run returns.
 	evidenceErr error

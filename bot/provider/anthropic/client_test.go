@@ -209,3 +209,14 @@ func TestToolResultOmitsLocalSkillMetadata(t *testing.T) {
 		t.Fatal("wire result lost delivered instructions")
 	}
 }
+
+func TestToolResultWireMarksOnlyErrors(t *testing.T) {
+	client := New("", "", "test")
+	for _, failed := range []bool{true, false} {
+		messages, _ := client.toMessages([]types.Message{{Role: "tool", ToolCallID: "r", Content: "diagnostic", IsError: failed}}, types.ReasoningSettings{})
+		wire, err := json.Marshal(messages)
+		if err != nil || strings.Contains(string(wire), `"is_error":true`) != failed {
+			t.Fatalf("failed=%t wire=%s err=%v", failed, wire, err)
+		}
+	}
+}

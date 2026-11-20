@@ -562,3 +562,20 @@ func TestResumeReportsCommittedStateWhenRewindPersistenceFails(t *testing.T) {
 		t.Fatal("failed persistence acknowledged the recovery journal")
 	}
 }
+
+func TestCaptureSessionDraftDoesNotShadowPersistedGoal(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	b := &Bot{sess: session.New(t.TempDir()), ctxMgr: ctxmgr.New(ctxmgr.Config{})}
+	snapshot := b.sess.Current()
+	snapshot.Goal = &session.Goal{Objective: "review the release", Status: "paused"}
+	if err := b.sess.SavePreservingDraft(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	draft, err := b.CaptureSessionDraft()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft != nil {
+		t.Fatal("goal-only session would be restored from a stale draft instead of its durable record")
+	}
+}

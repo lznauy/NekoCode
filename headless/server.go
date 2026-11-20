@@ -157,7 +157,7 @@ func (s *server) serve(ctx context.Context) error {
 	reads := s.conn.reads
 	if s.options.Prompt != "" {
 		s.queue = append(s.queue, userInput{id: uuid.NewString(), text: s.options.Prompt})
-		s.queueBytes = len(s.options.Prompt)
+		s.queueBytes = s.queue[0].queuedBytes()
 		s.eof = true
 		reads = nil
 	}
@@ -166,7 +166,7 @@ func (s *server) serve(ctx context.Context) error {
 			input := s.queue[0]
 			s.queue[0] = userInput{}
 			s.queue = s.queue[1:]
-			s.queueBytes -= len(input.text)
+			s.queueBytes -= input.queuedBytes()
 			if err := s.start(ctx, input); err != nil {
 				return err
 			}
@@ -229,7 +229,10 @@ func (s *server) start(ctx context.Context, input userInput) error {
 		return errors.New("backend session changed outside stream-json")
 	}
 	t := &turn{input: input, started: time.Now(), tools: make(map[toolKey]*toolState), wireIDs: make(map[string]bool)}
+	// sendTurn decorates the admission frames with the input identity. Even
+	// if writing a rejection fails, this provisional turn owns no runtime run.
 	s.active = t
+	defer func() { s.active = nil }()
 	turnCtx, cancel := context.WithCancel(modelbudget.WithRole(modelbudget.WithBudget(ctx, s.callBudget), modelbudget.Coordinator, ""))
 	t.cancel = cancel
 	// Snapshot configuration before starting the runner, then publish init with
@@ -250,7 +253,6 @@ func (s *server) start(ctx context.Context, input userInput) error {
 			if sendErr := s.result(rt.RunResult{Error: err.Error()}, "error_during_execution"); sendErr != nil {
 				return sendErr
 			}
-			s.active = nil
 			return nil
 		}
 		inputImages = append(inputImages, rt.ImageAttachment{Label: image.Label, Path: path})
@@ -258,7 +260,6 @@ func (s *server) start(ctx context.Context, input userInput) error {
 	id, err := s.backend.StartRun(turnCtx, rt.Input{
 		Source: rt.SourceRef{Kind: "headless", ID: input.id}, Text: input.text, Images: inputImages,
 	})
-	t.runID = id
 	if err != nil {
 		cancel()
 		if sendErr := s.sendTurn("system", init); sendErr != nil {
@@ -267,17 +268,16 @@ func (s *server) start(ctx context.Context, input userInput) error {
 		if err := s.result(rt.RunResult{Error: err.Error()}, "error_during_execution"); err != nil {
 			return err
 		}
-		s.active = nil
 		return nil
 	}
 	// StartRun may accept an input into the runtime queue. Acceptance is not
 	// execution: only its RunStarted (or preparation failure) selects active.
+	t.runID = id
 	t.init = init
 	if s.pendingTurns == nil {
 		s.pendingTurns = make(map[rt.RunID]*turn)
 	}
 	s.pendingTurns[id] = t
-	s.active = nil
 	return nil
 }
 
@@ -408,7 +408,8 @@ func (s *server) receive(ctx context.Context, f frame) error {
 		if s.seen[input.id] {
 			return s.send("system", map[string]any{"subtype": "input_duplicate", "user_message_uuid": input.id})
 		}
-		if len(s.queue) >= maxQueuedTurns || s.queueBytes+len(input.text) > 16<<20 {
+		size := input.queuedBytes()
+		if len(s.queue) >= maxQueuedTurns || s.queueBytes+size > 16<<20 {
 			return s.send("system", map[string]any{"subtype": "error", "error": "input queue full", "rejected_uuid": input.id})
 		}
 		if len(s.seen) >= 10000 {
@@ -416,7 +417,7 @@ func (s *server) receive(ctx context.Context, f frame) error {
 		}
 		s.seen[input.id] = true
 		s.queue = append(s.queue, input)
-		s.queueBytes += len(input.text)
+		s.queueBytes += size
 		return s.send("system", map[string]any{"subtype": "input_queued", "accepted_uuid": input.id})
 	case "control_request":
 		return s.control(ctx, f)

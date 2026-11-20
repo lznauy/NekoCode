@@ -1,11 +1,13 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/policy"
 	"nekocode/bot/provider/types"
 	"nekocode/protocol"
+	"strings"
 )
 
 // turnRunner orchestrates the lifecycle of a single turn: preparation,
@@ -104,11 +106,30 @@ func (r *turnRunner) handleText(reasoning *reasoningResult, callback RunCallback
 	if recordable && r.continueFailedTodoUpdate() {
 		return false
 	}
-	if recordable && a.run.todoUpdateError == "" && r.continueUnfinishedPlan() {
+	review, goalActive := a.getCtx().Value(goalReviewKey{}).(func(string) string)
+	marker := ""
+	if recordable && goalActive {
+		marker = GoalMarker(reasoning.ActionInput)
+	}
+	// A phase handoff or request for a user decision legitimately leaves work open.
+	handoff := marker == "GOAL NEXT" || marker == "GOAL REVIEW"
+	if recordable && !handoff && a.run.todoUpdateError == "" && r.continueUnfinishedPlan() {
 		return a.run.err != nil
 	}
 	if recordable && r.reviewPreservedFiles(&reasoning.ActionInput, true) {
 		return false
+	}
+	if goalActive && recordable {
+		if hint := review(reasoning.ActionInput); hint != "" {
+			// The next model step needs the preceding progress report even
+			// though this response is not the run's final answer.
+			r.recordReasoningText(reasoning, recordable)
+			a.stream.discardText()
+			a.clearFinalState()
+			a.run.step++
+			a.injectHint(&policy.Hint{Type: "goal", Content: hint})
+			return false
+		}
 	}
 	r.completeWithText(reasoning, recordable, callback)
 	return true
@@ -294,4 +315,17 @@ func (r *turnRunner) applyStopOutcome(out policy.Outcome, reasoning *reasoningRe
 		return true, r.applyStopHint(reasoning, &out.Hints[0], recordable, callback)
 	}
 	return false, false
+}
+
+type goalReviewKey struct{}
+
+// WithGoalReview installs a closeout check within the current run budget.
+func WithGoalReview(ctx context.Context, review func(string) string) context.Context {
+	return context.WithValue(ctx, goalReviewKey{}, review)
+}
+
+// GoalMarker returns the last nonblank line of a candidate goal response.
+func GoalMarker(answer string) string {
+	answer = strings.TrimSpace(answer)
+	return strings.TrimSpace(answer[strings.LastIndexByte(answer, '\n')+1:])
 }

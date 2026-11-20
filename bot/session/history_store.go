@@ -473,8 +473,9 @@ func (m *Manager) WalkHistory(through int, visit func(types.Message) error) erro
 }
 
 func (m *Manager) ExportHistory(through int, tail []types.Message, path string) (string, int, error) {
-	if path == "" {
-		path = DefaultExportPath
+	path, err := resolveExportPath(path)
+	if err != nil {
+		return "", 0, err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return "", 0, err

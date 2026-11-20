@@ -17,7 +17,7 @@ func RunHost(ctx context.Context, command string, timeout time.Duration) (string
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, "bash", "-c", command)
+	cmd := exec.CommandContext(cmdCtx, "bash", "-o", "pipefail", "-c", command)
 	if dir, err := os.Getwd(); err == nil {
 		cmd.Dir = dir
 	}

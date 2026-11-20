@@ -77,7 +77,30 @@ func (b *Bot) runAgent(ctx context.Context, input string, images []types.Message
 	if err := ag.Executor().SetInteractionMode(snapshot); err != nil {
 		return "", err
 	}
-	b.ctxMgr.SetRuntimePolicy(definition.Prompt)
+	goal := b.sess.CurrentGoal()
+	var audit *goalAudit
+	prompt := definition.Prompt
+	if goal != nil && goal.Status == "active" && snapshot.ID == mode.Standard && !protocol.CoordinationFromContext(ctx).Notification {
+		b.goalRunning.Store(true)
+		defer b.goalRunning.Store(false)
+		audit = &goalAudit{external: protocol.GoalScheduling(ctx), goal: goal, runID: protocol.ExecutionFromContext(ctx).RunID}
+		prompt += "\n" + audit.prompt()
+		ctx = agentcore.WithGoalReview(ctx, func(answer string) string {
+			hint := audit.review(answer)
+			if h, ok := b.currentHost().(interface{ GoalContinuation(int) }); ok && hint != "" {
+				h.GoalContinuation(goal.Attempts)
+			}
+			return hint
+		})
+		publish := onStep
+		onStep = func(event protocol.StepEvent) {
+			event.GoalProgress = audit.observe(event)
+			if publish != nil {
+				publish(event)
+			}
+		}
+	}
+	b.ctxMgr.SetRuntimePolicy(prompt)
 	defer func() {
 		ag.Executor().SetPlanMode(false)
 		b.ctxMgr.SetRuntimePolicy("")
@@ -102,11 +125,21 @@ func (b *Bot) runAgent(ctx context.Context, input string, images []types.Message
 	if compactionErr != nil && (errors.Is(compactionErr, context.Canceled) || errors.Is(compactionErr, context.DeadlineExceeded)) {
 		compactionErr = nil
 	}
+	var saveErr error
+	if audit != nil {
+		audit.finish(result, ctx.Err(), errors.Join(checkpointErr, compactionErr))
+		saveErr = b.saveGoal(goal)
+		if status, ok := b.currentHost().(interface{ GoalStatus(string) }); ok && saveErr == nil {
+			status.GoalStatus(goalSummary(goal))
+		}
+	} else {
+		saveErr = b.saveSession()
+	}
 	result.Error = errors.Join(
 		result.Error,
 		checkpointErr,
 		compactionErr,
-		b.saveSession(),
+		saveErr,
 	)
 	return result.FinalOutput, result.Error
 }
@@ -248,6 +281,9 @@ func (b *Bot) ExecuteCommand(ctx context.Context, input string, host RunHost) (p
 	release := b.bindHost(host)
 	defer release()
 
+	if cmd := b.cmd.Parser().Parse(input); cmd.Prefix == "/" && cmd.Name == "goal" {
+		return b.goalCommand(ctx, cmd)
+	}
 	previousMode := b.InteractionMode()
 	previousSessionID := b.sess.CurrentID()
 	resp, handled := b.cmd.Execute(ctx, input, b.ctxMgr)
@@ -281,6 +317,9 @@ func (b *Bot) ExecuteCommand(ctx context.Context, input string, host RunHost) (p
 // not touch conversation context by definition). Commands that need the run
 // path report LocalCommandRequiresIdle so callers can route or reject them.
 func (b *Bot) ExecuteLocalCommand(ctx context.Context, input string) (string, protocol.LocalCommandResult) {
+	if strings.EqualFold(strings.TrimSpace(input), "/goal") && b.sess != nil {
+		return goalStatus(b.sess.CurrentGoal()), protocol.LocalCommandExecuted
+	}
 	isCommand, duringTask := b.cmd.CommandAvailability(input)
 	if !isCommand {
 		return "", protocol.LocalCommandNotCommand

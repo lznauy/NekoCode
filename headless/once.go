@@ -105,15 +105,22 @@ func (localSchemaOnly) Load(string) (any, error) {
 type onceCapture struct{ result map[string]any }
 
 func (w *onceCapture) Write(data []byte) (int, error) {
+	var header struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return 0, err
+	}
+	if header.Type != "result" {
+		return len(data), nil
+	}
 	var frame map[string]any
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	if err := decoder.Decode(&frame); err != nil {
 		return 0, err
 	}
-	if frame["type"] == "result" {
-		w.result = frame
-	}
+	w.result = frame
 	return len(data), nil
 }
 func (*onceCapture) Close() error { return nil }

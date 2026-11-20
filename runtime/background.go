@@ -407,8 +407,7 @@ func (h runHost) PendingBackgroundPlan(groupID string) int {
 		if entry.SessionID != sessionID || entry.GroupID != groupID {
 			continue
 		}
-		switch entry.Status {
-		case "queued", "running", "waiting_dependencies", "waiting_approval", "waiting_question":
+		if pendingBackgroundStatus(entry.Status) {
 			count++
 		}
 	}
@@ -562,7 +561,7 @@ func (b *backgroundTasks) loop() {
 		case <-retry:
 			retry = nil
 		}
-		if err := b.dispatch(); err != nil {
+		if err := errors.Join(b.dispatch(), b.coordinate()); err != nil {
 			if !retrying {
 				b.runtime.Notify("Cannot persist background scheduling; retrying: " + err.Error())
 			}
@@ -584,7 +583,6 @@ func (b *backgroundTasks) loop() {
 			delay = backgroundDependencyRetryMin
 			retrying = false
 		}
-		b.coordinate()
 	}
 }
 

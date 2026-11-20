@@ -7,21 +7,22 @@ import (
 )
 
 type ManagerSnapshot struct {
-	Todos              []protocol.TodoItem
-	TodoGroup          string
-	TodoPlans          TodoPlans
-	TaskUpdateSequence uint64
-	SystemPrompt       string
-	Skills             string
-	Archive            string
-	Memory             string
-	Hints              string
-	Messages           []types.Message
-	Transcript         []types.Message
-	TranscriptBase     int
-	TranscriptLazy     bool
-	Budget             int
-	Tracker            token.State
+	Todos                 []protocol.TodoItem
+	TodoGroup             string
+	TodoPlans             TodoPlans
+	TaskUpdateSequence    uint64
+	SystemPrompt          string
+	Skills                string
+	Archive               string
+	Memory                string
+	Hints                 string
+	Messages              []types.Message
+	Transcript            []types.Message
+	TranscriptBase        int
+	TranscriptLazy        bool
+	LastAssistantSequence int // In-process transcript position used for turn rollback.
+	Budget                int
+	Tracker               token.State
 	// PrefixBaseline identifies the last request's cache-relevant head so a
 	// resumed session reports why the first call missed instead of a bare
 	// cold-start.
@@ -39,29 +40,27 @@ type ManagerSnapshot struct {
 func (m *Manager) Snapshot() ManagerSnapshot {
 	m.state.mu.RLock()
 	defer m.state.mu.RUnlock()
-	msgs := make([]types.Message, len(m.state.ctx.Messages))
-	copy(msgs, m.state.ctx.Messages)
-	transcript := cloneTranscript(m.state.transcript)
 	return ManagerSnapshot{
-		Todos:              append([]protocol.TodoItem(nil), m.state.ctx.TodoItems...),
-		TodoGroup:          m.state.ctx.TodoGroup,
-		TodoPlans:          m.state.ctx.TodoPlans.Clone(),
-		TaskUpdateSequence: m.state.taskUpdateSequence,
-		SystemPrompt:       m.state.ctx.SystemPrompt,
-		Skills:             m.state.ctx.Skills,
-		Archive:            m.state.ctx.Archive,
-		Memory:             m.state.ctx.Memory,
-		Hints:              m.state.ctx.Hints,
-		Messages:           msgs,
-		Transcript:         transcript,
-		TranscriptBase:     m.state.transcriptBase,
-		TranscriptLazy:     m.state.transcriptLazy,
-		Budget:             m.state.contextWindow,
-		Tracker:            m.state.tracker.Snapshot(),
-		PrefixBaseline:     m.state.prefix.Baseline(),
-		PrefixTurn:         m.turnToPersistLocked(),
-		CompactCount:       m.state.compactCount,
-		TrimCount:          m.state.trimCount,
+		Todos:                 append([]protocol.TodoItem(nil), m.state.ctx.TodoItems...),
+		TodoGroup:             m.state.ctx.TodoGroup,
+		TodoPlans:             m.state.ctx.TodoPlans.Clone(),
+		TaskUpdateSequence:    m.state.taskUpdateSequence,
+		SystemPrompt:          m.state.ctx.SystemPrompt,
+		Skills:                m.state.ctx.Skills,
+		Archive:               m.state.ctx.Archive,
+		Memory:                m.state.ctx.Memory,
+		Hints:                 m.state.ctx.Hints,
+		Messages:              types.CloneMessages(m.state.ctx.Messages),
+		Transcript:            types.CloneMessages(m.state.transcript),
+		TranscriptBase:        m.state.transcriptBase,
+		TranscriptLazy:        m.state.transcriptLazy,
+		LastAssistantSequence: m.state.lastAssistantSequence,
+		Budget:                m.state.contextWindow,
+		Tracker:               m.state.tracker.Snapshot(),
+		PrefixBaseline:        m.state.prefix.Baseline(),
+		PrefixTurn:            m.turnToPersistLocked(),
+		CompactCount:          m.state.compactCount,
+		TrimCount:             m.state.trimCount,
 	}
 }
 
@@ -104,19 +103,18 @@ func (m *Manager) Restore(snap ManagerSnapshot) {
 		if msg.Role == "user" && msg.Source == types.MessageSourceRuntimeEvent && msg.Content == "" && msg.SkillDelivery.Schema != 0 {
 			continue
 		}
-		m.state.ctx.Messages = append(m.state.ctx.Messages, msg)
+		msg.ReadID = ""
+		msg.ToolEvidence = protocol.ToolEvidence{}
+		msg.NonExecution = protocol.ToolNonExecution{}
+		m.state.ctx.Messages = append(m.state.ctx.Messages, msg.Clone())
 	}
-	for i := range m.state.ctx.Messages {
-		m.state.ctx.Messages[i].ReadID = ""
-		m.state.ctx.Messages[i].ToolEvidence = protocol.ToolEvidence{}
-		m.state.ctx.Messages[i].NonExecution = protocol.ToolNonExecution{}
-	}
+	m.state.lastAssistantSequence = snap.LastAssistantSequence
 	m.state.transcriptBase = snap.TranscriptBase
 	m.state.transcriptLazy = snap.TranscriptLazy
 	if snap.Transcript != nil || snap.TranscriptLazy {
-		m.state.transcript = cloneTranscript(snap.Transcript)
+		m.state.transcript = types.CloneMessages(snap.Transcript)
 	} else {
-		m.state.transcript = cloneTranscript(snap.Messages)
+		m.state.transcript = types.CloneMessages(snap.Messages)
 	}
 	m.restoreRuntimeContextLocked()
 	if m.state.tracker == nil {
@@ -169,15 +167,5 @@ func (m *Manager) AcknowledgeTranscript(base, end int) {
 func (m *Manager) TranscriptTail() (int, []types.Message, bool) {
 	m.state.mu.RLock()
 	defer m.state.mu.RUnlock()
-	return m.state.transcriptBase, cloneTranscript(m.state.transcript), m.state.transcriptLazy
-}
-
-// Transcript views cross ownership boundaries; receipt slices must not let a
-// snapshot consumer or restore caller rewrite the manager's execution facts.
-func cloneTranscript(messages []types.Message) []types.Message {
-	out := append([]types.Message(nil), messages...)
-	for i := range out {
-		out[i].ToolEvidence = out[i].ToolEvidence.Clone()
-	}
-	return out
+	return m.state.transcriptBase, types.CloneMessages(m.state.transcript), m.state.transcriptLazy
 }

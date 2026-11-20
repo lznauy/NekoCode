@@ -296,6 +296,7 @@ func (t *shellTask) resultLocked(reason string, output []byte, fromStart, clippe
 			text += "\n[Output preview truncated; the saved capture will be available after the process output drains (up to 8 MiB). Use process wait/watch, not a new shell launch.]"
 		}
 	}
+	observation.SampleHash = core.EvidenceHash([]byte(text))
 	return processResult{info: t.summaryLocked(), output: text, reason: reason, observation: observation, captured: t.savedOutput}
 }
 

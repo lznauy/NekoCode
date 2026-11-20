@@ -71,7 +71,15 @@ type userInput struct {
 	images []rt.ImageAttachment
 }
 
-// blockImageMarkerN numbers image markers within one user message starting
+func (input userInput) queuedBytes() int {
+	size := len(input.text) + len(input.id)
+	for _, image := range input.images {
+		size += len(image.Label) + len(image.Path)
+	}
+	return size
+}
+
+// user numbers image markers within one user message starting
 // at 1; the marker must appear in the message text for the runtime's
 // attachment envelope to accept the image.
 func (f frame) user() (userInput, error) {
@@ -100,6 +108,9 @@ func (f frame) user() (userInput, error) {
 			case "image":
 				if strings.TrimSpace(block.Path) == "" {
 					return userInput{}, errors.New("image block requires a path")
+				}
+				if imageCount >= rt.MaxImageAttachments {
+					return userInput{}, errors.New("too many image attachments")
 				}
 				imageCount++
 				marker := fmt.Sprintf("[Image #%d]", imageCount)

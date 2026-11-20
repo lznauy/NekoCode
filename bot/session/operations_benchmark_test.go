@@ -70,7 +70,7 @@ func BenchmarkForkHistory(b *testing.B) {
 			for i := 0; i < count; i++ {
 				s.Transcript = append(s.Transcript, types.Message{Role: "user", Content: content})
 			}
-			s.Messages = cloneMessages(s.Transcript[count-10:])
+			s.Messages = types.CloneMessages(s.Transcript[count-10:])
 			if err := m.Save(s); err != nil {
 				b.Fatal(err)
 			}

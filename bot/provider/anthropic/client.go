@@ -33,6 +33,7 @@ func New(apiKey, baseURL, model string) *Client {
 // --- request/response types ---
 
 type contentBlock struct {
+	IsError   bool            `json:"is_error,omitempty"`
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
 	Thinking  *string         `json:"thinking,omitempty"`
@@ -84,9 +85,10 @@ type thinkingConfig struct {
 }
 
 type response struct {
-	ID      string         `json:"id"`
-	Content []contentBlock `json:"content"`
-	Usage   wireUsage      `json:"usage"`
+	StopReason string         `json:"stop_reason"`
+	ID         string         `json:"id"`
+	Content    []contentBlock `json:"content"`
+	Usage      wireUsage      `json:"usage"`
 }
 
 type wireUsage struct {
@@ -158,6 +160,7 @@ func (c *Client) toMessages(messages []types.Message, reasoning types.ReasoningS
 				Content: []contentBlock{{
 					Type:      "tool_result",
 					ToolUseID: msg.ToolCallID,
+					IsError:   msg.IsError,
 					Content:   msg.Content,
 				}},
 			})
@@ -252,6 +255,7 @@ func toResponse(ar *response) *types.Response {
 		}
 	}
 	resp.Choices = []types.Choice{{
+		FinishReason: ar.StopReason,
 		Message: types.Message{Role: "assistant", Content: text, ReasoningContent: reasoning,
 			ReasoningSignature: signature, ToolCalls: toolCalls},
 	}}
@@ -400,8 +404,10 @@ func (c *Client) chatStream(ctx context.Context, messages []types.Message, tools
 		}
 
 		type toolAccum struct {
-			id   string
-			name string
+			id           string
+			name         string
+			initial      json.RawMessage
+			hasArguments bool
 		}
 		toolAccums := make(map[int]*toolAccum)
 
@@ -435,7 +441,7 @@ func (c *Client) chatStream(ctx context.Context, messages []types.Message, tools
 					return nil
 				}
 				if cb.Type == "tool_use" {
-					toolAccums[event.Index] = &toolAccum{id: cb.ID, name: cb.Name}
+					toolAccums[event.Index] = &toolAccum{id: cb.ID, name: cb.Name, initial: cb.Input}
 				} else if cb.Type == "thinking" {
 					if cb.Thinking != nil && *cb.Thinking != "" {
 						if err := types.SendStreamToken(ctx, tokenCh, types.StreamToken{ReasoningContent: *cb.Thinking}); err != nil {
@@ -471,7 +477,8 @@ func (c *Client) chatStream(ctx context.Context, messages []types.Message, tools
 				}
 				var ijd inputJSONDelta
 				if json.Unmarshal(event.Delta, &ijd) == nil && ijd.Type == "input_json_delta" {
-					if acc := toolAccums[event.Index]; acc != nil {
+					if acc := toolAccums[event.Index]; acc != nil && ijd.PartialJSON != "" {
+						acc.hasArguments = true
 						if err := types.SendStreamToken(ctx, tokenCh, types.StreamToken{
 							ToolCallDelta: &types.ToolCallDelta{
 								Index: event.Index, ID: acc.id, Name: acc.name,
@@ -482,13 +489,29 @@ func (c *Client) chatStream(ctx context.Context, messages []types.Message, tools
 						}
 					}
 				}
-			case "message_delta":
-				if event.Usage != nil && event.Usage.OutputTokens > 0 {
-					if err := types.SendStreamToken(ctx, tokenCh, types.StreamToken{
-						Usage: &types.StreamUsage{CompletionTokens: event.Usage.OutputTokens},
-					}); err != nil {
-						return err
+			case "content_block_stop":
+				acc := toolAccums[event.Index]
+				delete(toolAccums, event.Index)
+				if acc != nil && !acc.hasArguments {
+					input := string(acc.initial)
+					if input == "" {
+						input = "{}"
 					}
+					return types.SendStreamToken(ctx, tokenCh, types.StreamToken{ToolCallDelta: &types.ToolCallDelta{
+						Index: event.Index, ID: acc.id, Name: acc.name, Arguments: input,
+					}})
+				}
+			case "message_delta":
+				var delta struct {
+					StopReason string `json:"stop_reason"`
+				}
+				_ = json.Unmarshal(event.Delta, &delta)
+				token := types.StreamToken{FinishReason: delta.StopReason}
+				if event.Usage != nil && event.Usage.OutputTokens > 0 {
+					token.Usage = &types.StreamUsage{CompletionTokens: event.Usage.OutputTokens}
+				}
+				if token.FinishReason != "" || token.Usage != nil {
+					return types.SendStreamToken(ctx, tokenCh, token)
 				}
 			}
 			return nil

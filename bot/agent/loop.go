@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"nekocode/bot/agent/internal/kernel"
+	"nekocode/bot/agent/internal/llmstream"
 	"nekocode/bot/contextmgr"
 	"nekocode/bot/policy"
 	"nekocode/bot/provider/types"
@@ -100,8 +101,7 @@ func (r *loopRunner) runContext(ctx context.Context, input string, images []type
 	// Flush any steering messages that arrived too late to be drained during
 	// the run, so they are still recorded in the context instead of being lost.
 	result.Error = errors.Join(result.Error, a.drainSteering(), a.run.evidenceErr)
-	r.restoreInterruptedRun(beforeRun, result)
-	r.restoreUnansweredRun(beforeRun, result)
+	r.settleTurnHistory(beforeRun, result)
 	a.life.StopTiming()
 	r.publishSummary(result, callback)
 	return result
@@ -113,56 +113,30 @@ func (r *loopRunner) runContext(ctx context.Context, input string, images []type
 // being blind to its own work.
 const interruptedMarker = "The user interrupted the previous run. The tool calls and results above already took effect — files on disk may have been modified. Do not assume the run finished; ask the user how to proceed."
 
-func (r *loopRunner) restoreInterruptedRun(before contextmgr.ManagerSnapshot, result *RunResult) {
-	if result == nil || !result.Interrupted {
+// The transcript sequence survives compaction and acknowledgement. A shorter
+// active context can still contain a new turn and its tool side effects.
+func (r *loopRunner) settleTurnHistory(before contextmgr.ManagerSnapshot, result *RunResult) {
+	manager := r.agent.deps.ctxMgr
+	after := manager.Snapshot()
+	start := before.TranscriptBase + len(before.Transcript)
+	if after.TranscriptBase+len(after.Transcript) <= start {
 		return
 	}
-	a := r.agent
-	after := a.deps.ctxMgr.Snapshot()
-	if len(after.Messages) <= len(before.Messages) {
-		return // nothing was appended
-	}
-	if assistantCount(after.Messages) == assistantCount(before.Messages) {
-		// The turn produced nothing — roll back so a retry does not send the
-		// user message twice.
-		a.deps.ctxMgr.Restore(before)
-		return
-	}
-	// The turn already executed tools or produced output. Those are facts
-	// the next turn must see: the file system keeps those changes, and a
-	// context rollback here would leave the model blind to its own work.
-	// Keep everything and append a marker stating where the turn stopped.
-	a.deps.ctxMgr.Add("user", interruptedMarker, types.MessageSourceHint)
-}
-
-// restoreUnansweredRun rolls back a run that ended without a single model
-// response — a misconfigured model, a dead endpoint, or a failed compaction
-// before the first call. Without the rollback the user message stays
-// stranded in the context and the next attempt would send both copies.
-// Runs that produced any assistant message (text or tool call) are kept.
-func (r *loopRunner) restoreUnansweredRun(before contextmgr.ManagerSnapshot, result *RunResult) {
-	if result == nil || result.Interrupted {
-		return
-	}
-	a := r.agent
-	after := a.deps.ctxMgr.Snapshot()
-	if len(after.Messages) <= len(before.Messages) {
-		return // nothing was appended
-	}
-	if assistantCount(after.Messages) > assistantCount(before.Messages) {
-		return // the model answered; keep the turn
-	}
-	a.deps.ctxMgr.Restore(before)
-}
-
-func assistantCount(messages []types.Message) int {
-	count := 0
-	for _, m := range messages {
-		if m.Role == "assistant" {
-			count++
+	if after.LastAssistantSequence > start {
+		if result.Interrupted {
+			manager.Add("user", interruptedMarker, types.MessageSourceHint)
 		}
+		return
 	}
-	return count
+	// Pre-compaction backup can already have committed some or all of the
+	// transcript. Roll back working context without rewriting durable records.
+	if after.TranscriptBase > before.TranscriptBase {
+		acknowledged := min(after.TranscriptBase-before.TranscriptBase, len(before.Transcript))
+		before.Transcript = before.Transcript[acknowledged:]
+		before.TranscriptBase = after.TranscriptBase
+		before.TranscriptLazy = true
+	}
+	manager.Restore(before)
 }
 
 func (r *loopRunner) runTurn(input string, callback RunCallback) (finished bool) {
@@ -210,7 +184,7 @@ func (r *loopRunner) startRun(input string, images []types.MessageImage) {
 	a.deps.ctxMgr.BeginModelTurn()
 	// AddUser is exactly Add("user", input, "user") when images is empty,
 	// so the single path covers both.
-	if protocol.CoordinationFromContext(a.getCtx()).Notification {
+	if protocol.CoordinationFromContext(a.getCtx()).Notification || protocol.IsGoalContinuation(a.getCtx()) {
 		a.deps.ctxMgr.Add("user", input, types.MessageSourceRuntimeEvent)
 	} else {
 		a.deps.ctxMgr.AddUser(input, images)
@@ -260,6 +234,9 @@ func (r *loopRunner) publishSummary(result *RunResult, callback RunCallback) {
 	}
 	if result.Error != nil {
 		reason = "execution_error"
+		if errors.Is(result.Error, llmstream.ErrIncompleteResponse) {
+			reason = "incomplete"
+		}
 	}
 	if result.Interrupted {
 		reason = "cancelled"

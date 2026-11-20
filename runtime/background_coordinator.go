@@ -30,27 +30,21 @@ func backgroundReviewPrompt(review backgroundReview) string {
 
 // coordinate starts at most one serialized foreground turn. The service loop
 // never waits for that model call, so workers keep admitting and finishing jobs.
-func (b *backgroundTasks) coordinate() {
+func (b *backgroundTasks) coordinate() error {
 	r := b.runtime
 	r.mutationMu.Lock()
-	var notice string
-	defer func() {
-		r.mutationMu.Unlock()
-		if notice != "" {
-			r.Notify(notice)
-		}
-	}()
+	defer r.mutationMu.Unlock()
 	r.mu.Lock()
 	idle := !r.closed && r.status == RunIdle && !r.mutating
 	r.mu.Unlock()
 	if !idle || r.services.Modes.Current == nil || r.services.Modes.Current() != mode.SuperAgent {
-		return
+		return nil
 	}
 	sessionID := r.CurrentSessionID()
 	b.lockMutation()
 	if b.closed || b.coordinating {
 		b.unlockMutation()
-		return
+		return nil
 	}
 	var in *backgroundInput
 	inputIndex := -1
@@ -67,8 +61,7 @@ func (b *backgroundTasks) coordinate() {
 			next.Status = "claimed"
 			if err := b.saveDemandLocked(d, next); err != nil {
 				b.unlockMutation()
-				notice = "Cannot persist demand admission: " + err.Error()
-				return
+				return fmt.Errorf("persist demand admission: %w", err)
 			}
 		}
 		b.inputs = append(b.inputs[:inputIndex], b.inputs[inputIndex+1:]...)
@@ -80,7 +73,7 @@ func (b *backgroundTasks) coordinate() {
 		ids, group = b.reviewIDsLocked(sessionID)
 		if len(ids) == 0 {
 			b.unlockMutation()
-			return
+			return nil
 		}
 		// A persisted plan can span distinct host-owned execution budgets. Do
 		// not charge a delivery to an arbitrary historical task or merge trees.
@@ -105,8 +98,7 @@ func (b *backgroundTasks) coordinate() {
 		}
 		if err := b.saveStateLocked(sessionID, state); err != nil {
 			b.unlockMutation()
-			notice = "Cannot persist task notification: " + err.Error()
-			return
+			return fmt.Errorf("persist task notification: %w", err)
 		}
 		for _, entry := range claimed {
 			entry.Delivery = "claimed"
@@ -238,6 +230,7 @@ func (b *backgroundTasks) coordinate() {
 			r.Notify("Task result review interrupted; inspect task history before explicitly continuing: " + err.Error())
 		}
 	}()
+	return nil
 }
 
 // A foreground completion can consume its wake while this reservation is held.

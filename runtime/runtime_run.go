@@ -29,6 +29,7 @@ type runExecution struct {
 	settleOnce         sync.Once
 	withMetrics        bool
 	evidenceIncomplete bool
+	admissionContext   context.Context
 	finishSession      func() (bool, error)
 }
 
@@ -185,6 +186,18 @@ func (h runHost) Todos(items []TodoItem) {
 	})
 }
 
+// GoalContinuation records an admitted in-run handoff. Other policies can
+// retract streamed text too, so an assistant reset cannot identify this event.
+func (h runHost) GoalContinuation(attempt int) {
+	source := SourceRef{Kind: "goal"}
+	h.lease.emit(func() {
+		h.runtime.events.Publish(Event{RunID: h.runID, Type: EventSystemMessage, Source: source,
+			Payload: MessagePayload{Role: "system", Content: fmt.Sprintf("Continuing goal (attempt %d).", attempt), Source: source, GoalContinuation: attempt}})
+	})
+}
+
+func (h runHost) GoalStatus(message string) { h.system(message, SourceRef{Kind: "goal"}) }
+
 func (h runHost) system(message string, source SourceRef) {
 	if strings.TrimSpace(message) == "" {
 		return
@@ -245,14 +258,28 @@ func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runL
 	ctx = protocol.WithExecutionIdentity(ctx, protocol.ExecutionIdentity{RunID: string(runID)})
 	stopMetricsUpdates := func() {}
 	withMetrics := false
+	goalHost, supportsGoal := r.runner.(interface{ PendingGoalRun(string) bool })
+	interactiveGoal := supportsGoal && execution.finishSession == nil && (input.Source.Kind == "tui" || input.Source.Kind == "gui") && !protocol.CoordinationFromContext(ctx).Notification
+	var checkGoal bool
+	if interactiveGoal {
+		ctx = protocol.WithGoalScheduling(ctx)
+	}
 	defer func() {
 		stopMetricsUpdates()
 		r.invalidateContext()
 		if recovered := recover(); recovered != nil {
 			r.finishRun(runID, "", fmt.Errorf("runtime: run %s panicked: %v", runID, recovered), withMetrics)
 		}
+		if checkGoal {
+			r.mu.Lock()
+			checkGoal = r.status == RunDone && r.currentRun == runID
+			r.mu.Unlock()
+		}
 		execution.settle(withMetrics)
 		r.endRun(runID)
+		if checkGoal {
+			r.continueGoal(execution.admissionContext, runID, sessionID, input.Source, goalHost.PendingGoalRun)
+		}
 	}()
 
 	// Connector-downloaded images move into session attachment storage before
@@ -267,7 +294,9 @@ func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runL
 	}
 	host := runHost{runtime: r, runID: runID, lease: lease, images: input.Images}
 	source := input.Source
-	if source.Kind == "" {
+	if protocol.IsGoalContinuation(ctx) {
+		source = SourceRef{Kind: "goal_continuation"}
+	} else if source.Kind == "" {
 		source = SourceRef{Kind: "runtime"}
 	}
 	if !lease.guard(func() {
@@ -279,9 +308,13 @@ func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runL
 		return
 	}
 
-	agentInput, proceed := r.handleBotCommand(ctx, runID, input.Text, host)
-	if !proceed {
-		return
+	agentInput := input.Text
+	if !protocol.IsGoalContinuation(ctx) {
+		var proceed bool
+		agentInput, proceed = r.handleBotCommand(ctx, runID, input.Text, host)
+		if !proceed {
+			return
+		}
 	}
 	if resolve := r.services.Modes.Resolve; resolve != nil {
 		snapshot, err := resolve(input.Text)
@@ -301,7 +334,11 @@ func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runL
 			}
 		}
 	}
-	if !lease.guard(func() { r.publishAcceptedInput(ctx, runID, input) }) {
+	if !lease.guard(func() {
+		if !protocol.IsGoalContinuation(ctx) {
+			r.publishAcceptedInput(ctx, runID, input)
+		}
+	}) {
 		return
 	}
 
@@ -309,6 +346,12 @@ func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runL
 	stopMetricsUpdates = r.startMetricsUpdates(runID, lease)
 	agentInput = InputWithImageAttachments(agentInput, input.Images, r.VisionEnabled())
 	result, err := r.runner.Run(ctx, agentInput, host)
+	checkGoal = interactiveGoal && err == nil && ctx.Err() == nil && goalHost.PendingGoalRun(string(runID))
+	if checkGoal && sessionID == "" {
+		// The first goal command may create the session after run admission.
+		// Capture its identity while this run still owns the foreground.
+		sessionID = r.CurrentSessionID()
+	}
 	r.finishRun(runID, result, err, true)
 }
 
@@ -567,6 +610,7 @@ func (r *Runtime) publishStepForSession(runID RunID, step protocol.StepEvent, se
 		eventType = EventToolPreview
 		payload.Preview = textutil.NormalizeTerminalOutput(step.Output)
 	case protocol.StepActionExecuteTool:
+		payload.GoalProgress = step.GoalProgress
 		payload.Evidence = step.Evidence
 		eventType = EventToolCompleted
 		payload.Output = textutil.NormalizeTerminalOutput(step.Output)
@@ -624,4 +668,21 @@ func acceptedInputContent(ctx context.Context, text string) string {
 		return "后台任务已返回结果，正在验收。"
 	}
 	return RedactInputText(text)
+}
+
+// Recheck identity and goal state inside normal admission. A competing user
+// action wins the mutation gate; it can resume the persisted goal later.
+func (r *Runtime) continueGoal(ctx context.Context, previous RunID, sessionID string, source SourceRef, pending func(string) bool) {
+	r.mutationMu.Lock()
+	defer r.mutationMu.Unlock()
+	r.mu.Lock()
+	idle := !r.closed && r.currentRun == previous && r.status == RunIdle
+	r.mu.Unlock()
+	if !idle || sessionID != r.CurrentSessionID() || r.background.busy() || (r.services.Modes.Current != nil && r.services.Modes.Current() != mode.Standard) || !pending(string(previous)) {
+		return
+	}
+	_, err := r.startRunLocked(protocol.WithGoalContinuation(ctx), Input{Text: "Continue the active session goal from the last verified result.", Source: source}, nil, "")
+	if err != nil {
+		r.events.Publish(Event{SessionID: sessionID, Type: EventSystemMessage, Source: SourceRef{Kind: "runtime"}, Payload: MessagePayload{Role: "system", Content: "Goal continuation deferred: " + err.Error()}})
+	}
 }

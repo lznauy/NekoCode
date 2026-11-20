@@ -153,7 +153,7 @@ func TestInterruptedRunWithOutputKeepsFactsAndAppendsMarker(t *testing.T) {
 	}
 	a.run.stopReason = policy.StopInterrupted
 	result := a.loopRunner.finishRun(nil)
-	a.loopRunner.restoreInterruptedRun(before, result)
+	a.loopRunner.settleTurnHistory(before, result)
 	after := ctxMgr.Snapshot()
 
 	if !result.Interrupted || result.FinalOutput != msgInterrupted {
@@ -193,7 +193,7 @@ func TestInterruptedRunBeforeFirstToolDropsInputAndPreservesPriorHistory(t *test
 
 	a.run.stopReason = policy.StopInterrupted
 	result := a.loopRunner.finishRun(nil)
-	a.loopRunner.restoreInterruptedRun(before, result)
+	a.loopRunner.settleTurnHistory(before, result)
 
 	if after := ctxMgr.Snapshot(); !sameConversation(after, before) {
 		t.Fatalf("interruption before first tool changed history: before=%+v after=%+v", before, after)

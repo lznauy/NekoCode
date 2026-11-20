@@ -1,6 +1,10 @@
 package agent
 
 import (
+	"context"
+	"errors"
+	"nekocode/bot/contextmgr"
+	"strings"
 	"testing"
 
 	"nekocode/bot/provider/types"
@@ -15,8 +19,8 @@ func TestFailedRunDoesNotStrandUserMessage(t *testing.T) {
 	a.deps.llmClient = llm
 
 	result := a.Run("broken question", nil, nil)
-	if result.FinalOutput == "" {
-		t.Fatalf("run produced no fallback output: %+v", result)
+	if result.FinalOutput != "" || !errors.Is(result.Error, context.DeadlineExceeded) || result.StopReason != "execution_error" {
+		t.Fatalf("model failure reported as completed: %+v", result)
 	}
 	snapshot := a.deps.ctxMgr.Snapshot()
 	for _, m := range snapshot.Messages {
@@ -67,5 +71,36 @@ func TestSynthesizeFallbackIsNotPersisted(t *testing.T) {
 	}
 	if got := a.deps.ctxMgr.Len(); got != before {
 		t.Fatalf("fallback was persisted: context grew from %d to %d", before, got)
+	}
+}
+
+func TestFailedRunAfterCompactionRemovesUnansweredInput(t *testing.T) {
+	for _, durable := range []bool{false, true} {
+		a := newTestAgent()
+		summaries := 0
+		m := contextmgr.New(contextmgr.Config{ContextWindow: 16384, AutoCompactPercent: 1, Summarizer: func([]types.Message, string) (string, error) {
+			summaries++
+			return "<summary>Previous work.</summary>", nil
+		}})
+		a.deps.ctxMgr = m
+		a.deps.llmClient = &failingLLM{}
+		for range 8 {
+			m.Add("user", strings.Repeat("previous ", 30))
+			m.Add("assistant", "previous answer")
+		}
+		cursor := 0
+		if durable {
+			m.SetBeforeCompaction(func(string) error {
+				base, tail, _ := m.TranscriptTail()
+				cursor = base + len(tail)
+				m.AcknowledgeTranscript(base, cursor)
+				return nil
+			})
+		}
+		result := a.Run("currently unanswered", nil, nil)
+		after := m.Snapshot()
+		if summaries != 1 || result.Error == nil || containsMessage(after.Messages, "currently unanswered") || containsMessage(after.Transcript, "currently unanswered") || after.TranscriptBase != cursor {
+			t.Fatalf("durable=%t summaries=%d result=%+v cursor=%d got=%d unanswered=%t", durable, summaries, result, cursor, after.TranscriptBase, containsMessage(after.Messages, "currently unanswered"))
+		}
 	}
 }

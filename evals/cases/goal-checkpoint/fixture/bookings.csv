@@ -1,0 +1,7 @@
+route,action,seats
+north,reserve,12
+south,reserve,7
+north,cancel,3
+south,reserve,4
+north,reserve,5
+south,cancel,2

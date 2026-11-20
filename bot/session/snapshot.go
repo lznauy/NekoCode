@@ -20,7 +20,22 @@ import (
 	"nekocode/util/fs"
 )
 
+type Goal struct {
+	Proposal           string   `json:"proposal,omitempty"`
+	RecentObservations []string `json:"recent_observations,omitempty"`
+	LastObservation    string   `json:"last_observation,omitempty"`
+	PendingFrom        string   `json:"pending_from,omitempty"`
+	Objective          string   `json:"objective"`
+	Criteria           string   `json:"criteria,omitempty"`
+	Status             string   `json:"status"`
+	Check              string   `json:"check,omitempty"`
+	Delegated          bool     `json:"delegated,omitempty"`
+	Attempts           int      `json:"attempts,omitempty"`
+	Evidence           string   `json:"evidence,omitempty"`
+}
+
 type Snapshot struct {
+	Goal               *Goal               `json:"goal,omitempty"`
 	Name               string              `json:"name,omitempty"`
 	TodoGroup          string              `json:"todo_group,omitempty"`
 	TodoPlans          ctxmgr.TodoPlans    `json:"todo_plans,omitempty"`

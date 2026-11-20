@@ -93,7 +93,7 @@ func SubscribeRunEvents(ctx context.Context, rt eventRuntime, filter controlrunt
 								} else {
 									recovered = &controlruntime.Event{
 										Type: typ, RunID: run.ID, Source: controlruntime.SourceRef{Kind: "runtime"},
-										Payload: controlruntime.RunResult{Output: run.Output, Error: run.Error},
+										Payload: controlruntime.RunResult{Output: run.Output, Error: run.Error, EvidenceIncomplete: run.EvidenceIncomplete},
 									}
 								}
 							}

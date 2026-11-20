@@ -166,6 +166,8 @@ nekocode-tui
 
 配置完成后即可开始使用。常用入口：`/plan <任务>` 先审方案、`/tasks` 查看子任务、`/compact` 压缩上下文、`/rewind` 回退文件改动、`/sessions` 恢复会话、`/context` 查看上下文和缓存用量。
 
+在标准模式输入 `/goal 让首次搜索更快` 可启动会话目标。`/goal` 查看原目标、进度和验收方式。模型提出的验收条件可用 `/goal confirm` 确认。模糊目标默认等待你验收，可用 `/goal accept` 接受结果，或用 `/goal refine <条件>` 补充要求。用 `/goal check <命令>` 指定以该命令成功退出作为验收条件，或用 `/goal delegate` 把验收判断交给模型。每次启动或恢复最多自动续做三次。`/goal pause`、`/goal resume` 和 `/goal clear` 管理目标。
+
 ### 作为 ACP Agent 使用
 
 NekoCode 支持稳定版 Agent Client Protocol v1。让编辑器以项目目录为工作目录启动：

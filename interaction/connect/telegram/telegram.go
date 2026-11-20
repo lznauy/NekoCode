@@ -711,7 +711,20 @@ func (s *eventSink) Post(ctx context.Context, in connect.Intent) error {
 		if s.preview.runID == in.RunID {
 			s.preview.buf = []rune(in.Text)
 		}
-		if s.preview.finalize(ctx, in.RunID) {
+		if handled, err := s.preview.finalize(ctx, in.RunID); handled {
+			if err != nil {
+				s.c.base.PublishStatus("error", "Telegram final reply failed: "+err.Error())
+			}
+			return err
+		}
+		// The tracker truncates result cards. Keep long canonical answers
+		// intact even when a preview could not be created or settled.
+		if len([]rune(in.Text)) > 1800 {
+			for _, chunk := range chunkText(in.Text, previewMaxChunk) {
+				if err := s.broadcast(ctx, taskview.MarkdownToHTML(chunk)); err != nil {
+					return err
+				}
+			}
 			return nil
 		}
 		text := s.c.tracker().DoneReply(in.RunID)
@@ -721,7 +734,7 @@ func (s *eventSink) Post(ctx context.Context, in connect.Intent) error {
 			// dropping the message entirely.
 			text = taskview.MarkdownToHTML(in.Text)
 		}
-		s.broadcast(ctx, text)
+		return s.broadcast(ctx, text)
 	case connect.IntentSystem:
 		// Command/system reply (e.g. /connect, /model): deliver directly,
 		// bypassing the run-terminalization logic of IntentResult.
@@ -765,13 +778,17 @@ func (s *eventSink) Post(ctx context.Context, in connect.Intent) error {
 }
 
 // broadcast 向所有配对会话投递 HTML 文本。
-func (s *eventSink) broadcast(ctx context.Context, text string) {
+func (s *eventSink) broadcast(ctx context.Context, text string) error {
 	if text == "" {
-		return
+		return nil
 	}
 	for _, chatID := range s.c.pairedChats() {
-		_ = s.client.sendMessage(ctx, chatID, text)
+		if err := s.client.sendMessage(ctx, chatID, text); err != nil {
+			s.c.base.PublishStatus("error", "Telegram message delivery failed: "+err.Error())
+			return err
+		}
 	}
+	return nil
 }
 
 // sendInteractive 发带键盘的交互消息并记录 message id,供 terminalize 原地改写。

@@ -49,3 +49,14 @@ func TestStructuredControlPayloadCountsTowardHistoryBudget(t *testing.T) {
 		})
 	}
 }
+
+func TestSubAgentReasoningCountsTowardHistoryBudget(t *testing.T) {
+	b := NewEventBus()
+	defer b.Close()
+	b.Publish(core.Event{Type: core.EventSubAgentOutput, Payload: protocol.SubAgentOutput{
+		Reasoning: strings.Repeat("r", defaultEventHistoryBytes+1),
+	}})
+	if len(b.History(core.EventFilter{})) != 0 {
+		t.Fatal("oversized reasoning retained")
+	}
+}

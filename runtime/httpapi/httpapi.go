@@ -408,8 +408,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filter := controlruntime.EventFilter{
-		RunID: controlruntime.RunID(r.URL.Query().Get("run_id")),
-		After: parseEventCursor(r.URL.Query().Get("after"), r.Header.Get("Last-Event-ID")),
+		RunID:    controlruntime.RunID(r.URL.Query().Get("run_id")),
+		Reliable: true,
+		After:    parseEventCursor(r.URL.Query().Get("after"), r.Header.Get("Last-Event-ID")),
 	}
 	var events <-chan controlruntime.Event
 	var err error

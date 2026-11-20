@@ -93,7 +93,9 @@ func TestManagementBusySteerAndShutdown(t *testing.T) {
 		},
 	})
 	h.send(t, user("one", "run"))
-	h.until(t, "system")
+	// input_queued acknowledges the frame before the run is eligible for steering.
+	for h.until(t, "system")["subtype"] != "init" {
+	}
 	if f := rpc(t, h, "model.set", map[string]any{"model": "other"}); f["subtype"] != "error" {
 		t.Fatal(f)
 	}

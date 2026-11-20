@@ -80,7 +80,7 @@ func (b *ApprovalBroker) RegisterScoped(ownerID, runID core.RunID, req protocol.
 			ToolName:     req.ToolName,
 			CallID:       req.CallID,
 			SubAgentID:   req.SubAgentID,
-			Args:         cloneMap(protocol.ApprovalArgs(req.Args)),
+			Args:         core.CloneMap(protocol.ApprovalArgs(req.Args)),
 			ArgsHash:     argsHash,
 			ToolCallHash: stableHash(approvalHashInput{ToolName: req.ToolName, Kind: req.Kind, ArgsHash: argsHash, Approval: req.Approval}),
 			Kind:         string(req.Kind),
@@ -97,7 +97,7 @@ func (b *ApprovalBroker) RegisterScoped(ownerID, runID core.RunID, req protocol.
 		return nil
 	}
 	b.pending[id] = rec
-	viewCopy := cloneApprovalView(rec.view)
+	viewCopy := rec.view.Clone()
 	b.mu.Unlock()
 
 	b.publish(rec.runID, core.EventApprovalRequested, viewCopy)
@@ -158,7 +158,7 @@ func (b *ApprovalBroker) Pending() []core.ApprovalView {
 	defer b.mu.Unlock()
 	out := make([]core.ApprovalView, 0, len(b.pending))
 	for _, rec := range b.pending {
-		out = append(out, cloneApprovalView(rec.view))
+		out = append(out, rec.view.Clone())
 	}
 	return out
 }
@@ -195,19 +195,12 @@ func (b *ApprovalBroker) rejectAll(closeBroker bool, onlyRun core.RunID) {
 	b.publishResolved(publishedRecords)
 }
 
-func cloneApprovalView(view core.ApprovalView) core.ApprovalView {
-	view.Args = cloneMap(view.Args)
-	view.Metadata = cloneMap(view.Metadata)
-	view.Approval = view.Approval.Clone()
-	return view
-}
-
 // Commit every terminal projection before releasing any worker, then allow
 // ordinary observers to reenter the broker and consume the committed replies.
 func (b *ApprovalBroker) publishResolved(records []*approvalRecord) {
 	events := make([]core.Event, 0, len(records))
 	for _, rec := range records {
-		events = append(events, core.Event{RunID: rec.runID, Type: core.EventApprovalResolved, Source: b.source, Payload: cloneApprovalView(rec.view)})
+		events = append(events, core.Event{RunID: rec.runID, Type: core.EventApprovalResolved, Source: b.source, Payload: rec.view.Clone()})
 	}
 	b.eventBus.PublishCommitted(events, func() {
 		for _, rec := range records {

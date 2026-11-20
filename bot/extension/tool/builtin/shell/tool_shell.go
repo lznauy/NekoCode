@@ -77,8 +77,8 @@ func (t *ShellTool) Description() string {
 	return "Run commands in a permission-managed sandbox (workspace-write, network off). For files you may edit, use read first; shell output gives no version receipt. " +
 		"Long commands return a task for the process tool. Observation timeout leaves it running; timeout_ms kills the group. Identical anonymous live commands reuse a task. " +
 		"Share files with other tools via workspace paths. In the Linux sandbox /tmp and isolated localhost are private to each command; $NEKOCODE_SCRATCH persists across calls in this actor/workspace with writable GOCACHE and XDG_CACHE_HOME, shell-only until toolbox close. " +
-		"Start server and client in ONE command with cleanup: server_command & pid=$!; trap 'kill $pid' EXIT; node --input-type=module -e \"${NEKOCODE_BROWSER_CHECK:?Linux sandbox required}\" -- http://127.0.0.1:PORT/ 'predicate' 'do:action()' 'predicate'. Requires Chrome; actions run once, assertions retry. " +
-		"Check exit_code; run tests directly or use pipefail. Long output has a head/tail preview and readable transcript (8 MiB cap; incomplete captures marked). " +
+		"Static web app smoke test (Linux, Node + Chrome): node --input-type=module -e \"${NEKOCODE_BROWSER_CHECK:?Linux sandbox required}\" -- --static index.html 'readyPredicate' 'do:action()' 'observe:expression'. observe: prints the actual JSON value once; ordinary predicates assert true. This serves the entry directory, launches Chrome and cleans up in one call. Actions run once; assertions retry. For a custom backend run server and client in ONE command with cleanup and pass the loopback URL instead of --static. " +
+		"Bash pipelines use pipefail: a failed check piped to tail still reports failure. For intentional early consumers like head, account for upstream SIGPIPE. Long output has a head/tail preview and readable transcript (8 MiB cap; incomplete captures marked). " +
 		"Network, extra writable roots and host execution require approval. Check partial side effects before retrying with minimal permissions; respect denials and domain restrictions."
 }
 

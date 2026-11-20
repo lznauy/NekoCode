@@ -71,3 +71,19 @@ func TestEvidenceDetachedForImportedAndRecordedReplay(t *testing.T) {
 	mutateReceipt(event)
 	assertReceipt(t, recorded[0])
 }
+
+func TestHistoryOwnsToolInput(t *testing.T) {
+	b := NewEventBus()
+	defer b.Close()
+	input := []byte(`{"x":1}`)
+	b.Publish(core.Event{Type: core.EventToolStarted, Payload: core.ToolPayload{Input: input}})
+	input[5] = '2'
+	first := b.History(core.EventFilter{})[0].Payload.(core.ToolPayload)
+	if string(first.Input) != `{"x":1}` {
+		t.Fatalf("publisher changed history: %s", first.Input)
+	}
+	first.Input[5] = '3'
+	if got := string(b.History(core.EventFilter{})[0].Payload.(core.ToolPayload).Input); got != `{"x":1}` {
+		t.Fatalf("reader changed history: %s", got)
+	}
+}

@@ -71,9 +71,10 @@ type managerState struct {
 	restoredTurn PrefixTurnStats
 	// transcript is the append-only, user-visible conversation. Compaction and
 	// context repair mutate ctx.Messages but never this record.
-	transcript     []types.Message
-	transcriptBase int
-	transcriptLazy bool
+	transcript            []types.Message
+	transcriptBase        int
+	lastAssistantSequence int
+	transcriptLazy        bool
 }
 
 type appendProjection struct {

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"log"
 	"nekocode/bot/modelcatalog"
+	utilfs "nekocode/util/fs"
 	"net"
 	"net/http"
 	"os"
@@ -25,6 +26,9 @@ func main() {
 	enableA2A := flag.Bool("a2a", false, "enable the optional A2A Agent Card and protocol endpoints")
 	a2aURL := flag.String("a2a-url", "", "public A2A base URL (requires -a2a; default: first local access URL plus /a2a)")
 	flag.Parse()
+	if _, err := utilfs.UserHomeDir(); err != nil {
+		log.Fatal(err)
+	}
 	catalogCtx, cancelCatalog := context.WithCancel(context.Background())
 	defer cancelCatalog()
 	modelcatalog.RefreshInBackground(catalogCtx)

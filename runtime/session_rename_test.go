@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestRenameSessionPublishesMetadataEventOnlyOnSuccess(t *testing.T) {
@@ -46,10 +47,34 @@ func TestRenameSessionPublishesMetadataEventOnlyOnSuccess(t *testing.T) {
 	rt.mu.Lock()
 	rt.status = RunRunning
 	rt.mu.Unlock()
-	if err := rt.RenameSession("other", "custom name"); err == nil || calls != 2 {
-		t.Fatal("busy rename executed")
+	failure = false
+	if err := rt.RenameSession("other", "custom name"); err != nil || calls != 3 {
+		t.Fatalf("rename during run: %v, calls=%d", err, calls)
 	}
 	rt.mu.Lock()
 	rt.status = RunIdle
 	rt.mu.Unlock()
+}
+
+func TestRenameSessionObserverCanReenterRuntime(t *testing.T) {
+	rt := New(RunnerFunc(func(context.Context, string, RunHost) (string, error) { return "", nil }), ServiceGroups{Sessions: SessionsServices{RenameSession: func(string, string) error { return nil }}})
+	defer rt.Close()
+	called := false
+	rt.events.AddObserver(func(ev Event) {
+		if ev.Type != EventSessionChanged {
+			return
+		}
+		called = true
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		if _, err := rt.CancelRunWithResult(ctx, ""); err != nil {
+			t.Errorf("observer could not reenter runtime: %v", err)
+		}
+	})
+	if err := rt.RenameSession("s", "label"); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("session observer was not called")
+	}
 }

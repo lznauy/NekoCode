@@ -898,3 +898,48 @@ func BenchmarkChangedLargeUnmodifiedFile(b *testing.B) {
 		}
 	}
 }
+
+func TestRestartPreservesTurnMissingFromSessionIndex(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(t.TempDir(), "notes")
+	if err := os.WriteFile(path, []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m := New(root)
+	m.Activate("session", nil, 0)
+	turn, err := m.BeginMessage("session", "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = m.Capture(path); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, []byte("updated"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = m.Finalize(path); err != nil {
+		t.Fatal(err)
+	}
+
+	// The workspace and checkpoint reached disk before the session manifest did.
+	restarted := New(root)
+	restarted.Activate("session", nil, 0)
+	next, err := restarted.BeginMessage("session", "next")
+	if err != nil || next == turn {
+		t.Fatalf("turn reused: first=%q next=%q err=%v", turn, next, err)
+	}
+	if err = restarted.Finish("session"); err != nil {
+		t.Fatal(err)
+	}
+	history, err := restarted.History("session")
+	if err != nil || len(history) != 2 || history[1].UserMessage != "first" || len(history[1].Changes) != 1 {
+		t.Fatalf("history=%+v err=%v", history, err)
+	}
+	if _, err = restarted.Rewind("session", turn); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "original" {
+		t.Fatalf("rewound file=%q err=%v", data, err)
+	}
+}

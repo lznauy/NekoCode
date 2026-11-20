@@ -151,6 +151,9 @@ func TestStopReportsSuppressedUnconsumedResults(t *testing.T) {
 			if !ok || !strings.Contains(payload.Content, "1 项已结束但尚未消费") {
 				t.Fatalf("incorrect suppression notice: %+v", ev)
 			}
+			if b.entries["consumed"].Delivery != "delivered" || b.entries["unread"].Delivery != "stopped" {
+				t.Fatalf("consumed delivery=%q, unread delivery=%q", b.entries["consumed"].Delivery, b.entries["unread"].Delivery)
+			}
 			if b.entries["unread"].Result != "retained evidence" || b.entries["other"].Notified {
 				t.Fatal("result removed or another session stopped")
 			}

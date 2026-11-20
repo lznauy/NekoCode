@@ -183,47 +183,54 @@ func (m *Manager) renderRuntimeEnvironment() string {
 }
 
 func (m *Manager) filterValidMessages(kept []types.Message) []types.Message {
-	hasResult := map[string]bool{}
-	for _, msg := range kept {
-		if msg.Role == "tool" && msg.ToolCallID != "" {
-			hasResult[msg.ToolCallID] = true
-		}
-	}
-	validAsst := map[int]bool{}
-	for i, msg := range kept {
-		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
-			ok := true
-			for _, tc := range msg.ToolCalls {
-				if tc.ID != "" && !hasResult[tc.ID] {
-					ok = false
-					break
-				}
-			}
-			if ok {
-				validAsst[i] = true
-			}
-		}
-	}
-	validIDs := map[string]bool{}
-	filtered := make([]types.Message, 0, len(kept))
-	for i, msg := range kept {
+	project := func(msg types.Message) types.Message {
 		if msg.Content == "" && msg.Role != "system" {
 			msg.Content = "."
 		}
-		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
-			if !validAsst[i] {
-				continue
-			}
-			for _, tc := range msg.ToolCalls {
-				if tc.ID != "" {
-					validIDs[tc.ID] = true
-				}
-			}
+		return msg.Clone()
+	}
+	filtered := make([]types.Message, 0, len(kept))
+	for i := 0; i < len(kept); i++ {
+		msg := kept[i]
+		if msg.Role == "tool" {
+			continue // Orphan results cannot appear in a provider request.
 		}
-		if msg.Role == "tool" && (msg.ToolCallID == "" || !validIDs[msg.ToolCallID]) {
+		start := len(filtered)
+		filtered = append(filtered, project(msg))
+		if msg.Role != "assistant" || len(msg.ToolCalls) == 0 {
 			continue
 		}
-		filtered = append(filtered, msg)
+		// Tool IDs are scoped to one assistant exchange. A queued runtime
+		// notice may arrive between parallel results; project it after the
+		// settled batch so provider tool pairing stays contiguous.
+		pending := make(map[string]bool, len(msg.ToolCalls))
+		for _, call := range msg.ToolCalls {
+			if call.ID != "" {
+				pending[call.ID] = true
+			}
+		}
+		validIDs := len(pending) == len(msg.ToolCalls)
+		var notices []types.Message
+		for i+1 < len(kept) && len(pending) != 0 {
+			reply := kept[i+1]
+			if reply.Role != "tool" {
+				if reply.Role != "user" || reply.IsConversationUser() {
+					break
+				}
+				notices = append(notices, project(reply))
+				i++
+				continue
+			}
+			i++
+			if pending[reply.ToolCallID] {
+				delete(pending, reply.ToolCallID)
+				filtered = append(filtered, project(reply))
+			}
+		}
+		if !validIDs || len(pending) != 0 {
+			filtered = filtered[:start]
+		}
+		filtered = append(filtered, notices...)
 	}
 	return filtered
 }

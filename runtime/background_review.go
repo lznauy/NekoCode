@@ -88,13 +88,10 @@ func (b *backgroundTasks) reviewLocked(sessionID, group string, ids []string) ba
 		review.GroupTasks = append(review.GroupTasks, backgroundReviewTask{
 			ID: task.ID, Title: task.Title, Status: task.Status, AttemptID: task.AttemptID, Delivery: task.Delivery,
 		})
-		switch task.Status {
-		case "queued", "running", "waiting_approval", "waiting_question", "waiting_dependencies":
+		if pendingBackgroundStatus(task.Status) {
 			review.PendingTasks++
-		default:
-			if !included[id] && !task.Notified && task.Delivery != "stopped" {
-				review.PendingReviews++
-			}
+		} else if !included[id] && !task.Notified && task.Delivery != "stopped" {
+			review.PendingReviews++
 		}
 	}
 	return review

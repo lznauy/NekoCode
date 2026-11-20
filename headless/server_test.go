@@ -446,7 +446,7 @@ func TestQueuedStartFailuresDoNotHangAfterEOF(t *testing.T) {
 	var output bytes.Buffer
 	transport := newTransport(ctx, strings.NewReader(""), &output)
 	s := &server{backend: rejectingStartBackend{}, conn: transport, sessionID: "session-test", eof: true,
-		queue: []userInput{{id: "one", text: "first"}, {id: "two", text: "second"}}, queueBytes: 11}
+		queue: []userInput{{id: "one", text: "first"}, {id: "two", text: "second"}}, queueBytes: 17}
 	if err := s.serve(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -457,5 +457,39 @@ func TestQueuedStartFailuresDoNotHangAfterEOF(t *testing.T) {
 	transport.wg.Wait()
 	if n := strings.Count(output.String(), `"type":"result"`); n != 2 {
 		t.Fatalf("result count=%d: %s", n, output.String())
+	}
+}
+
+type busyStartBackend struct{ rejectingStartBackend }
+
+func (busyStartBackend) StartRun(context.Context, rt.Input) (rt.RunID, error) {
+	return "occupied-run", errors.New("busy")
+}
+func TestRejectedInputNeverOwnsBusyRun(t *testing.T) {
+	for _, failOutput := range []bool{false, true} {
+		ctx, cancel := context.WithCancel(t.Context())
+		var output bytes.Buffer
+		conn := newTransport(ctx, strings.NewReader(""), &output)
+		s := &server{backend: busyStartBackend{}, conn: conn, sessionID: "session-test"}
+		if failOutput {
+			cancel()
+		}
+		err := s.start(t.Context(), userInput{id: "retry", text: "hi"})
+		if (err != nil) != failOutput {
+			t.Fatalf("output failure=%v err=%v", failOutput, err)
+		}
+		if s.active != nil || len(s.pendingTurns) > 0 {
+			t.Fatal("cleanup retained a rejected turn")
+		}
+		if !failOutput {
+			if err := conn.flush(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cancel()
+		conn.wg.Wait()
+		if strings.Contains(output.String(), "occupied-run") {
+			t.Fatalf("rejected frame claimed foreign run: %s", output.String())
+		}
 	}
 }

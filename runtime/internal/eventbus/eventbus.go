@@ -3,6 +3,7 @@ package eventbus
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -115,7 +116,7 @@ func (b *EventBus) subscribeHistory(ctx context.Context, filter core.EventFilter
 		for _, ev := range recorded {
 			ev = NormalizeRecordedEvent(ev)
 			if !isCompactionDelta(ev) && eventMatches(filter, ev) {
-				history = append(history, cloneEvidence(ev))
+				history = append(history, cloneEvent(ev))
 			}
 		}
 	} else if replay {
@@ -184,7 +185,7 @@ func (s *subscriber) enqueue(ev core.Event) {
 			return
 		}
 	}
-	s.queue = append(s.queue, cloneEvidence(ev))
+	s.queue = append(s.queue, cloneEvent(ev))
 	s.mu.Unlock()
 	select {
 	case s.wake <- struct{}{}:
@@ -321,7 +322,7 @@ func (b *EventBus) PublishCommitted(events []core.Event, committed func()) []cor
 		if record != nil {
 			func() {
 				defer b.observerWG.Done()
-				if err := record(cloneEvidence(ev)); err != nil && ev.IsRunTerminal() {
+				if err := record(cloneEvent(ev)); err != nil && ev.IsRunTerminal() {
 					if result, ok := ev.Payload.(core.RunResult); ok {
 						result.EvidenceIncomplete = true
 						ev.Payload = result
@@ -339,7 +340,7 @@ func (b *EventBus) PublishCommitted(events []core.Event, committed func()) []cor
 	}
 	for _, n := range notifications {
 		for _, observer := range n.ordered {
-			func() { defer b.observerWG.Done(); observer(cloneEvidence(n.event)) }()
+			func() { defer b.observerWG.Done(); observer(cloneEvent(n.event)) }()
 		}
 		b.mu.Lock()
 		for _, sub := range b.subscribers {
@@ -360,7 +361,7 @@ func (b *EventBus) PublishCommitted(events []core.Event, committed func()) []cor
 	b.publishMu.Unlock()
 	for _, n := range notifications {
 		for _, observer := range n.observers {
-			func() { defer b.observerWG.Done(); observer(cloneEvidence(n.event)) }()
+			func() { defer b.observerWG.Done(); observer(cloneEvent(n.event)) }()
 		}
 	}
 	return events
@@ -381,7 +382,7 @@ func (b *EventBus) appendHistoryLocked(ev core.Event) {
 	if size > defaultEventHistoryBytes {
 		return
 	}
-	ev = cloneEvidence(ev)
+	ev = cloneEvent(ev)
 	if b.historyLimit <= 0 {
 		b.history = append(b.history, ev)
 		b.historyCount = len(b.history)
@@ -410,7 +411,7 @@ func (b *EventBus) historyLocked(filter core.EventFilter) []core.Event {
 	for i := 0; i < b.historyCount; i++ {
 		ev := b.history[(b.historyStart+i)%len(b.history)]
 		if eventMatches(filter, ev) {
-			out = append(out, cloneEvidence(ev))
+			out = append(out, cloneEvent(ev))
 		}
 	}
 	return out
@@ -560,12 +561,30 @@ func eventMatches(filter core.EventFilter, ev core.Event) bool {
 // Matches lets recorded replay apply the same filtering before cache budgeting.
 func Matches(filter core.EventFilter, ev core.Event) bool { return eventMatches(filter, ev) }
 
-// Each evidence consumer owns its receipt slice. An observer or replay client
-// must not change the copy retained by history or delivered to another sink.
-func cloneEvidence(ev core.Event) core.Event {
-	if payload, ok := ev.Payload.(core.ToolPayload); ok && len(payload.Evidence.Executions) > 0 {
-		payload.Evidence = payload.Evidence.Clone()
-		ev.Payload = payload
+// Detach mutable payload fields whenever an event crosses an ownership boundary.
+func cloneEvent(ev core.Event) core.Event {
+	switch p := ev.Payload.(type) {
+	case core.ToolPayload:
+		p.Input = slices.Clone(p.Input)
+		p.Evidence = p.Evidence.Clone()
+		ev.Payload = p
+	case core.MessagePayload:
+		p.Images = slices.Clone(p.Images)
+		ev.Payload = p
+	case core.SubAgentPayload:
+		p.Skills = slices.Clone(p.Skills)
+		ev.Payload = p
+	case core.QuestionView:
+		ev.Payload = p.Clone()
+	case core.ApprovalView:
+		ev.Payload = p.Clone()
+	case protocol.ContextSnapshot:
+		p.Segments = slices.Clone(p.Segments)
+		ev.Payload = p
+	case []protocol.TodoItem:
+		ev.Payload = slices.Clone(p)
+	default:
+		ev.Payload = core.CloneJSONValue(p)
 	}
 	return ev
 }

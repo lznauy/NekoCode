@@ -2,6 +2,7 @@ package contextmgr
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -41,13 +42,20 @@ func prunerTestHistory() []types.Message {
 	}
 }
 
+func pruneTestPrefix(m *Manager, history []types.Message, compressor *replacementCompactor) []types.Message {
+	cut := compressor.recentStart(history, 100000)
+	prefix := m.pruneStaleToolResults(context.Background(), history, cut)
+	out := append([]types.Message(nil), prefix...)
+	return append(out, history[cut:]...)
+}
+
 func TestPruneStaleToolResultsReplacesLowRelevance(t *testing.T) {
 	pruner := &fakePruner{ok: true, pruned: []bool{true}}
 	m := &Manager{toolPruner: pruner}
 	compressor := newReplacementCompactor(nil, 80)
 	history := prunerTestHistory()
 
-	out := m.pruneStaleToolResults(context.Background(), history, 100000, compressor)
+	out := pruneTestPrefix(m, history, compressor)
 
 	// The old t1 result is pruned to a placeholder; the tool call record and
 	// the recent t2 result survive verbatim.
@@ -74,7 +82,7 @@ func TestPruneStaleToolResultsFailsOpen(t *testing.T) {
 	compressor := newReplacementCompactor(nil, 80)
 	history := prunerTestHistory()
 
-	out := m.pruneStaleToolResults(context.Background(), history, 100000, compressor)
+	out := pruneTestPrefix(m, history, compressor)
 
 	for i, msg := range out {
 		if msg.Content != history[i].Content {
@@ -90,7 +98,7 @@ func TestPruneStaleToolResultsNilPrunerIsNoop(t *testing.T) {
 	m := &Manager{}
 	compressor := newReplacementCompactor(nil, 80)
 	history := prunerTestHistory()
-	out := m.pruneStaleToolResults(context.Background(), history, 100000, compressor)
+	out := pruneTestPrefix(m, history, compressor)
 	if len(out) != len(history) {
 		t.Fatal("nil pruner must not touch history")
 	}
@@ -114,7 +122,7 @@ func TestPruneStaleAssistantMessages(t *testing.T) {
 	m := &Manager{toolPruner: pruner}
 	compressor := newReplacementCompactor(nil, 80)
 
-	out := m.pruneStaleToolResults(context.Background(), history, 100000, compressor)
+	out := pruneTestPrefix(m, history, compressor)
 
 	if len(pruner.candidates) != 2 || pruner.candidates[0].Tool != assistantCandidate || pruner.candidates[1].Tool != "shell" {
 		t.Fatalf("expected assistant message + old tool result as candidates: %+v", pruner.candidates)
@@ -134,12 +142,38 @@ func TestGoalIncludesRecentToolResults(t *testing.T) {
 	pruner := &fakePruner{ok: true, pruned: []bool{true}}
 	m := &Manager{toolPruner: pruner}
 	compressor := newReplacementCompactor(nil, 80)
-	m.pruneStaleToolResults(context.Background(), prunerTestHistory(), 100000, compressor)
+	pruneTestPrefix(m, prunerTestHistory(), compressor)
 
 	if !strings.Contains(pruner.goal, "Recent tool results:") {
 		t.Fatalf("goal should carry recent tool-result context: %q", pruner.goal)
 	}
 	if !strings.Contains(pruner.goal, "recent file content") {
 		t.Fatalf("goal should include the most recent tool result: %q", pruner.goal)
+	}
+}
+
+func TestPruningDoesNotChangeRecentRetentionBoundary(t *testing.T) {
+	pruner := &fakePruner{ok: true}
+	m := New(Config{ContextWindow: 12000, ToolPruner: pruner, Summarizer: func([]types.Message, string) (string, error) { return "<summary>archived</summary>", nil }})
+	m.Add("user", "review task")
+	for i := range 12 {
+		id := fmt.Sprintf("call-%d", i)
+		m.AddAssistant(types.Message{ToolCalls: []types.ToolCall{{ID: id, Function: types.FunctionCall{Name: "read", Arguments: "{}"}}}})
+		m.AddToolResultsBatch([]ToolResultMsg{{ToolName: "read", Message: types.Message{ToolCallID: id, Content: strings.Repeat("a", 2000)}}})
+	}
+	before, compressor := m.compactionInput()
+	cut := compressor.recentStart(before.history, before.budget)
+	for _, msg := range before.history[:cut] {
+		if msg.Role == "tool" {
+			pruner.pruned = append(pruner.pruned, true)
+		}
+	}
+	ok, err := m.Summarize(t.Context())
+	if !ok || err != nil {
+		t.Fatalf("summarize: %t %v", ok, err)
+	}
+	recent := m.Snapshot().Messages
+	if len(recent) != len(before.history)-cut || recent[0].ToolCalls[0].ID != before.history[cut].ToolCalls[0].ID {
+		t.Fatalf("recent changed after pruning: got %d want %d", len(recent), len(before.history)-cut)
 	}
 }

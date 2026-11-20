@@ -42,6 +42,9 @@ func (m *Manager) AddTaskUpdate(sequence uint64, text string) {
 func (m *Manager) addMessageLocked(message types.Message) {
 	m.state.ctx.Messages = append(m.state.ctx.Messages, message)
 	m.state.transcript = append(m.state.transcript, message)
+	if message.Role == "assistant" {
+		m.state.lastAssistantSequence = m.state.transcriptBase + len(m.state.transcript)
+	}
 	m.state.tracker.AddNew(len(message.Role) + len(message.Content))
 	m.state.revision++
 }
@@ -57,7 +60,7 @@ func (m *Manager) addMessageLocked(message types.Message) {
 func (m *Manager) AddUser(content string, images []types.MessageImage) {
 	m.state.mu.Lock()
 	defer m.state.mu.Unlock()
-	message := types.Message{Role: "user", Content: content, Source: "user", Images: images}
+	message := types.Message{Role: "user", Content: content, Source: "user", Images: slices.Clone(images)}
 	m.state.ctx.Messages = append(m.state.ctx.Messages, message)
 	m.state.transcript = append(m.state.transcript, message)
 	m.state.tracker.AddNew(len("user") + len(content))
@@ -78,9 +81,11 @@ func (m *Manager) AddUser(content string, images []types.MessageImage) {
 func (m *Manager) AddAssistant(message types.Message) {
 	m.state.mu.Lock()
 	defer m.state.mu.Unlock()
+	message = message.Clone()
 	message.Role = "assistant"
 	m.state.ctx.Messages = append(m.state.ctx.Messages, message)
 	m.state.transcript = append(m.state.transcript, message)
+	m.state.lastAssistantSequence = m.state.transcriptBase + len(m.state.transcript)
 	m.state.tracker.AddEstimated(token.EstimateModelTokens([]types.Message{message}, m.state.reasoning, m.state.vision))
 	m.state.revision++
 }
@@ -250,6 +255,7 @@ func (m *Manager) Reset() {
 	m.state.ctx.Archive = ""
 	m.state.transcript = nil
 	m.state.transcriptBase = 0
+	m.state.lastAssistantSequence = 0
 	m.state.transcriptLazy = false
 	m.state.ctx.Hints = ""
 	m.state.runtimePolicy = ""

@@ -14,10 +14,14 @@ import (
 // attachment directory — which is why sessionID must be the active session —
 // and referenced from the text via the [Image #N] marker convention shared
 // with every other NekoCode entry point.
-func promptContent(blocks []contentBlock, sessionID string) (string, []controlruntime.ImageAttachment, *wireError) {
+func promptContent(blocks []contentBlock, sessionID string) (text string, attachments []controlruntime.ImageAttachment, failure *wireError) {
 	parts := make([]string, 0, len(blocks))
 	var images []controlruntime.ImageAttachment
-	imageCount := 0
+	defer func() {
+		if failure != nil {
+			discardPromptImages(images)
+		}
+	}()
 	for _, block := range blocks {
 		switch block.Type {
 		case "text":
@@ -32,6 +36,9 @@ func promptContent(blocks []contentBlock, sessionID string) (string, []controlru
 			}
 			parts = append(parts, link)
 		case "image":
+			if len(images) >= controlruntime.MaxImageAttachments {
+				return "", nil, rpcError(-32602, "too many image attachments")
+			}
 			if strings.TrimSpace(block.Data) == "" {
 				return "", nil, rpcError(-32602, "image block requires base64 data")
 			}
@@ -43,17 +50,22 @@ func promptContent(blocks []contentBlock, sessionID string) (string, []controlru
 			if err != nil {
 				return "", nil, rpcError(-32000, "store image attachment: %v", err)
 			}
-			imageCount++
-			marker := fmt.Sprintf("[Image #%d]", imageCount)
+			marker := fmt.Sprintf("[Image #%d]", len(images)+1)
 			parts = append(parts, marker)
 			images = append(images, controlruntime.ImageAttachment{Label: marker, Path: stored})
 		default:
 			return "", nil, rpcError(-32602, "unsupported prompt content type %q", block.Type)
 		}
 	}
-	text := strings.TrimSpace(strings.Join(parts, "\n\n"))
+	text = strings.TrimSpace(strings.Join(parts, "\n\n"))
 	if text == "" {
 		return "", nil, rpcError(-32602, "prompt is empty")
 	}
 	return text, images, nil
+}
+
+func discardPromptImages(images []controlruntime.ImageAttachment) {
+	for _, image := range images {
+		_ = attachment.DeleteImage(image.Path)
+	}
 }

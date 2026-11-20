@@ -56,9 +56,12 @@ func newRenameModel(t *testing.T, input string) (*Model, *renameFakeRuntime) {
 	return m, r
 }
 func TestSessionMenuRenameSelectedItemAndPreserveDraft(t *testing.T) {
-	for _, input := range []string{"/sessions"} {
-		t.Run(input, func(t *testing.T) {
-			m, r := newRenameModel(t, input)
+	for _, processing := range []bool{false, true} {
+		t.Run(map[bool]string{false: "idle", true: "running"}[processing], func(t *testing.T) {
+			m, r := newRenameModel(t, "/sessions")
+			if processing {
+				m.transitionTo(stateProcessing)
+			}
 			draft, before := m.Input.Value(), m.Messages.Len()
 			m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
 			if m.sessionName == nil || m.sessionName.input.Value() != "已有名称" {
@@ -88,6 +91,9 @@ func TestSessionMenuRenameSelectedItemAndPreserveDraft(t *testing.T) {
 			m.sessionName.input.SetValue("")
 			m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 			selected, _ = m.Suggestions.Selected()
+			if processing && m.state != stateProcessing {
+				t.Fatal("tag edit interrupted active run")
+			}
 			if selected.Label != "second" || r.name != "" {
 				t.Fatal("clear name failed")
 			}

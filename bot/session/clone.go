@@ -10,6 +10,15 @@ import (
 	"nekocode/protocol"
 )
 
+func (g *Goal) clone() *Goal {
+	if g == nil {
+		return nil
+	}
+	out := *g
+	out.RecentObservations = slices.Clone(g.RecentObservations)
+	return &out
+}
+
 // Clone separates all mutable session data, including the transcript omitted
 // from session.json. JSON round-tripping the entire snapshot would lose it.
 func (s *Snapshot) Clone() *Snapshot {
@@ -17,6 +26,7 @@ func (s *Snapshot) Clone() *Snapshot {
 		return nil
 	}
 	out := *s
+	out.Goal = s.Goal.clone()
 	out.Todos = append([]protocol.TodoItem(nil), s.Todos...)
 	out.TodoPlans = s.TodoPlans.Clone()
 	if s.Subagent != nil {
@@ -27,8 +37,8 @@ func (s *Snapshot) Clone() *Snapshot {
 		metadata.Attempts = slices.Clone(s.Subagent.Attempts)
 		out.Subagent = &metadata
 	}
-	out.Messages = cloneMessages(s.Messages)
-	out.Transcript = cloneMessages(s.Transcript)
+	out.Messages = types.CloneMessages(s.Messages)
+	out.Transcript = types.CloneMessages(s.Transcript)
 	out.LoadedSkills = slices.Clone(s.LoadedSkills)
 	out.CheckpointTurns = slices.Clone(s.CheckpointTurns)
 	out.Ledger.ReadFiles = slices.Clone(s.Ledger.ReadFiles)
@@ -42,15 +52,6 @@ func (s *Snapshot) Clone() *Snapshot {
 		out.PrefixTurn = &stats
 	}
 	return &out
-}
-
-func cloneMessages(messages []types.Message) []types.Message {
-	out := slices.Clone(messages)
-	for i := range out {
-		out[i].ToolCalls = slices.Clone(out[i].ToolCalls)
-		out[i].Images = slices.Clone(out[i].Images)
-	}
-	return out
 }
 
 func cloneToolEvents(events []ledger.ToolEvent) []ledger.ToolEvent {

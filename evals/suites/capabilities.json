@@ -1,1 +1,1 @@
-{"schema_version": 1, "id": "capabilities", "version": 3, "cases": ["release-handoff", "go-embed-path", "ledger-resume", "inventory-release", "catalog-recovery", "depot-ledger"]}
+{"schema_version": 1, "id": "capabilities", "version": 4, "cases": ["release-handoff", "go-embed-path", "ledger-resume", "inventory-release", "catalog-recovery", "depot-ledger", "release-window"]}

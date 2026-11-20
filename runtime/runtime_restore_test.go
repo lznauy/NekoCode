@@ -88,3 +88,39 @@ func itoa(n int) string {
 	}
 	return string(digits)
 }
+
+func TestRestoredObservedRunUsesArchiveClock(t *testing.T) {
+	start := time.Date(2020, 1, 2, 10, 0, 0, 0, time.UTC)
+	for _, withStart := range []bool{true, false} {
+		baseDir := t.TempDir()
+		rec, err := recording.NewEventRecorder(baseDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if withStart {
+			rec.Record(Event{RunID: "run_1", Type: EventRunStarted, Time: start})
+		}
+		end := start.Add(2 * time.Minute)
+		rec.Record(Event{RunID: "run_1", Type: EventRunDone, Time: end, Payload: RunResult{Output: "done"}})
+		if err := rec.Close(); err != nil {
+			t.Fatal(err)
+		}
+		rt := newTestRuntime(&testBot{})
+		if err := rt.EnableEventRecording(baseDir); err != nil {
+			t.Fatal(err)
+		}
+		r, ok := rt.LookupRun("run_1")
+		if !ok {
+			t.Fatal("missing restored run")
+		}
+		got := SummarizeObservedRun(r)
+		wantStart := end
+		if withStart {
+			wantStart = start
+		}
+		rt.Close()
+		if !got.StartedAt.Equal(wantStart) || got.FinishedAt == nil || !got.FinishedAt.Equal(end) || got.DurationMS != end.Sub(wantStart).Milliseconds() {
+			t.Fatalf("start event=%t: %+v", withStart, got)
+		}
+	}
+}

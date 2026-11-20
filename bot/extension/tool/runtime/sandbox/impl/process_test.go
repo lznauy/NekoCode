@@ -81,3 +81,19 @@ func TestUnavailableError(t *testing.T) {
 		t.Fatalf("unexpected default error: %s", e2.Error())
 	}
 }
+
+func TestRunHostPipelineExitStatus(t *testing.T) {
+	for _, tc := range []struct {
+		command     string
+		wantFailure bool
+	}{
+		{"(exit 7) | tail -1", true},
+		{"echo ok | tail -1", false},
+		{"set +o pipefail; (exit 7) | tail -1", false},
+	} {
+		_, err := RunHost(t.Context(), tc.command, 5*time.Second)
+		if (err != nil) != tc.wantFailure {
+			t.Errorf("%q returned %v", tc.command, err)
+		}
+	}
+}

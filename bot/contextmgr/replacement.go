@@ -44,7 +44,7 @@ const archiveUnavailable = "[Archive unavailable: summarizer output was malforme
 // Started event); nil falls back to s.summarizer. Keeping the override out of
 // the struct prevents a wrapper capturing one compaction's event state from
 // being stored and re-wrapped by the next compaction.
-func (s *replacementCompactor) summarize(history []types.Message, prevArchive string, budget int, summarizer Summarizer) (string, []types.Message, int, error) {
+func (s *replacementCompactor) summarize(history []types.Message, prevArchive string, budget int, summarizer Summarizer, prune func([]types.Message, int) []types.Message) (string, []types.Message, int, error) {
 	originalLen := len(history)
 	history = retainLatestRuntimeContext(history)
 	if summarizer == nil {
@@ -58,8 +58,12 @@ func (s *replacementCompactor) summarize(history []types.Message, prevArchive st
 		return prevArchive, history, originalLen - len(history), nil
 	}
 
-	toSummarize := withoutInternalContext(history[:keepStart])
 	recent := append([]types.Message(nil), history[keepStart:]...)
+	prefix := history[:keepStart]
+	if prune != nil {
+		prefix = prune(history, keepStart)
+	}
+	toSummarize := withoutInternalContext(prefix)
 
 	archive, err := s.summarizeBatches(toSummarize, prevArchive, summarizer)
 	if err != nil {

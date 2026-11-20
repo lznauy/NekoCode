@@ -40,6 +40,7 @@ type previewTracker struct {
 	hasPreview    bool
 	lastFlush     time.Time
 	sentLen       int
+	retryEdit     bool
 	responseStart int
 }
 
@@ -64,69 +65,101 @@ func (p *previewTracker) retract(ctx context.Context, runID controlruntime.RunID
 	if !p.hasPreview {
 		return
 	}
-	text := taskview.MarkdownToHTML(string(p.buf))
-	if text == "" {
-		text = "正在处理…"
+	p.editPreview(ctx)
+}
+
+func (p *previewTracker) previewLen() int { return min(len(p.buf), previewMaxChunk) }
+
+func (p *previewTracker) previewText() string {
+	if len(p.buf) == 0 {
+		return "正在处理…"
 	}
+	return taskview.MarkdownToHTML(string(p.buf[:p.previewLen()]))
+}
+
+func (p *previewTracker) editPreview(ctx context.Context) {
+	text := p.previewText()
+	p.retryEdit = false
 	for chatID, id := range p.msgIDs {
-		_ = p.sender.editMessageText(ctx, chatID, id, text)
+		if err := p.sender.editMessageText(ctx, chatID, id, text); err != nil {
+			p.retryEdit = true
+		}
 	}
-	p.sentLen, p.lastFlush = len(p.buf), p.now()
+	if !p.retryEdit {
+		p.sentLen = p.previewLen()
+	}
+	p.lastFlush = p.now()
 }
 
 // flush creates the preview once the buffer is big enough, then edits it in
 // place whenever both the interval and growth thresholds are met.
 func (p *previewTracker) flush(ctx context.Context) {
-	if len(p.buf) == 0 {
+	if len(p.buf) == 0 && !p.retryEdit {
 		return
 	}
 	if !p.hasPreview {
-		if len(p.buf) < previewMinStart {
+		if len(p.buf) < previewMinStart || (!p.lastFlush.IsZero() && p.now().Sub(p.lastFlush) < previewEditInterval) {
 			return
 		}
-		p.msgIDs = make(map[int64]int, len(p.chatIDs()))
-		for _, chatID := range p.chatIDs() {
-			if id, err := p.sender.sendMessageID(ctx, chatID, taskview.MarkdownToHTML(string(p.buf))); err == nil {
+		chats := p.chatIDs()
+		p.msgIDs = make(map[int64]int, len(chats))
+		for _, chatID := range chats {
+			if id, err := p.sender.sendMessageID(ctx, chatID, p.previewText()); err == nil {
 				p.msgIDs[chatID] = id
 			}
 		}
-		p.hasPreview = true
-		p.sentLen = len(p.buf)
+		p.hasPreview = len(p.msgIDs) > 0
+		if p.hasPreview {
+			p.sentLen = p.previewLen()
+		}
 		p.lastFlush = p.now()
 		return
 	}
-	if p.now().Sub(p.lastFlush) < previewEditInterval || len(p.buf)-p.sentLen < previewEditGrowth {
+	size := p.previewLen()
+	grew := size-p.sentLen >= previewEditGrowth || (size == previewMaxChunk && size > p.sentLen)
+	if p.now().Sub(p.lastFlush) < previewEditInterval || (!grew && !p.retryEdit) {
 		return
 	}
-	for chatID, id := range p.msgIDs {
-		_ = p.sender.editMessageText(ctx, chatID, id, taskview.MarkdownToHTML(string(p.buf)))
-	}
-	p.sentLen = len(p.buf)
-	p.lastFlush = p.now()
+	p.editPreview(ctx)
 }
 
 // finalize settles the preview with the full buffered text (chunked: the
 // preview keeps the first chunk, the rest goes out as new messages). It
 // reports whether a preview existed — when false, the caller should deliver
 // the final text through its normal done-reply path instead.
-func (p *previewTracker) finalize(ctx context.Context, runID controlruntime.RunID) bool {
-	existed := p.hasPreview
-	if !existed {
+func (p *previewTracker) finalize(ctx context.Context, runID controlruntime.RunID) (bool, error) {
+	if p.runID != runID {
+		return false, nil
+	}
+	if !p.hasPreview {
 		p.reset(runID)
-		return false
+		return false, nil
 	}
 	chunks := chunkText(string(p.buf), previewMaxChunk)
 	if len(chunks) == 0 {
 		chunks = []string{""}
 	}
-	for chatID, id := range p.msgIDs {
-		_ = p.sender.editMessageText(ctx, chatID, id, taskview.MarkdownToHTML(chunks[0]))
-		for _, chunk := range chunks[1:] {
-			_ = p.sender.sendMessage(ctx, chatID, taskview.MarkdownToHTML(chunk))
+	// Only the currently paired chat receives the final result. A failed
+	// edit (for example a deleted preview) falls back to a normal message.
+	defer p.reset(runID)
+	delivered := false
+	for _, chatID := range p.chatIDs() {
+		id, ok := p.msgIDs[chatID]
+		if !ok {
+			continue
+		}
+		rest := chunks
+		if err := p.sender.editMessageText(ctx, chatID, id, taskview.MarkdownToHTML(chunks[0])); err == nil {
+			rest = chunks[1:]
+		}
+		delivered = true
+		for _, chunk := range rest {
+			if err := p.sender.sendMessage(ctx, chatID, taskview.MarkdownToHTML(chunk)); err != nil {
+				return true, err
+			}
 		}
 	}
-	p.reset(runID)
-	return true
+	return delivered, nil
 }
 
 // drop discards any in-flight preview state without settling it.
@@ -136,6 +169,7 @@ func (p *previewTracker) reset(runID controlruntime.RunID) {
 	p.msgIDs = nil
 	p.hasPreview = false
 	p.sentLen = 0
+	p.retryEdit = false
 	p.responseStart = 0
 	p.lastFlush = time.Time{}
 }

@@ -137,7 +137,7 @@ func TestSummaryBatchLimitPreflightDoesNotCallModel(t *testing.T) {
 	calls := 0
 	rc := newReplacementCompactor(func([]types.Message, string) (string, error) { calls++; return "<summary>ok</summary>", nil }, 80)
 	rc.modelWindow = 16000
-	_, _, _, err := rc.summarize(summaryTestHistory(strings.Repeat("data ", 100000)), "", 64000, nil)
+	_, _, _, err := rc.summarize(summaryTestHistory(strings.Repeat("data ", 100000)), "", 64000, nil, nil)
 	if err == nil || calls != 0 || !strings.Contains(err.Error(), "8") {
 		t.Fatalf("preflight = calls %d, error %v", calls, err)
 	}

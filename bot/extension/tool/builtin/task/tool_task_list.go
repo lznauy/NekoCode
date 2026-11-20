@@ -37,22 +37,6 @@ func (t *TaskListTool) Parameters() []core.Parameter {
 	}
 }
 
-func taskListIntArg(args map[string]any, name string, fallback int) (int, error) {
-	raw, exists := args[name]
-	if !exists {
-		return fallback, nil
-	}
-	value, ok := raw.(float64)
-	if !ok {
-		return 0, fmt.Errorf("%s must be an integer", name)
-	}
-	converted := int(value)
-	if value != float64(converted) {
-		return 0, fmt.Errorf("%s must be an integer", name)
-	}
-	return converted, nil
-}
-
 func (t *TaskListTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	if t.list == nil {
 		return core.ToolOutput{}, fmt.Errorf("task_list: not wired")
@@ -67,11 +51,11 @@ func (t *TaskListTool) Execute(ctx context.Context, args map[string]any) (core.T
 			*target = value
 		}
 	}
-	offset, err := taskListIntArg(args, "offset", 0)
+	offset, err := toolutil.OptIntArg(args, "offset", 0)
 	if err != nil {
 		return core.ToolOutput{}, err
 	}
-	limit, err := taskListIntArg(args, "limit", 20)
+	limit, err := toolutil.OptIntArg(args, "limit", 20)
 	if err != nil {
 		return core.ToolOutput{}, err
 	}

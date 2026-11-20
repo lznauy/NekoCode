@@ -2,8 +2,13 @@ package telegram
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"nekocode/interaction/connect"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -18,8 +23,9 @@ type stubMsg struct {
 }
 
 type stubSender struct {
-	sent  []stubMsg
-	edits []stubMsg
+	editErr error
+	sent    []stubMsg
+	edits   []stubMsg
 }
 
 func (s *stubSender) sendMessageID(_ context.Context, chatID int64, text string) (int, error) {
@@ -30,7 +36,7 @@ func (s *stubSender) sendMessageID(_ context.Context, chatID int64, text string)
 
 func (s *stubSender) editMessageText(_ context.Context, chatID int64, messageID int, text string) error {
 	s.edits = append(s.edits, stubMsg{chatID: int(chatID), id: messageID, text: text})
-	return nil
+	return s.editErr
 }
 
 func (s *stubSender) sendMessage(_ context.Context, chatID int64, text string) error {
@@ -53,7 +59,7 @@ func TestPreviewShortReplyNeverCreatesPreview(t *testing.T) {
 	if p.hasPreview {
 		t.Fatal("preview created for short reply")
 	}
-	if p.finalize(context.Background(), "run1") {
+	if handled, err := p.finalize(context.Background(), "run1"); handled || err != nil {
 		t.Fatal("finalize should report no preview")
 	}
 	if len(sender.sent) != 0 || len(sender.edits) != 0 {
@@ -138,7 +144,7 @@ func TestPreviewFinalizeChunksLongText(t *testing.T) {
 	long := strings.Repeat("段落一的内容。\n\n", 400) // ~ 4000+ runes
 	p.addDelta(context.Background(), "run1", long)
 
-	if !p.finalize(context.Background(), "run1") {
+	if handled, err := p.finalize(context.Background(), "run1"); !handled || err != nil {
 		t.Fatal("finalize should report a preview existed")
 	}
 	if len(sender.edits) != 1 {
@@ -218,5 +224,93 @@ func TestIsParseFailure(t *testing.T) {
 	}
 	if isParseFailure(fmt.Errorf("network timeout")) {
 		t.Fatal("network error is not a parse failure")
+	}
+}
+
+func TestFailedInitialPreviewDeliversFullCanonicalReply(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := saveConfig(Config{ActiveProfile: "p", Profiles: []BotProfile{{Name: "p", BotToken: "token", Owner: &Device{UserID: 1, ChatID: 42}}}}); err != nil {
+		t.Fatal(err)
+	}
+	var requests int
+	var sent []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			http.Error(w, "temporary error", http.StatusServiceUnavailable)
+			return
+		}
+		var msg struct {
+			Text string `json:"text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
+			t.Error(err)
+		}
+		sent = append(sent, msg.Text)
+		io.WriteString(w, `{"ok":true,"result":{"message_id":10}}`)
+	}))
+	defer server.Close()
+	c := New(nil)
+	client := newAPIClient("token")
+	client.base = server.URL
+	client.client = server.Client()
+	sink := newEventSink(c, client)
+	if err := sink.Post(t.Context(), connect.Intent{Kind: connect.IntentPreview, RunID: "run", Text: strings.Repeat("p", previewMinStart)}); err != nil {
+		t.Fatal(err)
+	}
+	full := strings.Repeat("z", previewMaxChunk+35)
+	if err := sink.Post(t.Context(), connect.Intent{Kind: connect.IntentResult, RunID: "run", Text: full}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(sent, ""); got != full {
+		t.Fatalf("received %d chars, want %d", len(got), len(full))
+	}
+}
+
+type missingPreviewSender struct{ stubSender }
+
+func (*missingPreviewSender) editMessageText(context.Context, int64, int, string) error {
+	return errors.New("preview deleted")
+}
+func TestFailedFinalEditFallsBackToNormalMessage(t *testing.T) {
+	s := &missingPreviewSender{}
+	p := newPreviewTracker(s, func() []int64 { return []int64{42} })
+	p.addDelta(t.Context(), "r", strings.Repeat("p", previewMinStart))
+	p.buf = []rune("final answer")
+	if handled, err := p.finalize(t.Context(), "r"); !handled || err != nil {
+		t.Fatalf("handled=%v error=%v", handled, err)
+	}
+	if len(s.sent) != 2 || s.sent[1].text != "final answer" {
+		t.Fatalf("outbound=%v", s.sent)
+	}
+}
+
+func TestLongPreviewRetriesAndStopsEditingAtCap(t *testing.T) {
+	sender := &stubSender{}
+	now := time.Now()
+	p := newTestPreview(sender, &now)
+	ctx := context.Background()
+	p.addDelta(ctx, "r", strings.Repeat("界", previewMinStart))
+	now = now.Add(previewEditInterval)
+	sender.editErr = errors.New("temporary failure")
+	p.addDelta(ctx, "r", strings.Repeat("文", previewMaxChunk))
+	if p.sentLen != previewMinStart {
+		t.Fatal("failed edit advanced cursor")
+	}
+	sender.editErr = nil
+	now = now.Add(previewEditInterval)
+	p.flush(ctx)
+	if p.sentLen != previewMaxChunk || len([]rune(sender.edits[1].text)) != previewMaxChunk {
+		t.Fatal("retry failed to show capped preview")
+	}
+	now = now.Add(previewEditInterval)
+	p.addDelta(ctx, "r", strings.Repeat("尾", 300))
+	if len(sender.edits) != 2 {
+		t.Fatal("redundant edit beyond cap")
+	}
+	p.responseStart = previewMaxChunk + 1
+	p.retract(ctx, "r")
+	if len([]rune(sender.edits[2].text)) != previewMaxChunk {
+		t.Fatal("oversized retraction")
 	}
 }

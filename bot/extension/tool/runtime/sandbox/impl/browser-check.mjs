@@ -1,15 +1,19 @@
 // Usage: node --input-type=module -e "${NEKOCODE_BROWSER_CHECK:?Linux sandbox required}" -- URL 'predicate' 'do:action()' 'predicate'
 import { spawn } from 'node:child_process'
+import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { networkInterfaces, tmpdir } from 'node:os'
-import { dirname, extname, join } from 'node:path'
+import { basename, dirname, extname, join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 
 const [address, ...args] = process.argv.slice(1)
 const screenshot = address === '--screenshot'
-const steps = screenshot ? [] : args
+const staticPage = address === '--static'
+const steps = screenshot ? [] : staticPage ? args.slice(1) : args
+const hasAssertion = steps.some(step => step.trim() && !step.startsWith('do:') && !step.startsWith('observe:'))
+const hasObservation = steps.some(step => step.startsWith('observe:') && step.slice(8).trim())
 let url, output, viewport, clip
 if (screenshot) {
   const [input, destination, size = '1024x768', region] = args
@@ -28,17 +32,39 @@ if (screenshot) {
   }
   url = pathToFileURL(await realpath(input))
   output = destination
-} else {
+} else if (!staticPage) {
   url = new URL(address)
-  if (url.protocol !== 'http:' || !['127.0.0.1', '[::1]'].includes(url.hostname) || !steps.some(step => !step.startsWith('do:') && step.trim())) {
-    throw Error('Expected an HTTP loopback URL and at least one page assertion')
+  if (url.protocol !== 'http:' || !['127.0.0.1', '[::1]'].includes(url.hostname) || (!hasAssertion && !hasObservation)) {
+    throw Error('Expected an HTTP loopback URL and at least one page assertion or observation')
   }
 }
 
 const profile = await mkdtemp(join(tmpdir(), 'nekocode-chrome-'))
-let browser
+let browser, server
 let closed
 try {
+  if (staticPage) {
+    if (!args[0] || (!hasAssertion && !hasObservation)) throw Error('Usage: --static ENTRY.html predicate [do:action predicate ...]')
+    const entry = await realpath(args[0])
+    if (!/\.html?$/i.test(entry) || !(await stat(entry)).isFile()) throw Error('Expected a static HTML entry file')
+    const root = dirname(entry)
+    const types = { '.html':'text/html', '.htm':'text/html', '.js':'text/javascript', '.mjs':'text/javascript',
+      '.css':'text/css', '.json':'application/json', '.svg':'image/svg+xml', '.wasm':'application/wasm' }
+    server = createServer(async (req,res) => {
+      try {
+        const name = decodeURIComponent(new URL(req.url,'http://localhost').pathname)
+        const file = await realpath(join(root, name === '/' ? basename(entry) : name))
+        const parts = relative(root,file).split('/')
+        if (req.method !== 'GET' || parts.some(part=>part.startsWith('.')) || !(await stat(file)).isFile()) throw Error()
+        const bytes = await readFile(file)
+        res.writeHead(200, {'Content-Type': types[extname(file).toLowerCase()] || 'application/octet-stream'})
+        res.end(bytes)
+      } catch { res.writeHead(404); res.end() }
+    })
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    url = new URL('/'+encodeURIComponent(basename(entry)), 'http://127.0.0.1:'+server.address().port)
+  }
   // Chrome refuses UID 0 even inside the shell's single-user namespace.
   const mappedRoot = process.platform === 'linux' && process.getuid() === 0 &&
     Object.values(networkInterfaces()).flat().every(address => address.internal) &&
@@ -118,12 +144,20 @@ try {
   }
   for (const [index, step] of steps.entries()) {
     const action = step.startsWith('do:')
-    const expression = action ? step.slice(3) : step
+    const observe = step.startsWith('observe:')
+    const expression = observe ? step.slice(8) : action ? step.slice(3) : step
     const until = Date.now() + 5000
     for (;;) {
       const result = await call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }, sessionId)
       const failure = result.exceptionDetails
       const detail = failure?.exception?.description || failure?.text
+      if (observe) {
+        if (failure || !Object.hasOwn(result.result,'value')) throw Error('Observation ' + (index+1) + ': ' + (detail || 'expected a JSON value'))
+        const value = JSON.stringify(result.result.value)
+        if (value.length > 4096) throw Error('Observation ' + (index+1) + ': select a smaller JSON value (max 4096 characters)')
+        console.log('Observation ' + (index+1) + ': ' + value)
+        break
+      }
       if (action || failure?.exception?.className === 'SyntaxError') {
         if (failure) throw Error('Step ' + (index + 1) + ': ' + detail)
         break
@@ -150,7 +184,7 @@ try {
       await rm(staging, { recursive: true, force: true })
     }
     console.log('Screenshot saved: ' + output)
-  } else {
+  } else if (hasAssertion) {
     console.log('Browser check passed (' + steps.length + ' steps)')
   }
 } catch (err) {
@@ -163,5 +197,7 @@ try {
     await closed
     clearTimeout(timer)
   }
+  server?.close()
+  server?.closeAllConnections()
   await rm(profile, { recursive: true, force: true, maxRetries: 4 })
 }

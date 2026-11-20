@@ -75,6 +75,7 @@ func (r *toolRunner) executeAndFeedback(calls []core.ToolCallItem, textContent s
 
 	msgs := emitResultCallbacks(calls, filtered.Blocked, results, callback)
 	r.addToolResultsAndHints(calls, msgs, filtered.PreToolHints)
+	r.agent.observeShellRetry(results)
 	for _, result := range results {
 		if result.Name == "todo_write" {
 			var err error

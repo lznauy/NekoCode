@@ -182,7 +182,8 @@ func TestConsumeStreamPreservesContentBeforeToolCall(t *testing.T) {
 	if resets != 0 {
 		t.Fatalf("unexpected transport reset: %d", resets)
 	}
-	if got := len(stream.CollectToolCalls()); got != 1 {
+	calls, err := stream.CollectToolCalls()
+	if got := len(calls); err != nil || got != 1 {
 		t.Fatalf("tool calls = %d, want 1", got)
 	}
 }

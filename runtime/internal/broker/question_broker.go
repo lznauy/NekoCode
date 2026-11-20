@@ -66,7 +66,7 @@ func (b *QuestionBroker) RegisterScoped(ownerID, runID core.RunID, req protocol.
 		view: core.QuestionView{
 			ID:         id,
 			SubAgentID: req.SubAgentID,
-			Questions:  cloneQuestions(req.Questions),
+			Questions:  core.CloneQuestions(req.Questions),
 			Status:     core.QuestionPending,
 			CreatedAt:  time.Now(),
 			Source:     b.source,
@@ -79,7 +79,7 @@ func (b *QuestionBroker) RegisterScoped(ownerID, runID core.RunID, req protocol.
 		return nil
 	}
 	b.pending[id] = rec
-	viewCopy := cloneQuestionView(rec.view)
+	viewCopy := rec.view.Clone()
 	b.mu.Unlock()
 
 	b.publish(rec.runID, core.EventQuestionRequested, viewCopy)
@@ -132,7 +132,7 @@ func (b *QuestionBroker) Pending() []core.QuestionView {
 	defer b.mu.Unlock()
 	out := make([]core.QuestionView, 0, len(b.pending))
 	for _, rec := range b.pending {
-		out = append(out, cloneQuestionView(rec.view))
+		out = append(out, rec.view.Clone())
 	}
 	return out
 }
@@ -174,7 +174,7 @@ func (b *QuestionBroker) rejectAll(closeBroker bool, onlyRun core.RunID) {
 func (b *QuestionBroker) publishResolved(records []*questionRecord) {
 	events := make([]core.Event, 0, len(records))
 	for _, rec := range records {
-		events = append(events, core.Event{RunID: rec.runID, Type: core.EventQuestionResolved, Source: b.source, Payload: cloneQuestionView(rec.view)})
+		events = append(events, core.Event{RunID: rec.runID, Type: core.EventQuestionResolved, Source: b.source, Payload: rec.view.Clone()})
 	}
 	b.eventBus.PublishCommitted(events, func() {
 		for _, rec := range records {
@@ -200,11 +200,6 @@ func (b *QuestionBroker) currentRunID() core.RunID {
 		return ""
 	}
 	return b.runID()
-}
-
-func cloneQuestionView(view core.QuestionView) core.QuestionView {
-	view.Questions = cloneQuestions(view.Questions)
-	return view
 }
 
 func cloneQuestionReply(reply protocol.QuestionReply) protocol.QuestionReply {

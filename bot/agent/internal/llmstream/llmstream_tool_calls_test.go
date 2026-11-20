@@ -10,8 +10,8 @@ func TestCollectToolCallsSortsByDeltaIndex(t *testing.T) {
 	stream.TcAccum[1].Args.WriteString(`{"path":"b.go"}`)
 	stream.TcAccum[0].Args.WriteString(`{"path":"a.go"}`)
 
-	calls := stream.CollectToolCalls()
-	if len(calls) != 2 {
+	calls, err := stream.CollectToolCalls()
+	if err != nil || len(calls) != 2 {
 		t.Fatalf("expected 2 calls, got %d", len(calls))
 	}
 	if calls[0].ID != "a" || calls[1].ID != "b" {
@@ -19,7 +19,7 @@ func TestCollectToolCallsSortsByDeltaIndex(t *testing.T) {
 	}
 }
 
-func TestCollectToolCallsSkipsInvalidArgs(t *testing.T) {
+func TestCollectToolCallsRejectsMalformedBatch(t *testing.T) {
 	stream := StreamResult{TcAccum: map[int]*ToolAccum{
 		0: {ID: "bad", Name: "read"},
 		1: {ID: "ok", Name: "read"},
@@ -27,8 +27,8 @@ func TestCollectToolCallsSkipsInvalidArgs(t *testing.T) {
 	stream.TcAccum[0].Args.WriteString(`{`)
 	stream.TcAccum[1].Args.WriteString(`{"path":"a.go"}`)
 
-	calls := stream.CollectToolCalls()
-	if len(calls) != 1 || calls[0].ID != "ok" {
-		t.Fatalf("expected only valid call, got %+v", calls)
+	calls, err := stream.CollectToolCalls()
+	if err == nil || len(calls) != 0 {
+		t.Fatalf("expected malformed batch error, got %+v, %v", calls, err)
 	}
 }

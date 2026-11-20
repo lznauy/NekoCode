@@ -72,7 +72,27 @@ type Manager struct {
 }
 
 // DefaultExportPath is the default context-export destination under ~/.nekocode/exports.
-var DefaultExportPath = filepath.Join(fs.NekocodeDataDir("exports"), "nekocode-context.json")
+// Applications can override it before exporting. An unavailable home leaves
+// it empty until an export can resolve a valid home.
+var DefaultExportPath, _ = userExportPath()
+
+func userExportPath() (string, error) {
+	home, err := fs.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve session export directory: %w", err)
+	}
+	return filepath.Join(home, ".nekocode", "exports", "nekocode-context.json"), nil
+}
+
+func resolveExportPath(path string) (string, error) {
+	if path != "" {
+		return path, nil
+	}
+	if DefaultExportPath != "" {
+		return DefaultExportPath, nil
+	}
+	return userExportPath()
+}
 
 // New creates a manager with a fresh current session.
 func New(cwd string) *Manager {
@@ -114,9 +134,13 @@ func (m *Manager) ClearCurrent() {
 	m.set(nil)
 }
 
-// Save persists snapshot as the current session. A session with no conversation
-// history is removed from disk instead of being written, so empty sessions
-// never show up as invalid records in session lists.
+// IsDraft reports whether this session needs in-memory restoration because it
+// has neither persisted conversation history nor a session goal.
+func (s *Snapshot) IsDraft() bool {
+	return s.Goal == nil && len(s.Transcript) == 0 && len(s.Messages) == 0 && s.TranscriptSeq == 0 && s.TranscriptBase == 0
+}
+
+// Save persists the current session or removes its disposable draft.
 func (m *Manager) Save(sess *Snapshot) error {
 	return m.save(sess, false)
 }
@@ -134,7 +158,7 @@ func (m *Manager) save(sess *Snapshot, keepDraft bool) error {
 	if sess == nil {
 		return fmt.Errorf("session: cannot save nil snapshot")
 	}
-	if len(sess.Transcript) == 0 && len(sess.Messages) == 0 && sess.TranscriptSeq == 0 && sess.TranscriptBase == 0 {
+	if sess.IsDraft() {
 		if err := deleteSnapshot(sess.ID); err != nil {
 			return err
 		}
@@ -148,13 +172,13 @@ func (m *Manager) save(sess *Snapshot, keepDraft bool) error {
 	if err := sess.save(); err != nil {
 		return err
 	}
-	saved := sess
 	if sess.TranscriptLazy {
-		saved = sess.Clone()
+		saved := *sess
 		saved.Transcript = nil
-		saved.TranscriptBase = sess.TranscriptSeq
+		saved.TranscriptBase = saved.TranscriptSeq
+		sess = &saved
 	}
-	m.set(saved)
+	m.set(sess)
 	return nil
 }
 
@@ -223,8 +247,9 @@ func (m *Manager) Delete(id string) error {
 }
 
 func ExportMessages(msgs []types.Message, path string) (string, error) {
-	if path == "" {
-		path = DefaultExportPath
+	path, err := resolveExportPath(path)
+	if err != nil {
+		return "", err
 	}
 	data, err := json.MarshalIndent(msgs, "", "  ")
 	if err != nil {
@@ -234,4 +259,14 @@ func ExportMessages(msgs []types.Message, path string) (string, error) {
 		return "", fmt.Errorf("write file: %w", err)
 	}
 	return path, nil
+}
+
+// CurrentGoal returns an independent copy without cloning conversation history.
+func (m *Manager) CurrentGoal() *Goal {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sess == nil || m.sess.Goal == nil {
+		return nil
+	}
+	return m.sess.Goal.clone()
 }

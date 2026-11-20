@@ -61,9 +61,10 @@ type ServerOptions struct {
 }
 
 type activeTurn struct {
-	runID     controlruntime.RunID
-	cancel    context.CancelFunc
-	cancelled bool
+	runID              controlruntime.RunID
+	cancel             context.CancelFunc
+	cancelled          bool
+	awaitingSettlement bool
 }
 
 // Serve runs an ACP v1 server over the supplied newline-delimited stream.

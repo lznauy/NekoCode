@@ -3,7 +3,10 @@ package llmstream
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"nekocode/bot/calllog"
@@ -129,5 +132,58 @@ func TestCallLLMPreservesReasoningSignature(t *testing.T) {
 	}
 	if result.Reasoning != "inspect first" || result.ReasoningSignature != "sig" {
 		t.Fatalf("reasoning round trip = %+v", result)
+	}
+}
+
+// idleStreamClient keeps a physical request alive until its request context ends.
+type idleStreamClient struct {
+	fakeStreamClient
+	requestDone chan struct{}
+	emitToken   bool
+}
+
+func (c *idleStreamClient) ChatStream(ctx context.Context, _ []types.Message, _ []types.ToolDef) (<-chan types.StreamToken, <-chan error) {
+	tokens := make(chan types.StreamToken, 1)
+	errs := make(chan error, 1)
+	if c.emitToken {
+		tokens <- types.StreamToken{Content: "late"}
+	}
+	go func() {
+		<-ctx.Done()
+		errs <- ctx.Err()
+		close(errs)
+		close(tokens)
+		close(c.requestDone)
+	}()
+	return tokens, errs
+}
+
+func TestAbandoningModelStreamCancelsOnlyCurrentRequest(t *testing.T) {
+	for _, stopped := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stopped=%v", stopped), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				rec := captureRecord(t)
+				client := &idleStreamClient{requestDone: make(chan struct{}), emitToken: stopped}
+				_, err := CallLLM(client, LLMCallOptions{Ctx: ctx, CheckDone: func() bool { return stopped }})
+				if stopped {
+					if !errors.Is(err, context.Canceled) || rec.FailureStage != "cancelled" {
+						t.Fatalf("err=%v stage=%s", err, rec.FailureStage)
+					}
+				} else if err == nil || !strings.Contains(err.Error(), "stream idle timeout") || rec.FailureStage != "stream" {
+					t.Fatalf("err=%v stage=%s", err, rec.FailureStage)
+				}
+				synctest.Wait()
+				select {
+				case <-client.requestDone:
+				default:
+					t.Fatal("abandoned provider request is still running")
+				}
+				if ctx.Err() != nil {
+					t.Fatalf("parent run canceled: %v", ctx.Err())
+				}
+			})
+		})
 	}
 }

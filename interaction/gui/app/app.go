@@ -152,6 +152,12 @@ func compactConfirmArgs(req controlruntime.ConfirmRequest) map[string]any {
 		if replaceAll, ok := req.Args["replaceAll"].(bool); ok {
 			m["replaceAll"] = replaceAll
 		}
+	case "workspace":
+		for _, key := range []string{"path", "access", "requested_path"} {
+			if value, ok := req.Args[key].(string); ok {
+				m[key] = value
+			}
+		}
 	case "write":
 		if p, ok := req.Args["path"].(string); ok {
 			m["path"] = p
@@ -357,7 +363,7 @@ func (a *App) dispatchRuntimeEvent(ev controlruntime.Event) {
 		a.runs++
 		a.start = time.Now()
 		a.mu.Unlock()
-		wailsruntime.EventsEmit(a.ctx, "agent:status", map[string]string{"status": "running"})
+		wailsruntime.EventsEmit(a.ctx, "agent:status", map[string]string{"status": "running", "source": ev.Source.Kind})
 	case controlruntime.EventAssistantDelta:
 		if p, ok := ev.Payload.(controlruntime.DeltaPayload); ok {
 			wailsruntime.EventsEmit(a.ctx, "agent:delta", map[string]any{
@@ -389,9 +395,15 @@ func (a *App) dispatchRuntimeEvent(ev controlruntime.Event) {
 		if p, ok := ev.Payload.(controlruntime.SessionPayload); ok {
 			attachmentDraft := false
 			var messages []controlruntime.DisplayMessage
-			if p.Reason != "rename" {
+			if p.Reason != "rename" && (p.Reason != "delete" || p.CurrentChanged) {
 				attachmentDraft = a.consumeAttachmentDraftSession(p.ID)
-				messages = a.rt.SessionMessages()
+				if !attachmentDraft {
+					var current bool
+					messages, current = a.sessionChangeMessages(p.ID)
+					if !current {
+						return
+					}
+				}
 			}
 			wailsruntime.EventsEmit(a.ctx, "session:changed", map[string]any{
 				"id": p.ID, "messages": messages, "attachmentDraft": attachmentDraft,
@@ -468,7 +480,7 @@ func (a *App) dispatchRuntimeEvent(ev controlruntime.Event) {
 		}
 	case controlruntime.EventRunDone:
 		payload, _ := ev.Payload.(controlruntime.RunResult)
-		a.emitRunDone(payload.Output, "")
+		a.emitRunDone(payload)
 	case controlruntime.EventSystemMessage:
 		// Command output (e.g. /connect, /model) reaches the UI as a
 		// system message so the user sees the command's reply.
@@ -479,9 +491,11 @@ func (a *App) dispatchRuntimeEvent(ev controlruntime.Event) {
 		}
 	case controlruntime.EventRunFailed:
 		payload, _ := ev.Payload.(controlruntime.RunResult)
-		a.emitRunDone(payload.Output, payload.Error)
+		a.emitRunDone(payload)
 	case controlruntime.EventRunCancelled:
-		a.emitRunDone("", "cancelled")
+		payload, _ := ev.Payload.(controlruntime.RunResult)
+		payload.Error = "cancelled"
+		a.emitRunDone(payload)
 	case controlruntime.EventConnectorStatus:
 		if p, ok := ev.Payload.(controlruntime.ConnectorStatusPayload); ok {
 			wailsruntime.EventsEmit(a.ctx, "agent:step", map[string]string{
@@ -493,16 +507,25 @@ func (a *App) dispatchRuntimeEvent(ev controlruntime.Event) {
 	}
 }
 
-func (a *App) emitRunDone(output, errStr string) {
+// A queued change may arrive after a newer session has already been selected.
+// Never publish another session's messages under the older event's identity.
+func (a *App) sessionChangeMessages(id string) ([]controlruntime.DisplayMessage, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.rt.CurrentSessionID() != id {
+		return nil, false
+	}
+	messages := a.rt.SessionMessages()
+	return messages, a.rt.CurrentSessionID() == id
+}
+
+func (a *App) emitRunDone(result controlruntime.RunResult) {
 	wailsruntime.EventsEmit(a.ctx, "agent:delta", map[string]any{
 		"id":    a.runNumber(),
 		"delta": "",
 		"done":  true,
 	})
-	wailsruntime.EventsEmit(a.ctx, "agent:done", map[string]string{
-		"output": output,
-		"error":  errStr,
-	})
+	wailsruntime.EventsEmit(a.ctx, "agent:done", result)
 	wailsruntime.EventsEmit(a.ctx, "agent:status", map[string]string{
 		"status": "idle",
 	})
@@ -668,6 +691,16 @@ func (a *App) NewSession() (controlruntime.SessionMeta, error) {
 }
 
 func (a *App) LoadSession(id string) ([]controlruntime.DisplayMessage, error) {
+	return a.loadSession(id, false)
+}
+
+// SelectSession returns history directly for initial hydration. Switching
+// sessions delivers history through the ordered session:changed event.
+func (a *App) SelectSession(id string) ([]controlruntime.DisplayMessage, error) {
+	return a.loadSession(id, true)
+}
+
+func (a *App) loadSession(id string, eventDriven bool) ([]controlruntime.DisplayMessage, error) {
 	a.attachmentMu.Lock()
 	defer a.attachmentMu.Unlock()
 	if err := a.ensureAttachmentsOpenLocked(); err != nil {
@@ -676,8 +709,14 @@ func (a *App) LoadSession(id string) ([]controlruntime.DisplayMessage, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	if eventDriven && id != "" && id == a.rt.CurrentSessionID() {
+		return a.rt.SessionMessages(), nil
+	}
 	if err := a.rt.ResumeSession(id); err != nil {
 		return nil, err
+	}
+	if eventDriven {
+		return nil, nil
 	}
 	return a.rt.SessionMessages(), nil
 }

@@ -324,3 +324,7 @@ func (a *adapter) ResolveModelProfile(spec controlruntime.ModelSpec) controlrunt
 	}}
 	return viewmodel.ModelProfile(configuration.AllModels()[0])
 }
+
+func (a *adapter) PendingGoalRun(previous string) bool { return a.bot.PendingGoalRun(previous) }
+
+func (a *adapter) ActiveSessionGoal() bool { return a.bot.ActiveSessionGoal() }

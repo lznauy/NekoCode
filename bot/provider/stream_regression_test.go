@@ -115,3 +115,40 @@ func TestStreamCancellationUnblocksProducer(t *testing.T) {
 		}
 	}
 }
+
+func TestAnthropicToolBlocksAndFinishReason(t *testing.T) {
+	events := []string{
+		`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"a","name":"task_list","input":{}}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"b","name":"read","input":{}}}`,
+		`{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}`,
+		`{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\"file\"}"}}`,
+		`{"type":"content_block_stop","index":1}`,
+		`{"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":7}}`,
+		`{"type":"message_stop"}`,
+	}
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, event := range events {
+			fmt.Fprintf(w, "data: %s\n\n", event)
+		}
+	}))
+	defer s.Close()
+	tokens, errs := anthropic.New("k", s.URL, "m").ChatStream(t.Context(), nil, nil)
+	args := map[string]string{}
+	var reason string
+	var usage int
+	for token := range tokens {
+		if delta := token.ToolCallDelta; delta != nil {
+			args[delta.ID] += delta.Arguments
+		}
+		if token.FinishReason != "" {
+			reason = token.FinishReason
+		}
+		if token.Usage != nil {
+			usage = token.Usage.CompletionTokens
+		}
+	}
+	if err := <-errs; err != nil || args["a"] != "{}" || args["b"] != `{"path":"file"}` || reason != "max_tokens" || usage != 7 {
+		t.Fatalf("args=%v reason=%q usage=%d err=%v", args, reason, usage, err)
+	}
+}

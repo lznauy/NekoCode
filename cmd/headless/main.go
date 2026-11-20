@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"nekocode/bot/modelcatalog"
+	utilfs "nekocode/util/fs"
 	"os"
 	"os/signal"
 	"syscall"
@@ -25,6 +26,10 @@ func main() {
 	if !selected {
 		fmt.Fprintln(os.Stderr, "expected headless arguments; use exec for one-shot execution or --headless for a persistent connection")
 		os.Exit(2)
+	}
+	if _, err := utilfs.UserHomeDir(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

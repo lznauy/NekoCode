@@ -14,7 +14,7 @@ import {
   GetConfig,
   GetSkillManagement,
   ListSessions,
-  LoadSession,
+  SelectSession,
   NewSession,
   CurrentModel,
   InteractionMode,
@@ -199,7 +199,7 @@ export function safeNewSession(): Promise<SessionMeta | null> {
 
 export function safeLoadSession(id: string): Promise<DisplayMessage[] | null> {
   try {
-    return LoadSession(id)
+    return SelectSession(id)
   } catch {
     return Promise.resolve(null)
   }

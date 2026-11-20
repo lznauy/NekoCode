@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -29,7 +30,7 @@ func handleRestrictedCommand() {
 	}
 	for _, shell := range []string{"/bin/bash", "/bin/sh", "/usr/bin/bash", "/usr/bin/sh"} {
 		if _, err := os.Stat(shell); err == nil {
-			if err := unix.Exec(shell, []string{shell, "-c", os.Args[2]}, os.Environ()); err == nil {
+			if err := unix.Exec(shell, sandboxShellArgs(shell, os.Args[2]), os.Environ()); err == nil {
 				return
 			}
 		}
@@ -145,4 +146,13 @@ func restrictEgressCommand() error {
 	filters = append(filters, unix.SockFilter{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_ALLOW})
 	program := unix.SockFprog{Len: uint16(len(filters)), Filter: &filters[0]}
 	return unix.Prctl(unix.PR_SET_SECCOMP, unix.SECCOMP_MODE_FILTER, uintptr(unsafe.Pointer(&program)), 0, 0)
+}
+
+func sandboxShellArgs(shell, command string) []string {
+	if filepath.Base(shell) == "bash" {
+		return []string{shell, "-o", "pipefail", "-c", command}
+	}
+	// Some systems expose Bash only as /bin/sh. Probe in a subshell since
+	// older POSIX shells terminate on an unsupported set option.
+	return []string{shell, "-c", "if (set -o pipefail) 2>/dev/null; then set -o pipefail; fi\n" + command}
 }

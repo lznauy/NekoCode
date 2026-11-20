@@ -66,6 +66,7 @@ type SubAgentOutput struct {
 }
 
 type StepEvent struct {
+	GoalProgress       bool         `json:"goal_progress,omitempty"`
 	Evidence           ToolEvidence // Executor-delivery snapshot; final admission belongs to transcript.
 	NonExecution       ToolNonExecution
 	Summary            *RunSummary

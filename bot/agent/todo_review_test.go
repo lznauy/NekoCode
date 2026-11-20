@@ -53,3 +53,19 @@ func TestFinishedWorkerDoesNotPermitUnfinishedChecklistToClose(t *testing.T) {
 		t.Fatal("stale dispatch flag bypassed live idle status")
 	}
 }
+
+func TestGoalHandoffWithOpenTodosReachesGoalReview(t *testing.T) {
+	for _, marker := range []string{"GOAL NEXT", "GOAL REVIEW", "GOAL DONE"} {
+		t.Run(marker, func(t *testing.T) {
+			a := newTestAgent()
+			a.deps.ctxMgr.SetTodos([]protocol.TodoItem{{Content: "Next stage", Status: "pending"}})
+			a.run.todoTouched = true
+			reviewed := false
+			a.life.SetValues(WithGoalReview(t.Context(), func(string) string { reviewed = true; return "" }))
+			a.turnRunner.handleText(&reasoningResult{Action: actionChat, ActionInput: "Phase result\n" + marker}, nil)
+			if reviewed != (marker != "GOAL DONE") {
+				t.Fatalf("goal reviewed=%v", reviewed)
+			}
+		})
+	}
+}

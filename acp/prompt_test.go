@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -69,5 +70,63 @@ func TestPromptPreservesIncompleteEvidenceMetadata(t *testing.T) {
 	}
 	if _, exists := terminalPromptResult("cancelled", controlruntime.RunResult{})["_meta"]; exists {
 		t.Fatal("legacy result gained metadata")
+	}
+}
+
+type delayedSettlementBackend struct {
+	fakeBackend
+	settled bool
+}
+
+func (b *delayedSettlementBackend) WaitRun(ctx context.Context, id controlruntime.RunID) error {
+	if !b.settled {
+		return context.DeadlineExceeded
+	}
+	return b.fakeBackend.WaitRun(ctx, id)
+}
+
+func TestPromptRetriesSettlementBeforeAdmittingNextTurn(t *testing.T) {
+	b := &delayedSettlementBackend{fakeBackend: fakeBackend{current: "s", events: make(chan controlruntime.Event, 2)}}
+	s := &server{backend: b, active: make(map[string]*activeTurn), conn: newConnection(&bytes.Buffer{})}
+	req := json.RawMessage(`{"sessionId":"s","prompt":[{"type":"text","text":"run"}]}`)
+	if _, err := s.prompt(t.Context(), req); err == nil || err.Code != -32603 {
+		t.Fatalf("cleanup: %+v", err)
+	}
+	if _, err := s.prompt(t.Context(), req); err == nil || err.Code != -32000 {
+		t.Fatalf("unsettled admission: %+v", err)
+	}
+	b.settled = true
+	if _, err := s.prompt(t.Context(), req); err != nil {
+		t.Fatalf("settled retry: %+v", err)
+	}
+}
+
+type rejectedAdmissionBackend struct{ fakeBackend }
+
+func (b *rejectedAdmissionBackend) StartRun(context.Context, controlruntime.Input) (controlruntime.RunID, error) {
+	return "", context.Canceled
+}
+func TestPromptOnlyCommitsImagesAfterAdmission(t *testing.T) {
+	for _, admitted := range []bool{true, false} {
+		t.Setenv("HOME", t.TempDir())
+		fake := &fakeBackend{current: "s", events: make(chan controlruntime.Event, 2)}
+		var backend Backend = fake
+		if !admitted {
+			backend = &rejectedAdmissionBackend{*fake}
+		}
+		s := &server{backend: backend, active: make(map[string]*activeTurn), conn: newConnection(&bytes.Buffer{})}
+		if _, err := s.prompt(t.Context(), json.RawMessage(`{"sessionId":"s","prompt":[{"type":"image","data":"iVBORw0KGgo="}]}`)); err != nil {
+			t.Fatal(err)
+		}
+		if !admitted {
+			requireNoDraftImages(t, "s")
+			continue
+		}
+		if len(fake.input.Images) != 1 {
+			t.Fatalf("missing image: %+v", fake.input)
+		}
+		if _, err := os.Stat(fake.input.Images[0].Path); err != nil {
+			t.Fatalf("admitted image: %v", err)
+		}
 	}
 }

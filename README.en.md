@@ -166,6 +166,8 @@ nekocode-tui
 
 After configuration, start the TUI and enter a request. Common commands: `/plan <task>` to review an approach, `/tasks` to inspect subtasks, `/compact` to compact context, `/rewind` to restore file changes, `/sessions` to resume a session, and `/context` to inspect context and cache usage.
 
+In standard mode, start a session goal with `/goal Make the first search faster`. Use `/goal` to inspect it. Use `/goal confirm` to adopt a proposed criterion. Goals await your review by default. Use `/goal accept` to accept the result, `/goal refine <criterion>` to clarify it, `/goal check <command>` to accept a verified zero exit, or `/goal delegate` to delegate acceptance to the model. Each start or resume allows up to three automatic continuations. Manage the goal with `/goal pause`, `/goal resume`, and `/goal clear`.
+
 ### Use as an ACP agent
 
 NekoCode supports the stable Agent Client Protocol v1. Configure your editor to launch it with the project directory as its working directory:

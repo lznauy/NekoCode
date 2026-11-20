@@ -6,6 +6,7 @@ import (
 	"nekocode/bot/contextmgr"
 	"nekocode/bot/policy/ledger"
 	"nekocode/bot/provider/types"
+	"nekocode/protocol"
 )
 
 func TestManagerSnapshotsAreDetachedAtEveryBoundary(t *testing.T) {
@@ -13,6 +14,7 @@ func TestManagerSnapshotsAreDetachedAtEveryBoundary(t *testing.T) {
 	m := New(t.TempDir())
 	s := m.Current()
 	s.Messages = []types.Message{{Role: "user", Content: "original", ToolCalls: []types.ToolCall{{ID: "call"}}, Images: []types.MessageImage{{Path: "image"}}}}
+	s.Messages[0].ToolEvidence.Executions = []protocol.ExecutionReceipt{{ID: "receipt"}}
 	s.Transcript = s.Messages
 	s.LoadedSkills = []string{"skill"}
 	s.CheckpointTurns = []string{"turn"}
@@ -25,6 +27,7 @@ func TestManagerSnapshotsAreDetachedAtEveryBoundary(t *testing.T) {
 		s.Messages[0].ToolCalls[0].ID = "changed"
 		s.Messages[0].Images[0].Path = "changed"
 		s.Transcript[0].Content = "changed"
+		s.Transcript[0].ToolEvidence.Executions[0].ID = "changed"
 		s.LoadedSkills[0] = "changed"
 		s.CheckpointTurns[0] = "changed"
 		s.PrefixTurn.PeakMiss.Parts[0] = "changed"
@@ -35,6 +38,9 @@ func TestManagerSnapshotsAreDetachedAtEveryBoundary(t *testing.T) {
 	mutate(s)
 	mutate(m.Current())
 	got := m.Current()
+	if got.Transcript[0].ToolEvidence.Executions[0].ID != "receipt" {
+		t.Fatal("shared execution receipt")
+	}
 	if got.Messages[0].ToolCalls[0].ID != "call" || got.Messages[0].Images[0].Path != "image" || got.Transcript[0].Content != "original" || got.LoadedSkills[0] != "skill" || got.CheckpointTurns[0] != "turn" || got.PrefixTurn.PeakMiss.Parts[0] != "system" || got.Ledger.ReadFiles[0] != "read" || got.Ledger.ModifiedFiles[0] != "write" || got.Ledger.BlockedTools[0].Args["nested"].([]any)[0].(map[string]any)["path"] != "original" {
 		t.Fatalf("snapshot alias: %+v", got)
 	}

@@ -22,13 +22,12 @@ func (s *server) prompt(ctx context.Context, params json.RawMessage) (response a
 
 	turnCtx, cancelTurn := context.WithCancel(ctx)
 	turn := &activeTurn{cancel: cancelTurn}
-	s.mu.Lock()
-	if len(s.active) != 0 {
-		s.mu.Unlock()
+	if s.hasActiveTurn() {
 		s.sessionMu.Unlock()
 		cancelTurn()
 		return nil, rpcError(-32000, "another prompt is already running")
 	}
+	s.mu.Lock()
 	s.active[request.SessionID] = turn
 	s.mu.Unlock()
 	var startedRun controlruntime.RunID
@@ -39,6 +38,9 @@ func (s *server) prompt(ctx context.Context, params json.RawMessage) (response a
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 			if err := s.cancelAndWait(ctx, startedRun); err != nil {
+				s.mu.Lock()
+				turn.awaitingSettlement = true
+				s.mu.Unlock()
 				failure = backendError("settle prompt", errors.Join(err, wireFailure(failure)))
 				response = nil
 				return
@@ -66,6 +68,12 @@ func (s *server) prompt(ctx context.Context, params json.RawMessage) (response a
 		s.sessionMu.Unlock()
 		return nil, rpcErr
 	}
+	// The runtime owns these files only once it has admitted the turn.
+	defer func() {
+		if startedRun == "" {
+			discardPromptImages(images)
+		}
+	}()
 	if s.activeMCPSession != request.SessionID {
 		if err := s.backend.ReplaceMCPServers(turnCtx, mcpSource, cloneMCPServerSpecs(s.sessionMCPConfigs[request.SessionID])); err != nil {
 			s.sessionMu.Unlock()

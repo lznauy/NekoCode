@@ -31,7 +31,7 @@ func TestForkCopiesCompactedHistoryAndOwnedAttachments(t *testing.T) {
 		}
 	}
 	source.Transcript = []types.Message{{Role: "user", Content: "old question", Images: []types.MessageImage{{Path: image, MIME: "image/png"}}}, {Role: "tool", Content: "output " + artifact, DeferredContent: artifact, ToolOutput: protocol.ToolOutputArtifact{Path: artifact}}, {Role: "assistant", Content: "answer"}}
-	source.Messages = cloneMessages(source.Transcript[1:])
+	source.Messages = types.CloneMessages(source.Transcript[1:])
 	source.Archive = "earlier compacted context: " + artifact
 	source.Memory = "attached image " + image
 	source.CompactCount = 1
@@ -110,7 +110,7 @@ func TestForkRejectsEmptyAndCancelled(t *testing.T) {
 		t.Fatal("forked empty session")
 	}
 	s.Messages = []types.Message{{Role: "user", Content: "hello"}}
-	s.Transcript = cloneMessages(s.Messages)
+	s.Transcript = types.CloneMessages(s.Messages)
 	if e := m.Save(s); e != nil {
 		t.Fatal(e)
 	}
@@ -140,7 +140,7 @@ func TestForkAttachmentFailureLeavesSourceAndCleansPartialCopy(t *testing.T) {
 		t.Skip(e)
 	}
 	s.Messages = []types.Message{{Role: "user", Content: "question", Images: []types.MessageImage{{Path: path}}}}
-	s.Transcript = cloneMessages(s.Messages)
+	s.Transcript = types.CloneMessages(s.Messages)
 	if e := m.Save(s); e != nil {
 		t.Fatal(e)
 	}
@@ -170,7 +170,7 @@ func TestForkFromLazyCompactedSessionPreservesFullHistory(t *testing.T) {
 	for i := 0; i < 1000; i++ {
 		s.Transcript = append(s.Transcript, types.Message{Role: "user", Content: strings.Repeat("history ", 10)})
 	}
-	s.Messages = cloneMessages(s.Transcript[990:])
+	s.Messages = types.CloneMessages(s.Transcript[990:])
 	s.Archive = "compacted earlier 990 messages"
 	if e := m.Save(s); e != nil {
 		t.Fatal(e)

@@ -47,6 +47,9 @@ func (b *Bot) initSession() {
 }
 
 func (b *Bot) registerSessionCommands(p *command.Parser) {
+	p.RegisterInfo("goal", "Manage a persistent session goal", func(_ context.Context, _ *command.Command) (string, bool) {
+		return goalStatus(b.sess.CurrentGoal()), true
+	})
 	p.RegisterInfo("fork", "Fork the current conversation into a new session", func(ctx context.Context, cmd *command.Command) (string, bool) {
 		if len(cmd.Args) != 0 {
 			return "Usage: /fork", true
@@ -77,7 +80,7 @@ func (b *Bot) registerSessionCommands(p *command.Parser) {
 			return "Export cancelled: " + err.Error(), true
 		}
 		base, tail, _ := b.ctxMgr.TranscriptTail()
-		path, count, err := b.sess.ExportHistory(base, tail, session.DefaultExportPath)
+		path, count, err := b.sess.ExportHistory(base, tail, "")
 		if err != nil {
 			return fmt.Sprintf("Failed to %v", err), true
 		}
@@ -106,7 +109,10 @@ func (b *Bot) registerSessionCommands(p *command.Parser) {
 }
 
 func (b *Bot) saveSession() error {
-	snapshot := b.captureCurrentSession()
+	return b.persistSession(b.captureCurrentSession())
+}
+
+func (b *Bot) persistSession(snapshot *session.Snapshot) error {
 	snapshot.TranscriptLazy = true
 	if err := b.sess.SavePreservingDraft(snapshot); err != nil {
 		return protocol.MarkEvidenceIncomplete(err)
@@ -147,7 +153,7 @@ func (b *Bot) CaptureSessionDraft() (func() error, error) {
 	b.historyMu.Lock()
 	defer b.historyMu.Unlock()
 	snapshot := b.captureCurrentSession()
-	if len(snapshot.Messages) > 0 || len(snapshot.Transcript) > 0 || snapshot.TranscriptSeq > 0 || snapshot.TranscriptBase > 0 {
+	if !snapshot.IsDraft() {
 		return nil, nil
 	}
 	return func() error {

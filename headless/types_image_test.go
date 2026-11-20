@@ -2,6 +2,8 @@ package headless
 
 import (
 	"encoding/json"
+	rt "nekocode/runtime"
+	"strings"
 	"testing"
 )
 
@@ -76,5 +78,21 @@ func TestResolveWithinCWD(t *testing.T) {
 		if _, err := resolveWithinCWD(base, path); err == nil {
 			t.Fatalf("%s: path %q must be rejected", name, path)
 		}
+	}
+}
+
+func TestImagePathCountsAgainstQueueBudget(t *testing.T) {
+	path := strings.Repeat("a", 512)
+	f := mustFrame(t, `[{"type":"image","path":"`+path+`"}]`)
+	input, err := f.user()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := input.queuedBytes(), len(input.id)+len(input.text)+len(input.images[0].Label)+len(path); got != want {
+		t.Fatalf("bytes=%d want=%d", got, want)
+	}
+	blocks := strings.Repeat(`{"type":"image","path":"img"},`, rt.MaxImageAttachments) + `{"type":"image","path":"img"}`
+	if _, err := mustFrame(t, "["+blocks+"]").user(); err == nil {
+		t.Fatal("accepted too many images")
 	}
 }

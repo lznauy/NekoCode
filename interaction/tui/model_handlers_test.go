@@ -947,3 +947,45 @@ func TestOversizedUncommittedTurnDoesNotDonateTelemetry(t *testing.T) {
 		t.Fatal("oversized uncommitted turn donated usage to old answer")
 	}
 }
+
+func TestTerminalRunShowsIncompleteEvidence(t *testing.T) {
+	for _, typ := range []controlruntime.EventType{controlruntime.EventRunDone, controlruntime.EventRunCancelled, controlruntime.EventRunFailed} {
+		t.Run(string(typ), func(t *testing.T) {
+			m, err := NewModel(&statusFakeBot{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.handleRuntimeEvent(controlruntime.Event{Type: controlruntime.EventRunStarted})
+			m.handleRuntimeEvent(controlruntime.Event{Type: typ, Payload: controlruntime.RunResult{EvidenceIncomplete: true}})
+			for _, item := range m.Messages.Items() {
+				if strings.Contains(ansi.Strip(item.Render(120)), "部分操作无法核验") {
+					return
+				}
+			}
+			t.Fatal("evidence warning missing")
+		})
+	}
+}
+
+func TestIdleEditorHandlesGraphemesAndShortRows(t *testing.T) {
+	m, err := NewModel(&tickFakeBot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Input.SetWidth(40)
+	m.Input.SetValue("ab👩‍💻\nx\nabcdef")
+	m.Input.SetCursorEnd()
+	key := func(code rune) { m.handleKeyPress(tea.KeyPressMsg{Code: code}) }
+	key(tea.KeyLeft)
+	key(tea.KeyUp)
+	key(tea.KeyUp)
+	key(tea.KeyBackspace)
+	if got := m.Input.Value(); got != "ab\nx\nabcdef" {
+		t.Fatalf("edited draft=%q", got)
+	}
+	key(tea.KeyLeft)
+	key(tea.KeyDelete)
+	if got := m.Input.Value(); got != "a\nx\nabcdef" {
+		t.Fatalf("forward delete removed adjacent newline: %q", got)
+	}
+}

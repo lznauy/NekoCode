@@ -78,7 +78,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyPressMsg:
-		if m.sessionName != nil && m.state == stateReady {
+		if m.sessionNameFocused() {
 			return m, m.handleSessionNameKey(msg)
 		}
 		if m.state == stateConfirming {
@@ -106,7 +106,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case cursor.BlinkMsg:
-		if m.sessionName != nil && m.state == stateReady {
+		if m.sessionNameFocused() {
 			var cmd tea.Cmd
 			m.sessionName.input, cmd = m.sessionName.input.Update(msg)
 			return m, cmd
@@ -116,7 +116,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.PasteMsg:
-		if m.sessionName != nil && m.state == stateReady {
+		if m.sessionNameFocused() {
 			return m, m.sessionName.updateInput(msg)
 		}
 		if m.state == stateQuestioning {

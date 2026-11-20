@@ -80,7 +80,7 @@ func (m *Model) View() tea.View {
 
 	parts = append(parts, historyHint)
 	parts = append(parts, m.Input.View())
-	if m.sessionName != nil && m.state == stateReady {
+	if m.sessionNameFocused() {
 		parts = append(parts, m.Suggestions.ViewWithFooter(m.Width, m.sessionName.view(m.Width)))
 	} else if sug := m.Suggestions.View(m.Width); sug != "" {
 		parts = append(parts, sug)
@@ -124,7 +124,7 @@ func (m *Model) View() tea.View {
 			}
 		}
 	}
-	if m.sessionName != nil && m.state == stateReady {
+	if m.sessionNameFocused() {
 		c = nil
 	}
 	v.Cursor = c

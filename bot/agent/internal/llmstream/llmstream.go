@@ -2,6 +2,7 @@ package llmstream
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -14,6 +15,8 @@ import (
 	"nekocode/logger"
 	"nekocode/util/modelbudget"
 )
+
+var ErrIncompleteResponse = errors.New("model response incomplete")
 
 // StreamCallbacks holds per-token callbacks for ConsumeStream.
 type StreamCallbacks struct {
@@ -28,6 +31,8 @@ type StreamCallbacks struct {
 
 // StreamResult accumulates the output of consuming a ChatStream.
 type StreamResult struct {
+	finishReason       string
+	refused            bool
 	TextBuf            strings.Builder
 	ReasoningBuf       strings.Builder
 	ReasoningSignature string
@@ -78,7 +83,9 @@ func CallLLM(client provider.LLM, opts LLMCallOptions) (*LLMCallResult, error) {
 	}
 
 	start := time.Now()
-	tokenCh, errCh := provider.ChatStream(client, opts.Ctx, opts.Messages, opts.ToolDefs, opts.Request)
+	requestCtx, cancel := context.WithCancel(opts.Ctx)
+	defer cancel()
+	tokenCh, errCh := provider.ChatStream(client, requestCtx, opts.Messages, opts.ToolDefs, opts.Request)
 	if tokenCh == nil {
 		err := fmt.Errorf("chat stream failed")
 		select {
@@ -95,24 +102,39 @@ func CallLLM(client provider.LLM, opts LLMCallOptions) (*LLMCallResult, error) {
 	err := func() error {
 		if err := ConsumeStream(tokenCh, &stream, opts.Callbacks, opts.CheckDone); err != nil {
 			failureStage = "stream"
-			go func() { <-errCh }()
+			if errors.Is(err, context.Canceled) {
+				failureStage = "cancelled"
+			}
 			return err
 		}
 
 		if opts.CheckDone != nil && opts.CheckDone() {
 			failureStage = "cancelled"
-			go func() { <-errCh }()
 			return context.Canceled
 		}
 
-		return <-errCh
+		if err := <-errCh; err != nil {
+			return err
+		}
+		if stream.refused {
+			return fmt.Errorf("%w: provider returned a refusal", ErrIncompleteResponse)
+		}
+		switch stream.finishReason {
+		case "length", "max_tokens", "model_context_window_exceeded":
+			return fmt.Errorf("%w: provider output token limit reached", ErrIncompleteResponse)
+		case "content_filter", "refusal":
+			return fmt.Errorf("%w: provider stopped generation (%s)", ErrIncompleteResponse, stream.finishReason)
+		}
+		return nil
 	}()
 	// Preserve partial output so a replacement attempt can retract its preview.
 	result := &LLMCallResult{
 		Text:               ansiRegex.ReplaceAllString(stream.TextBuf.String(), ""),
 		Reasoning:          stream.ReasoningBuf.String(),
 		ReasoningSignature: stream.ReasoningSignature,
-		ToolCalls:          stream.CollectToolCalls(),
+	}
+	if err == nil {
+		result.ToolCalls, err = stream.CollectToolCalls()
 	}
 	if opts.Callbacks.OnUsage != nil && stream.Usage.HasTokens() {
 		opts.Callbacks.OnUsage(stream.Usage)
@@ -173,6 +195,9 @@ func CallLLMWithRetry(ctx context.Context, client provider.LLM, buildOptions fun
 		disabled := true
 		retryOpts.Request.DisableThinking = &disabled
 		retry, retryErr := CallLLM(client, retryOpts)
+		if errors.Is(retryErr, ErrIncompleteResponse) {
+			return retry, retryErr
+		}
 		if retryErr == nil && retry != nil {
 			return retry, nil
 		}

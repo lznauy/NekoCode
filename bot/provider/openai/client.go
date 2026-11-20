@@ -23,6 +23,7 @@ type streamChunk struct {
 }
 
 type delta struct {
+	Refusal          string           `json:"refusal"`
 	Content          string           `json:"content"`
 	ReasoningContent string           `json:"reasoning_content"`
 	ToolCalls        []types.ToolCall `json:"tool_calls,omitempty"`
@@ -192,8 +193,9 @@ func (c *Client) chatStream(ctx context.Context, messages []types.Message, tools
 				ReasoningContent: delta.ReasoningContent,
 				Usage:            chunk.Usage,
 				FinishReason:     chunk.Choices[0].FinishReason,
+				Refused:          delta.Refusal != "",
 			}
-			if token.Content != "" || token.ReasoningContent != "" || token.Usage != nil || token.FinishReason != "" {
+			if token.Content != "" || token.ReasoningContent != "" || token.Usage != nil || token.FinishReason != "" || token.Refused {
 				if err := types.SendStreamToken(ctx, tokenCh, token); err != nil {
 					return err
 				}

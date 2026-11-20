@@ -30,7 +30,7 @@ def command(case, workspace=None, staging=None, events=None, original_workspace=
             "--new-session", "--cap-drop", "ALL", "--clearenv", "--setenv", "HOME", "/home/verify",
             "--setenv", "LANG", "C.UTF-8", "--setenv", "TMPDIR", "/tmp", "--proc", "/proc", "--dev", "/dev",
             "--tmpfs", "/tmp", "--dir", "/home/verify", "--dir", "/tools", "--setenv", "PATH", "/tools:/usr/bin:/bin"]
-    browser = case["manifest"]["id"] in ("snake", "pelican-bicycle")
+    browser = case["manifest"]["id"] in ("snake", "pelican-bicycle", "goal-night-shift")
     tools = {"python3": python, "python": python}
     if shell := shutil.which("sh"):
         tools["sh"] = Path(shell).resolve()
@@ -71,7 +71,8 @@ def command(case, workspace=None, staging=None, events=None, original_workspace=
     verifier = case["paths"]["verifier"]
     args.extend(["--ro-bind", str(verifier.parent.resolve()), "/case",
                  "--ro-bind", str(workspace), "/workspace", "--bind", str(staging), "/output"])
-    if events is not None and "multi-agent-writing" in case["manifest"]["tags"]:
+    include_events = events is not None and bool({"multi-agent-writing", "session-goal"}.intersection(case["manifest"]["tags"]))
+    if include_events:
         if Path(events).is_file():
             args.extend(["--ro-bind", str(Path(events).resolve()), "/events.jsonl"])
     args += ["--chdir", "/output", "--", "/tools/python3", "-I"]
@@ -84,7 +85,7 @@ def command(case, workspace=None, staging=None, events=None, original_workspace=
                  "ignore=shutil.ignore_patterns('.git','__pycache__')); os.execv(sys.executable,"
                  "[sys.executable,'-I',*sys.argv[1:]])"]
     args += ["/case/" + verifier.name, product, "/output"]
-    if events is not None and "multi-agent-writing" in case["manifest"]["tags"]:
+    if include_events:
         args.extend(["/events.jsonl", str(original_workspace or workspace)])
     return args
 

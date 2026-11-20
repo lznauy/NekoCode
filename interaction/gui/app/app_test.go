@@ -349,3 +349,45 @@ func TestExtensionMutationsSurfaceErrors(t *testing.T) {
 		t.Fatal("failed refresh returned an apparently valid empty extension list")
 	}
 }
+
+func TestWorkspaceApprovalIncludesRequestedAccess(t *testing.T) {
+	args := compactConfirmArgs(controlruntime.ConfirmRequest{ToolName: "workspace", Args: map[string]any{"path": "/example", "access": "read", "requested_path": "/example/a"}})
+	if args["access"] != "read" || args["requested_path"] != "/example/a" || args["path"] != "/example" {
+		t.Fatalf("workspace approval fields: %+v", args)
+	}
+}
+
+func TestSelectSessionHydrationAndEventOwnedHistory(t *testing.T) {
+	current := "first"
+	reads, resumes := 0, 0
+	runner := &imageSessionRunner{}
+	rt := controlruntime.New(runner, controlruntime.ServiceGroups{Sessions: controlruntime.SessionsServices{
+		ListSessions:     runner.ListSessions,
+		CurrentSessionID: func() string { return current },
+		ResumeSession:    func(id string) error { current = id; resumes++; return nil },
+		SessionMessages: func() []controlruntime.DisplayMessage {
+			reads++
+			return []controlruntime.DisplayMessage{{Content: current}}
+		},
+	}})
+	defer rt.Close()
+	a := &App{ctx: t.Context(), rt: rt}
+	history, err := a.SelectSession("first")
+	if err != nil || len(history) != 1 || resumes != 0 || reads != 1 {
+		t.Fatalf("hydrate: %v %v reads=%d resumes=%d", history, err, reads, resumes)
+	}
+	history, err = a.SelectSession("second")
+	if err != nil || history != nil || current != "second" || resumes != 1 || reads != 1 {
+		t.Fatalf("switch: %v %v reads=%d resumes=%d", history, err, reads, resumes)
+	}
+	if snapshot, current := a.sessionChangeMessages("first"); current || snapshot != nil || reads != 1 {
+		t.Fatalf("stale event: %v current=%v reads=%d", snapshot, current, reads)
+	}
+	if snapshot, current := a.sessionChangeMessages("second"); !current || len(snapshot) != 1 || reads != 2 {
+		t.Fatalf("committed event: %v current=%v reads=%d", snapshot, current, reads)
+	}
+	history, err = a.LoadSession("second")
+	if err != nil || len(history) != 1 || reads != 3 {
+		t.Fatalf("snapshot RPC: %v %v reads=%d", history, err, reads)
+	}
+}

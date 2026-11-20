@@ -5,6 +5,7 @@ import (
 	"embed"
 	"log"
 	"nekocode/bot/modelcatalog"
+	utilfs "nekocode/util/fs"
 
 	"nekocode/interaction/gui/app"
 	controlruntime "nekocode/runtime"
@@ -123,6 +124,10 @@ func (a *App) LoadSession(id string) ([]controlruntime.DisplayMessage, error) {
 	return a.impl.LoadSession(id)
 }
 
+func (a *App) SelectSession(id string) ([]controlruntime.DisplayMessage, error) {
+	return a.impl.SelectSession(id)
+}
+
 func (a *App) DeleteSession(id string) error {
 	return a.impl.DeleteSession(id)
 }
@@ -144,6 +149,9 @@ func (a *App) ReplyQuestion(id string, answersJSON string, rejected bool) error 
 }
 
 func main() {
+	if _, err := utilfs.UserHomeDir(); err != nil {
+		log.Fatal(err)
+	}
 	catalogCtx, cancelCatalog := context.WithCancel(context.Background())
 	defer cancelCatalog()
 	modelcatalog.RefreshInBackground(catalogCtx)

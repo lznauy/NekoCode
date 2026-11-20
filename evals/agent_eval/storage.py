@@ -9,7 +9,7 @@ import uuid
 
 # Bump when execution, delivery scoring or cost accounting semantics change.
 # Source fingerprints remain provenance, including presentation-only edits.
-EVALUATION_CONTRACT_VERSION = 4
+EVALUATION_CONTRACT_VERSION = 5
 
 
 def digest(value):

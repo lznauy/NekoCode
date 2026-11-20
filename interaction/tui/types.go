@@ -15,9 +15,10 @@ const (
 )
 
 type doneMsg struct {
-	content string
-	metrics controlruntime.MetricsSnapshot
-	err     error
+	evidenceIncomplete bool
+	content            string
+	metrics            controlruntime.MetricsSnapshot
+	err                error
 }
 
 type runtimeEventMsg struct {

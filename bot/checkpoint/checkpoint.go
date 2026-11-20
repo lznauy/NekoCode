@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -146,6 +147,28 @@ func (m *Manager) Activate(session string, turns []string, next int) {
 	}
 	m.turns[session] = m.existingTurns(session, cleaned)
 	m.next[session] = next
+	// The turn manifest and workspace edits may have reached disk before the
+	// session saved its next-turn counter. Recover only authenticated anchors.
+	entries, err := os.ReadDir(filepath.Join(m.root, session))
+	if err != nil {
+		return
+	}
+	var recovered []int
+	for _, e := range entries {
+		n, err := strconv.Atoi(e.Name())
+		if err != nil || !e.IsDir() || n <= next || strconv.Itoa(n) != e.Name() {
+			continue
+		}
+		m.next[session] = max(m.next[session], n)
+		mf, err := m.readManifest(m.turnDir(session, e.Name()))
+		if err == nil && validateManifest(mf, session, e.Name()) == nil {
+			recovered = append(recovered, n)
+		}
+	}
+	sort.Ints(recovered)
+	for _, n := range recovered {
+		m.turns[session] = append(m.turns[session], strconv.Itoa(n))
+	}
 }
 
 // Begin starts a checkpoint without message metadata. It is retained for
@@ -172,26 +195,33 @@ func (m *Manager) beginMessage(session, userMessage string) (string, error) {
 	if m.activeSession != "" || m.active.Turn != "" {
 		return "", fmt.Errorf("checkpoint: turn %s is still active for session %s", m.active.Turn, m.activeSession)
 	}
-	m.next[session]++
-	turn := strconv.Itoa(m.next[session])
-	dir := m.turnDir(session, turn)
 	if err := secureDir(m.root); err != nil {
-		m.next[session]--
 		return "", fmt.Errorf("checkpoint: secure root: %w", err)
 	}
-	if err := secureDir(filepath.Join(m.root, session)); err != nil {
-		m.next[session]--
+	sessionDir := filepath.Join(m.root, session)
+	if err := secureDir(sessionDir); err != nil {
 		return "", fmt.Errorf("checkpoint: secure session: %w", err)
 	}
-	if err := secureDir(dir); err != nil {
-		m.next[session]--
-		return "", fmt.Errorf("checkpoint: create turn: %w", err)
+	if m.next[session] == math.MaxInt {
+		return "", fmt.Errorf("checkpoint: turn numbers exhausted")
+	}
+	number := m.next[session] + 1
+	turn := strconv.Itoa(number)
+	dir := m.turnDir(session, turn)
+	// A second manager may reserve the same number after activation.
+	// Never replace an existing anchor or an interrupted creation.
+	if err := os.Mkdir(dir, 0700); err != nil {
+		return "", fmt.Errorf("checkpoint: reserve turn %s: %w", turn, err)
 	}
 	next := manifest{Session: session, Turn: turn, UserMessage: messagePreview(userMessage), CreatedAt: time.Now()}
 	if err := m.writeManifest(dir, next); err != nil {
-		m.next[session]--
+		_ = os.Remove(dir) // only removes a still-empty reservation
 		return "", fmt.Errorf("checkpoint: write turn: %w", err)
 	}
+	if err := syncPath(sessionDir); err != nil {
+		return "", fmt.Errorf("checkpoint: persist turn directory: %w", err)
+	}
+	m.next[session] = number
 	m.activeSession = session
 	m.active = next
 	m.inFlight = make(map[string]int)

@@ -3,11 +3,15 @@ package agent
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"nekocode/bot/contextmgr"
 	"nekocode/bot/policy"
+	"nekocode/bot/provider/openai"
 	"nekocode/bot/provider/types"
 	"nekocode/bot/reasoning"
 )
@@ -532,5 +536,55 @@ func TestSteeringDuringPreModelDoesNotBecomeGuardRejection(t *testing.T) {
 	next := a.modelRunner.reason("updated task")
 	if next.Interrupted || next.IsError || next.ActionInput != "continued" || llm.calls != 1 {
 		t.Fatalf("resume failed: %+v calls=%d", next, llm.calls)
+	}
+}
+
+func TestTokenLimitIsIncompleteRun(t *testing.T) {
+	for _, reason := range []string{"length", "max_tokens"} {
+		a, llm := newTestAgentWithLLM(types.StreamToken{Content: "partial answer"}, types.StreamToken{FinishReason: reason})
+		result := a.loopRunner.runContext(t.Context(), "write a report", nil, nil)
+		if result.Error == nil || result.StopReason != "incomplete" || result.FinalOutput != "" || llm.calls != 1 {
+			t.Fatalf("reason=%s result=%+v calls=%d", reason, result, llm.calls)
+		}
+	}
+}
+
+func TestFilteredOrMalformedToolReplyCannotComplete(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		token types.StreamToken
+	}{
+		{"filtered", types.StreamToken{FinishReason: "content_filter"}},
+		{"invalid JSON", types.StreamToken{ToolCallDelta: &types.ToolCallDelta{Index: 0, ID: "r", Name: "read", Arguments: "{"}}},
+		{"null arguments", types.StreamToken{ToolCallDelta: &types.ToolCallDelta{Index: 0, ID: "r", Name: "read", Arguments: "null"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, llm := newTestAgentWithLLM(types.StreamToken{Content: "I will check."}, tc.token)
+			result := a.loopRunner.runContext(t.Context(), "check that", nil, nil)
+			if result.Error == nil || result.FinalOutput != "" || result.StopReason != "incomplete" || llm.calls != 1 {
+				t.Fatalf("reply=%+v calls=%d", result, llm.calls)
+			}
+		})
+	}
+}
+
+func TestOpenAIRefusalDeltaWithNormalStopIsIncomplete(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		io.WriteString(w, `data: {"choices":[{"delta":{"content":"I will check."}}]}
+
+data: {"choices":[{"delta":{"refusal":"I cannot fulfill that request."}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+`)
+	}))
+	defer server.Close()
+	a := newTestAgent()
+	a.deps.llmClient = openai.New("", server.URL, "local-test-model")
+	result := a.loopRunner.runContext(t.Context(), "review the request", nil, nil)
+	if result.StopReason != "incomplete" || result.FinalOutput != "" || result.Error == nil || !strings.Contains(result.Error.Error(), "refusal") {
+		t.Fatalf("provider refusal reported as answer: %+v", result)
 	}
 }

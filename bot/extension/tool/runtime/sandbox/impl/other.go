@@ -59,7 +59,7 @@ func Run(ctx context.Context, command string, profile Profile, timeout time.Dura
 	// timeout enforcement is not applied on these platforms. Long-running
 	// commands rely on the caller's context cancellation. Native timeout/kill
 	// is available on Linux via the namespace and Landlock backends.
-	cmd := tbsb.Command("bash", "-c", command)
+	cmd := tbsb.Command("bash", "-o", "pipefail", "-c", command)
 	cmd.Dir = ws
 	cmd.Policy.WritableDirs = writable
 

@@ -138,7 +138,7 @@ func (r *Runtime) StartRunInSession(ctx context.Context, sessionID string, input
 		fallback, restoreErr := restore()
 		return fallback, errors.Join(captureErr, restoreErr)
 	}
-	runID, err := r.startRunLocked(context.WithValue(ctx, sessionRunKey{}, true), input, finish)
+	runID, err := r.startRunLocked(context.WithValue(ctx, sessionRunKey{}, true), input, finish, "")
 	if err != nil && previousSessionID != selectedSessionID {
 		_, recoveryErr := restore()
 		err = errors.Join(err, recoveryErr)

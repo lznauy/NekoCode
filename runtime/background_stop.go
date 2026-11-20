@@ -82,7 +82,9 @@ func (r *Runtime) StopBackgroundTasks(ctx context.Context, sessionID string) err
 		task := &state.Tasks[i]
 		if pendingBackgroundStatus(task.Status) {
 			stopped++
-		} else if !task.Notified && task.Delivery != "delivered" && task.Delivery != "stopped" {
+		} else if task.Notified || task.Delivery == "delivered" || task.Delivery == "stopped" {
+			continue
+		} else {
 			suppressed++
 		}
 		task.Notified, task.Delivery = true, "stopped"

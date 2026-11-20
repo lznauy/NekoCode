@@ -739,3 +739,36 @@ func parseDocumentedRoutes(doc string) map[string]bool {
 	}
 	return out
 }
+
+type sseSubscriptionProbe struct {
+	*fakeRuntime
+	filter   controlruntime.EventFilter
+	replayed bool
+}
+
+func (p *sseSubscriptionProbe) Events(_ context.Context, filter controlruntime.EventFilter) (<-chan controlruntime.Event, error) {
+	p.filter = filter
+	out := make(chan controlruntime.Event)
+	close(out)
+	return out, nil
+}
+
+func (p *sseSubscriptionProbe) ReplayEvents(ctx context.Context, filter controlruntime.EventFilter) (<-chan controlruntime.Event, error) {
+	p.replayed = true
+	return p.Events(ctx, filter)
+}
+
+func TestSSEUsesReliableSubscriptionAndClientCursor(t *testing.T) {
+	for _, tc := range []struct {
+		cursor   string
+		sequence uint64
+	}{{"", 0}, {"evt_12", 12}} {
+		p := &sseSubscriptionProbe{fakeRuntime: newFakeRuntime()}
+		req := httptest.NewRequest(http.MethodGet, "/events", nil)
+		req.Header.Set("Last-Event-ID", tc.cursor)
+		New(p).Handler().ServeHTTP(httptest.NewRecorder(), req)
+		if !p.filter.Reliable || p.filter.After != tc.sequence || p.replayed != (tc.sequence > 0) {
+			t.Fatalf("cursor=%q replay=%v filter=%+v", tc.cursor, p.replayed, p.filter)
+		}
+	}
+}

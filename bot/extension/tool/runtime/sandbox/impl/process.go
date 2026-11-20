@@ -155,5 +155,5 @@ func StartHost(ctx context.Context, command string) (*Process, error) {
 // StartHostIn executes in an explicitly owned workspace without process chdir.
 func StartHostIn(ctx context.Context, command, dir string) (*Process, error) {
 	sysproc := hostProcessAttributes()
-	return startCommand(ctx, "bash", []string{"-c", command}, nil, dir, sysproc, nil)
+	return startCommand(ctx, "bash", []string{"-o", "pipefail", "-c", command}, nil, dir, sysproc, nil)
 }

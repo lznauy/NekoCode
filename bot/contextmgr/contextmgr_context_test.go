@@ -329,3 +329,47 @@ func TestTokenUsage(t *testing.T) {
 		t.Errorf("budget = %d, want 10000", budget)
 	}
 }
+
+func TestRepeatedToolIDCanOnlyPairWithinItsExchange(t *testing.T) {
+	m := newContextManager()
+	call := types.Message{ToolCalls: []types.ToolCall{{ID: "call_0"}}}
+	m.Add("user", "first")
+	m.AddAssistant(call)
+	m.AddToolResultsBatch([]ToolResultMsg{{Message: types.Message{ToolCallID: "call_0", Content: "first result"}}})
+	m.Add("user", "second")
+	m.AddAssistant(call)
+	check := func(want int) {
+		t.Helper()
+		calls, results := 0, 0
+		for _, msg := range m.Build() {
+			if len(msg.ToolCalls) > 0 {
+				calls++
+			}
+			if msg.Role == "tool" {
+				results++
+			}
+		}
+		if calls != want || results != want {
+			t.Fatalf("calls=%d results=%d want=%d", calls, results, want)
+		}
+	}
+	check(1)
+	m.AddToolResultsBatch([]ToolResultMsg{{Message: types.Message{ToolCallID: "call_0", Content: "second result"}}})
+	check(2)
+}
+
+func TestInterleavedRuntimeNoticeFollowsPairedParallelResults(t *testing.T) {
+	m := newContextManager()
+	m.AddAssistant(types.Message{ToolCalls: []types.ToolCall{{ID: "a"}, {ID: "b"}}})
+	add := func(id string) {
+		m.AddToolResultsBatch([]ToolResultMsg{{Message: types.Message{ToolCallID: id, Content: id}}})
+	}
+	add("a")
+	m.Add("user", "notice", types.MessageSourceRuntimeEvent)
+	add("b")
+	messages := m.Build()
+	tail := messages[len(messages)-4:]
+	if len(tail[0].ToolCalls) != 2 || tail[1].ToolCallID != "a" || tail[2].ToolCallID != "b" || tail[3].Content != "notice" {
+		t.Fatalf("invalid projected exchange: %+v", tail)
+	}
+}

@@ -40,3 +40,17 @@ func TestBaseGenerationGuard(t *testing.T) {
 		t.Fatal("current generation should clear running state")
 	}
 }
+
+func TestNaturalStopCancelsAllLoopsOfOnlyItsGeneration(t *testing.T) {
+	b := NewBase(nil, "test", "Test")
+	first, g1 := b.Start(t.Context())
+	second, g2 := b.Start(t.Context())
+	b.MarkStopped(g1)
+	if first.Err() == nil || second.Err() != nil {
+		t.Fatalf("stale completion: old=%v new=%v", first.Err(), second.Err())
+	}
+	b.MarkStopped(g2)
+	if second.Err() == nil || b.IsRunning() {
+		t.Fatal("natural stop left sibling loops active")
+	}
+}

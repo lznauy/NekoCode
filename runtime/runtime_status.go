@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"nekocode/protocol"
 	"nekocode/runtime/internal/recording"
 	"nekocode/runtime/internal/runstore"
 	"reflect"
@@ -163,6 +164,23 @@ func (r *Runtime) ExecuteLocalCommand(ctx context.Context, input string) (string
 	r.mu.Unlock()
 	if closed || service == nil {
 		return "", LocalCommandNotCommand
+	}
+	if protocol.IsGoalPauseCommand(input) {
+		if goals, ok := r.runner.(interface{ ActiveSessionGoal() bool }); ok {
+			r.mu.Lock()
+			id := r.currentRun
+			running := r.status == RunRunning || r.status == RunWaitingApproval || r.status == RunWaitingQuestion
+			r.mu.Unlock()
+			if running && goals.ActiveSessionGoal() {
+				result, err := r.CancelRunWithResult(ctx, id)
+				if err != nil {
+					return err.Error(), LocalCommandExecuted
+				}
+				if result.State == CancellationStarted {
+					return "Pausing the active goal.", LocalCommandExecuted
+				}
+			}
+		}
 	}
 	return service(ctx, input)
 }

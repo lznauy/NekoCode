@@ -26,7 +26,7 @@ func TestCompactsLongHistoryWithFewUserTurns(t *testing.T) {
 						types.Message{Role: "user", Source: types.MessageSourceRuntimeEvent, Content: "notification"})
 				}
 			}
-			archive, recent, trimmed, err := s.summarize(history, "", 6000, nil)
+			archive, recent, trimmed, err := s.summarize(history, "", 6000, nil, nil)
 			if err != nil || !called || trimmed <= 0 || archive == "" {
 				t.Fatalf("called=%v trimmed=%d err=%v", called, trimmed, err)
 			}

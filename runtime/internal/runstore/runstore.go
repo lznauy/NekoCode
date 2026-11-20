@@ -23,6 +23,7 @@ type RunStore struct {
 }
 
 type runRecord struct {
+	inputAccepted bool
 	snapshot      core.RunSnapshot
 	metadataBytes int
 	// Builders are append-only between replacements, so strings already handed
@@ -55,7 +56,7 @@ func (s *RunStore) PrepareRun(id core.RunID, source core.SourceRef, sessionID st
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	snapshot := &s.record(id).snapshot
+	snapshot := &s.record(id, time.Now()).snapshot
 	snapshot.Source, snapshot.SessionID = source, sessionID
 }
 
@@ -66,29 +67,30 @@ func (s *RunStore) Record(ev core.Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	rec := s.record(ev.RunID)
+	rec := s.record(ev.RunID, ev.Time)
 	rec.snapshot.UpdatedAt = ev.Time
 	rec.snapshot.EventCount++
 
 	switch ev.Type {
 	case core.EventInputAccepted:
+		p, ok := ev.Payload.(core.MessagePayload)
+		// Older recordings did not mark steering. Their first accepted input
+		// supplies the origin; later messages remain visible in event history.
+		if !ok || p.Steering || rec.inputAccepted {
+			break
+		}
+		rec.inputAccepted = true
 		rec.snapshot.Status = core.RunRunning
 		if rec.snapshot.StartedAt.IsZero() {
 			rec.snapshot.StartedAt = ev.Time
 		}
-		if p, ok := ev.Payload.(core.MessagePayload); ok {
-			rec.snapshot.Input = p.Content
-			if p.InteractionMode.ID != "" && rec.snapshot.InteractionMode.ID == "" {
-				rec.snapshot.InteractionMode = p.InteractionMode
-			}
-			// Keep the first concrete source: later frames may carry an empty
-			// SourceRef and must not erase who started the run.
-			if p.Source.Kind != "" {
-				rec.snapshot.Source = p.Source
-			}
-			if p.Sender.ID != "" || p.Sender.Username != "" || p.Sender.Display != "" {
-				rec.snapshot.Sender = p.Sender
-			}
+		rec.snapshot.Input = p.Content
+		rec.snapshot.Sender = p.Sender
+		if p.InteractionMode.ID != "" && rec.snapshot.InteractionMode.ID == "" {
+			rec.snapshot.InteractionMode = p.InteractionMode
+		}
+		if p.Source.Kind != "" {
+			rec.snapshot.Source = p.Source
 		}
 	case core.EventRunStarted:
 		if ev.SessionID != "" {
@@ -101,7 +103,7 @@ func (s *RunStore) Record(ev core.Event) {
 		// The runtime tags this frame with "runtime", which is the transport
 		// that emitted it, not who started the run. Only a concrete caller
 		// source overrides the later input_accepted payload.
-		if ev.Source.Kind != "" && ev.Source.Kind != "runtime" {
+		if !rec.inputAccepted && ev.Source.Kind != "" && ev.Source.Kind != "runtime" {
 			rec.snapshot.Source = ev.Source
 		}
 	case core.EventSystemMessage:
@@ -297,29 +299,23 @@ func (s *RunStore) List(limit int) []core.RunSnapshot {
 	return out
 }
 
-func (s *RunStore) record(id core.RunID) *runRecord {
+func (s *RunStore) record(id core.RunID, at time.Time) *runRecord {
 	if rec, ok := s.runs[id]; ok {
 		s.last = id
 		return rec
 	}
-	now := time.Now()
 	rec := &runRecord{
 		snapshot: core.RunSnapshot{
 			ID:        id,
 			Status:    core.RunRunning,
-			StartedAt: now,
-			UpdatedAt: now,
+			StartedAt: at,
+			UpdatedAt: at,
 		},
 	}
 	s.runs[id] = rec
 	s.order = append(s.order, id)
 	s.last = id
 	s.evictBytesLocked()
-	if len(s.order) > s.limit {
-		drop := s.order[0]
-		s.order = s.order[1:]
-		delete(s.runs, drop)
-	}
 	return rec
 }
 
@@ -350,14 +346,14 @@ func (r *runRecord) startTool(p core.ToolPayload, at time.Time) {
 }
 
 func (r *runRecord) applyToolPreview(p core.ToolPayload) {
-	idx := r.findOpenTool(p.CallID, p.ToolName)
+	idx := r.findOpenTool(p)
 	if idx >= 0 {
 		r.snapshot.Tools[idx].Preview = p.Preview
 	}
 }
 
 func (r *runRecord) finishTool(p core.ToolPayload, status core.ToolStatus, at time.Time) {
-	idx := r.findOpenTool(p.CallID, p.ToolName)
+	idx := r.findOpenTool(p)
 	if idx < 0 {
 		r.startTool(p, at)
 		idx = len(r.snapshot.Tools) - 1
@@ -370,17 +366,20 @@ func (r *runRecord) finishTool(p core.ToolPayload, status core.ToolStatus, at ti
 	r.removeToolStack(idx)
 }
 
-func (r *runRecord) findOpenTool(callID, name string) int {
+func (r *runRecord) findOpenTool(p core.ToolPayload) int {
 	for i := len(r.toolStack) - 1; i >= 0; i-- {
 		idx := r.toolStack[i]
 		if idx < 0 || idx >= len(r.snapshot.Tools) {
 			continue
 		}
 		tool := r.snapshot.Tools[idx]
-		if callID != "" && tool.CallID == callID {
+		if tool.SubAgentID != p.SubAgentID {
+			continue
+		}
+		if p.CallID != "" && tool.CallID == p.CallID {
 			return idx
 		}
-		if callID == "" && tool.Name == name {
+		if p.CallID == "" && tool.Name == p.ToolName {
 			return idx
 		}
 	}
@@ -493,7 +492,7 @@ func (r *runRecord) removeToolStack(idx int) {
 }
 
 func (r *runRecord) upsertApproval(view core.ApprovalView) {
-	view = copyApproval(view)
+	view = view.Clone()
 	for i := range r.snapshot.Approvals {
 		if r.snapshot.Approvals[i].ID == view.ID {
 			r.snapshot.Approvals[i] = view
@@ -504,7 +503,7 @@ func (r *runRecord) upsertApproval(view core.ApprovalView) {
 }
 
 func (r *runRecord) upsertQuestion(view core.QuestionView) {
-	view = copyQuestion(view)
+	view = view.Clone()
 	for i := range r.snapshot.Questions {
 		if r.snapshot.Questions[i].ID == view.ID {
 			r.snapshot.Questions[i] = view
@@ -545,32 +544,13 @@ func copyRunSnapshot(in core.RunSnapshot) core.RunSnapshot {
 	}
 	out.Approvals = make([]core.ApprovalView, len(in.Approvals))
 	for i, approval := range in.Approvals {
-		out.Approvals[i] = copyApproval(approval)
+		out.Approvals[i] = approval.Clone()
 	}
 	out.Questions = make([]core.QuestionView, len(in.Questions))
 	for i, question := range in.Questions {
-		out.Questions[i] = copyQuestion(question)
+		out.Questions[i] = question.Clone()
 	}
 	return out
-}
-
-func copyApproval(input core.ApprovalView) core.ApprovalView {
-	output := input
-	output.Args = copyMap(input.Args)
-	output.Metadata = copyMap(input.Metadata)
-	output.Approval = input.Approval.Clone()
-	output.ResolvedAt = copyTime(input.ResolvedAt)
-	return output
-}
-
-func copyQuestion(input core.QuestionView) core.QuestionView {
-	output := input
-	output.ResolvedAt = copyTime(input.ResolvedAt)
-	output.Questions = append([]protocol.QuestionItem(nil), input.Questions...)
-	for i := range output.Questions {
-		output.Questions[i].Options = append([]protocol.QuestionOption(nil), input.Questions[i].Options...)
-	}
-	return output
 }
 
 func copyTime(value *time.Time) *time.Time {
@@ -579,34 +559,6 @@ func copyTime(value *time.Time) *time.Time {
 	}
 	copied := *value
 	return &copied
-}
-
-func copyMap(input map[string]any) map[string]any {
-	if input == nil {
-		return nil
-	}
-	output := make(map[string]any, len(input))
-	for key, value := range input {
-		output[key] = copyValue(value)
-	}
-	return output
-}
-
-func copyValue(value any) any {
-	switch value := value.(type) {
-	case map[string]any:
-		return copyMap(value)
-	case []any:
-		output := make([]any, len(value))
-		for i := range value {
-			output[i] = copyValue(value[i])
-		}
-		return output
-	case []string:
-		return append([]string(nil), value...)
-	default:
-		return value
-	}
 }
 
 func snapshotBytes(v core.RunSnapshot) int {

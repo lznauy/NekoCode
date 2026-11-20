@@ -135,8 +135,9 @@ export interface MetricsPayload {
 }
 
 export interface DoneEvent {
-  output: string
-  error: string
+  output?: string
+  error?: string
+  evidence_incomplete?: boolean
 }
 
 export interface SystemEvent {
@@ -160,6 +161,7 @@ export type AgentPhase =
 export type AgentStatus = 'idle' | 'thinking' | 'running'
 
 export interface StatusEvent {
+  source?: string
   status: AgentStatus
 }
 

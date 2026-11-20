@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "goal-checkpoint",
+  "version": 5,
+  "title": "Goal 在阶段答复后自动续做，并等待人工验收",
+  "kind": "product",
+  "tags": ["session-goal"],
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {"id": "continuation", "description": "单次用户请求中，Goal 接收进度答复后自动续做并实际调用工具", "required": true},
+    {"id": "delivery", "description": "净订座数和排序正确，原始记录完整", "required": true},
+    {"id": "review", "description": "运行时将本次 Goal 置于待验收", "required": true}
+  ],
+  "budgets": {"wall_seconds": 180, "model_calls": 15, "total_tokens": 180000, "verifier_seconds": 15},
+  "source": "NekoCode headless goal lifecycle regression"
+}

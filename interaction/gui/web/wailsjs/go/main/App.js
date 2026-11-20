@@ -181,3 +181,7 @@ export function TaskHistory(arg1, arg2, arg3, arg4) {
 export function TaskOutput(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['TaskOutput'](arg1, arg2, arg3, arg4);
 }
+
+export function SelectSession(arg1) {
+  return window['go']['main']['App']['SelectSession'](arg1);
+}

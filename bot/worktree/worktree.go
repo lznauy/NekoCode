@@ -83,7 +83,7 @@ func canonical(path string) (string, error) {
 }
 func output(ctx context.Context, cwd string, args ...string) (string, error) {
 	b, e := git(ctx, cwd, nil, nil, args...)
-	return strings.TrimSpace(string(b)), e
+	return strings.TrimSuffix(string(b), "\n"), e
 }
 func repository(ctx context.Context, cwd string) (root, common string, err error) {
 	root, err = output(ctx, cwd, "rev-parse", "--show-toplevel")

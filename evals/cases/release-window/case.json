@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "id": "release-window",
+  "version": 2,
+  "title": "发布值班排程修复与交接",
+  "kind": "product",
+  "tags": [
+    "scheduling",
+    "multi-source",
+    "regression-testing",
+    "handoff"
+  ],
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "handoff",
+      "description": "值班排程交付及原始记录保全",
+      "required": true
+    },
+    {
+      "id": "dependencies",
+      "description": "依赖排序、并行和稳定平局",
+      "required": true
+    },
+    {
+      "id": "windows",
+      "description": "多班组禁作区间与边界",
+      "required": true
+    },
+    {
+      "id": "revisions",
+      "description": "乱序与重复工时修订",
+      "required": true
+    },
+    {
+      "id": "rejection",
+      "description": "非法批次失败且保护现有输出",
+      "required": true
+    },
+    {
+      "id": "regression",
+      "description": "提交的测试在成品上通过并能检出原型缺陷",
+      "required": true
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 900,
+    "model_calls": 75,
+    "total_tokens": 1200000,
+    "verifier_seconds": 90
+  },
+  "source": "Original release scheduling benchmark"
+}

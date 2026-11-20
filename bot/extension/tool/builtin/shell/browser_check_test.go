@@ -35,6 +35,11 @@ fixture=$(mktemp -d "$NEKOCODE_SCRATCH/browser-test.XXXXXXXX")
 cd -P "$fixture"
 export TMPDIR="$PWD" CHROME_CONFIG_HOME="$PWD/chrome-config" XDG_CACHE_HOME="$PWD/cache"
 echo '<button onclick="this.textContent=Number(this.textContent)+1">0</button>' > index.html
+echo '{"ready":true}' > state.json
+browser_check --static index.html 'fetch("state.json").then(r=>r.json()).then(s=>s.ready)' 'do:document.querySelector("button").click()' 'document.querySelector("button").textContent==="1"'
+observed=$(browser_check --static index.html 'observe:document.querySelector("button").textContent' 'do:document.querySelector("button").click()' 'observe:Number(document.querySelector("button").textContent)')
+[[ "$observed" == $'Observation 1: "0"\nObservation 3: 1' ]]
+if browser_check --static index.html 'document.querySelector("button").textContent==="wrong"'; then exit 1; fi
 python3 -u -c 'from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 class Handler(SimpleHTTPRequestHandler):
     warming = True

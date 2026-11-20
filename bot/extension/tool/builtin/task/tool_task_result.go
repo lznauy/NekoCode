@@ -82,7 +82,7 @@ func (t *ResultTool) Execute(ctx context.Context, args map[string]any) (core.Too
 			}
 		}
 		if _, exists := args["offset"]; exists {
-			offset, err := taskListIntArg(args, "offset", q.Offset)
+			offset, err := toolutil.OptIntArg(args, "offset", q.Offset)
 			if err != nil {
 				return core.ToolOutput{}, err
 			}
@@ -91,7 +91,7 @@ func (t *ResultTool) Execute(ctx context.Context, args map[string]any) (core.Too
 			}
 		}
 		if _, exists := args["limit"]; exists {
-			limit, err := taskListIntArg(args, "limit", q.Limit)
+			limit, err := toolutil.OptIntArg(args, "limit", q.Limit)
 			if err != nil {
 				return core.ToolOutput{}, err
 			}
@@ -115,11 +115,11 @@ func (t *ResultTool) Execute(ctx context.Context, args map[string]any) (core.Too
 			return core.ToolOutput{}, fmt.Errorf("id or result_ref is required")
 		}
 		var err error
-		q.Offset, err = taskListIntArg(args, "offset", 0)
+		q.Offset, err = toolutil.OptIntArg(args, "offset", 0)
 		if err != nil {
 			return core.ToolOutput{}, err
 		}
-		q.Limit, err = taskListIntArg(args, "limit", 1000)
+		q.Limit, err = toolutil.OptIntArg(args, "limit", 1000)
 		if err != nil {
 			return core.ToolOutput{}, err
 		}

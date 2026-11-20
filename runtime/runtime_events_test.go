@@ -385,3 +385,28 @@ func TestBindRecordedSessionAppendsToExistingBatch(t *testing.T) {
 		t.Fatalf("batches = %v, want a single session dir", dirs)
 	}
 }
+
+func TestSteeringPreservesRunOrigin(t *testing.T) {
+	bot := &testBot{}
+	rt := newTestRuntime(bot)
+	defer rt.Close()
+	started, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	bot.run = func(string, RunHost) (string, error) { close(started); <-release; return "ok", nil }
+	id, err := rt.StartRun(t.Context(), Input{Text: "initial", Source: SourceRef{Kind: "http"}, Sender: SenderRef{ID: "starter"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	awaitBackground(t, started)
+	if err = rt.SteerRun(t.Context(), id, Input{Text: "correction", Source: SourceRef{Kind: "tui"}, Sender: SenderRef{ID: "editor"}}); err != nil {
+		t.Fatal(err)
+	}
+	run, ok := rt.LookupRun(id)
+	if !ok || run.Source.Kind != "http" || run.Sender.ID != "starter" || run.Input != "initial" {
+		t.Fatalf("origin overwritten: %+v", run)
+	}
+	events := rt.EventHistory(EventFilter{RunID: id, Types: []EventType{EventInputAccepted}})
+	if len(events) != 2 || events[1].Payload.(MessagePayload).Content != "correction" {
+		t.Fatalf("steering missing from history: %+v", events)
+	}
+}

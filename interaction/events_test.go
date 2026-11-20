@@ -226,7 +226,7 @@ func TestSubscribeRunEventsFinishedSnapshotWithLostTerminal(t *testing.T) {
 				rt := &eventStreamRuntime{
 					streams:   []<-chan controlruntime.Event{first, second},
 					cancelled: make(chan controlruntime.RunID, 1),
-					current:   controlruntime.RunSnapshot{ID: "finished", Status: tc.status, Output: "completed answer", Error: tc.err},
+					current:   controlruntime.RunSnapshot{ID: "finished", Status: tc.status, Output: "completed answer", Error: tc.err, EvidenceIncomplete: true},
 					snapshots: []controlruntime.RunSnapshot{{}},
 				}
 				events, err := SubscribeRunEvents(t.Context(), rt, controlruntime.EventFilter{})
@@ -245,7 +245,7 @@ func TestSubscribeRunEventsFinishedSnapshotWithLostTerminal(t *testing.T) {
 						}
 						if typ == tc.typ {
 							result, ok := ev.Payload.(controlruntime.RunResult)
-							if !ok || ev.RunID != "finished" || result.Output != "completed answer" || result.Error != tc.err {
+							if !ok || ev.RunID != "finished" || result.Output != "completed answer" || result.Error != tc.err || !result.EvidenceIncomplete {
 								t.Fatalf("recovered result = %+v", ev)
 							}
 						}

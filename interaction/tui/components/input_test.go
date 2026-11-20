@@ -404,3 +404,102 @@ func TestPlanModeRemainsVisibleOnNarrowFooter(t *testing.T) {
 		}
 	}
 }
+
+func TestMiddleDeletionKeepsWideCharactersVisible(t *testing.T) {
+	in := NewInput(24)
+	in.SetValue(strings.Repeat("中a", 16))
+	for range 16 {
+		in.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	}
+	in.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	want := strings.Repeat("中a", 7) + "中" + strings.Repeat("中a", 8)
+	if in.Value() != want {
+		t.Fatalf("edited text = %q", in.Value())
+	}
+	lines := strings.Split(ansi.Strip(in.View()), "\n")
+	var visible strings.Builder
+	for _, line := range lines[1 : len(lines)-3] {
+		if w := ansi.StringWidth(line); w > 24 {
+			t.Fatalf("row width %d: %q", w, line)
+		}
+		visible.WriteString(strings.TrimSpace(strings.TrimPrefix(line, "┃ ")))
+	}
+	if visible.String() != want {
+		t.Fatalf("visible text = %q, want %q", visible.String(), want)
+	}
+	cursor := in.Cursor()
+	if cursor.X != 4 || cursor.Y != 2 {
+		t.Fatalf("cursor = %+v", cursor)
+	}
+}
+
+func TestInputCharacterKeysRespectGraphemes(t *testing.T) {
+	for _, cluster := range []string{"e\u0301", "👩‍💻", "🇨🇳"} {
+		in := NewInput(40)
+		in.SetValue("A" + cluster + "B")
+		in.SetCursorEnd()
+		in.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+		in.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+		if got := in.cursorRuneOffset(); got != 1 {
+			t.Fatalf("left entered %q at offset %d", cluster, got)
+		}
+		in.Update(tea.KeyPressMsg{Code: tea.KeyDelete})
+		if got := in.Value(); got != "AB" {
+			t.Fatalf("delete %q: %q", cluster, got)
+		}
+		in.SetValue("A" + cluster + "B")
+		in.setCursorRuneOffset(1)
+		in.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+		in.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+		if got := in.Value(); got != "AB" {
+			t.Fatalf("backspace %q: %q", cluster, got)
+		}
+	}
+}
+
+func TestInputMaintainsColumnAcrossShortRow(t *testing.T) {
+	in := NewInput(40)
+	in.SetValue("123456\nx\n123456")
+	in.setCursorRuneOffset(5)
+	in.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	in.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if got := in.Cursor().X; got != promptCols+5 {
+		t.Fatalf("column after short row=%d", got)
+	}
+	in.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	in.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	in.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if got := in.Cursor().X; got != promptCols+4 {
+		t.Fatalf("after horizontal movement=%d", got)
+	}
+}
+
+func TestInputReusesLayoutUntilEditOrResize(t *testing.T) {
+	in := NewInput(12)
+	in.SetValue("abc界defghi")
+	in.Height()
+	l := in.cachedLayout
+	in.Cursor()
+	in.View()
+	if l != in.cachedLayout {
+		t.Fatal("render recalculated unchanged layout")
+	}
+	in.SetWidth(30)
+	if in.Height() != 5 || in.cachedLayout == l {
+		t.Fatal("resize used stale layout")
+	}
+	in.SetValue("xy")
+	if in.layout().rows[0].text != "xy" {
+		t.Fatal("replacement used stale layout")
+	}
+}
+
+func TestInputWrapsKeycapAtGraphemeBoundary(t *testing.T) {
+	in := NewInput(24)
+	prefix := strings.Repeat("a", 24-promptCols-1)
+	in.SetValue(prefix + "1️⃣b")
+	got := in.layout()
+	if len(got.rows) != 2 || got.rows[0].text != prefix || got.rows[1].text != "1️⃣b" || got.column != 3 {
+		t.Fatalf("keycap at right edge: rows=%+v cursor column=%d", got.rows, got.column)
+	}
+}

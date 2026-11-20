@@ -128,12 +128,14 @@ type EventFilter struct {
 }
 
 type MessagePayload struct {
-	InteractionMode mode.Snapshot     `json:"interaction_mode,omitzero"`
-	Role            string            `json:"role"`
-	Content         string            `json:"content"`
-	Source          SourceRef         `json:"source"`
-	Sender          SenderRef         `json:"sender"`
-	Images          []ImageAttachment `json:"images,omitempty"`
+	Steering         bool              `json:"steering,omitempty"`
+	GoalContinuation int               `json:"goal_continuation,omitempty"`
+	InteractionMode  mode.Snapshot     `json:"interaction_mode,omitzero"`
+	Role             string            `json:"role"`
+	Content          string            `json:"content"`
+	Source           SourceRef         `json:"source"`
+	Sender           SenderRef         `json:"sender"`
+	Images           []ImageAttachment `json:"images,omitempty"`
 }
 
 type DeltaPayload struct {
@@ -146,6 +148,7 @@ type PhasePayload struct {
 }
 
 type ToolPayload struct {
+	GoalProgress  bool                      `json:"goal_progress,omitempty"`
 	Evidence      protocol.ToolEvidence     `json:"evidence,omitzero"`
 	NonExecution  protocol.ToolNonExecution `json:"non_execution,omitzero"`
 	ToolName      string                    `json:"tool_name"`

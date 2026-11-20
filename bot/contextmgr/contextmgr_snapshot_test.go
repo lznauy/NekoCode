@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"nekocode/bot/contextmgr/token"
+	"nekocode/bot/provider/types"
 )
 
 func TestSnapshotRestore(t *testing.T) {
@@ -111,4 +112,37 @@ func TestInterleavedDemandPlansSurviveRestore(t *testing.T) {
 	if restored.Status().HasTasks {
 		t.Fatal("new demand inherited an unrelated plan")
 	}
+}
+
+func TestNestedMessageOwnership(t *testing.T) {
+	m := New(Config{})
+	images := []types.MessageImage{{Path: "image"}}
+	assistant := types.Message{ToolCalls: []types.ToolCall{{ID: "call"}}}
+	m.AddUser("look", images)
+	m.AddAssistant(assistant)
+	images[0].Path = "changed input"
+	assistant.ToolCalls[0].ID = "changed input"
+	snap := m.Snapshot()
+	assertMessages := func(messages []types.Message) {
+		t.Helper()
+		if messages[0].Images[0].Path != "image" || messages[1].ToolCalls[0].ID != "call" {
+			t.Fatalf("shared message data: %+v", messages)
+		}
+	}
+	assertMessages(snap.Messages)
+	m.Restore(snap)
+	snap.Messages[1].ToolCalls[0].ID = "changed restore input"
+	snap.Transcript[0].Images[0].Path = "changed restore input"
+	exported := m.Snapshot()
+	exported.Messages[0].Images[0].Path = "changed snapshot"
+	_, tail, _ := m.TranscriptTail()
+	tail[1].ToolCalls[0].ID = "changed transcript"
+	for _, msg := range m.BuildRequest(ModelRequest{}) {
+		if len(msg.Images) > 0 {
+			msg.Images[0].Path = "changed projection"
+		}
+	}
+	after := m.Snapshot()
+	assertMessages(after.Messages)
+	assertMessages(after.Transcript)
 }

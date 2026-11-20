@@ -297,3 +297,50 @@ func TestCanonicalAssistantMessagesPreserveSnapshot(t *testing.T) {
 		})
 	}
 }
+
+func TestEarlySteerAndLegacyAcceptedFramesKeepOriginalInput(t *testing.T) {
+	store := NewRunStore(0)
+	for _, message := range []core.MessagePayload{
+		{Content: "early steer", Steering: true, Source: core.SourceRef{Kind: "tui"}},
+		{Content: "initial", Source: core.SourceRef{Kind: "api"}},
+		{Content: "legacy steer", Source: core.SourceRef{Kind: "gui"}},
+	} {
+		store.Record(core.Event{RunID: "r", Type: core.EventInputAccepted, Payload: message})
+	}
+	got, _ := store.Lookup("r")
+	if got.Input != "initial" || got.Source.Kind != "api" || got.EventCount != 3 {
+		t.Fatalf("run=%+v", got)
+	}
+}
+
+func TestConcurrentToolsWithSameIDKeepOwner(t *testing.T) {
+	for _, id := range []string{"call", ""} {
+		s := NewRunStore(2)
+		record := func(kind core.EventType, owner string) {
+			s.Record(core.Event{Type: kind, RunID: "r", Payload: core.ToolPayload{CallID: id, ToolName: "read", SubAgentID: owner, Preview: "preview-" + owner, Output: "output-" + owner}})
+		}
+		record(core.EventToolStarted, "a")
+		record(core.EventToolStarted, "b")
+		record(core.EventToolPreview, "a")
+		record(core.EventToolCompleted, "a")
+		v, _ := s.Lookup("r")
+		if v.Tools[0].Output != "output-a" || v.Tools[1].Status != core.ToolRunning || v.Tools[1].Preview != "preview-b" {
+			t.Fatalf("id %q: %+v", id, v.Tools)
+		}
+	}
+}
+
+func TestCountLimitKeepsLiveRuns(t *testing.T) {
+	s := NewRunStore(2)
+	for _, id := range []core.RunID{"a", "b", "c"} {
+		s.PrepareRun(id, core.SourceRef{}, "")
+	}
+	if len(s.List(0)) != 3 {
+		t.Fatal("lost live run")
+	}
+	s.Record(core.Event{RunID: "b", Type: core.EventRunDone})
+	s.Record(core.Event{RunID: "c", Type: core.EventRunDone})
+	if _, ok := s.Lookup("a"); !ok || len(s.List(0)) != 2 {
+		t.Fatal("incorrect eviction after completion")
+	}
+}

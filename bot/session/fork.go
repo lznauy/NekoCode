@@ -66,11 +66,12 @@ func (m *Manager) Fork(ctx context.Context, id string) (_ *Snapshot, runErr erro
 	// load returns an independently owned snapshot. Reuse it instead of
 	// cloning every history message and nested slice a second time.
 	fork := source
+	fork.Goal = nil
 	fork.ID, fork.CreatedAt, fork.UpdatedAt = identity.ID, identity.CreatedAt, identity.UpdatedAt
 	fork.ForkedFrom = id
 	fork.ForkedAtSeq = len(source.Transcript)
 	if len(fork.Transcript) == 0 {
-		fork.Transcript = cloneMessages(fork.Messages)
+		fork.Transcript = types.CloneMessages(fork.Messages)
 		fork.ForkedAtSeq = len(fork.Transcript)
 	}
 	fork.history = nil

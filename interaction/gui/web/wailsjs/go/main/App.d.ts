@@ -93,3 +93,5 @@ export function TaskAttempts(arg1:string,arg2:string,arg3:number,arg4:number):Pr
 export function TaskHistory(arg1:string,arg2:string,arg3:number,arg4:number):Promise<runtime.SubagentHistoryPage>;
 
 export function TaskOutput(arg1:string,arg2:string,arg3:number,arg4:number):Promise<runtime.SubagentOutputPage>;
+
+export function SelectSession(arg1:string):Promise<Array<runtime.DisplayMessage> | null>;

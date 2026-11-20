@@ -24,6 +24,30 @@ function emit(event: string, data: unknown): void {
 })
 
 describe('useChat', () => {
+  it('renders the automatic goal reply without adding a user message', () => {
+    const { result } = renderHook(() => useChat())
+    act(() => {
+      emit('agent:status', { status: 'running', source: 'goal_continuation' })
+      emit('agent:done', { output: 'Verified the latency target', error: '' })
+      emit('agent:status', { status: 'idle' })
+    })
+    expect(result.current.msgs.map(({role, text}) => ({role, text}))).toEqual([
+      {role: 'assistant', text: 'Verified the latency target'},
+    ])
+  })
+
+  it('shows an incomplete recording alongside the final answer', () => {
+    const { result } = renderHook(() => useChat())
+    act(() => {
+      emit('agent:status', { status: 'running', source: 'goal_continuation' })
+      emit('agent:done', { output: 'answer', evidence_incomplete: true })
+    })
+    expect(result.current.msgs.map(({role, text}) => [role, text])).toEqual([
+      ['assistant', 'answer'],
+      ['system', '本次运行的记录不完整，部分操作无法核验。'],
+    ])
+  })
+
   it.each(['edit', 'replace', 'stop'])('keeps submission ownership after automatic review and %s', async (action) => {
     let rejectSend!: (error: Error) => void
     ;(window as unknown as { go: unknown }).go = { main: { App: {

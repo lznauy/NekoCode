@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -43,13 +44,13 @@ func TestInvalidMessageDoesNotBlockQueuedDelivery(t *testing.T) {
 	if err := sink.Post(t.Context(), connect.Intent{Kind: connect.IntentResult, Text: "first"}); err != nil {
 		t.Fatal(err)
 	}
-	c.routeRun, c.routeChat = "invalid-run", "owner"
+	c.routes["invalid-run"] = "owner"
 	err := sink.Post(t.Context(), connect.Intent{Kind: connect.IntentResult, RunID: "invalid-run", Text: "invalid UTF-8: \xff"})
 	if err == nil {
 		t.Fatal("invalid UTF-8 was treated as deferred delivery")
 	}
-	if len(c.pending) != 1 || c.routeRun != "" {
-		t.Fatalf("invalid message retained delivery state: pending=%d route=%s", len(c.pending), c.routeRun)
+	if len(c.pending) != 1 || len(c.routes) != 0 {
+		t.Fatalf("invalid message retained delivery state: pending=%d routes=%v", len(c.pending), c.routes)
 	}
 	lastStatus := rt.statuses[len(rt.statuses)-1]
 	if lastStatus.Status != "error" || !strings.Contains(lastStatus.Message, "prepare") || strings.Contains(lastStatus.Message, "reconnect") {
@@ -74,8 +75,7 @@ func TestGroupRoutesOnlyItsOwnRun(t *testing.T) {
 	if got := c.routeFor("other-run", groupOwner.Owner); got != "" {
 		t.Fatalf("unrelated run routed to group: %q", got)
 	}
-	c.routeRun = controlruntime.RunID("wecom-run")
-	c.routeChat = "group-1"
+	c.routes["wecom-run"] = "group-1"
 	if got := c.routeFor("wecom-run", groupOwner.Owner); got != "group-1" {
 		t.Fatalf("wecom run route = %q", got)
 	}
@@ -122,13 +122,12 @@ func TestPendingMessagesSurviveFailedFlush(t *testing.T) {
 
 func TestClearDeliveryStateDropsOldIdentityMessages(t *testing.T) {
 	c := New(nil)
-	c.routeRun = "run-1"
-	c.routeChat = "old-chat"
+	c.routes["run-1"] = "old-chat"
 	c.enqueue(outboundMessage{chatID: "old-chat", parts: []string{"secret result"}})
 	c.acceptMessage("msg-1", time.Now())
 	c.clearDeliveryState()
-	if c.routeRun != "" || c.routeChat != "" || len(c.pending) != 0 || len(c.seen) != 0 {
-		t.Fatalf("delivery state not cleared: route=%s/%s pending=%v seen=%v", c.routeRun, c.routeChat, c.pending, c.seen)
+	if len(c.routes) != 0 || len(c.pending) != 0 || len(c.seen) != 0 {
+		t.Fatalf("delivery state not cleared: routes=%v pending=%v seen=%v", c.routes, c.pending, c.seen)
 	}
 }
 
@@ -187,5 +186,106 @@ func TestHandleMessagePairsOnlyMatchingNonce(t *testing.T) {
 	}
 	if saved.Owner == nil || saved.Owner.UserID != "user-1" || saved.Owner.ChatID != "chat-1" {
 		t.Fatalf("saved owner = %#v", saved.Owner)
+	}
+}
+
+type unavailableEventsRuntime struct {
+	statusRecorder
+	attempts int
+}
+
+func (r *unavailableEventsRuntime) Events(context.Context, controlruntime.EventFilter) (<-chan controlruntime.Event, error) {
+	r.attempts++
+	return nil, errors.New("subscription offline")
+}
+func TestStartRetriesFailedEventSubscription(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := saveConfig(Config{BotID: "bot", Secret: "secret"}); err != nil {
+		t.Fatal(err)
+	}
+	rt := &unavailableEventsRuntime{}
+	c := New(rt)
+	for i := 1; i <= 2; i++ {
+		if err := c.Start(t.Context()); err == nil || c.base.IsRunning() || rt.attempts != i {
+			t.Fatalf("start #%d: err=%v running=%v subscriptions=%d", i, err, c.base.IsRunning(), rt.attempts)
+		}
+	}
+}
+
+type routedRuntime struct{ statusRecorder }
+
+func (r *routedRuntime) StartRun(_ context.Context, input controlruntime.Input) (controlruntime.RunID, error) {
+	return controlruntime.RunID(input.Text), nil
+}
+
+func TestRoutedGroupTurnsDeliverBothResults(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := Config{}
+	cfg.finishPairing("owner", "group")
+	if err := saveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	c := New(&routedRuntime{})
+	var wg sync.WaitGroup
+	for _, id := range []string{"run_a", "queued_b", "empty"} {
+		wg.Go(func() {
+			if err := c.startRunRouted(t.Context(), "group", controlruntime.Input{Text: id}); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	sender := &fakeSender{}
+	sink := eventSink{c: c, sender: sender}
+	sink.Track(controlruntime.Event{RunID: "empty", Type: controlruntime.EventRunDone, Payload: controlruntime.RunResult{}})
+	for _, id := range []string{"queued_b", "run_a"} {
+		if err := sink.Post(t.Context(), connect.Intent{Kind: connect.IntentResult, RunID: controlruntime.RunID(id), Text: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(c.routes) != 0 || strings.Join(sender.sent, ",") != "queued_b,run_a" {
+		t.Fatalf("routes=%v delivered=%v", c.routes, sender.sent)
+	}
+}
+
+type cancelledQueueRuntime struct {
+	routedRuntime
+	settled chan struct{}
+	checked chan struct{}
+}
+
+func (r *cancelledQueueRuntime) WaitRun(ctx context.Context, _ controlruntime.RunID) error {
+	select {
+	case <-r.settled:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func (r *cancelledQueueRuntime) LookupRun(controlruntime.RunID) (controlruntime.RunSnapshot, bool) {
+	close(r.checked)
+	return controlruntime.RunSnapshot{}, false
+}
+func TestNeverStartedQueuedTurnReleasesRoute(t *testing.T) {
+	rt := &cancelledQueueRuntime{settled: make(chan struct{}), checked: make(chan struct{})}
+	c := New(rt)
+	if err := c.startRunRouted(t.Context(), "group", controlruntime.Input{Text: "queued_test"}); err != nil {
+		t.Fatal(err)
+	}
+	if c.routeFor("queued_test", nil) != "group" {
+		t.Fatal("route missing during admission")
+	}
+	close(rt.settled)
+	select {
+	case <-rt.checked:
+	case <-time.After(time.Second):
+		t.Fatal("missing settlement check")
+	}
+	deadline := time.Now().Add(time.Second)
+	for c.routeFor("queued_test", nil) != "" {
+		if time.Now().After(deadline) {
+			t.Fatal("cancelled queued turn retained its route")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

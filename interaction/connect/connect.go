@@ -64,6 +64,7 @@ func (b *Base) MarkStopped(generation int) {
 		b.mu.Unlock()
 		return
 	}
+	b.cancel()
 	b.cancel = nil
 	b.running = false
 	b.mu.Unlock()

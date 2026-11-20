@@ -223,7 +223,7 @@ func TestHistoryUpdatesReplayFullHistory(t *testing.T) {
 	if err := os.WriteFile(imagePath, []byte("fakepng"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	updates := historyUpdates(3, controlruntime.DisplayMessage{
+	updates := historyUpdates(t.Context(), 3, controlruntime.DisplayMessage{
 		Role:      "assistant",
 		Content:   "done",
 		Reasoning: "thinking",
@@ -259,19 +259,45 @@ func TestHistoryUpdatesReplayFullHistory(t *testing.T) {
 		t.Fatalf("replayed image = %#v", image)
 	}
 
-	user := historyUpdates(0, controlruntime.DisplayMessage{Role: "user", Content: "hello"})
+	user := historyUpdates(t.Context(), 0, controlruntime.DisplayMessage{Role: "user", Content: "hello"})
 	if len(user) != 1 || user[0]["sessionUpdate"] != "user_message_chunk" {
 		t.Fatalf("user replay = %#v", user)
 	}
 
 	var dropped []map[string]any
-	dropped = historyUpdates(1, controlruntime.DisplayMessage{Role: "system", Content: "note"})
-	dropped = append(dropped, historyUpdates(1, controlruntime.DisplayMessage{Role: "user", Content: ""})...)
-	dropped = append(dropped, historyUpdates(1, controlruntime.DisplayMessage{
+	dropped = historyUpdates(t.Context(), 1, controlruntime.DisplayMessage{Role: "system", Content: "note"})
+	dropped = append(dropped, historyUpdates(t.Context(), 1, controlruntime.DisplayMessage{Role: "user", Content: ""})...)
+	dropped = append(dropped, historyUpdates(t.Context(), 1, controlruntime.DisplayMessage{
 		Role:   "assistant",
 		Images: []controlruntime.ImageRef{{Path: filepath.Join(t.TempDir(), "missing.png")}},
 	})...)
 	if len(dropped) != 0 {
 		t.Fatalf("expected no updates for empty/system history, got %#v", dropped)
+	}
+}
+
+func TestReplayImageRespectsSizeAndContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "image.png")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(maxReplayImageBytes + 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ref := controlruntime.ImageRef{Path: path}
+	if got := imageContent(t.Context(), ref); got != nil {
+		t.Fatal("oversize image replayed")
+	}
+	if err := os.WriteFile(path, []byte("image"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if got := imageContent(ctx, ref); got != nil {
+		t.Fatal("cancelled image replay continued")
 	}
 }

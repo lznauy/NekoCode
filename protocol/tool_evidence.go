@@ -6,6 +6,8 @@ import "slices"
 // Empty State means no observation. ExitCodeKnown is true only for a normal
 // exit. OutputComplete concerns captured bytes before text normalization.
 type ProcessObservation struct {
+	// SampleHash identifies the output preview before process handles and status labels are added.
+	SampleHash     string `json:"sample_hash,omitempty"`
 	Task           string `json:"task,omitempty"`
 	Reason         string `json:"reason,omitempty"`
 	NewOutputBytes uint64 `json:"new_output_bytes,omitempty"`

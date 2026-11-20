@@ -16,15 +16,15 @@ import (
 // runtime. The platform visibility rules are supplemented by an explicit
 // NekoCode owner pairing because this channel can authorize local actions.
 type Connector struct {
-	rt   controlruntime.ConnectorRuntime
-	base *connect.Base
+	rt      controlruntime.ConnectorRuntime
+	base    *connect.Base
+	startMu sync.Mutex
 
 	questions *connect.QuestionTracker
 	menus     *connect.CommandMenus
 
-	routeMu   sync.Mutex
-	routeRun  controlruntime.RunID
-	routeChat string
+	routeMu sync.Mutex
+	routes  map[controlruntime.RunID]string
 
 	pendingMu sync.Mutex
 	pending   []outboundMessage
@@ -41,12 +41,15 @@ func New(rt controlruntime.ConnectorRuntime) *Connector {
 		questions: connect.NewQuestionTracker(),
 		menus:     connect.NewCommandMenus(),
 		seen:      make(map[string]time.Time),
+		routes:    make(map[controlruntime.RunID]string),
 	}
 }
 
 func (c *Connector) Name() string { return "wecom" }
 
 func (c *Connector) Start(ctx context.Context) error {
+	c.startMu.Lock()
+	defer c.startMu.Unlock()
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
@@ -67,10 +70,12 @@ func (c *Connector) Start(ctx context.Context) error {
 	case err := <-eventsReady:
 		if err != nil {
 			cancelSession()
+			c.base.MarkStopped(generation)
 			return err
 		}
-	case <-sessionCtx.Done():
+	case <-runCtx.Done():
 		cancelSession()
+		c.base.MarkStopped(generation)
 		return sessionCtx.Err()
 	}
 	go c.wsLoop(sessionCtx, client, generation, cancelSession)
@@ -293,16 +298,31 @@ func (c *Connector) startRunRouted(ctx context.Context, chatID string, input con
 	if err != nil {
 		return err
 	}
-	c.routeRun = runID
-	c.routeChat = chatID
+	c.routes[runID] = chatID
+	// Queued work cancelled before it starts has no terminal event or run
+	// snapshot. Release just those routes when admission settles.
+	if strings.HasPrefix(string(runID), "queued_") {
+		if runs, ok := c.rt.(interface {
+			WaitRun(context.Context, controlruntime.RunID) error
+			LookupRun(controlruntime.RunID) (controlruntime.RunSnapshot, bool)
+		}); ok {
+			go func() {
+				if runs.WaitRun(ctx, runID) == nil {
+					if _, started := runs.LookupRun(runID); !started {
+						c.clearRoute(runID)
+					}
+				}
+			}()
+		}
+	}
 	return nil
 }
 
 func (c *Connector) routeFor(runID controlruntime.RunID, owner *connect.Owner[string]) string {
 	c.routeMu.Lock()
 	defer c.routeMu.Unlock()
-	if runID != "" && runID == c.routeRun {
-		return c.routeChat
+	if chatID, ok := c.routes[runID]; ok {
+		return chatID
 	}
 	// Direct-message owners are private and retain the existing connector
 	// behavior of receiving events from other NekoCode surfaces. A group is
@@ -315,10 +335,7 @@ func (c *Connector) routeFor(runID controlruntime.RunID, owner *connect.Owner[st
 
 func (c *Connector) clearRoute(runID controlruntime.RunID) {
 	c.routeMu.Lock()
-	if c.routeRun == runID {
-		c.routeRun = ""
-		c.routeChat = ""
-	}
+	delete(c.routes, runID)
 	c.routeMu.Unlock()
 }
 
@@ -327,8 +344,7 @@ func (c *Connector) clearRoute(runID controlruntime.RunID) {
 // unpair/reset or bot replacement.
 func (c *Connector) clearDeliveryState() {
 	c.routeMu.Lock()
-	c.routeRun = ""
-	c.routeChat = ""
+	clear(c.routes)
 	c.routeMu.Unlock()
 	c.pendingMu.Lock()
 	c.pending = nil
@@ -353,9 +369,7 @@ type eventSink struct {
 type outboundMessage struct {
 	chatID string
 	// Only prepared parts enter the retry queue; format errors are permanent.
-	parts    []string
-	runID    controlruntime.RunID
-	terminal bool
+	parts []string
 }
 
 func (out *outboundMessage) send(ctx context.Context, sender messageSender) error {
@@ -366,6 +380,15 @@ func (out *outboundMessage) send(ctx context.Context, sender messageSender) erro
 		out.parts = out.parts[1:]
 	}
 	return nil
+}
+
+// Commands may finish with an empty result after sending their system reply.
+func (s eventSink) Track(ev controlruntime.Event) {
+	if ev.Type == controlruntime.EventRunDone {
+		if p, ok := ev.Payload.(controlruntime.RunResult); ok && strings.TrimSpace(p.Output) == "" && p.Error == "" {
+			s.c.clearRoute(ev.RunID)
+		}
+	}
 }
 
 func (eventSink) Caps() connect.Capabilities { return connect.Capabilities{} }
@@ -391,21 +414,19 @@ func (s eventSink) Post(ctx context.Context, intent connect.Intent) error {
 		return nil
 	}
 	terminal := intent.Kind == connect.IntentResult || intent.Kind == connect.IntentFailed || intent.Kind == connect.IntentStopped
+	if terminal {
+		defer s.c.clearRoute(intent.RunID)
+	}
 	parts, err := splitMessage(intent.Text, maxTextBytes)
 	if err != nil {
 		s.c.base.PublishStatus("error", "WeCom message could not be prepared: "+err.Error())
-		if terminal {
-			s.c.clearRoute(intent.RunID)
-		}
 		return fmt.Errorf("prepare WeCom message: %w", err)
 	}
-	out := outboundMessage{chatID: chatID, parts: parts, runID: intent.RunID, terminal: terminal}
+	out := outboundMessage{chatID: chatID, parts: parts}
 	err = out.send(ctx, s.sender)
 	if err != nil {
 		s.c.enqueue(out)
 		s.c.base.PublishStatus("error", "WeCom send deferred until reconnect: "+err.Error())
-	} else if terminal {
-		s.c.clearRoute(intent.RunID)
 	}
 	return nil
 }
@@ -443,9 +464,6 @@ func (c *Connector) flushPending(ctx context.Context, sender messageSender) {
 			c.pending = append([]outboundMessage{out}, c.pending...)
 			c.pendingMu.Unlock()
 			return
-		}
-		if out.terminal {
-			c.clearRoute(out.runID)
 		}
 	}
 }

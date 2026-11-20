@@ -3,13 +3,35 @@ package fs
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 )
 
+// UserHomeDir requires an absolute path for user-level state.
+func UserHomeDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(home) {
+		return "", fmt.Errorf("user home directory must be absolute: %q", home)
+	}
+	return home, nil
+}
+
 // NekocodeHome returns the user-level ~/.nekocode directory path.
 func NekocodeHome() string {
-	home, _ := os.UserHomeDir()
+	home, err := UserHomeDir()
+	if err != nil {
+		// Standalone path helpers may also be used before application startup.
+		account, lookupErr := user.Current()
+		if lookupErr != nil || !filepath.IsAbs(account.HomeDir) {
+			panic(fmt.Errorf("resolve NekoCode home: %w", err))
+		}
+		home = account.HomeDir
+	}
 	return filepath.Join(home, ".nekocode")
 }
 

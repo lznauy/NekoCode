@@ -594,7 +594,7 @@ func sandboxChildSetupAndExec(profile Profile, command string) error {
 		if strings.HasSuffix(shell, "/sh") {
 			name = "sh"
 		}
-		lastErr = unix.Exec(shell, []string{name, "-c", command}, env)
+		lastErr = unix.Exec(shell, sandboxShellArgs(name, command), env)
 		if lastErr == nil {
 			return nil
 		}

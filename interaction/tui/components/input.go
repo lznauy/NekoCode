@@ -51,6 +51,8 @@ type Input struct {
 	taskObserver    bool
 	textarea        textarea.Model
 	width           int
+	cachedLayout    *inputLayout
+	preferredColumn int
 	follow          bool
 	permissionMode  string
 	model           string
@@ -89,13 +91,20 @@ func NewInput(width int) *Input {
 	ta.SetPromptFunc(promptCols, func(info textarea.PromptInfo) string { return prompt })
 	ta.SetWidth(max(1, width))
 
-	return &Input{textarea: ta, width: width, follow: true}
+	return &Input{textarea: ta, width: width, follow: true, preferredColumn: -1}
 }
 
 func (i *Input) SetTaskObserver(enabled bool) { i.taskObserver = enabled }
 
-func (i *Input) SetWidth(width int) { i.width = width; i.textarea.SetWidth(max(1, width)) }
-func (i *Input) Width() int         { return i.width }
+func (i *Input) SetWidth(width int) {
+	if i.width != width {
+		i.width = width
+		i.cachedLayout = nil
+		i.preferredColumn = -1
+		i.textarea.SetWidth(max(1, width))
+	}
+}
+func (i *Input) Width() int { return i.width }
 
 func (i *Input) Value() string { return strings.TrimRight(i.expandedValue(), "\n\t\r ") }
 
@@ -113,6 +122,8 @@ func (i *Input) SetValue(v string) {
 }
 
 func (i *Input) setValue(v string) {
+	i.cachedLayout = nil
+	i.preferredColumn = -1
 	i.draftGeneration++
 	i.pastedBlocks = nil
 	i.nextPasteID = 0
@@ -122,7 +133,10 @@ func (i *Input) setValue(v string) {
 	i.syncDisplayCharLimit()
 }
 
-func (i *Input) SetCursorEnd()    { i.textarea.MoveToEnd() }
+func (i *Input) SetCursorEnd() {
+	i.preferredColumn = -1
+	i.textarea.MoveToEnd()
+}
 func (i *Input) HasContent() bool { return i.textarea.Value() != "" }
 
 func (i *Input) Clear() {
@@ -130,6 +144,8 @@ func (i *Input) Clear() {
 }
 
 func (i *Input) clear(deleteImages bool) {
+	i.cachedLayout = nil
+	i.preferredColumn = -1
 	i.draftGeneration++
 	if deleteImages {
 		i.releaseDraftImages()
@@ -331,30 +347,20 @@ func (i *Input) SetModel(model string) { i.model = model }
 // Empty means the provider/model default and is rendered as Auto.
 func (i *Input) SetReasoningEffort(effort string) { i.reasoningEffort = strings.TrimSpace(effort) }
 
-func (i *Input) CanCursorUp() bool {
-	return i.textarea.Line() > 0 || i.textarea.LineInfo().RowOffset > 0
-}
-
-func (i *Input) CanCursorDown() bool {
-	info := i.textarea.LineInfo()
-	return i.textarea.Line() < i.textarea.LineCount()-1 || info.RowOffset < info.Height-1
-}
-
-func (i *Input) Height() int { return 4 + i.textarea.Height() }
-
-func (i *Input) Cursor() *tea.Cursor {
-	c := i.textarea.Cursor()
-	if c == nil {
-		return nil
-	}
-	return tea.NewCursor(c.X, c.Y+1)
-}
-
 func (i *Input) Update(msg tea.Msg) (*Input, tea.Cmd) {
 	switch m := msg.(type) {
 	case tea.PasteMsg:
 		return i.updatePaste(m.Content)
 	case tea.KeyPressMsg:
+		if key.Matches(m, i.textarea.KeyMap.LinePrevious) || key.Matches(m, i.textarea.KeyMap.LineNext) {
+			step := 1
+			if key.Matches(m, i.textarea.KeyMap.LinePrevious) {
+				step = -1
+			}
+			i.moveVisualRow(step)
+			return i, nil
+		}
+		i.preferredColumn = -1
 		if m.String() == "enter" {
 			return i, nil
 		}
@@ -363,6 +369,13 @@ func (i *Input) Update(msg tea.Msg) (*Input, tea.Cmd) {
 		}
 		if (key.Matches(m, i.textarea.KeyMap.DeleteCharacterForward) || key.Matches(m, i.textarea.KeyMap.DeleteWordForward)) && i.deletePastedBlockAtCursor(false) {
 			return i, nil
+		}
+		backward := key.Matches(m, i.textarea.KeyMap.CharacterBackward) || key.Matches(m, i.textarea.KeyMap.DeleteCharacterBackward)
+		deleting := key.Matches(m, i.textarea.KeyMap.DeleteCharacterBackward) || key.Matches(m, i.textarea.KeyMap.DeleteCharacterForward)
+		if backward || deleting || key.Matches(m, i.textarea.KeyMap.CharacterForward) {
+			if i.editGrapheme(backward, deleting) {
+				return i, nil
+			}
 		}
 	}
 	cmd, _ := i.applyTextareaUpdate(msg)
@@ -439,6 +452,8 @@ func (i *Input) expandedValue() string {
 }
 
 func (i *Input) applyTextareaUpdate(msg tea.Msg) (tea.Cmd, bool) {
+	i.cachedLayout = nil
+	i.preferredColumn = -1
 	i.syncDisplayCharLimit()
 	before := i.textarea.Value()
 	beforeCursor := i.cursorRuneOffset()
@@ -509,6 +524,9 @@ func (i *Input) reconcileDisplayEdit(before, after string, editCursor int) bool 
 }
 
 func (i *Input) deletePastedBlockAtCursor(backward bool) bool {
+	if len(i.pastedBlocks) == 0 {
+		return false
+	}
 	display := i.textarea.Value()
 	displayRunes := []rune(display)
 	cursor := i.cursorRuneOffset()
@@ -523,6 +541,7 @@ func (i *Input) deletePastedBlockAtCursor(backward bool) bool {
 			continue
 		}
 
+		i.cachedLayout = nil
 		i.textarea.SetValue(string(append(displayRunes[:start], displayRunes[end:]...)))
 		i.setCursorRuneOffset(start)
 		i.pastedBlocks = append(i.pastedBlocks[:idx], i.pastedBlocks[idx+1:]...)
@@ -572,6 +591,8 @@ func (i *Input) captureDraft() *inputDraft {
 }
 
 func (i *Input) restoreDraft(draft *inputDraft) {
+	i.cachedLayout = nil
+	i.preferredColumn = -1
 	i.draftGeneration++
 	i.releaseDraftImages()
 	if draft == nil {
@@ -613,6 +634,7 @@ func (i *Input) setCursorRuneOffset(offset int) {
 			return
 		}
 		offset -= lineLen + 1
+		i.textarea.CursorEnd()
 		i.textarea.CursorDown()
 	}
 }
@@ -677,7 +699,7 @@ func (i *Input) View() string {
 	w := max(20, i.width)
 	line := styles.BorderStyle.Render(strings.Repeat(styles.Horizontal, w))
 
-	tv := strings.TrimRight(i.textarea.View(), "\n")
+	tv := i.textView()
 
 	txt := "Auto"
 	if !i.follow {

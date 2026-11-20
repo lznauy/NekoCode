@@ -52,7 +52,10 @@ evals/
 | `ledger-resume` | 定位 SQLite 投影同时间分页漏计与故障重启多计 | Python 标准库 | `capabilities` |
 | `inventory-release` | 接手 CSV 原型，验证汇总、异常退出与发布清单 | Python 标准库 | `capabilities` |
 | `catalog-recovery` | 迁移 v1 归档、重放日志、处理冲突与墓碑并原子发布 v2 快照 | Python 标准库 | `capabilities` |
+| `release-window` | 修复发布排程 CLI，合并修订、处理依赖和班组禁作窗口，交付值班计划与能检出旧版缺陷的测试 | Python 标准库 | `capabilities` |
 | `depot-ledger` | 从 v1 查看器交付多仓预留服务，黑盒检查迁移、跨进程重试、并发争抢、库存与审计一致性 | Python 标准库，预算上限 200 次模型调用 | `capabilities` |
+| `goal-night-shift` | 单次 /goal 经两个阶段检查点交付三关推箱子；浏览器独立求解通关、检查存档和触控，并保存截图供美术复核 | Node、Chrome、Playwright，standard 模式 | 单独用 `--case goal-night-shift` |
+| `goal-checkpoint` | 单条 /goal 输入在阶段答复后自动继续，交付净订座表并进入待验收；独立核查运行轨迹 | Python 标准库，standard 模式 | 单独用 `--case goal-checkpoint` |
 | `unittest-triage` | 运行固定失败的 Python 测试，沿回溯核查计费字段，只读报告根因 | Python 标准库 | 单独用 `--case unittest-triage` |
 | `retry-settings` | 单文件重试配置修改，检查目标值和无关改动 | Python 标准库 | `short-tasks` |
 | `round-robin-card` | 制作六队五轮赛程卡，校验对阵、同轮冲突、场地轮换 | Python 标准库 | `short-tasks` |
@@ -69,6 +72,8 @@ evals/
 | `latest-sample-sql` | 按表结构和业务契约编写可复用查询，用两组独立数据执行验收 | SQLite（Python 标准库） | `tool-efficiency` |
 | `rail-rebooking` | 96 张团体票的改签结算；重建截止快照，按优先级跨段占座，分别验收四张表及输入保全 | Python 标准库 | `tool-efficiency` |
 | `edit-recovery` | 刷新已读配置，检查版本变化后的长文件定向读取与重试；按轨迹复核调用链 | Python 标准库 | `tool-efficiency` |
+
+连续开发小游戏可单独运行 `--case goal-night-shift --mode standard`，浏览器依赖与 `snake` 相同。运行后在 trial 的 `product/` 启动静态 HTTP 服务即可试玩；`verification/v1/results/` 保存桌面和手机截图。九项必测分别覆盖 Goal 轨迹、地图、移动与撤销、暂停与恢复、三关通关、成绩、坏档、触控及离线运行。 `goal-night-shift` v6 与 `goal-checkpoint` v5 从运行时的 `goal_continuation` 事件确认单次请求内的续做，并要求阶段内出现运行时标记为 `goal_progress` 且最后一条执行回执为 success 的工具观察；旧轨迹应使用随 trial 冻结的验收器。检查点计数只能说明调度发生，游戏质量要看浏览器操作后的独立断言。视觉和键盘体验另按 `cases/goal-night-shift/review.md` 复核。
 
 短任务套件可用 `python3 -m agent_eval validate --suite short-tasks` 离线校验，真实运行使用 `--suite short-tasks --mode standard`。
 

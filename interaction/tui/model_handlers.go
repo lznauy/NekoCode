@@ -21,7 +21,8 @@ import (
 )
 
 const (
-	contentMarginV = 2
+	contentMarginV            = 2
+	incompleteEvidenceMessage = "本次运行的记录不完整，部分操作无法核验。"
 )
 
 // --- done ---
@@ -111,14 +112,7 @@ func (m *Model) handleDone(msg doneMsg) tea.Cmd {
 		if telemetry != nil {
 			m.Messages.AddMessage(message.ChatMessage{Role: "telemetry", Telemetry: telemetry})
 		}
-	} else {
-		if accumulated == "" && len(finalBlocks) == 0 {
-			if telemetry != nil {
-				m.Messages.AddMessage(message.ChatMessage{Role: "telemetry", Telemetry: telemetry})
-			}
-			m.refreshRuntimeStatus()
-			return m.refreshCompletedHistory(telemetry)
-		}
+	} else if accumulated != "" || len(finalBlocks) > 0 {
 		footer := ""
 		if telemetry == nil && msg.metrics.Duration != "" {
 			footer = "Duration: " + msg.metrics.Duration
@@ -133,14 +127,19 @@ func (m *Model) handleDone(msg doneMsg) tea.Cmd {
 		}
 		m.Messages.AddMessage(assistant)
 		m.retainCompletedTurn(assistant)
+	} else if telemetry != nil {
+		m.Messages.AddMessage(message.ChatMessage{Role: "telemetry", Telemetry: telemetry})
+	}
+	if msg.evidenceIncomplete {
+		m.Messages.AddMessage(message.ChatMessage{Role: "system", Content: incompleteEvidenceMessage})
 	}
 
 	m.refreshRuntimeStatus()
 	if m.Messages.Follow {
 		m.Messages.GotoBottom()
 	}
-	if msg.err != nil {
-		// Keep the live error visible; it may not exist in conversation history.
+	if msg.err != nil || msg.evidenceIncomplete {
+		// Keep the live error or evidence warning visible; it may not exist in conversation history.
 		return m.continuePendingChat(loadWorkspaceChanges(m.Runtime))
 	}
 	return m.refreshCompletedHistory(telemetry)
@@ -302,6 +301,12 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 		return cmd
 	}
 
+	if msg.String() == "r" || msg.String() == "R" {
+		cmd := m.requestSessionRename()
+		if m.sessionName != nil {
+			return cmd
+		}
+	}
 	if m.state == stateProcessing {
 		return m.handleProcessingKey(msg)
 	}
@@ -423,12 +428,6 @@ func (m *Model) handleProcessingKey(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (m *Model) handleIdleKey(msg tea.KeyPressMsg) tea.Cmd {
-	if msg.String() == "r" || msg.String() == "R" {
-		cmd := m.requestSessionRename()
-		if m.sessionName != nil {
-			return cmd
-		}
-	}
 	if (msg.String() == "d" || msg.String() == "D") && m.requestSessionDelete() {
 		return nil
 	}
@@ -875,6 +874,11 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) (cmd tea.Cmd) {
 				m.Messages.AddMessage(notice)
 				m.sessionLoadNotices = append(m.sessionLoadNotices, notice)
 			}
+			if m.sessionLoadDone.evidenceIncomplete {
+				notice := message.ChatMessage{Role: "system", Content: incompleteEvidenceMessage}
+				m.Messages.AddMessage(notice)
+				m.sessionLoadNotices = append(m.sessionLoadNotices, notice)
+			}
 			m.sessionLoadDone = nil
 			m.transitionTo(stateReady)
 			m.sessionLoadPhase = PhaseWaiting
@@ -976,8 +980,9 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) (cmd tea.Cmd) {
 	case controlruntime.EventRunDone:
 		payload, _ := ev.Payload.(controlruntime.RunResult)
 		return m.handleDone(doneMsg{
-			content: payload.Output,
-			metrics: m.metrics,
+			content:            payload.Output,
+			evidenceIncomplete: payload.EvidenceIncomplete,
+			metrics:            m.metrics,
 		})
 	case controlruntime.EventRunFailed:
 		payload, _ := ev.Payload.(controlruntime.RunResult)
@@ -986,12 +991,14 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) (cmd tea.Cmd) {
 			err = errors.New(payload.Error)
 		}
 		return m.handleDone(doneMsg{
-			content: payload.Output,
-			metrics: m.metrics,
-			err:     err,
+			content:            payload.Output,
+			evidenceIncomplete: payload.EvidenceIncomplete,
+			metrics:            m.metrics,
+			err:                err,
 		})
 	case controlruntime.EventRunCancelled:
-		return m.handleDone(doneMsg{metrics: m.metrics, err: errors.New("cancelled")})
+		payload, _ := ev.Payload.(controlruntime.RunResult)
+		return m.handleDone(doneMsg{metrics: m.metrics, content: payload.Output, evidenceIncomplete: payload.EvidenceIncomplete, err: errors.New("cancelled")})
 	case controlruntime.EventSessionChanged:
 		if p, ok := ev.Payload.(controlruntime.SessionPayload); ok && p.Reason == "rename" {
 			m.refreshOpenSessionMenu()

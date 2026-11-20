@@ -4,6 +4,7 @@ package core
 import (
 	"context"
 	"fmt"
+	utilfs "nekocode/util/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -55,6 +56,7 @@ type RunHost interface {
 }
 
 type Bot struct {
+	goalRunning          atomic.Bool
 	backgroundLeases     atomic.Int32
 	projectReloadPending atomic.Bool
 	closed               atomic.Bool
@@ -111,7 +113,7 @@ func NewAt(cwd string) (*Bot, error) {
 		return nil, fmt.Errorf("bot: resolve working directory: %w", err)
 	}
 	b := &Bot{cwd: abs}
-	if b.home, err = os.UserHomeDir(); err != nil {
+	if b.home, err = utilfs.UserHomeDir(); err != nil {
 		return nil, fmt.Errorf("bot: resolve home directory: %w", err)
 	}
 	if err := b.initConfig(); err != nil {

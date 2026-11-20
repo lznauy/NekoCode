@@ -373,7 +373,9 @@ class ToolCostTests(unittest.TestCase):
             other['message']['session_id'] = 's/child'
             real_child = frame('assistant', [{'type': 'tool_use', 'id': 'real-child'}], parent_tool_use_id=None, nekocode_subagent_id='worker')
             child_error = frame('user', [{'type': 'tool_result', 'tool_use_id': 'real-child', 'is_error': True}], nekocode_subagent_id='worker')
-            rows = [request, request, error, error, child, real_child, child_error, setup, other,
+            notice = frame("system", [])
+            notice["message"].update(subtype="message", message="Goal awaits your review.")
+            rows = [notice, request, request, error, error, child, real_child, child_error, setup, other,
                     frame('user', [{'type': 'tool_result', 'tool_use_id': 'b', 'is_error': False,
                                     'content': 'process exited with status 1'}])]
             path.write_text(''.join(json.dumps(r) + '\n' for r in rows))

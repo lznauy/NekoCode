@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"nekocode/bot/modelcatalog"
+	utilfs "nekocode/util/fs"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,6 +18,9 @@ import (
 func main() {
 	if handled, exitCode := tui.RunClipboardHelper(); handled {
 		os.Exit(exitCode)
+	}
+	if _, err := utilfs.UserHomeDir(); err != nil {
+		log.Fatal(err)
 	}
 	catalogCtx, cancelCatalog := context.WithCancel(context.Background())
 	defer cancelCatalog()

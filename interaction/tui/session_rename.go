@@ -23,8 +23,12 @@ func sessionMenuInput(value string) bool {
 	return value == "/sessions"
 }
 
+func (m *Model) sessionNameFocused() bool {
+	return m.sessionName != nil && (m.state == stateReady || m.state == stateProcessing)
+}
+
 func (m *Model) requestSessionRename() tea.Cmd {
-	if m.sessionMenu == "" || !m.Suggestions.IsMenu() || m.state != stateReady || m.sessionLoading {
+	if m.sessionMenu == "" || !m.Suggestions.IsMenu() || m.sessionLoading {
 		return nil
 	}
 	if _, ok := m.Runtime.(sessionRenamer); !ok {

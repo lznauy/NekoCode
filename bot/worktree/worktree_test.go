@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -539,5 +540,21 @@ func TestApplyCheckpointFinalizesAfterApplyError(t *testing.T) {
 	}
 	if data, readErr := os.ReadFile(filepath.Join(root, "same.txt")); readErr != nil || string(data) != "external\n" {
 		t.Fatalf("unexpected parent state: %q %v", data, readErr)
+	}
+}
+
+func TestWorktreePreservesTrailingSpaceInRepositoryPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows normalizes trailing spaces in directory names")
+	}
+	root := fixture(t)
+	moved := filepath.Join(t.TempDir(), "project ")
+	if err := os.Rename(root, moved); err != nil {
+		t.Fatal(err)
+	}
+	l := openTask(t, t.Context(), moved, "space")
+	want, err := canonical(moved)
+	if err != nil || l.Info.Repository != want {
+		t.Fatalf("repository=%q want=%q err=%v", l.Info.Repository, want, err)
 	}
 }

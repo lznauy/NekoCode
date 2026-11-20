@@ -285,10 +285,7 @@ func (c *apiClient) sendMessageID(ctx context.Context, chatID int64, text string
 // editMessageText rewrites a previously sent message in place (used by the
 // streaming preview). Same HTML-with-plain-fallback behavior as sends.
 func (c *apiClient) editMessageText(ctx context.Context, chatID int64, messageID int, text string) error {
-	body := messageBody(chatID, text, false)
-	body["message_id"] = messageID
-	_, err := c.sendHTML(ctx, "editMessageText", body)
-	return err
+	return c.editMessage(ctx, chatID, messageID, text, nil)
 }
 
 type inlineKeyboardMarkup struct {

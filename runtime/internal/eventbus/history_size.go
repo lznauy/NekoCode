@@ -23,7 +23,7 @@ func eventBytes(ev core.Event) int {
 			n += 64 + len(image.Path) + len(image.Label)
 		}
 	case core.ToolPayload:
-		n += len(p.Args) + len(p.Input) + len(p.Output) + len(p.Preview) + len(p.ToolName) + len(p.CallID) + len(p.SubAgentID) + len(p.Decision)
+		n += len(p.Args) + len(p.Input) + len(p.Output) + len(p.Preview) + len(p.ToolName) + len(p.CallID) + len(p.SubAgentID) + len(p.AttemptID) + len(p.Decision)
 		if p.NonExecution.Schema != 0 {
 			if data, err := json.Marshal(p.NonExecution); err == nil {
 				n += len(data)
@@ -37,7 +37,7 @@ func eventBytes(ev core.Event) int {
 	case protocol.CompactionEvent:
 		n += len(p.ID) + len(p.Delta) + len(p.Summary) + len(p.Error) + len(p.Warning)
 	case protocol.SubAgentOutput:
-		n += len(p.ID) + len(p.Kind) + len(p.Text)
+		n += len(p.ID) + len(p.Kind) + len(p.Text) + len(p.Reasoning) + len(p.AttemptID)
 	case protocol.RunSummary:
 		n += len(p.StopReason)
 	case protocol.Metrics:

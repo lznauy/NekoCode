@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "id": "goal-night-shift",
+  "version": 6,
+  "title": "夜班货站：连续推进的三关离线推箱子",
+  "tags": [
+    "session-goal",
+    "browser",
+    "game"
+  ],
+  "kind": "product",
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "progression",
+      "description": "至少两次真实 Goal 续做，各阶段间有成功工具操作，最后进入待验收",
+      "required": true
+    },
+    {
+      "id": "maps",
+      "description": "三张原始地图完整且没有被修改",
+      "required": true
+    },
+    {
+      "id": "movement",
+      "description": "合法移动、碰撞、推箱与撤销逐步符合独立规则",
+      "required": true
+    },
+    {
+      "id": "resume",
+      "description": "暂停冻结棋盘，刷新恢复棋盘、计数和撤销历史",
+      "required": true
+    },
+    {
+      "id": "campaign",
+      "description": "玩家通过界面解完三关，胜利锁定且可切换、重玩",
+      "required": true
+    },
+    {
+      "id": "best",
+      "description": "最低成绩跨重置、重玩和刷新保留",
+      "required": true
+    },
+    {
+      "id": "recovery",
+      "description": "存档损坏仍可从首关游玩",
+      "required": true
+    },
+    {
+      "id": "mobile",
+      "description": "窄屏无横向溢出，触屏方向键有效且尺寸足够",
+      "required": true
+    },
+    {
+      "id": "offline",
+      "description": "游玩全过程无外部网络依赖、资源加载失败和脚本错误",
+      "required": true
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 900,
+    "model_calls": 75,
+    "total_tokens": 5000000,
+    "verifier_seconds": 110
+  },
+  "source": "Original NekoCode Goal game delivery evaluation"
+}

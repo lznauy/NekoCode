@@ -273,3 +273,19 @@ func TestOnceStartFailure(t *testing.T) {
 		t.Fatalf("start failure: %v %s", err, out.String())
 	}
 }
+
+func BenchmarkOnceCaptureToolPreview(b *testing.B) {
+	frame, err := json.Marshal(map[string]string{"type": "stream_event", "output": strings.Repeat("tool output ", 32768)})
+	if err != nil {
+		b.Fatal(err)
+	}
+	capture := &onceCapture{}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(frame)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := capture.Write(frame); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

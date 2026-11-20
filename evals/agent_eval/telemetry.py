@@ -162,6 +162,8 @@ def protocol_tool_cost(path, session):
                     or frame.get("user_message_uuid") != "task"):
                 continue
             observed = True
+            if frame.get("type") not in {"assistant", "user"}:
+                continue
             content = frame.get("message", {}).get("content", [])
             if not isinstance(content, list):
                 continue

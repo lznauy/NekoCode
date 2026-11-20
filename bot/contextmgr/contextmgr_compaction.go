@@ -235,8 +235,9 @@ func (m *Manager) compact(ctx context.Context, force bool, outputTokens int) (ap
 	// Optional relevance pruning (e.g. Jev): stale tool results in the
 	// summarized prefix are replaced by placeholders before the summarizer
 	// runs. Fail-open — pruner errors leave history untouched.
-	snap.history = m.pruneStaleToolResults(ctx, snap.history, snap.budget, compressor)
-	archive, recent, trimmed, err := compressor.summarize(snap.history, snap.archive, snap.budget, summarizer)
+	archive, recent, trimmed, err := compressor.summarize(snap.history, snap.archive, snap.budget, summarizer, func(history []types.Message, keepStart int) []types.Message {
+		return m.pruneStaleToolResults(ctx, history, keepStart)
+	})
 	if err != nil {
 		if !force {
 			return false, fmt.Errorf("auto compact failed: %w", err)
@@ -326,39 +327,26 @@ func contextFullError(used, budget int) error {
 // Tool-call records stay intact so provider message pairing remains valid.
 // Recent messages (per the compactor's own retention boundary) are never
 // pruned. Any unavailable judgment keeps the original content.
-func (m *Manager) pruneStaleToolResults(ctx context.Context, history []types.Message, budget int, compressor *replacementCompactor) []types.Message {
+func (m *Manager) pruneStaleToolResults(ctx context.Context, history []types.Message, keepStart int) []types.Message {
 	m.usageMu.RLock()
 	pruner := m.toolPruner
 	m.usageMu.RUnlock()
-	if pruner == nil {
-		return history
+	prefix := history[:keepStart]
+	if pruner == nil || keepStart == 0 {
+		return prefix
 	}
-	// summarize filters internal-context messages before computing its own
-	// retention boundary; pruning must run on the same filtered view, or a
-	// placeholder could replace a tool result that lands inside the recent
-	// window after the filter shifts the indexes.
-	history = retainLatestRuntimeContext(history)
-	keepStart := compressor.recentStart(history, budget)
-	if keepStart <= 0 {
-		return history
-	}
-
-	// One reverse pass builds the tool-call name table; resolving per
-	// candidate instead would rescan the whole history (O(n²)) while
-	// holding compactionMu.
-	toolNames := make(map[string]string, 16)
-	for _, msg := range history {
-		for _, call := range msg.ToolCalls {
-			if call.ID != "" {
+	// Resolve names in the same exchange as each result; providers may
+	// reuse an ID in later turns.
+	toolNames := make(map[string]string)
+	resultIdx := make([]int, 0, 16)
+	var candidates []decision.Candidate
+	for i, msg := range prefix {
+		if msg.Role == "assistant" || msg.IsConversationUser() {
+			clear(toolNames)
+			for _, call := range msg.ToolCalls {
 				toolNames[call.ID] = call.Function.Name
 			}
 		}
-	}
-
-	resultIdx := make([]int, 0, 16)
-	var candidates []decision.Candidate
-	for i := 0; i < keepStart; i++ {
-		msg := history[i]
 		var tool string
 		switch {
 		case msg.ToolCallID != "":
@@ -387,14 +375,14 @@ func (m *Manager) pruneStaleToolResults(ctx context.Context, history []types.Mes
 		resultIdx = append(resultIdx, i)
 	}
 	if len(candidates) == 0 {
-		return history
+		return prefix
 	}
 
 	pruned, ok := pruner.PruneTools(ctx, goalFromHistory(history), candidates)
 	if !ok || len(pruned) != len(candidates) {
-		return history
+		return prefix
 	}
-	out := append([]types.Message(nil), history...)
+	out := append([]types.Message(nil), prefix...)
 	prunedCount := 0
 	for j, i := range resultIdx {
 		if !pruned[j] {

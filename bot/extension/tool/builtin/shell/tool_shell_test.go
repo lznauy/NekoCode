@@ -291,3 +291,36 @@ func TestManagedProcessesAreScopedToSession(t *testing.T) {
 		t.Fatalf("session stop left process running: %q", summary)
 	}
 }
+
+func TestShellPipelineReportsUpstreamCheckFailure(t *testing.T) {
+	tool := &ShellTool{initialWait: 2 * time.Second}
+	out, err := tool.ExecuteWithPermission(t.Context(), map[string]any{
+		"command": "(echo assertion-failed >&2; exit 7) 2>&1 | tail -1",
+	}, permReq())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Process.ExitCodeKnown || out.Process.ExitCode != 7 || !strings.Contains(out.Render(), "assertion-failed") {
+		t.Fatalf("pipeline observation: %+v, output: %s", out.Process, out.Render())
+	}
+}
+
+func TestShellSeparateLaunchesPreserveSampleIdentity(t *testing.T) {
+	tool := &ShellTool{initialWait: 2 * time.Second}
+	cleanupShellTool(t, tool)
+	run := func() core.ToolOutput {
+		t.Helper()
+		out, err := tool.ExecuteWithPermission(t.Context(), map[string]any{"command": "echo fixed-result"}, permReq())
+		if err != nil || out.Process.State != "exited" {
+			t.Fatalf("command: %+v, %v", out.Process, err)
+		}
+		return out
+	}
+	first, second := run(), run()
+	if first.Process.Task == second.Process.Task || core.OutputHash(first) == core.OutputHash(second) {
+		t.Fatal("launches did not get distinct audit identities")
+	}
+	if first.Process.SampleHash == "" || first.Process.SampleHash != second.Process.SampleHash {
+		t.Fatal("identical output from two shell launches must produce the same sample hash")
+	}
+}

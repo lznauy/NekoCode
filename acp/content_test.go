@@ -63,3 +63,27 @@ func TestPromptContentRejectsBadImages(t *testing.T) {
 		}
 	}
 }
+
+func TestRejectedPromptCleansPreviouslyStoredImages(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const sessionID = "session-1"
+	data := base64.StdEncoding.EncodeToString([]byte{0x89, 'P', 'N', 'G', 13, 10, 26, 10})
+	if _, _, err := promptContent([]contentBlock{{Type: "image", Data: data}, {Type: "image", Data: "invalid"}}, sessionID); err == nil {
+		t.Fatal("invalid image accepted")
+	}
+	requireNoDraftImages(t, sessionID)
+}
+func requireNoDraftImages(t *testing.T, id string) {
+	t.Helper()
+	dir, err := attachment.ImageDir(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("unadmitted prompt retained %d images", len(entries))
+	}
+}

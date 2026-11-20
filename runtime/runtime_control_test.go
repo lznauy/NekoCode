@@ -662,3 +662,63 @@ func TestCancelAndClosePreserveCancellationTerminal(t *testing.T) {
 		t.Fatalf("cancelled run snapshot = %#v, ok=%v", run, ok)
 	}
 }
+
+func TestSuperAgentSteerBindsExplicitRun(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	release, started := make(chan struct{}), make(chan struct{})
+	rt := New(RunnerFunc(func(ctx context.Context, input string, _ RunHost) (string, error) {
+		if input == "active" {
+			close(started)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+		return input, nil
+	}), backgroundServices(t.TempDir()))
+	defer rt.Close()
+	run, err := rt.StartRun(ctx, Input{Text: "active"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	awaitBackground(t, started)
+	// WaitRun settles the demand, while the background coordinator can still
+	// briefly hold the admission gate to check whether another demand is ready.
+	steer := func(id RunID, text string) error {
+		for {
+			err := rt.SteerRun(ctx, id, Input{Text: text})
+			var target *ProtocolError
+			if !errors.As(err, &target) || target.Code != ErrorBusy {
+				return err
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Millisecond):
+			}
+		}
+	}
+	assertConflict := func(id RunID) {
+		t.Helper()
+		err := steer(id, "wrong target")
+		var target *ProtocolError
+		if !errors.As(err, &target) || target.Code != ErrorConflict {
+			t.Fatalf("steer %s: %v", id, err)
+		}
+	}
+	assertConflict("different")
+	if err := steer(run, "valid next demand"); err != nil {
+		t.Fatal(err)
+	}
+	demands, err := rt.BackgroundDemands("session")
+	if err != nil || len(demands) != 1 || demands[0].Input.Text != "valid next demand" {
+		t.Fatalf("unexpected queued demands: %+v, %v", demands, err)
+	}
+	close(release)
+	if err := rt.WaitRun(ctx, demands[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	assertConflict(demands[0].ID)
+}

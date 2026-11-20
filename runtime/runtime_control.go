@@ -58,23 +58,23 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if err := r.mutationMu.LockContext(ctx); err != nil {
+		return "", err
+	}
+	defer r.mutationMu.Unlock()
+	return r.startRunLocked(ctx, input, nil, "")
+}
+
+// startRunLocked preserves normal admission while the caller holds mutationMu.
+func (r *Runtime) startRunLocked(ctx context.Context, input Input, finishSession func() (bool, error), steerTarget RunID) (RunID, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if strings.TrimSpace(input.Text) == "" {
 		return "", protocolError(ErrorInvalidInput, "start_run", "empty input")
 	}
 	if len(input.Images) > MaxImageAttachments {
 		return "", protocolError(ErrorInvalidInput, "start_run", "too many image attachments")
-	}
-	if err := r.mutationMu.LockContext(ctx); err != nil {
-		return "", err
-	}
-	defer r.mutationMu.Unlock()
-	return r.startRunLocked(ctx, input, nil)
-}
-
-// startRunLocked preserves normal admission while the caller holds mutationMu.
-func (r *Runtime) startRunLocked(ctx context.Context, input Input, finishSession func() (bool, error)) (RunID, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
 	}
 	if ctx.Value(sessionRunKey{}) != nil && r.services.Modes.Current != nil && !sessionModeRecoveryCommand(input.Text) {
 		if err := validateSessionRunMode(ctx, r.services.Modes.Current()); err != nil {
@@ -102,6 +102,11 @@ func (r *Runtime) startRunLocked(ctx context.Context, input Input, finishSession
 	if r.sessionRestoreFailed {
 		r.mu.Unlock()
 		return "", protocolError(ErrorConflict, "start_run", "previous session restoration failed")
+	}
+	if steerTarget != "" && (steerTarget != r.currentRun ||
+		(r.status != RunRunning && r.status != RunWaitingApproval && r.status != RunWaitingQuestion)) {
+		r.mu.Unlock()
+		return "", protocolError(ErrorConflict, "steer_run", fmt.Sprintf("run %s is no longer active", steerTarget))
 	}
 	if r.status != RunIdle {
 		runID := r.currentRun
@@ -161,6 +166,7 @@ func (r *Runtime) startRunLocked(ctx context.Context, input Input, finishSession
 	lease := newRunLease()
 	execution := newRunExecution()
 	execution.finishSession = finishSession
+	execution.admissionContext = executionCtx
 	r.runLease = lease
 	r.runExecution = execution
 	r.mu.Unlock()
@@ -177,11 +183,12 @@ func (r *Runtime) SteerRun(ctx context.Context, runID RunID, input Input) error 
 		return protocolError(ErrorBusy, "steer_run", "runtime operation in progress")
 	}
 	super := r.services.Modes.Current != nil && r.services.Modes.Current() == mode.SuperAgent
-	r.mutationMu.Unlock()
 	if super && !strings.HasPrefix(strings.TrimSpace(input.Text), "/") {
-		_, err := r.StartRun(ctx, input)
+		defer r.mutationMu.Unlock()
+		_, err := r.startRunLocked(ctx, input, nil, runID)
 		return err
 	}
+	r.mutationMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -247,11 +254,12 @@ func (r *Runtime) SteerRun(ctx context.Context, runID RunID, input Input) error 
 				Type:   EventInputAccepted,
 				Source: input.Source,
 				Payload: MessagePayload{
-					Role:    "user",
-					Content: RedactInputText(input.Text),
-					Source:  input.Source,
-					Sender:  input.Sender,
-					Images:  ValidImageAttachments(input.Text, input.Images),
+					Steering: true,
+					Role:     "user",
+					Content:  RedactInputText(input.Text),
+					Source:   input.Source,
+					Sender:   input.Sender,
+					Images:   ValidImageAttachments(input.Text, input.Images),
 				},
 			})
 		}

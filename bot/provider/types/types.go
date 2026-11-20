@@ -3,6 +3,7 @@ package types
 import (
 	"context"
 	nethttp "net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -62,6 +63,22 @@ type Message struct {
 	// placeholder text (and image_attachments envelope) as the only image
 	// trace, so switching models never breaks a conversation.
 	Images []MessageImage `json:"images,omitempty"`
+}
+
+// Clone detaches mutable message fields at history and session boundaries.
+func (m Message) Clone() Message {
+	m.ToolCalls = slices.Clone(m.ToolCalls)
+	m.Images = slices.Clone(m.Images)
+	m.ToolEvidence = m.ToolEvidence.Clone()
+	return m
+}
+
+func CloneMessages(messages []Message) []Message {
+	out := slices.Clone(messages)
+	for i := range out {
+		out[i] = out[i].Clone()
+	}
+	return out
 }
 
 // MessageImage references one image attached to a user message. Width and
@@ -174,6 +191,8 @@ type StreamToken struct {
 	ToolCallDelta      *ToolCallDelta
 	Usage              *StreamUsage
 	FinishReason       string
+	// Refused marks provider refusal content even when the final reason is stop.
+	Refused bool
 	// Request is emitted once, as the first token of a stream: wire-level
 	// facts about the request for the per-call evidence log.
 	Request *RequestMeta
