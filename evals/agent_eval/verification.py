@@ -32,16 +32,20 @@ def stop_process(proc):
         pass
 
 
-def verify(case, workspace, output, final_text="", input_sha256=None, events_path=None, original_workspace=None):
+def verify(case, workspace, output, final_text="", input_sha256=None, events_path=None, original_workspace=None, workspace_change_ns=None):
     workspace, output = Path(workspace).resolve(), Path(output).resolve()
     if output.is_relative_to(workspace) or workspace.is_relative_to(output):
         raise ValueError('verification input and output must not overlap')
     output.mkdir(parents=True, exist_ok=False)
     (output / "answer.txt").write_text(final_text)
+    info = {}
+    if workspace_change_ns is not None:
+        info["workspace_change_ns"] = workspace_change_ns
     if input_sha256 is not None:
-        info = {"sha256": input_sha256}
+        info["sha256"] = input_sha256
         if "architecture" in case["manifest"]["tags"]:
             info["unchanged"] = tree_hash(workspace) == input_sha256
+    if info:
         write_json(output / "input.json", info)
     result_path = output / "result.json"
     # The sandbox gets a private output directory. Never let a candidate plant

@@ -16,7 +16,7 @@ const defaultMaxRetries = 2
 
 // runState holds the mutable state of a single Run.
 type runState struct {
-	preserved           []preservedFile
+	preserved           []protocol.PreservedFile
 	preservationChecked bool
 	writeDrafts         toolpolicy.WriteDrafts
 	lastShellFailure    shellFailure
@@ -27,10 +27,11 @@ type runState struct {
 	taskReferences *contextmgr.TaskReferences
 	hookStopped    bool
 	// Progress and termination.
-	step                int               // current iteration, capped by maxAgentSteps
-	stopReason          policy.StopReason // why the run stopped; finishRun branches on it
-	err                 error             // unrecoverable preparation failure
-	todoPartialCloseout bool              // bounded checklist recovery ended with open work
+	step            int               // current iteration, capped by maxAgentSteps
+	stopReason      policy.StopReason // why the run stopped; finishRun branches on it
+	err             error             // unrecoverable preparation failure
+	hasToolResults  bool
+	partialCloseout bool // the run ended with a partial report
 
 	// lastText is the latest model text. finalText holds an accepted final
 	// answer; rejected candidates are cleared. finalPersisted tracks whether
@@ -39,10 +40,8 @@ type runState struct {
 	finalText      string
 	finalPersisted bool
 
-	// Loop-stuck guards: consecutive Stop hint injections (capped by
-	// maxConsecutiveHints) and consecutive LLM failures (maxConsecutiveFailures).
-	consecutiveHints    int
-	consecutiveFailures int
+	// Consecutive Stop hints without intervening tool calls.
+	consecutiveHints int
 
 	// Hints staged across phases (UserSubmit/PostToolBatch), merged into the next
 	// turn's transient hints.

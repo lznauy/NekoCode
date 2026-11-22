@@ -30,9 +30,11 @@ func TestHandoffAvoidsCompactionButNeverBypassesContextLimit(t *testing.T) {
 
 func TestSharedBudgetNoticeIncludedInContextAdmission(t *testing.T) {
 	m := New(Config{ContextWindow: 2000})
-	budget, _ := modelbudget.New(100)
+	budget, _ := modelbudget.NewWithLimits(100, false, 500)
+	budget.ObserveTokens(300, true)
+	budget.ObserveTokens(250, false)
 	messages, err := m.PrepareRequest(modelbudget.WithBudget(t.Context(), budget), ModelRequest{HandoffOnly: true, OutputTokens: 100})
-	if err != nil || !strings.Contains(messages[len(messages)-1].Content, "Shared execution budget") {
+	if err != nil || !strings.Contains(messages[len(messages)-1].Content, "External token cutoff: 500") || !strings.Contains(messages[len(messages)-1].Content, "execution: 300 (lower bound") {
 		t.Fatalf("missing budget notice: %v", err)
 	}
 	if len(m.Snapshot().Messages) != 0 {

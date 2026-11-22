@@ -25,10 +25,12 @@ type ApprovalDecision struct {
 }
 
 func (d ApprovalDecision) ConfirmReply() protocol.ConfirmReply {
+	if d.Cancelled {
+		return protocol.ConfirmReply{Cancelled: true}
+	}
 	return protocol.ConfirmReply{
-		Allowed:   d.Allowed,
-		Cancelled: d.Cancelled,
-		Remember:  d.Remember,
+		Allowed:  d.Allowed,
+		Remember: d.Remember,
 	}
 }
 

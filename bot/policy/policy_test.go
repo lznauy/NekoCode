@@ -1,6 +1,9 @@
 package policy
 
-import "testing"
+import (
+	"nekocode/protocol"
+	"testing"
+)
 
 func TestRecordToolsPublishesConcreteToolOutcome(t *testing.T) {
 	p := New()
@@ -49,5 +52,19 @@ func TestBeforeToolHasNoHeuristicQuota(t *testing.T) {
 		if results := p.BeforeTool(ToolRequest{Name: "read"}); len(results) != 0 {
 			t.Fatalf("read %d unexpectedly blocked: %+v", i+1, results)
 		}
+	}
+}
+
+func TestProcessFailureRemainsDistinctFromToolError(t *testing.T) {
+	p := New()
+	var got ToolFacts
+	p.Register(Hook{Name: "capture", Point: PostToolUse, On: func(s State) *Result { got = s.Facts().Tool; return nil }})
+	p.RecordTools([]ToolResult{{Name: "shell", Process: protocol.ProcessObservation{State: "exited", ExitCodeKnown: true, ExitCode: 7}}})
+	if got.Error || !got.Process.FailedExit() || got.Process.ExitCode != 7 {
+		t.Fatalf("unexpected post-tool facts: %+v", got)
+	}
+	failures := p.Snapshot().ToolErrors
+	if len(failures) != 1 || failures[0].Process.ExitCode != 7 || failures[0].Error != "" {
+		t.Fatalf("unexpected ledger: %+v", failures)
 	}
 }

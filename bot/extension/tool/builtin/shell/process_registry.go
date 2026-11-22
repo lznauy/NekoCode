@@ -56,6 +56,7 @@ type startRequest struct {
 	owner       string
 	actor       string
 	command     string
+	testName    string
 	directory   string
 	profile     sandbox.Profile
 	host        bool
@@ -167,12 +168,15 @@ func (r *taskRegistry) startOrReuse(ctx context.Context, req startRequest) (*she
 	}
 
 	t := &shellTask{
-		directory: req.directory,
-		name:      name, owner: req.owner, cmd: req.command, launchKey: launchKey,
+		directory: req.directory, testName: req.testName,
+		name: name, owner: req.owner, cmd: req.command, launchKey: launchKey,
 		startedAt: time.Now(), status: taskRunning, proc: proc, cancel: cancel,
 		scratchFile: req.profile.ScratchFile,
 		done:        make(chan struct{}), changed: make(chan struct{}, 1),
 		drained: make(chan struct{}),
+	}
+	if directGoTest(req.command) {
+		t.goReport = &emptyGoReport{}
 	}
 	t.outputStore = req.outputStore
 	if t.outputStore == nil {
@@ -182,7 +186,7 @@ func (r *taskRegistry) startOrReuse(ctx context.Context, req startRequest) (*she
 	// terminating or replaying a command that may have external side effects.
 	t.capture = core.NewOutputCapture(t.outputStore, core.MaxCapturedOutputBytes, nil)
 	r.register(t)
-	drainProcessOutput(t, proc)
+	drainProcessOutput(t, proc.Stdout(), proc.Stderr())
 	go func() {
 		defer cancel()
 		waitErr := proc.Wait()
@@ -634,15 +638,25 @@ func drainToRing(t *shellTask, reader io.Reader) {
 	}
 }
 
-func drainProcessOutput(t *shellTask, proc processHandle) {
+func drainProcessOutput(t *shellTask, stdout, stderr io.Reader) {
 	var readers sync.WaitGroup
-	for _, reader := range []io.Reader{proc.Stdout(), proc.Stderr()} {
+	if t.goReport != nil && stdout != nil {
+		stdout = io.TeeReader(stdout, t.goReport)
+	}
+	report := namedGoTest{name: t.testName}
+	if report.name != "" && stdout != nil {
+		stdout = io.TeeReader(stdout, &report)
+	}
+	for _, reader := range []io.Reader{stdout, stderr} {
 		readers.Go(func() {
 			drainToRing(t, reader)
 		})
 	}
 	go func() {
 		readers.Wait()
+		if report.name != "" {
+			t.testOutcome = report.outcome()
+		}
 		t.finishOutput()
 		close(t.drained)
 	}()

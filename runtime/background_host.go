@@ -59,15 +59,48 @@ func (h backgroundHost) Step(ev protocol.StepEvent) {
 	b.mu.Unlock()
 	h.runtime.publishStepForSession(RunID("task_"+h.id), ev, h.sessionID)
 }
-func (h backgroundHost) status(status string) {
-	h.runtime.background.mu.Lock()
-	if e := h.runtime.background.entries[h.id]; h.owns(e) && h.ctx.Err() == nil && e.cancel != nil {
-		e.Status = status
+func (h backgroundHost) updateInteractionStatus(approvalDelta, questionDelta int) {
+	b := h.runtime.background
+	b.mu.Lock()
+	e := b.entries[h.id]
+	if !h.owns(e) || h.ctx.Err() != nil || e.cancel == nil {
+		b.mu.Unlock()
+		return
 	}
-	h.runtime.background.mu.Unlock()
-	h.Step(protocol.StepEvent{Action: protocol.StepActionSubAgentUpdate, SubAgentStatus: status})
-	h.runtime.background.signal()
+	e.waitingApprovals += approvalDelta
+	e.waitingQuestions += questionDelta
+	status := "running"
+	if e.waitingApprovals > 0 {
+		status = "waiting_approval"
+	} else if e.waitingQuestions > 0 {
+		status = "waiting_question"
+	}
+	if status == e.Status {
+		b.mu.Unlock()
+		return
+	}
+	e.Status = status
+	b.signal()
+	if e.publishingWaitStatus {
+		b.mu.Unlock()
+		return
+	}
+	e.publishingWaitStatus = true
+	// Concurrent tools can resolve while an observer is receiving the previous
+	// update. Publish the latest status in order without holding the task lock.
+	for {
+		b.mu.Unlock()
+		h.Step(protocol.StepEvent{Action: protocol.StepActionSubAgentUpdate, SubAgentStatus: status})
+		b.mu.Lock()
+		if b.entries[h.id] != e || !h.owns(e) || h.ctx.Err() != nil || e.Status == status {
+			e.publishingWaitStatus = false
+			b.mu.Unlock()
+			return
+		}
+		status = e.Status
+	}
 }
+
 func (h backgroundHost) Confirm(req protocol.ConfirmRequest) protocol.ConfirmReply {
 	if h.ctx.Err() != nil {
 		return protocol.ConfirmReply{Cancelled: true}
@@ -82,9 +115,9 @@ func (h backgroundHost) Confirm(req protocol.ConfirmRequest) protocol.ConfirmRep
 	if h.ctx.Err() != nil {
 		h.runtime.approvals.RejectRun(h.interactionID)
 	}
-	h.status("waiting_approval")
+	h.updateInteractionStatus(1, 0)
 	reply := wait()
-	h.status("running")
+	h.updateInteractionStatus(-1, 0)
 	if h.ctx.Err() != nil {
 		return protocol.ConfirmReply{Cancelled: true}
 	}
@@ -104,9 +137,9 @@ func (h backgroundHost) Ask(req protocol.QuestionRequest) protocol.QuestionReply
 	if h.ctx.Err() != nil {
 		h.runtime.questions.RejectRun(h.interactionID)
 	}
-	h.status("waiting_question")
+	h.updateInteractionStatus(0, 1)
 	reply := wait()
-	h.status("running")
+	h.updateInteractionStatus(0, -1)
 	if h.ctx.Err() != nil {
 		return protocol.QuestionReply{Rejected: true}
 	}

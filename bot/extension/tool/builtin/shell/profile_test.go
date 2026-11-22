@@ -52,6 +52,7 @@ func TestApplyWorkspaceRoots(t *testing.T) {
 	manager := workspace.New(cwd, []workspace.Root{
 		{Path: extraRW, Access: workspace.AccessReadWrite},
 		{Path: extraRO, Access: workspace.AccessReadOnly},
+		{Path: t.TempDir(), Access: workspace.AccessReadWrite, FileOnly: true},
 	})
 
 	profile := sandbox.Profile{Workspace: cwd}

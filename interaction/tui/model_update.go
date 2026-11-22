@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"nekocode/interaction/tui/components"
+	"nekocode/interaction/tui/components/message"
 	controlruntime "nekocode/runtime"
 	"nekocode/util/runtime"
 
@@ -13,10 +14,14 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	defer func() {
 		if r := recover(); r != nil {
 			runtime.WritePanicLog(r)
+			return
+		}
+		if next := m.dispatchQueued(); next != nil {
+			cmd = tea.Batch(cmd, next)
 		}
 	}()
 
@@ -46,6 +51,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.Header.SetWidth(msg.Width)
 		m.Input.SetWidth(msg.Width)
+		if m.queue.editor != nil {
+			m.queue.editor.SetWidth(msg.Width)
+		}
 		m.Splash.SetSize(msg.Width, msg.Height)
 
 		m.resizeMessages()
@@ -64,6 +72,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case modeChangedMsg:
 		return m, m.applyModeChange(msg)
 
+	case queueSettledMsg:
+		if m.queue.settling == msg.id {
+			m.queue.settling = ""
+			if msg.err != nil {
+				m.queue.managing = true
+				m.Messages.AddMessage(message.ChatMessage{Role: "error", Content: msg.err.Error()})
+			}
+		}
+		return m, nil
 	case doneMsg:
 		return m, m.handleDone(msg)
 
@@ -96,6 +113,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.modePicker {
 			return m, m.handleModeKey(msg)
 		}
+		if handled, cmd := m.handleQueueKey(msg); handled {
+			return m, cmd
+		}
 		return m, m.handleKeyPress(msg)
 
 	case components.TickMsg:
@@ -116,6 +136,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.PasteMsg:
+		if m.state == stateConfirming {
+			return m, nil
+		}
 		if m.sessionNameFocused() {
 			return m, m.sessionName.updateInput(msg)
 		}
@@ -130,6 +153,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.tasks.query = string([]rune(m.tasks.query + text)[:min(256, len([]rune(m.tasks.query+text)))])
 				m.tasks.listOffset = 0
 				return m, m.loadTasks()
+			}
+			return m, nil
+		}
+		if m.queue.managing {
+			if m.queue.editor != nil {
+				_, cmd := m.queue.editor.Update(msg)
+				m.resizeMessages()
+				return m, cmd
 			}
 			return m, nil
 		}

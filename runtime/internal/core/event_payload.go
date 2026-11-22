@@ -37,6 +37,7 @@ var payloadCodecs = map[EventType]payloadCodec{
 	EventToolStarted: codec[ToolPayload](), EventToolBlocked: codec[ToolPayload](), EventToolPreview: codec[ToolPayload](), EventToolCompleted: codec[ToolPayload](),
 	EventSubAgentStarted: codec[SubAgentPayload](), EventSubAgentUpdated: codec[SubAgentPayload](), EventSubAgentEnded: codec[SubAgentPayload](), EventSubAgentOutput: codec[protocol.SubAgentOutput](),
 	EventTodosUpdated:      codec[[]protocol.TodoItem](),
+	EventInteractionQueue:  codec[InteractionQueuePayload](),
 	EventApprovalRequested: codec[ApprovalView](), EventApprovalResolved: codec[ApprovalView](),
 	EventQuestionRequested: codec[QuestionView](), EventQuestionResolved: codec[QuestionView](),
 	EventRunSummary: codec[protocol.RunSummary](),

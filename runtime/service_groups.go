@@ -89,15 +89,16 @@ type SessionsServices struct {
 	// callback means the current session is durable and can be resumed by ID.
 	CaptureDraft func() (restore func() error, err error)
 
-	CurrentSessionID    func() string
-	ListSessions        func() []SessionMeta
-	SessionMessages     func() []DisplayMessage
-	SessionMessagesPage func(offset, limit int) (SessionMessagePage, error)
-	HistoryWindow       func(before, limit int) (SessionHistoryWindow, error)
-	ResumeSession       func(string) error
-	NewSession          func() (SessionMeta, error)
-	DeleteSession       func(string) error
-	RenameSession       func(string, string) error
+	CurrentSessionID      func() string
+	EnsureSessionIdentity func() string
+	ListSessions          func() []SessionMeta
+	SessionMessages       func() []DisplayMessage
+	SessionMessagesPage   func(offset, limit int) (SessionMessagePage, error)
+	HistoryWindow         func(before, limit int) (SessionHistoryWindow, error)
+	ResumeSession         func(string) error
+	NewSession            func() (SessionMeta, error)
+	DeleteSession         func(string) error
+	RenameSession         func(string, string) error
 }
 
 // ToolsServices contains optional tools callbacks supplied by the application.

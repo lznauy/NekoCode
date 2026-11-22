@@ -9,6 +9,7 @@ import (
 
 	"nekocode/mode"
 	"nekocode/protocol"
+	"nekocode/util/modelbudget"
 )
 
 type RunID string
@@ -76,6 +77,7 @@ const (
 	EventSubAgentEnded          EventType = "subagent_ended"
 	EventSubAgentUpdated        EventType = "subagent_updated"
 	EventTodosUpdated           EventType = "todos_updated"
+	EventInteractionQueue       EventType = "interaction_queue"
 	EventApprovalRequested      EventType = "approval_requested"
 	EventApprovalResolved       EventType = "approval_resolved"
 	EventQuestionRequested      EventType = "question_requested"
@@ -165,6 +167,13 @@ type ToolPayload struct {
 	AttemptSeq    int                       `json:"attempt_seq,omitempty"`
 }
 
+// InteractionQueuePayload identifies one foreground child blocked on the shared interaction slot.
+type InteractionQueuePayload struct {
+	ID         uint64 `json:"id"`
+	SubAgentID string `json:"subagent_id"`
+	Waiting    bool   `json:"waiting"`
+}
+
 type SubAgentPayload struct {
 	Summary   protocol.RunSummary `json:"summary,omitzero"`
 	SessionID string              `json:"session_id,omitempty"`
@@ -189,8 +198,10 @@ type SessionPayload struct {
 }
 
 type RunResult struct {
-	Output string `json:"output"`
-	Error  string `json:"error,omitempty"`
+	StopReason      string                `json:"stop_reason,omitempty"`
+	ExecutionBudget *modelbudget.Snapshot `json:"execution_budget,omitempty"`
+	Output          string                `json:"output"`
+	Error           string                `json:"error,omitempty"`
 
 	EvidenceIncomplete bool `json:"evidence_incomplete,omitempty"`
 }

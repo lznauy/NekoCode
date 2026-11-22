@@ -3,6 +3,7 @@ package contextmgr
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -424,6 +425,56 @@ func TestMutationReceiptsFollowReadReceiptDeliveryAndRestoreRules(t *testing.T) 
 			if restored.Snapshot().Messages[0].ReadID != "" {
 				t.Fatal("restore revived mutation receipt")
 			}
+		})
+	}
+}
+
+func TestTaskBatchContextLimitPreservesMachineReadableManifest(t *testing.T) {
+	store := core.NewOutputStore(t.TempDir())
+	entries := make([]map[string]string, 50)
+	for i := range entries {
+		entries[i] = map[string]string{"id": fmt.Sprint(i), "status": "completed", "summary": strings.Repeat("X", 125)}
+	}
+	full, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, alreadyStored := range []bool{false, true} {
+		t.Run(fmt.Sprint(alreadyStored), func(t *testing.T) {
+			m := New(Config{ContextWindow: 10000, SystemPrompt: strings.Repeat("x", 28000)})
+			m.SetOutputStore(store)
+			call := types.ToolCall{ID: "batch", Function: types.FunctionCall{Name: "task_batch", Arguments: "{}"}}
+			m.AddAssistant(types.Message{ToolCalls: []types.ToolCall{call}})
+			result := types.Message{Content: string(full), ToolCallID: "batch"}
+			if alreadyStored {
+				result.ToolOutput.Path, err = store.PreserveOutput(string(full))
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			m.AddToolResultsBatch([]ToolResultMsg{{ToolName: "task_batch", Message: result}})
+			msgs, err := m.PrepareRequest(t.Context(), ModelRequest{OutputTokens: 256})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, msg := range msgs {
+				if msg.ToolCallID != "batch" {
+					continue
+				}
+				if msg.ToolOutput.Path == "" {
+					t.Fatal("missing full manifest reference")
+				}
+				body := strings.TrimPrefix(msg.Content, core.ArtifactHeader(msg.ToolOutput))
+				if !json.Valid([]byte(body)) {
+					t.Fatalf("malformed batch reply after context admission: %q", body[:min(100, len(body))])
+				}
+				file, err := os.ReadFile(msg.ToolOutput.Path)
+				if err != nil || string(file) != string(full) {
+					t.Fatalf("full manifest lost: %v", err)
+				}
+				return
+			}
+			t.Fatal("batch tool response missing from model request")
 		})
 	}
 }

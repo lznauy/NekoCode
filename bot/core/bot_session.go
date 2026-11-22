@@ -316,11 +316,15 @@ func (b *Bot) clearConversationState() {
 	}
 }
 
-func (b *Bot) ensureSessionIdentity() {
+// EnsureSessionIdentity binds the first foreground submission before it is visible to the TUI.
+func (b *Bot) EnsureSessionIdentity() string { return b.ensureSessionIdentity() }
+
+func (b *Bot) ensureSessionIdentity() string {
+
 	b.historyMu.Lock()
 	defer b.historyMu.Unlock()
 	if b.sess == nil {
-		return
+		return ""
 	}
 	if b.sess.CurrentID() == "" {
 		newSession := b.sess.StartNew()
@@ -330,6 +334,7 @@ func (b *Bot) ensureSessionIdentity() {
 	}
 	b.bindPermissionSession()
 	b.bindSessionResources()
+	return b.sess.CurrentID()
 }
 
 func (b *Bot) DeleteSession(id string) error {

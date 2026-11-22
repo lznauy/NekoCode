@@ -5,19 +5,22 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"nekocode/mode"
 	"nekocode/protocol"
+	"nekocode/util/modelbudget"
 	textutil "nekocode/util/text"
 )
 
 type runLease struct {
-	mu          sync.Mutex
-	drained     chan struct{}
-	drainOnce   sync.Once
-	interaction sync.Mutex
-	active      bool
-	inFlight    int
+	mu            sync.Mutex
+	drained       chan struct{}
+	drainOnce     sync.Once
+	interaction   chan struct{}
+	interactionID atomic.Uint64
+	active        bool
+	inFlight      int
 }
 
 // runExecution tracks runner completion separately from callback drainage.
@@ -63,7 +66,7 @@ func (e *runExecution) hasMetrics() bool {
 }
 
 func newRunLease() *runLease {
-	return &runLease{active: true, drained: make(chan struct{})}
+	return &runLease{active: true, drained: make(chan struct{}), interaction: make(chan struct{}, 1)}
 }
 
 func (l *runLease) emit(fn func()) {
@@ -210,13 +213,56 @@ func (h runHost) system(message string, source SourceRef) {
 	})
 }
 
+func (l *runLease) acquireInteraction(done <-chan struct{}) bool {
+	select {
+	case l.interaction <- struct{}{}:
+		return true
+	case <-done:
+		return false
+	}
+}
+
+func (h runHost) acquireInteraction(child string, done <-chan struct{}) (func(), bool) {
+	release := func() { <-h.lease.interaction }
+	select {
+	case h.lease.interaction <- struct{}{}:
+		return release, true
+	default:
+	}
+	if child == "" {
+		return release, h.lease.acquireInteraction(done)
+	}
+	id := h.lease.interactionID.Add(1)
+	publish := func(waiting bool, committed func()) {
+		published := h.lease.guard(func() {
+			event := Event{RunID: h.runID, Type: EventInteractionQueue, Source: SourceRef{Kind: "runtime"}, Payload: InteractionQueuePayload{ID: id, SubAgentID: child, Waiting: waiting}}
+			h.runtime.events.PublishCommitted([]Event{event}, committed)
+		})
+		if !published && committed != nil {
+			committed() // The inactive run still owns the acquired slot.
+		}
+	}
+	publish(true, nil)
+	if !h.lease.acquireInteraction(done) {
+		publish(false, nil)
+		return nil, false
+	}
+	// Keep the interval open through registration and reply, so the two
+	// sources of waiting evidence overlap across the queue-to-broker handoff.
+	// Release at commit so ordinary observers can synchronously request the next slot.
+	return func() { publish(false, release) }, true
+}
+
 func (h runHost) Confirm(request ConfirmRequest) ConfirmReply {
-	h.lease.interaction.Lock()
-	defer h.lease.interaction.Unlock()
+	release, ok := h.acquireInteraction(request.SubAgentID, request.Done)
+	if !ok {
+		return ConfirmReply{Cancelled: true}
+	}
+	defer release()
 
 	var wait func() ConfirmReply
 	var waiting bool
-	ok := h.lease.guard(func() {
+	ok = h.lease.guard(func() {
 		wait = h.runtime.approvals.Register(request)
 		if wait != nil {
 			waiting = h.runtime.beginWaiting(h.runID, RunWaitingApproval)
@@ -233,12 +279,15 @@ func (h runHost) Confirm(request ConfirmRequest) ConfirmReply {
 }
 
 func (h runHost) Ask(request QuestionRequest) QuestionReply {
-	h.lease.interaction.Lock()
-	defer h.lease.interaction.Unlock()
+	release, ok := h.acquireInteraction(request.SubAgentID, request.Done)
+	if !ok {
+		return QuestionReply{Rejected: true}
+	}
+	defer release()
 
 	var wait func() QuestionReply
 	var waiting bool
-	ok := h.lease.guard(func() {
+	ok = h.lease.guard(func() {
 		wait = h.runtime.questions.Register(request)
 		if wait != nil {
 			waiting = h.runtime.beginWaiting(h.runID, RunWaitingQuestion)
@@ -345,6 +394,9 @@ func (r *Runtime) run(ctx context.Context, runID RunID, input Input, lease *runL
 	withMetrics = true
 	stopMetricsUpdates = r.startMetricsUpdates(runID, lease)
 	agentInput = InputWithImageAttachments(agentInput, input.Images, r.VisionEnabled())
+	if modelbudget.FromContext(ctx) != nil {
+		ctx = modelbudget.WithHandoffSettlement(ctx, r.background.releaseIdleHandoffs)
+	}
 	result, err := r.runner.Run(ctx, agentInput, host)
 	checkGoal = interactiveGoal && err == nil && ctx.Err() == nil && goalHost.PendingGoalRun(string(runID))
 	if checkGoal && sessionID == "" {
@@ -372,7 +424,7 @@ func (r *Runtime) publishAcceptedInput(ctx context.Context, runID RunID, input I
 }
 
 func (r *Runtime) handleBotCommand(ctx context.Context, runID RunID, input string, host runHost) (string, bool) {
-	if r.background.busy() && strings.HasPrefix(strings.TrimSpace(input), "/") {
+	if r.background.busy() && protocol.IsSlashCommandInput(input) {
 		fields := strings.Fields(input)
 		safe := false
 		switch fields[0] {
@@ -489,6 +541,16 @@ func (r *Runtime) finishRun(runID RunID, output string, err error, withMetrics b
 	default:
 		r.mu.Unlock()
 		return
+	}
+	if protocol.OnlyFailure(err, modelbudget.ErrExhausted) {
+		payload.StopReason = "call_budget"
+		if budget := modelbudget.FromContext(r.runContext); budget != nil {
+			snapshot := budget.Snapshot()
+			payload.ExecutionBudget = &snapshot
+		}
+	}
+	if protocol.OnlyIncompleteResponse(err) {
+		payload.StopReason = "incomplete"
 	}
 	r.status = status
 	cancel := r.cancelRun

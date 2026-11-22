@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	ctxmgr "nekocode/bot/contextmgr"
@@ -261,5 +262,32 @@ func TestPostExecutionSaveFailureMarksIncompleteWithoutReplayingTool(t *testing.
 	})
 	if !errors.Is(err, cause) || !protocol.EvidenceIncomplete(err) || completed != 1 || receiptID == "" || model.calls != 1 {
 		t.Fatalf("err=%v executions=%d receipt=%s model calls=%d", err, completed, receiptID, model.calls)
+	}
+}
+
+func TestResumeClosesOnlyPendingCallsFromLatestExchange(t *testing.T) {
+	call := func(id string) types.ToolCall {
+		return types.ToolCall{ID: id, Type: "function", Function: types.FunctionCall{Name: "inspect", Arguments: "{}"}}
+	}
+	snapshot := ctxmgr.ManagerSnapshot{Messages: []types.Message{
+		{Role: "assistant", ToolCalls: []types.ToolCall{call("reused")}},
+		{Role: "tool", ToolCallID: "reused", Content: "old"},
+		{Role: "user", Content: "new request"},
+		{Role: "assistant", ToolCalls: []types.ToolCall{call("settled"), call("reused")}},
+		{Role: "tool", ToolCallID: "settled", Content: "current"},
+	}}
+	model := &scriptedLLM{scripts: [][]types.StreamToken{completionScript()}}
+	_, err := New(Config{LLM: model, Tools: tools.New()}).Run(t.Context(), RunConfig{Profile: Profile{Name: "test"}, Prompt: "resume", ResumeContext: &snapshot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var outputs []string
+	for _, msg := range model.messages[0] {
+		if msg.Role == "tool" {
+			outputs = append(outputs, msg.Content)
+		}
+	}
+	if len(outputs) != 3 || outputs[0] != "old" || outputs[1] != "current" || !strings.Contains(outputs[2], "Previous execution was interrupted") {
+		t.Fatalf("model tool results %v", outputs)
 	}
 }

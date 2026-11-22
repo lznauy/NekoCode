@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/google/uuid"
 	"nekocode/mode"
@@ -125,16 +124,7 @@ func (b *backgroundTasks) coordinate() error {
 		parent = context.WithValue(in.ctx, queuedRunKey{}, in.id)
 	} else {
 		budget := claimed[ids[0]].callBudget
-		settled := true
-		for _, e := range b.entries {
-			if e.callBudget == budget && pendingBackgroundStatus(e.Status) {
-				settled = false
-				break
-			}
-		}
-		if budget != nil && settled {
-			budget.ReleaseHandoffs()
-		}
+		b.releaseIdleHandoffsLocked(budget)
 		parent = modelbudget.WithRole(modelbudget.WithBudget(parent, budget), modelbudget.Coordinator, "")
 		parent = protocol.WithCoordination(parent, protocol.Coordination{GroupID: group, Notification: true, PendingTasks: pendingTasks, PendingReviews: pendingReviews})
 	}
@@ -256,7 +246,7 @@ func (r *Runtime) queueBackgroundInput(ctx context.Context, input Input) (RunID,
 	if len(input.Images) > 0 {
 		return "", protocolError(ErrorBusy, "queue_input", "wait for the short coordinator turn before sending images; the image draft must be retained")
 	}
-	if strings.HasPrefix(strings.TrimSpace(input.Text), "/") {
+	if protocol.IsSlashCommandInput(input.Text) {
 		return "", protocolError(ErrorBusy, "queue_input", "control commands must wait for the coordinator turn")
 	}
 	sessionID := r.CurrentSessionID()
@@ -335,4 +325,22 @@ type backgroundDemandKey struct{}
 
 func (r *Runtime) SubmitBackgroundDemand(ctx context.Context, sessionID string, input Input) (RunID, error) {
 	return r.StartRun(context.WithValue(ctx, backgroundDemandKey{}, sessionID), input)
+}
+
+func (b *backgroundTasks) releaseIdleHandoffs(budget *modelbudget.Budget) {
+	b.lockMutation()
+	defer b.unlockMutation()
+	b.releaseIdleHandoffsLocked(budget)
+}
+
+func (b *backgroundTasks) releaseIdleHandoffsLocked(budget *modelbudget.Budget) {
+	if budget == nil {
+		return
+	}
+	for _, e := range b.entries {
+		if e.callBudget == budget && pendingBackgroundStatus(e.Status) {
+			return
+		}
+	}
+	budget.ReleaseHandoffs()
 }

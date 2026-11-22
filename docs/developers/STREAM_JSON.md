@@ -42,7 +42,9 @@ stdout 只输出协议 JSON；CLI 诊断错误写 stderr，内部诊断日志沿
 
 - 一个连接独占一个 runtime，默认创建新会话；`--resume` 在开始读取消息前恢复会话。
 - `initialize` 可省略；如果使用，必须在第一条 user 消息之前发送，且只能成功一次。
-- 可在 initialize 设置 `model_call_budget`（1–1000000 的整数）。预算覆盖这条连接启动的前台、排队输入及其后台任务与结果协调，按请求发出前原子计数，包含在途、失败和重试；普通额度耗尽后最多预留 8 次不同 attempt 的交接及 4 次协调调用，小预算按比例缩小。`server.info` 与 `context.snapshot` 的 `execution_budget` 返回当前计数。没有配置时不限制。预算是连接内的内存对象；后台已受理工作继续使用原对象，不写进会话或在重连时重置旧工作的额度。新连接可以为新受理工作设置新预算，同一计划的不同预算报告分开协调。
+- 可在 initialize 设置 `model_call_budget`（1–1000000 的整数）。预算覆盖这条连接启动的前台、排队输入及其后台任务与结果协调，按请求发出前原子计数，包含在途、失败和重试；普通额度耗尽后最多预留 8 次不同 attempt 的交接及 4 次协调调用，小预算按比例缩小。普通额度耗尽后，同步批次已返回且同一预算下没有待执行或运行中的后台任务时，主代理可将剩余交接额度用于收尾。`server.info` 与 `context.snapshot` 的 `execution_budget` 返回当前计数。没有配置时不限制。预算是连接内的内存对象；后台已受理工作继续使用原对象，不写进会话或在重连时重置旧工作的额度。新连接可以为新受理工作设置新预算，同一计划的不同预算报告分开协调。
+- 配置调用预算时，宿主可通过 `initialize.external_token_limit` 声明自己执行的 token 截止值（正整数）。每次模型请求的临时预算提示显示该值和已结束请求报告的输入与输出 token 小计，包含缓存输入。缺失用量及在途请求使小计成为下界。该字段只提供信息；截止由宿主执行。
+- `initialize.parallel_step_sharing=true` 可在已配置调用预算的连接上试验同步并行任务步数分配。宿主按批次派发时的普通调用余额，为每个任务和主代理各预留一份规划额度，每个任务预留一次交接调用。实际计费仍以物理调用为准；此选项默认关闭。
 - 已覆盖主模型、子任务、压缩与 image_understand 调用；外部 MCP/脚本自己访问模型不在该计数器内。预算计数是请求 admission 上限，不是精确账单或 token 上限。不会中断正在执行的工具批次；阶段交接与最终回答仍可能因取消、上下文过大或模型协议错误失败，必须保留 partial/验证缺口。
 - user 消息按 FIFO 排队，一个 runtime 同时只运行一个 turn。
 - 每次接受输入后输出 `system/input_queued`，其 `accepted_uuid` 是关联 ID。
@@ -118,9 +120,14 @@ thinking signature 或供应商 usage。完整 assistant 内容是权威值，�
 ### 结果与统计
 
 `result.subtype` 支持 `success`、`error_during_execution`、`error_cancelled`、
-`error_step_limit`、`error_incomplete`，含 `is_error`、`result`、`duration_ms` 和可选 `errors` 数组。
-`stop_reason` 分别为 `completed`、`execution_error`、`cancelled`、`step_limit`、`incomplete`。
-未完成清单的部分报告使用 `error_incomplete`，保留报告正文并设置 `is_error=true`；单次 CLI 退出码为 `1`。
+`error_step_limit`、`error_incomplete`、`error_call_budget`，含 `is_error`、`result`、`duration_ms` 和可选 `errors` 数组。
+`stop_reason` 分别为 `completed`、`execution_error`、`cancelled`、`step_limit`、`incomplete`、`call_budget`。调用预算耗尽时，`execution_budget` 附带本次运行结束时各角色的余额。
+`stop_reason="incomplete"` 对应 `subtype="error_incomplete"`、`is_error=true`，单次 CLI 退出码为 `1`。宿主应分别读取 `result`（可展示的正文）和可选的 `errors`（运行错误详情）。
+
+| 情形 | `result` | `errors` |
+| --- | --- | --- |
+| 清单仍有未完成项，或已有工具结果、模型空答复后进入部分收尾 | 部分报告或兜底提示，附已有的未完成待办 | 无运行错误时省略 |
+| 只有不完整响应错误，例如 provider 因输出长度限制而停止 | 可为空字符串 | 包含错误详情 |
 runtime 的失败/取消终态优先于代理摘要，保存会话等收尾失败不会被标为成功。
 
 一次性 `--output-schema` 模式还使用 `error_output_validation`：最终答案 JSON 解析失败、包含额外 JSON 值或尾随内容、以及 Schema Validate 失败均归入此类，退出码为 `1`。运行取消优先报告 `error_cancelled` 和退出码 `130`；启动前的 Schema 文件或编译错误仍退出 `2`，不会启动运行。输出校验失败不自动重试。
@@ -260,6 +267,8 @@ ACK 不代表运行已经清理完成，必须继续读取 result。
 
 `system/nekocode_event` 携带 `event_type` 与 `payload`，转发工具预览、phase、todos、
 子代理开始/结束事件。`subagent_started` 可先携带 `status=queued` 预登记，再以相同任务 `id` 携带 `status=running`、`attempt_id` 和递增的 `attempt_seq`；queued 占位没有 attempt，宿主应将其合并到后续正式执行，不能计成两个任务。`subagent_ended` 通过 `status` 区分 `completed`、`partial`、`failed`、`interrupted`、`not_started` 等结果，仅表示生命周期结束，不保证成功；不同 attempt 以序号区分，不能用迟到的非终态覆盖已提交终态。
+
+运行日志的 `interaction_queue` 事件记录前台子任务等待共享交互槽的区间。载荷中的 `subagent_id` 标识子任务，`id` 在该次运行内配对，`waiting` 从 true 变为 false 时表示等待已结束。该区间可与对应审批或提问事件重叠。
 
 子代理模型输出使用独立 `subagent` 帧，携带 `subagent_id`、`run_id`、
 `user_message_uuid`、`event`、`text`。`event` 为 text_delta、reasoning_delta 或 message。

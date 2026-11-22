@@ -75,8 +75,8 @@ func TestFailedThinkingRetryRetractsDiscardedOutput(t *testing.T) {
 			OnText: func(d string) { visible += d }, OnTextReset: func() { visible = "" },
 		}}
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil || err.Error() != "terminal error" {
+		t.Fatalf("missing retry failure: %v", err)
 	}
 	if result.Text != "" || visible != "" {
 		t.Fatalf("discarded result still visible: result=%+v visible=%q", result, visible)

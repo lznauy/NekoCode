@@ -26,6 +26,7 @@ type ApprovalBroker struct {
 
 type approvalRecord struct {
 	ownerID            core.RunID
+	done               <-chan struct{}
 	view               core.ApprovalView
 	reply              chan protocol.ConfirmReply
 	runID              core.RunID
@@ -68,11 +69,17 @@ func (b *ApprovalBroker) RegisterForRun(runID core.RunID, req protocol.ConfirmRe
 
 // RegisterScoped separates cancellation ownership from the public event run ID.
 func (b *ApprovalBroker) RegisterScoped(ownerID, runID core.RunID, req protocol.ConfirmRequest) func() protocol.ConfirmReply {
+	select {
+	case <-req.Done:
+		return nil
+	default:
+	}
 	id := fmt.Sprintf("apr_%d", atomic.AddUint64(&b.nextID, 1))
 	now := time.Now()
 	argsHash := stableHash(protocol.ToolInputArgs(req.Args))
 	rec := &approvalRecord{
 		ownerID: ownerID,
+		done:    req.Done,
 		reply:   make(chan protocol.ConfirmReply, 1),
 		runID:   runID,
 		view: core.ApprovalView{
@@ -112,7 +119,14 @@ func (b *ApprovalBroker) RegisterScoped(ownerID, runID core.RunID, req protocol.
 	}
 
 	return func() protocol.ConfirmReply {
-		reply := <-rec.reply
+		var reply protocol.ConfirmReply
+		select {
+		case reply = <-rec.reply:
+		case <-rec.done:
+			// A simultaneous human decision may already own the terminal event.
+			_ = b.Decide(id, core.ApprovalDecision{Cancelled: true})
+			reply = <-rec.reply
+		}
 		if !rec.view.Approval.CanRemember() {
 			reply.Remember = false
 		}
@@ -131,26 +145,36 @@ func (b *ApprovalBroker) Decide(id string, decision core.ApprovalDecision) error
 		b.mu.Unlock()
 		return fmt.Errorf("runtime: approval %s already resolved", id)
 	}
-	if decision.Remember && !rec.view.Approval.CanRemember() {
+	reply := decision.ConfirmReply()
+	var decisionErr error
+	select {
+	case <-rec.done:
+		decisionErr = fmt.Errorf("runtime: approval %s expired", id)
+		reply = protocol.ConfirmReply{Cancelled: true}
+	default:
+	}
+	if reply.Remember && !rec.view.Approval.CanRemember() {
 		b.mu.Unlock()
 		return fmt.Errorf("runtime: approval %s only supports a one-time decision", id)
 	}
 	resolvedAt := time.Now()
 	rec.view.ResolvedAt = &resolvedAt
-	if decision.Allowed {
+	if reply.Cancelled {
+		rec.view.Status = core.ApprovalExpired
+	} else if reply.Allowed {
 		rec.view.Status = core.ApprovalApproved
 	} else {
 		rec.view.Status = core.ApprovalRejected
 	}
 	delete(b.pending, id)
-	rec.resolvedReply = decision.ConfirmReply()
+	rec.resolvedReply = reply
 	publishResolved := rec.requestedPublished
 	b.mu.Unlock()
 
 	if publishResolved {
 		b.publishResolved([]*approvalRecord{rec})
 	}
-	return nil
+	return decisionErr
 }
 
 func (b *ApprovalBroker) Pending() []core.ApprovalView {
@@ -183,7 +207,7 @@ func (b *ApprovalBroker) rejectAll(closeBroker bool, onlyRun core.RunID) {
 		}
 		resolvedAt := time.Now()
 		rec.view.ResolvedAt = &resolvedAt
-		rec.view.Status = core.ApprovalRejected
+		rec.view.Status = core.ApprovalExpired
 		rec.resolvedReply = protocol.ConfirmReply{Cancelled: true}
 		if rec.requestedPublished {
 			publishedRecords = append(publishedRecords, rec)

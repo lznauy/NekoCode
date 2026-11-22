@@ -24,36 +24,10 @@ func newTestAgent() *Agent {
 	return agent
 }
 
-func TestHandleText_IsError_NotRecorded(t *testing.T) {
-	a := newTestAgent()
-
-	rr := &reasoningResult{
-		Thought:     "LLM call failed",
-		Action:      actionChat,
-		ActionInput: "LLM call failed: connection refused",
-		IsError:     true,
-	}
-
-	msgCountBefore := a.deps.ctxMgr.Len()
-	finished := a.turnRunner.handleText(rr, nil)
-
-	if !finished {
-		t.Error("expected finished=true for IsError without hook hints")
-	}
-	if a.deps.ctxMgr.Len() != msgCountBefore {
-		t.Errorf("expected no messages added to context, got %d (was %d)",
-			a.deps.ctxMgr.Len(), msgCountBefore)
-	}
-	if a.run.consecutiveFailures != 1 {
-		t.Errorf("expected consecutiveFailures=1, got %d", a.run.consecutiveFailures)
-	}
-}
-
 func TestHandleText_GarbledToolCall_NotRecorded(t *testing.T) {
 	a := newTestAgent()
 
 	rr := &reasoningResult{
-		Thought:         "Format correction",
 		Action:          actionChat,
 		ActionInput:     "",
 		GarbledToolCall: true,
@@ -85,7 +59,6 @@ func TestHandleText_NormalChat_Recorded(t *testing.T) {
 	a := newTestAgent()
 
 	rr := &reasoningResult{
-		Thought:     "Direct reply",
 		Action:      actionChat,
 		ActionInput: "Hello, world!",
 	}
@@ -99,39 +72,6 @@ func TestHandleText_NormalChat_Recorded(t *testing.T) {
 	if a.deps.ctxMgr.Len() != msgCountBefore+1 {
 		t.Errorf("expected 1 message added to context, got %d (was %d)",
 			a.deps.ctxMgr.Len(), msgCountBefore)
-	}
-	if a.run.consecutiveFailures != 0 {
-		t.Errorf("expected consecutiveFailures=0, got %d", a.run.consecutiveFailures)
-	}
-}
-
-func TestHandleText_IsError_ConsecutiveFailuresIncrement(t *testing.T) {
-	a := newTestAgent()
-
-	rr := &reasoningResult{
-		Thought:     "LLM call failed",
-		Action:      actionChat,
-		ActionInput: "LLM call failed: timeout",
-		IsError:     true,
-	}
-
-	for i := 1; i <= maxConsecutiveFailures; i++ {
-		finished := a.turnRunner.handleText(rr, nil)
-		if !finished {
-			t.Errorf("step %d: expected finished=true", i)
-		}
-		if a.run.consecutiveFailures != i {
-			t.Errorf("step %d: expected consecutiveFailures=%d, got %d",
-				i, i, a.run.consecutiveFailures)
-		}
-	}
-
-	finished := a.turnRunner.handleText(rr, nil)
-	if !finished {
-		t.Error("expected finished=true after limit reached")
-	}
-	if a.run.consecutiveFailures != 6 {
-		t.Errorf("expected consecutiveFailures=6, got %d", a.run.consecutiveFailures)
 	}
 }
 
@@ -157,16 +97,6 @@ func TestStopHooksSetStructuredFinalIntent(t *testing.T) {
 		t.Fatalf("final intent = %q, want final", intent)
 	}
 
-	errResult := &reasoningResult{
-		Action:      actionChat,
-		ActionInput: "LLM call failed",
-		IsError:     true,
-	}
-	a.turnRunner.applyStopHooks(errResult, isRecordableText(errResult), nil)
-	if intent != policy.FinalIntentError {
-		t.Fatalf("error intent = %q, want error", intent)
-	}
-
 	garbled := &reasoningResult{
 		Action:          actionChat,
 		GarbledToolCall: true,
@@ -174,31 +104,6 @@ func TestStopHooksSetStructuredFinalIntent(t *testing.T) {
 	a.turnRunner.applyStopHooks(garbled, isRecordableText(garbled), nil)
 	if intent != policy.FinalIntentFormatError {
 		t.Fatalf("garbled intent = %q, want format_error", intent)
-	}
-}
-
-func TestHandleText_NormalChat_ConsecutiveFailuresReset(t *testing.T) {
-	a := newTestAgent()
-
-	errRR := &reasoningResult{
-		Thought:     "LLM call failed",
-		Action:      actionChat,
-		ActionInput: "error",
-		IsError:     true,
-	}
-	a.turnRunner.handleText(errRR, nil)
-	if a.run.consecutiveFailures != 1 {
-		t.Fatalf("expected consecutiveFailures=1 after error, got %d", a.run.consecutiveFailures)
-	}
-
-	okRR := &reasoningResult{
-		Thought:     "Direct reply",
-		Action:      actionChat,
-		ActionInput: "Hello!",
-	}
-	a.turnRunner.handleText(okRR, nil)
-	if a.run.consecutiveFailures != 0 {
-		t.Errorf("expected consecutiveFailures=0 after normal chat, got %d", a.run.consecutiveFailures)
 	}
 }
 
@@ -226,7 +131,7 @@ func TestPostToolStopClearsStaleFinalText(t *testing.T) {
 
 func TestTurnTreatsCanceledContextAsInterrupt(t *testing.T) {
 	a := newTestAgent()
-	a.life.Cancel()
+	a.Abort()
 	if !a.loopRunner.runTurn("", nil) || a.run.err != nil || a.run.stopReason != policy.StopInterrupted {
 		t.Fatalf("cancellation was not reported as interruption: %v %v", a.run.err, a.run.stopReason)
 	}

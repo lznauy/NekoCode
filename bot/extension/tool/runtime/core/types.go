@@ -36,7 +36,8 @@ func (c ToolCallItem) Effective() (string, map[string]any) {
 }
 
 type ToolCallResult struct {
-	NonExecution protocol.ToolNonExecution `json:"non_execution,omitzero"`
+	PermissionDenied bool                      `json:"-"` // The permission policy or the user explicitly denied invocation.
+	NonExecution     protocol.ToolNonExecution `json:"non_execution,omitzero"`
 	// Cause preserves physical invocation errors for host classification. Error
 	// remains the model-facing delivery text; later retries may have succeeded.
 	Cause    error                 `json:"-"`

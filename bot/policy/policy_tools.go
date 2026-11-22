@@ -37,6 +37,7 @@ func (p *Policy) RecordTool(result ToolResult) {
 		Error:     result.Error,
 		Blocked:   result.Blocked,
 		BlockText: result.BlockReason,
+		Process:   result.Process,
 	})
 }
 
@@ -48,7 +49,7 @@ func (p *Policy) RecordAuditTool(result ToolResult) {
 	}
 	p.ledger.RecordAuditTool(ledger.ToolEvent{
 		Name: result.Name, Args: result.Args, Output: result.Output, Error: result.Error,
-		Blocked: result.Blocked, BlockText: result.BlockReason,
+		Blocked: result.Blocked, BlockText: result.BlockReason, Process: result.Process,
 	})
 }
 
@@ -67,7 +68,7 @@ func (p *Policy) RecordTools(results []ToolResult, contexts ...context.Context) 
 			Name:   result.Name,
 			Args:   result.Args,
 			Error:  result.Error != "",
-			Output: result.Output, ErrorMessage: result.Error,
+			Output: result.Output, Process: result.Process, ErrorMessage: result.Error,
 		}
 		decisions = append(decisions, p.evaluate(PostToolUse, tool, contexts...)...)
 	}

@@ -248,6 +248,7 @@ type ApprovalContext struct {
 	Capabilities      []string               `json:"capabilities,omitempty"`
 	Scope             ApprovalScope          `json:"scope,omitempty"`
 	Workspace         string                 `json:"workspace,omitempty"`
+	WorkspaceTarget   string                 `json:"workspace_target,omitempty"` // "file" or "directory" for workspace grants
 	Sandbox           string                 `json:"sandbox,omitempty"`
 	OutboundDomains   []string               `json:"outbound_domains"`
 	WritePaths        []string               `json:"write_paths,omitempty"`
@@ -341,6 +342,8 @@ func (c *ApprovalContext) Clone() *ApprovalContext {
 }
 
 type ConfirmRequest struct {
+	// Done closes when the originating tool call can no longer use an approval.
+	Done     <-chan struct{} `json:"-"`
 	ToolName string
 	Args     map[string]any
 	Kind     ConfirmKind
@@ -407,6 +410,8 @@ type QuestionReply struct {
 }
 
 type QuestionRequest struct {
+	// Done closes when the originating tool call can no longer use an answer.
+	Done       <-chan struct{} `json:"-"`
 	SubAgentID string
 	Questions  []QuestionItem
 }

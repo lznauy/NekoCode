@@ -324,8 +324,16 @@ func (s *server) result(result rt.RunResult, subtype string) error {
 			reason = s.active.summary.StopReason
 		}
 	}
+	if subtype == "error_during_execution" && (result.StopReason == "call_budget" || result.StopReason == "incomplete") {
+		reason = result.StopReason
+		if result.ExecutionBudget != nil {
+			fields["execution_budget"] = result.ExecutionBudget
+		}
+	}
 	fields["stop_reason"] = reason
 	switch reason {
+	case "call_budget":
+		subtype = "error_call_budget"
 	case "incomplete":
 		subtype = "error_incomplete"
 	case "step_limit":

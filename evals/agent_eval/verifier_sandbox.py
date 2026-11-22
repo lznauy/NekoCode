@@ -71,7 +71,7 @@ def command(case, workspace=None, staging=None, events=None, original_workspace=
     verifier = case["paths"]["verifier"]
     args.extend(["--ro-bind", str(verifier.parent.resolve()), "/case",
                  "--ro-bind", str(workspace), "/workspace", "--bind", str(staging), "/output"])
-    include_events = events is not None and bool({"multi-agent-writing", "session-goal"}.intersection(case["manifest"]["tags"]))
+    include_events = events is not None and bool({"multi-agent-writing", "multi-agent-project", "session-goal"}.intersection(case["manifest"]["tags"]))
     if include_events:
         if Path(events).is_file():
             args.extend(["--ro-bind", str(Path(events).resolve()), "/events.jsonl"])

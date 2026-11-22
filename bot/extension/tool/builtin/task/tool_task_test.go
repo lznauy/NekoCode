@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/taskbridge"
 	"nekocode/protocol"
 )
@@ -43,14 +44,28 @@ func TestTaskToolPassesComposedSpec(t *testing.T) {
 		return &taskbridge.TaskResult{Content: "done"}, nil
 	})
 	out, err := tk.Execute(context.Background(), map[string]any{
-		"_sub_callback": taskbridge.TaskCallback{ID: "sub-test"}, "title": "Review auth", "profile": "explore", "skills": []any{"check", "hunt"}, "prompt": "review",
+		"_sub_callback": taskbridge.TaskCallback{ID: "sub-test"}, "title": "Review auth", "max_steps": 15, "profile": "explore", "skills": []any{"check", "hunt"}, "prompt": "review",
 	})
 	if err != nil || out.Render() != "done" {
 		t.Fatalf("Execute() = %q, %v", out.Render(), err)
 	}
-	want := taskbridge.TaskSpec{Title: "Review auth", Profile: "explore", Skills: []string{"check", "hunt"}, Prompt: "review"}
+	want := taskbridge.TaskSpec{MaxSteps: 15, Title: "Review auth", Profile: "explore", Skills: []string{"check", "hunt"}, Prompt: "review"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("spec = %+v, want %+v", got, want)
+	}
+}
+
+func TestAttemptLimitIsDeclaredOncePerTool(t *testing.T) {
+	for _, tool := range []interface{ Parameters() []core.Parameter }{NewTaskTool(), NewSubmitTool()} {
+		count := 0
+		for _, p := range tool.Parameters() {
+			if p.Name == "max_steps" && p.Type == "integer" {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("%T declares %d attempt limits", tool, count)
+		}
 	}
 }
 
@@ -64,7 +79,8 @@ func TestTaskToolPublishesActualTerminalStatus(t *testing.T) {
 		{"completed", taskbridge.TaskStatusCompleted, nil, "completed"},
 		{"partial", taskbridge.TaskStatusPartial, nil, "partial"},
 		{"failed-save", taskbridge.TaskStatusPartial, errors.New("save failed"), "failed"},
-		{"cancelled", taskbridge.TaskStatusPartial, context.Canceled, "interrupted"},
+		{"provider timeout", taskbridge.TaskStatusPartial, context.DeadlineExceeded, "failed"},
+		{"provider cancelled", taskbridge.TaskStatusPartial, context.Canceled, "failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tool := NewTaskTool()
@@ -81,7 +97,7 @@ func TestTaskToolPublishesActualTerminalStatus(t *testing.T) {
 }
 
 func TestTaskToolPublishesSummaryWithActualTerminalError(t *testing.T) {
-	for _, cause := range []error{nil, errors.New("save failed"), context.Canceled} {
+	for _, cause := range []error{nil, errors.New("save failed"), context.DeadlineExceeded, context.Canceled} {
 		tool := NewTaskTool()
 		tool.Wire(func(context.Context, taskbridge.TaskSpec) (*taskbridge.TaskResult, error) {
 			return &taskbridge.TaskResult{Summary: protocol.RunSummary{StepCount: 3, StopReason: "step_limit"}, Status: taskbridge.TaskStatusPartial}, cause
@@ -91,9 +107,6 @@ func TestTaskToolPublishesSummaryWithActualTerminalError(t *testing.T) {
 		want := "step_limit"
 		if cause != nil {
 			want = "execution_error"
-		}
-		if errors.Is(cause, context.Canceled) {
-			want = "cancelled"
 		}
 		if terminal.Summary == nil || terminal.Summary.StopReason != want || terminal.Summary.StepCount != 3 {
 			t.Fatalf("terminal=%+v", terminal)
@@ -162,5 +175,20 @@ func TestTaskResumeAllowsOmittedProfile(t *testing.T) {
 		if parameter.Name == "profile" && parameter.Required {
 			t.Fatal("schema requires profile even for resume")
 		}
+	}
+}
+
+func TestCommittedSubagentCompletionSurvivesLateParentCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	tool := NewTaskTool()
+	tool.Wire(func(context.Context, taskbridge.TaskSpec) (*taskbridge.TaskResult, error) {
+		cancel()
+		return &taskbridge.TaskResult{Status: taskbridge.TaskStatusCompleted, Summary: protocol.RunSummary{StopReason: "completed"}}, nil
+	})
+	var terminal protocol.StepEvent
+	_, err := tool.Execute(ctx, map[string]any{"profile": "explore", "prompt": "inspect", "_sub_callback": taskbridge.TaskCallback{Callback: func(e protocol.StepEvent) { terminal = e }}})
+	if err != nil || terminal.SubAgentStatus != "completed" || terminal.Summary == nil || terminal.Summary.StopReason != "completed" {
+		t.Fatalf("event=%+v err=%v", terminal, err)
 	}
 }

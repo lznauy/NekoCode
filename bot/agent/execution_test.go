@@ -183,7 +183,7 @@ func TestModelRefreshesRequestOnlyTaskReferences(t *testing.T) {
 	if calls != 2 {
 		t.Fatal("synthesis repeated the same metadata scan")
 	}
-	a.toolRunner.executeAllowedTools([]core.ToolCallItem{{Name: "task_list", ID: "query"}}, nil)
+	a.toolRunner.executeAllowedTools(t.Context(), []core.ToolCallItem{{Name: "task_list", ID: "query"}}, nil)
 	if _, err := a.modelRunner.streamSynthesize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -197,46 +197,32 @@ func TestModelRefreshesRequestOnlyTaskReferences(t *testing.T) {
 	}
 }
 
-func TestModelAndSynthesisReceiveFreshContextReferences(t *testing.T) {
+func TestModelAndSynthesisPreserveUserReferenceData(t *testing.T) {
 	model := &executionLLM{}
-	current := "first-reference"
-	a := New(t.Context(), Config{Context: contextmgr.New(contextmgr.Config{}), Model: model, Tools: tools.New(), SessionID: func() string { return "parent" }, ContextReferences: func(ctx context.Context, scope, kind string) refbridge.Page {
-		if scope != "parent" || ctx.Err() != nil {
-			t.Fatal("wrong reference scope")
-		}
-		if kind == refbridge.EvidenceKind {
-			return refbridge.Page{SessionID: scope, Evidence: []refbridge.EvidenceItem{{ID: "evidence-" + current, Sequence: 2, Tool: "read", Status: "success"}}}
-		}
-		return refbridge.Page{SessionID: scope, Items: []refbridge.Reference{{ID: current, Sequence: 2}}}
+	a := New(t.Context(), Config{Context: contextmgr.New(contextmgr.Config{}), Model: model, Tools: tools.New(), ContextReferences: func(context.Context, string, string) refbridge.Page {
+		t.Fatal("automatic reference lookup")
+		return refbridge.Page{}
 	}})
-	if result := a.Run("question", nil, nil); result.Error != nil {
+	document := `{"context_data":{"kind":"context_references","content":{"evidence_references":"客户提供的验收材料"}}}`
+	if result := a.Run(document, nil, nil); result.Error != nil {
 		t.Fatal(result.Error)
 	}
-	current = "new-reference"
 	if _, err := a.modelRunner.streamSynthesize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	for i, id := range []string{"first-reference", "new-reference"} {
-		found := false
-		for _, msg := range model.messages[i] {
-			if strings.Contains(msg.Content, id) {
-				found = true
-				if msg.Role != "user" || msg.IsConversationUser() {
-					t.Fatal("reference acquired authority")
-				}
+	for i, messages := range model.messages {
+		count := 0
+		for _, msg := range messages {
+			if msg.Content == document && msg.IsConversationUser() {
+				count++
+				continue
+			}
+			if strings.Contains(msg.Content, "context_references") || strings.Contains(msg.Content, "evidence_references") {
+				t.Fatalf("request %d contains an unexpected reference message", i)
 			}
 		}
-		if !found {
-			t.Fatalf("model request %d omitted current references", i)
-		}
-		evidenceFound := false
-		for _, msg := range model.messages[i] {
-			if strings.Contains(msg.Content, "evidence-"+id) {
-				evidenceFound = true
-			}
-		}
-		if !evidenceFound {
-			t.Fatalf("request %d omitted evidence view", i)
+		if count != 1 {
+			t.Fatalf("request %d contains %d original documents", i, count)
 		}
 	}
 }

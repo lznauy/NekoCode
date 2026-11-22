@@ -18,6 +18,9 @@ func (e *Executor) toolPolicy() mode.ToolPolicy {
 // checkToolPolicy enforces capabilities using an atomic registered entry.
 func (e *Executor) checkToolPolicy(name string, entry tools.Entry) error {
 	policy := e.toolPolicy()
+	if entry.StandardOnly && policy != "" && policy != mode.AllTools {
+		return errors.New("tool requires standard mode")
+	}
 	if entry.CoordinatorOnly && policy != mode.CoordinationTools {
 		return errors.New("tool requires coordinator mode")
 	}
@@ -58,7 +61,7 @@ func (e *Executor) ToolDescriptors() []core.Descriptor {
 	policy := e.toolPolicy()
 	return e.registry.DescriptorsMatching(func(entry tools.Entry) bool {
 		// Preserve the established Standard/Plan view for other tools.
-		if policy != mode.CoordinationTools {
+		if policy != mode.CoordinationTools && !entry.StandardOnly {
 			return !entry.CoordinatorOnly
 		}
 		return e.checkToolPolicy(entry.Tool.Name(), entry) == nil

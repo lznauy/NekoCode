@@ -989,3 +989,23 @@ func TestIdleEditorHandlesGraphemesAndShortRows(t *testing.T) {
 		t.Fatalf("forward delete removed adjacent newline: %q", got)
 	}
 }
+
+func TestComposerCtrlJInsertsNewline(t *testing.T) {
+	for _, processing := range []bool{false, true} {
+		bot := &tickFakeBot{}
+		m, err := NewModel(bot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+		if processing {
+			m.transitionTo(stateProcessing)
+		}
+		m.Update(tea.PasteMsg{Content: "第一行"})
+		m.Update(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
+		m.Update(tea.PasteMsg{Content: "第二行"})
+		if got := m.Input.Value(); got != "第一行\n第二行" || len(bot.submitted) != 0 {
+			t.Fatalf("processing=%v: draft=%q submitted=%v", processing, got, bot.submitted)
+		}
+	}
+}

@@ -1,26 +1,42 @@
 package agent
 
 import (
-	"crypto/sha256"
+	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"strings"
 
 	"nekocode/bot/policy"
+	"nekocode/protocol"
 )
 
-type preservedFile struct {
-	root   string
-	path   string
-	digest [sha256.Size]byte
-	known  bool
+type goalPreservationKey struct{}
+
+// GoalPreservation carries the first observations and the closeout verdict for a goal run.
+type GoalPreservation struct {
+	Files       []protocol.PreservedFile
+	Criteria    string
+	Save        func([]protocol.PreservedFile) error
+	NeedsReview bool
 }
 
-func (a *Agent) capturePreservedFiles(input string) []preservedFile {
+// WithGoalPreservation attaches the private working copy of the session goal.
+// Newly observed baselines are committed before model or tool execution.
+func WithGoalPreservation(ctx context.Context, goal *GoalPreservation) context.Context {
+	return context.WithValue(ctx, goalPreservationKey{}, goal)
+}
+
+func (a *Agent) capturePreservedFiles(input string) error {
+	if a.deps.toolRegistry == nil {
+		return nil
+	}
 	root := a.deps.toolRegistry.Workspace().Primary()
-	var files []preservedFile
-	seen := map[string]bool{}
+	seen := make(map[string]bool, len(a.run.preserved))
+	for _, file := range a.run.preserved {
+		seen[file.Path] = true
+	}
 	for line := range strings.SplitSeq(input, "\n") {
 		label, paths, ok := strings.Cut(strings.Replace(strings.TrimSpace(line), "：", ":", 1), ":")
 		if !ok || (label != "保留原件" && !strings.EqualFold(label, "Preserve files")) {
@@ -33,28 +49,48 @@ func (a *Agent) capturePreservedFiles(input string) []preservedFile {
 			}
 			seen[path] = true
 			sum, err := a.deps.toolExecutor.PreservedFileDigest(a.getCtx(), root, path)
-			files = append(files, preservedFile{root: root, path: path, digest: sum, known: err == nil})
+			file := protocol.PreservedFile{Root: root, Path: path}
+			if err == nil {
+				file.SHA256 = hex.EncodeToString(sum[:])
+			}
+			a.run.preserved = append(a.run.preserved, file)
 		}
 	}
-	return files
+	goal, ok := a.getCtx().Value(goalPreservationKey{}).(*GoalPreservation)
+	if !ok || len(a.run.preserved) == len(goal.Files) {
+		return nil
+	}
+	if goal.Save != nil {
+		if err := goal.Save(a.run.preserved); err != nil {
+			return protocol.MarkEvidenceIncomplete(err)
+		}
+	}
+	// A baseline is pending until the next preservation check. Steering
+	// can arrive after the final check but before the last queue drain.
+	goal.NeedsReview = true
+	goal.Files = a.run.preserved
+	return nil
 }
 
 func (r *turnRunner) reviewPreservedFiles(text *string, allowRetry bool) bool {
 	a := r.agent
 	var changed, unverifiable []string
 	for _, file := range a.run.preserved {
-		if !file.known {
-			unverifiable = append(unverifiable, fmt.Sprintf("%q", file.path))
+		if file.SHA256 == "" {
+			unverifiable = append(unverifiable, fmt.Sprintf("%q", file.Path))
 			continue
 		}
-		sum, err := a.deps.toolExecutor.PreservedFileDigest(a.getCtx(), file.root, file.path)
+		sum, err := a.deps.toolExecutor.PreservedFileDigest(a.getCtx(), file.Root, file.Path)
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			unverifiable = append(unverifiable, fmt.Sprintf("%q", file.path))
+			unverifiable = append(unverifiable, fmt.Sprintf("%q", file.Path))
 			continue
 		}
-		if err != nil || sum != file.digest {
-			changed = append(changed, fmt.Sprintf("%q", file.path))
+		if err != nil || hex.EncodeToString(sum[:]) != file.SHA256 {
+			changed = append(changed, fmt.Sprintf("%q", file.Path))
 		}
+	}
+	if goal, ok := a.getCtx().Value(goalPreservationKey{}).(*GoalPreservation); ok {
+		goal.NeedsReview = len(changed) > 0 || len(unverifiable) > 0
 	}
 	if allowRetry && len(changed) > 0 && !a.run.preservationChecked && a.getCtx().Err() == nil {
 		a.run.preservationChecked = true

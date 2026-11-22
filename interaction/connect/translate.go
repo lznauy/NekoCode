@@ -113,11 +113,15 @@ func Translate(ev controlruntime.Event) []Intent {
 			return nil
 		}
 		view := p
+		verdict := "已回答"
+		if p.Status == controlruntime.QuestionRejected {
+			verdict = "已忽略"
+		}
 		return []Intent{{
 			Kind:     IntentQuestionResolved,
 			RunID:    ev.RunID,
 			ID:       p.ID,
-			Verdict:  "已回答",
+			Verdict:  verdict,
 			Question: &view,
 		}}
 	}
@@ -201,6 +205,8 @@ func ApprovalVerdict(s controlruntime.ApprovalStatus) string {
 		return "已批准"
 	case controlruntime.ApprovalRejected:
 		return "已拒绝"
+	case controlruntime.ApprovalExpired:
+		return "已过期"
 	}
 	return "已处理"
 }
@@ -213,6 +219,10 @@ func IsResolvedErr(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
+	fields := strings.Fields(msg)
+	if len(fields) == 4 && fields[0] == "runtime:" && (fields[1] == "approval" || fields[1] == "question") && fields[3] == "expired" {
+		return true
+	}
 	return strings.Contains(msg, "not pending") ||
 		strings.Contains(msg, "already resolved") ||
 		strings.Contains(msg, "not found")

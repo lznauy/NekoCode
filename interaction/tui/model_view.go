@@ -32,7 +32,7 @@ func (m *Model) View() tea.View {
 	var parts []string
 	historyHint := ""
 
-	if m.Messages.Len() == 0 {
+	if m.Messages.Len() == 0 && m.queueHeight() == 0 {
 		parts = append(parts, m.Splash.View())
 	} else {
 		// Streaming and history replacement can change overflow without a
@@ -79,7 +79,17 @@ func (m *Model) View() tea.View {
 	}
 
 	parts = append(parts, historyHint)
-	parts = append(parts, m.Input.View())
+	var queueCursor *tea.Cursor
+	if queue, c := m.queueView(); queue != "" {
+		if c != nil {
+			for _, p := range parts {
+				c.Y += lipgloss.Height(p)
+			}
+		}
+		queueCursor = c
+		parts = append(parts, queue)
+	}
+	parts = append(parts, m.Input.ViewWithQueueHint(m.queueShortcutAvailable()))
 	if m.sessionNameFocused() {
 		parts = append(parts, m.Suggestions.ViewWithFooter(m.Width, m.sessionName.view(m.Width)))
 	} else if sug := m.Suggestions.View(m.Width); sug != "" {
@@ -124,7 +134,10 @@ func (m *Model) View() tea.View {
 			}
 		}
 	}
-	if m.sessionNameFocused() {
+	if m.queue.managing && m.state != stateQuestioning {
+		c = queueCursor
+	}
+	if m.sessionNameFocused() || m.state == stateConfirming {
 		c = nil
 	}
 	v.Cursor = c

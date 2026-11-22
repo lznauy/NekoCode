@@ -17,7 +17,7 @@ import (
 )
 
 func TestSmallContextWindowDoesNotTriggerSyntheticBlocking(t *testing.T) {
-	llm := &fakeLLM{}
+	llm := &fakeLLM{tokens: []types.StreamToken{{Content: "done"}}}
 	a := New(context.Background(), Config{
 		Context: ctxmgr.New(ctxmgr.Config{
 			SystemPrompt:  "test",
@@ -105,16 +105,16 @@ func TestFinishRunDoesNotPersistNonRecordableText(t *testing.T) {
 		ActionInput: "draft answer from hook-retried turn",
 	}, true)
 	a.turnRunner.recordReasoningText(&reasoningResult{
-		Action:      actionChat,
-		ActionInput: "LLM call failed: timeout",
-		IsError:     true,
+		Action:          actionChat,
+		ActionInput:     "malformed tool reply",
+		GarbledToolCall: true,
 	}, false)
 	a.run.stopReason = policy.StopCompleted
 
 	msgCountBefore := a.deps.ctxMgr.Len()
 	result := a.loopRunner.finishRun(nil)
 
-	if result.FinalOutput != "LLM call failed: timeout" {
+	if result.FinalOutput != "malformed tool reply" {
 		t.Fatalf("FinalOutput = %q, want latest non-recordable text", result.FinalOutput)
 	}
 	if a.deps.ctxMgr.Len() != msgCountBefore {
@@ -216,7 +216,7 @@ func lastAssistantContent(msgs []types.Message) string {
 }
 
 func TestRunDurationIsFixedBeforeSummary(t *testing.T) {
-	a, _ := newTestAgentWithLLM()
+	a, _ := newTestAgentWithLLM(types.StreamToken{Content: "done"})
 	var elapsedAtSummary time.Duration
 	result := a.Run("hello", nil, func(event protocol.StepEvent) {
 		if event.Action == protocol.StepActionRunSummary {
@@ -258,7 +258,7 @@ func TestMentionedFileHint(t *testing.T) {
 	a.deps.llmClient = model
 	for step := 0; step < 2; step++ {
 		a.run.step = step
-		if _, err := a.modelRunner.callLLMForTool("inspect absent.py"); err != nil {
+		if _, err := a.modelRunner.callLLMForTool(a.getCtx(), "inspect absent.py"); err != nil {
 			t.Fatal(err)
 		}
 		if got := messagesContain(model.messages[step], `User-supplied path: "absent.py"`); got != (step == 0) {

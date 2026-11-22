@@ -141,6 +141,16 @@ describe('ConfirmDialog', () => {
     expect(screen.getByText('上方差异是本次 revert 将恢复的内容。')).toBeInTheDocument()
   })
 
+  it.each([['file', '仅此文件'], ['directory', '目录及其子项']] as const)('shows the %s workspace grant in details and persistence preview', (target, label) => {
+    render(<ConfirmDialog entry={{ id: 'workspace', kind: 'permission', toolName: 'workspace',
+      args: { path: '/outside', access: 'read-write' },
+      approval: { scope: 'project', workspace: '/outside', workspace_target: target, write_paths: ['/outside'] },
+    }} onDone={vi.fn()} />)
+    expect(screen.getByText(label)).toBeInTheDocument()
+    expect(screen.getByText(`${label}：/outside（read-write）`)).toBeInTheDocument()
+    expect(screen.getByText('可写路径')).toBeInTheDocument()
+  })
+
   it('shows permission details and can remember project grants', async () => {
     render(
       <ConfirmDialog

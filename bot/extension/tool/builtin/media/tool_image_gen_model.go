@@ -50,7 +50,7 @@ func resolveOutputDir(ctx context.Context, args map[string]any) (string, error) 
 	var safeOutputDir string
 	var err error
 	if explicit {
-		safeOutputDir, err = toolutil.ValidatePathWritableContext(ctx, outputDir)
+		safeOutputDir, err = toolutil.ValidateDirectoryWritableContext(ctx, outputDir)
 	} else {
 		safeOutputDir, err = toolutil.ValidatePath(outputDir)
 	}

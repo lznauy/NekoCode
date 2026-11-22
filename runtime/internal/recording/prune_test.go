@@ -212,3 +212,36 @@ func TestPruneRemovesIdleSessionRuns(t *testing.T) {
 		t.Fatalf("session directory was removed: %v", err)
 	}
 }
+
+func TestPruneOversizedRunPreservesOtherHistory(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		name := "finished"
+		if active {
+			name = "active"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			now := time.Now()
+			writeBatch(t, root, "history", 20, now.Add(-time.Hour))
+			writeBatch(t, root, "large", 120, now)
+			large := filepath.Join(root, "large", runsSubdir, "run_1")
+			if active {
+				lock, acquired, err := lockRun(large)
+				if err != nil || !acquired {
+					t.Fatalf("lock: acquired=%v err=%v", acquired, err)
+				}
+				defer lock.Close()
+			}
+			if err := PruneRecordedRuns(root, 0, 50); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(filepath.Join(root, "history", runsSubdir, "run_1", "events.jsonl")); err != nil {
+				t.Fatalf("lost history: %v", err)
+			}
+			_, err := os.Stat(large)
+			if active && err != nil || !active && !os.IsNotExist(err) {
+				t.Fatalf("unexpected oversized run state: %v", err)
+			}
+		})
+	}
+}

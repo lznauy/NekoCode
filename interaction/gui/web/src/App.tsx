@@ -1,3 +1,4 @@
+import { isSlashCommandInput } from './lib/commandInput'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { SessionSidebar } from './components/session'
 import { TopBar } from './components/TopBar'
@@ -119,7 +120,7 @@ export default function App() {
 
 	useEffect(() => {
 	  const input = text.trim()
-	  if (busy || (!input.startsWith('/') && !input.startsWith('$'))) {
+	  if (busy || (!isSlashCommandInput(input) && !input.startsWith('$'))) {
 		setCommandMenu(null)
 		return
 	  }

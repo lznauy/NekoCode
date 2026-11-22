@@ -549,24 +549,45 @@ func loadRecordedEventFile(path string) ([]core.Event, error) {
 // WalkRecordedEventFile decodes one event at a time for bounded startup and
 // on-demand run recovery. It does not retain the stream's delta payloads.
 func WalkRecordedEventFile(path string, visit func(core.Event)) error {
+	_, err := walkRecordedEventFile(path, 0, visit)
+	return err
+}
+
+// RestoreRetainedEventFile skips journals that cannot fit in the retention
+// budget. Check the same size snapshot that bounds the read, even if another
+// process is still appending.
+func RestoreRetainedEventFile(path string, visit func(core.Event)) (bool, error) {
+	return walkRecordedEventFile(path, RetentionBytes, visit)
+}
+
+func walkRecordedEventFile(path string, maxBytes int64, visit func(core.Event)) (bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { _ = f.Close() }()
 
 	// The writer accepts complete tool outputs of arbitrary size. Read one
 	// record at a time without Scanner's token ceiling so cache eviction does
 	// not make a large, successfully recorded run inaccessible.
-	reader := bufio.NewReaderSize(f, 64*1024)
+	info, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	if maxBytes > 0 && info.Size() > maxBytes {
+		return false, nil
+	}
+	// Another process may still be recording. Replay the bytes visible at
+	// open; a producer appending faster than recovery must not hold startup.
+	reader := bufio.NewReaderSize(io.LimitReader(f, info.Size()), 64*1024)
 	lineNo := 0
 	for {
 		line, err := reader.ReadBytes('\n')
 		if err != nil && err != io.EOF {
-			return err
+			return false, err
 		}
 		if len(line) == 0 && err == io.EOF {
-			return nil
+			return true, nil
 		}
 		lineNo++
 		line = bytes.TrimSpace(line)
@@ -685,8 +706,8 @@ const (
 	RetentionBytes = 500 << 20
 )
 
-// PruneRecordedRuns removes expired runs, then oldest inactive runs until the
-// byte budget is met. Session snapshots and active runs are never removed.
+// PruneRecordedRuns removes expired or individually oversized inactive runs.
+// It evicts the oldest remaining inactive runs as needed to meet the budget.
 func PruneRecordedRuns(sessionsRoot string, maxAge time.Duration, maxBytes int64) error {
 	if strings.TrimSpace(sessionsRoot) == "" {
 		return fmt.Errorf("runtime: empty event recorder base dir")
@@ -711,6 +732,11 @@ func PruneRecordedRuns(sessionsRoot string, maxAge time.Duration, maxBytes int64
 		total += info.Size()
 	}
 	sort.Slice(runs, func(i, j int) bool {
+		// A run larger than the entire budget cannot fit even after deleting
+		// all older history. Handle it before evicting ordinary runs.
+		if maxBytes > 0 && (runs[i].size > maxBytes) != (runs[j].size > maxBytes) {
+			return runs[i].size > maxBytes
+		}
 		if runs[i].mod.Equal(runs[j].mod) {
 			return runs[i].path < runs[j].path
 		}
@@ -731,6 +757,9 @@ func PruneRecordedRuns(sessionsRoot string, maxAge time.Duration, maxBytes int64
 			return err
 		}
 		if !acquired {
+			if maxBytes > 0 && run.size > maxBytes {
+				total -= run.size // the active writer cannot be pruned this pass
+			}
 			continue
 		}
 		// A writer may have finished between the scan and lock acquisition.

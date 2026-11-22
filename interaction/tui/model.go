@@ -37,6 +37,7 @@ type sessionDeleter interface {
 }
 
 type Model struct {
+	queue          messageQueue
 	sessionMenu    string
 	sessionName    *sessionNameEditor
 	Runtime        RuntimeClient
@@ -175,7 +176,7 @@ func loadWorkspaceChanges(rt RuntimeClient) tea.Cmd {
 
 func (m *Model) resizeMessages() {
 	follow := m.Messages.Follow
-	extra := 0
+	extra := m.queueHeight()
 	if m.sessionNameFocused() {
 		extra += sessionNameHeight - 1 // Replace the menu's one-line hints with a two-line editor.
 	}

@@ -47,6 +47,7 @@ const (
 	EventSubAgentEnded          = core.EventSubAgentEnded
 	EventSubAgentUpdated        = core.EventSubAgentUpdated
 	EventTodosUpdated           = core.EventTodosUpdated
+	EventInteractionQueue       = core.EventInteractionQueue
 	EventApprovalRequested      = core.EventApprovalRequested
 	EventApprovalResolved       = core.EventApprovalResolved
 	EventQuestionRequested      = core.EventQuestionRequested
@@ -86,6 +87,8 @@ type MetricsSnapshot = protocol.Metrics
 type WorkspaceChanges = protocol.WorkspaceChanges
 type CheckpointInfo = protocol.CheckpointInfo
 type ToolPayload = core.ToolPayload
+type InteractionQueuePayload = core.InteractionQueuePayload
+
 type SubAgentPayload = core.SubAgentPayload
 type SessionPayload = core.SessionPayload
 type RunResult = core.RunResult

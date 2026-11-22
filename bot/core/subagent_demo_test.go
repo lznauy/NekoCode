@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"nekocode/bot/config"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/session"
+	"nekocode/bot/worktree"
 	"nekocode/protocol"
 )
 
@@ -292,5 +294,86 @@ func TestSubagentResumeExplainsTaskIdentity(t *testing.T) {
 	_, err = tool.Execute(t.Context(), map[string]any{"resume_id": "attempt-id-not-task-id", "prompt": "continue"})
 	if err == nil || !strings.Contains(err.Error(), "items[].id") || !strings.Contains(err.Error(), "latest_attempt.id") {
 		t.Fatalf("missing actionable task identity error: %v", err)
+	}
+}
+
+func newWorktreeTestBot(t *testing.T) *Bot {
+	t.Helper()
+	root := t.TempDir()
+	t.Chdir(root)
+	b := newPersistTestBot(t)
+	for _, args := range [][]string{{"init", "-q"}, {"-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-qm", "test"}} {
+		if output, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	return b
+}
+
+func TestForegroundWorktreeRejectedResumeKeepsPreviousAttempt(t *testing.T) {
+	b := newWorktreeTestBot(t)
+	root := b.cwd
+	parent, id := b.sess.CurrentID(), "worktree-task"
+	lease, err := worktree.Acquire(parent, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lease.Open(t.Context(), root, id, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	child, err := session.OpenSubagent(parent, id, root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Close()
+	if err := child.SetIsolation("worktree"); err != nil {
+		t.Fatal(err)
+	}
+	if err := child.SetWorkspaceKind("head"); err != nil {
+		t.Fatal(err)
+	}
+	// A previous attempt's baseline disagrees with the worktree manifest.
+	if err := child.SetWorkspaceBaseline(strings.Repeat("a", 40), ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Begin("explore", "initial review", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Checkpoint(ctxmgr.ManagerSnapshot{}, "completed", "previous result"); err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Close(); err != nil {
+		t.Fatal(err)
+	}
+	tool, err := b.toolbox.Registry.Get("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = tool.Execute(t.Context(), map[string]any{"resume_id": id, "prompt": "follow up"})
+	if err == nil || !strings.Contains(err.Error(), "cannot change workspace baseline") {
+		t.Fatalf("unexpected resume error: %v", err)
+	}
+	info, err := session.ReadSubagentMetadata(parent, id)
+	if err != nil || info.RunCount != 1 || info.Status != "completed" || info.Result != "previous result" {
+		t.Fatalf("rejected resume replaced successful attempt: %+v, %v", info, err)
+	}
+}
+
+func TestForegroundInvalidSkillDoesNotCreateWorktree(t *testing.T) {
+	b := newWorktreeTestBot(t)
+	tool, err := b.toolbox.Registry.Get("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = tool.Execute(t.Context(), map[string]any{"profile": "explore", "prompt": "review", "isolation": "worktree", "skills": []string{"unknown-workflow"}})
+	if err == nil || !strings.Contains(err.Error(), "delegated skill") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	items, err := worktree.List(b.sess.CurrentID())
+	if err != nil || len(items) != 0 {
+		t.Fatalf("invalid request retained checkout: %+v, err=%v", items, err)
 	}
 }

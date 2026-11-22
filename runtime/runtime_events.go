@@ -165,11 +165,6 @@ func (r *Runtime) EnableDefaultEventRecording() error {
 	return r.EnableEventRecording(recording.DefaultBaseDir())
 }
 
-// immediateRestoredRuns is how many of the newest recorded runs are decoded
-// synchronously during startup so /last /status answer instantly. Older runs
-// stay on disk until an explicit lookup or replay requests their contents.
-const immediateRestoredRuns = 1
-
 // BindRecordedSession moves provisional recordings into the real session, or
 // selects a new session for future events. A failed bind preserves its source.
 func (r *Runtime) BindRecordedSession(sessionID string) {
@@ -301,13 +296,18 @@ func (r *Runtime) EnableEventRecording(baseDir string) error {
 		r.archivedRuns[RunID(filepath.Base(filepath.Dir(run.Path)))] = run
 	}
 	r.mu.Unlock()
-	immediate := runs
-	if len(immediate) > immediateRestoredRuns {
-		immediate = immediate[len(immediate)-immediateRestoredRuns:]
-	}
-	for _, run := range immediate {
-		if err := recording.WalkRecordedEventFile(run.Path, func(ev Event) { r.runs.Record(ev); r.events.ImportHistory([]Event{ev}) }); err != nil {
+	// Warm the most recent retainable run. An oversized journal would
+	// otherwise delay startup only to be pruned as soon as startup finishes.
+	for i := len(runs) - 1; i >= 0; i-- {
+		restored, err := recording.RestoreRetainedEventFile(runs[i].Path, func(ev Event) {
+			r.runs.Record(ev)
+			r.events.ImportHistory([]Event{ev})
+		})
+		if err != nil {
 			logger.Log("runtime: restore recent run: %v", err)
+		}
+		if restored || err != nil {
+			break
 		}
 	}
 

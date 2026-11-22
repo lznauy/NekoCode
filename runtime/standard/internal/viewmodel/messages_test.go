@@ -4,7 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	"nekocode/bot/contextmgr"
+	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/provider/types"
+	"nekocode/protocol"
 	controlruntime "nekocode/runtime"
 )
 
@@ -270,5 +273,44 @@ func TestTaskHistoryPreservesSummaryFailuresAndResumeIdentity(t *testing.T) {
 		if err != nil || page.Total != 2 || len(page.Messages) != 1 {
 			t.Fatalf("page %d = %+v, %v", offset, page, err)
 		}
+	}
+}
+
+func TestDisplayMessagesRestoresBatchResult(t *testing.T) {
+	for _, result := range []types.Message{
+		{Content: `[{"id":"a","status":"partial"},{"id":"b","status":"completed"}]`},
+		{Content: "duplicate output", IsError: true},
+		{Content: "compact status list", ToolOutput: protocol.ToolOutputArtifact{Path: "/saved/batch.json"}},
+	} {
+		result.Role, result.ToolCallID = "tool", "batch"
+		history := []types.Message{
+			{Role: "assistant", ToolCalls: []types.ToolCall{{ID: "batch", Function: types.FunctionCall{Name: "task_batch"}}}},
+			result,
+		}
+		page, err := DisplayMessagesPage(history, 0, 1)
+		if err != nil || page.Total != 1 || len(page.Messages) != 1 || len(page.Messages[0].Blocks) != 1 {
+			t.Fatalf("lost batch history: %+v, %v", page, err)
+		}
+		block := page.Messages[0].Blocks[0]
+		if !strings.Contains(block.Content, result.Content) || !strings.Contains(block.Content, result.ToolOutput.Path) || block.IsError != result.IsError {
+			t.Fatalf("wrong batch result: %+v", block)
+		}
+	}
+}
+
+func TestBatchTranscriptRendersArtifactReferenceOnce(t *testing.T) {
+	store := core.NewOutputStore(t.TempDir())
+	path, err := store.PreserveOutput("[]")
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := core.ToolOutput{Text: "[]", Artifact: protocol.ToolOutputArtifact{Path: path}}
+	m := contextmgr.New(contextmgr.Config{ContextWindow: 64000})
+	m.SetOutputStore(store)
+	m.AddAssistant(types.Message{Role: "assistant", ToolCalls: []types.ToolCall{{ID: "batch", Function: types.FunctionCall{Name: "task_batch"}}}})
+	m.AddToolResultsBatch([]contextmgr.ToolResultMsg{{ToolName: "task_batch", Message: types.Message{ToolCallID: "batch", Content: output.Text, ToolOutput: output.Artifact}}})
+	history := DisplayMessages(m.Snapshot().Transcript)
+	if len(history) != 1 || len(history[0].Blocks) != 1 || history[0].Blocks[0].Content != output.Render() {
+		t.Fatalf("restored batch = %+v", history)
 	}
 }

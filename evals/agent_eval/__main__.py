@@ -35,6 +35,8 @@ def main():
     run.add_argument("--output", type=Path, default=ROOT / "runs")
     run.add_argument("--telemetry-root", type=Path, default=Path.home() / ".nekocode")
     run.add_argument("--interaction-policy", choices=["deny", "allow"], default="deny")
+    run.add_argument("--no-execution-budget", action="store_true", help="Observe usage without enforcing wall time, model call or token cutoffs")
+    run.add_argument("--parallel-step-sharing", action="store_true", help="Experimentally bound foreground worker attempts by their batch share of the remaining model calls")
     run.add_argument("--config-fingerprint", help="SHA256 of the explicit effective external configuration; no credentials")
     run.add_argument("--allow-user-config", action="store_true", help="Acknowledge real configured model calls, local code execution and configured plugins/hooks")
     comp = commands.add_parser("compare")
@@ -95,7 +97,7 @@ def main():
         args.output = new_verification(args.trial, args.output)
         result = verify(case, args.trial / "product", args.output.resolve() / "results",
                         (args.trial / "answer.txt").read_text(), events_path=layout.trace("events.jsonl"),
-                        original_workspace=receipt.get("workspace"))
+                        original_workspace=receipt.get("workspace"), workspace_change_ns=receipt.get("workspace_change_ns"))
         write_json(args.output / "source.json", {"trial": str(args.trial.resolve()), "case_fingerprint": case["fingerprint"], "product_sha256": original["product_sha256"]})
         print(str(args.output.resolve()))
         return 0 if result["product_passed"] else 1
@@ -107,6 +109,8 @@ def main():
         parser.error("real runs require --allow-user-config; the standalone evaluator never silently uses application credentials/plugins")
     if args.config_fingerprint and (len(args.config_fingerprint) != 64 or any(c not in "0123456789abcdef" for c in args.config_fingerprint)):
         parser.error("--config-fingerprint must be a lowercase SHA256, not configuration text")
+    if args.parallel_step_sharing and args.no_execution_budget:
+        parser.error("--parallel-step-sharing requires an execution budget")
     binary = args.binary.resolve()
     if not binary.is_file() or not os.access(binary, os.X_OK):
         parser.error("--binary must be an executable file")
@@ -135,7 +139,8 @@ def main():
                 run_data["trial_specs"][relative] = {"case_id": case["manifest"]["id"], "repeat": repeat}
                 write_json(directory / "run.json", run_data)
                 outcome = run_trial(case, binary, args.model, args.mode, args.telemetry_root, directory / relative, repeat,
-                                    args.interaction_policy, config_hash)
+                                    args.interaction_policy, config_hash, parallel_step_sharing=args.parallel_step_sharing,
+                                    no_execution_budget=args.no_execution_budget)
                 failed |= not outcome["success"]
                 print(json.dumps({"trial": relative, "success": outcome["success"], "stop": outcome["stop_reason"]}), flush=True)
         run_data["status"] = "finished"

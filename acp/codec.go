@@ -19,6 +19,7 @@ const maxQueuedWrites = 128
 type handler func(context.Context, string, json.RawMessage) (any, *wireError)
 
 type outboundMessage struct {
+	ctx  context.Context
 	body []byte
 	done chan error
 }
@@ -178,7 +179,7 @@ func (c *connection) request(ctx context.Context, method string, params any, res
 		c.mu.Unlock()
 	}()
 
-	if err := c.write(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}); err != nil {
+	if err := c.writeContext(ctx, map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}); err != nil {
 		return err
 	}
 	select {
@@ -202,6 +203,13 @@ func (c *connection) request(ctx context.Context, method string, params any, res
 }
 
 func (c *connection) write(value any) error {
+	return c.writeContext(context.Background(), value)
+}
+
+func (c *connection) writeContext(ctx context.Context, value any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	b, err := json.Marshal(value)
 	if err != nil {
 		return err
@@ -209,7 +217,7 @@ func (c *connection) write(value any) error {
 	b = append(b, '\n')
 	if c.writeQ != nil {
 		done := make(chan error, 1)
-		message := outboundMessage{body: b, done: done}
+		message := outboundMessage{ctx: ctx, body: b, done: done}
 		// Prefer an immediately available queue slot even if shutdown raced
 		// with a handler finishing its response.
 		select {
@@ -217,6 +225,8 @@ func (c *connection) write(value any) error {
 		default:
 			select {
 			case c.writeQ <- message:
+			case <-ctx.Done():
+				return ctx.Err()
 			case <-c.ctxDone:
 				return context.Canceled
 			case <-c.stopQ:
@@ -226,6 +236,8 @@ func (c *connection) write(value any) error {
 		select {
 		case err := <-done:
 			return err
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-c.ctxDone:
 			return context.Canceled
 		case <-c.stopQ:
@@ -261,6 +273,10 @@ func (c *connection) writeLoop() {
 	for {
 		select {
 		case message := <-c.writeQ:
+			if message.ctx != nil && message.ctx.Err() != nil {
+				message.done <- message.ctx.Err()
+				continue
+			}
 			var err error
 			if len(message.body) != 0 {
 				err = c.writeDirect(message.body)

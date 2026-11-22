@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +18,7 @@ func TestEventRecordingRestoresOlderRunsOnlyOnDemand(t *testing.T) {
 	baseDir := t.TempDir()
 
 	// Record more runs than the synchronous slice covers.
-	const totalRuns = immediateRestoredRuns + 5
+	const totalRuns = 6
 	for i := 1; i <= totalRuns; i++ {
 		rec, err := recording.NewEventRecorder(baseDir)
 		if err != nil {
@@ -75,6 +77,44 @@ func TestEventRecordingRestoresOlderRunsOnlyOnDemand(t *testing.T) {
 		t.Fatalf("run id = %q, want %q", runID, want)
 	}
 	waitForRun(t, rt, runID)
+}
+
+func TestStartupRestoresLatestRetainableRun(t *testing.T) {
+	root := t.TempDir()
+	rec, err := recording.NewEventRecorder(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Record(Event{RunID: "run_1", Type: EventRunDone, Payload: RunResult{Output: "previous"}})
+	if err := rec.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "session", "runs", "run_2")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "events.jsonl")
+	if err := os.WriteFile(path, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(path, recording.RetentionBytes+1); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Add(time.Minute)
+	if err := os.Chtimes(path, now, now); err != nil {
+		t.Fatal(err)
+	}
+	rt := newTestRuntime(&testBot{})
+	defer rt.Close()
+	if err := rt.EnableEventRecording(root); err != nil {
+		t.Fatal(err)
+	}
+	if run, ok := rt.CurrentRun(); !ok || run.ID != "run_1" || run.Output != "previous" {
+		t.Fatalf("current run = %+v, ok=%v", run, ok)
+	}
+	if rt.nextRun != 2 {
+		t.Fatalf("run sequence = %d, want 2", rt.nextRun)
+	}
 }
 
 func itoa(n int) string {

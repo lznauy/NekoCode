@@ -17,12 +17,12 @@ import (
 type ModelRequest struct {
 	// HandoffOnly avoids spending an extra model request on automatic compaction
 	// during finalization. Oversized input still fails closed; history is retained.
-	HandoffOnly        bool
-	TaskReferences     TaskReferences
-	ContextReferences  refbridge.Page
-	EvidenceReferences refbridge.Page
-	Tools              []types.ToolDef
-	PolicyHints        string
+	HandoffOnly    bool
+	TaskReferences TaskReferences
+	// Deprecated: Reference pages are delivered by tool calls. Both fields are ignored.
+	ContextReferences, EvidenceReferences refbridge.Page
+	Tools                                 []types.ToolDef
+	PolicyHints                           string
 	// ExtraMessages are transient request-only instructions, e.g. synthesis
 	// prompts and delegated workflows. They are included in the final budget.
 	ExtraMessages []types.Message
@@ -90,7 +90,6 @@ func (m *Manager) buildLocked(request ModelRequest) ([]types.Message, int, int) 
 	if msg := request.TaskReferences.message(); msg.Content != "" {
 		out = append(out, msg)
 	}
-	out = append(out, referenceMessages(request.ContextReferences, request.EvidenceReferences)...)
 	return out, systemEnd, historyEnd
 }
 

@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/permission"
+	"nekocode/bot/extension/tool/runtime/workspace"
 	"nekocode/protocol"
 )
 
@@ -76,6 +78,67 @@ func TestWorkspaceApprovalRejectsChangedContext(t *testing.T) {
 			}
 			if len(e.workspace.Snapshot()) != 1 {
 				t.Fatalf("stale approval left an extra session root: %+v", e.workspace.Snapshot())
+			}
+		})
+	}
+}
+
+func TestOutputDirectoryRequiresDirectoryApproval(t *testing.T) {
+	e := newPermTestExecutor(t)
+	path := filepath.Join(t.TempDir(), "output")
+	e.workspace.Configure(t.TempDir(), []workspace.Root{{Path: path, Access: workspace.AccessReadWrite, FileOnly: true}})
+	call := core.ToolCallItem{Name: "image_gen", Args: map[string]any{"output_dir": path}}
+	if _, _, ok := e.ensureWorkspaceAccess(call, nil); ok {
+		t.Fatal("file-only grant authorized output directory")
+	}
+	if _, message, ok := e.ensureWorkspaceAccess(call, func(protocol.ConfirmRequest) protocol.ConfirmReply { return protocol.AllowOnce() }); !ok {
+		t.Fatal(message)
+	}
+	if _, _, ok, err := e.workspace.CheckWriteDirectory(path); !ok || err != nil {
+		t.Fatalf("directory approval: %v %v", ok, err)
+	}
+}
+
+func TestWorkspaceApprovalIdentifiesTargetOnWire(t *testing.T) {
+	tempFile, err := os.CreateTemp("", "workspace-target-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(tempFile.Name()) })
+	if err := tempFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	for _, tc := range []struct{ request, target, kind string }{
+		{tempFile.Name(), tempFile.Name(), "file"},
+		{filepath.Join(dir, "new.txt"), dir, "directory"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			e := newPermTestExecutor(t)
+			e.workspace.Configure(t.TempDir(), nil)
+			call := core.ToolCallItem{Name: "write", Args: map[string]any{"path": tc.request}}
+			called := false
+			_, message, ok := e.ensureWorkspaceAccess(call, func(req protocol.ConfirmRequest) protocol.ConfirmReply {
+				called = true
+				raw, err := json.Marshal(req.Approval)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var fields map[string]any
+				if err := json.Unmarshal(raw, &fields); err != nil {
+					t.Fatal(err)
+				}
+				target, err := workspace.Resolve(tc.target)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if fields["workspace"] != target || fields["workspace_target"] != tc.kind {
+					t.Fatalf("approval for %s: %s", tc.request, raw)
+				}
+				return protocol.AllowOnce()
+			})
+			if !called || !ok {
+				t.Fatalf("called=%v ok=%v message=%s", called, ok, message)
 			}
 		})
 	}

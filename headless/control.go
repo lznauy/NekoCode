@@ -60,12 +60,27 @@ func (s *server) control(ctx context.Context, f frame) error {
 				}
 			}
 		}
+		shareSteps := false
+		if raw, ok := fields["parallel_step_sharing"]; ok {
+			if string(raw) == "null" || json.Unmarshal(raw, &shareSteps) != nil {
+				return s.respond(f.RequestID, nil, errors.New("parallel_step_sharing must be a boolean"))
+			}
+			if shareSteps && fields["model_call_budget"] == nil {
+				return s.respond(f.RequestID, nil, errors.New("parallel_step_sharing requires model_call_budget"))
+			}
+		}
+		var externalTokens int64
+		if raw, ok := fields["external_token_limit"]; ok {
+			if fields["model_call_budget"] == nil || json.Unmarshal(raw, &externalTokens) != nil || externalTokens < 1 {
+				return s.respond(f.RequestID, nil, errors.New("external_token_limit requires a positive integer and model_call_budget"))
+			}
+		}
 		if raw, ok := fields["model_call_budget"]; ok {
 			var limit int
 			if json.Unmarshal(raw, &limit) != nil {
 				return s.respond(f.RequestID, nil, errors.New("model_call_budget must be an integer"))
 			}
-			budget, err := modelbudget.New(limit)
+			budget, err := modelbudget.NewWithLimits(limit, shareSteps, externalTokens)
 			if err != nil {
 				return s.respond(f.RequestID, nil, err)
 			}

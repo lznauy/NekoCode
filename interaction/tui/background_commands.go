@@ -20,7 +20,7 @@ type backgroundController interface {
 	CancelBackgroundTask(context.Context, string, string) error
 }
 
-func (m *Model) backgroundCommand(value string) (bool, tea.Cmd) {
+func (m *Model) backgroundCommand(value string, scope *string) (bool, tea.Cmd) {
 	fields := strings.Fields(value)
 	if len(fields) == 0 {
 		return false, nil
@@ -33,6 +33,16 @@ func (m *Model) backgroundCommand(value string) (bool, tea.Cmd) {
 	if !ok {
 		return false, nil
 	}
+	sessionID := ""
+	if scope != nil {
+		sessionID = *scope
+		if sessionID == "" {
+			m.Messages.AddMessage(message.ChatMessage{Role: "error", Content: "此命令需要已建立的会话。"})
+			return true, nil
+		}
+	} else {
+		sessionID = rt.CurrentSessionID()
+	}
 	var out string
 	var err error
 	switch command {
@@ -44,7 +54,7 @@ func (m *Model) backgroundCommand(value string) (bool, tea.Cmd) {
 			out = "用法：/task-review <任务 ID>"
 			break
 		}
-		err = controller.RetryBackgroundNotification(context.Background(), rt.CurrentSessionID(), fields[1])
+		err = controller.RetryBackgroundNotification(context.Background(), sessionID, fields[1])
 		out = "验收已重新排队；不会重新执行任务。"
 	case "/task-find":
 		controller, ok := m.Runtime.(interface {
@@ -66,7 +76,7 @@ func (m *Model) backgroundCommand(value string) (bool, tea.Cmd) {
 			}
 		}
 		var page controlruntime.TaskSearchPage
-		page, err = controller.SearchSubagentOutputs(context.Background(), rt.CurrentSessionID(), fields[1], strings.Join(query, " "), after, 20)
+		page, err = controller.SearchSubagentOutputs(context.Background(), sessionID, fields[1], strings.Join(query, " "), after, 20)
 		for _, hit := range page.Hits {
 			out += fmt.Sprintf("#%d %s\n", hit.Sequence, hit.Preview)
 		}
@@ -87,7 +97,7 @@ func (m *Model) backgroundCommand(value string) (bool, tea.Cmd) {
 		var file *os.File
 		file, err = os.OpenFile(fields[2], os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if err == nil {
-			err = controller.ExportSubagentOutputs(context.Background(), rt.CurrentSessionID(), fields[1], file)
+			err = controller.ExportSubagentOutputs(context.Background(), sessionID, fields[1], file)
 			closeErr := file.Close()
 			if err == nil {
 				err = closeErr
@@ -110,7 +120,7 @@ func (m *Model) backgroundCommand(value string) (bool, tea.Cmd) {
 		}
 		if command == "/inbox" {
 			var demands []controlruntime.BackgroundDemand
-			demands, err = inbox.BackgroundDemands(rt.CurrentSessionID())
+			demands, err = inbox.BackgroundDemands(sessionID)
 			var lines []string
 			for _, d := range demands {
 				lines = append(lines, fmt.Sprintf("%s  %s  %s", d.ID, d.Status, d.Input.Text))
@@ -125,10 +135,10 @@ func (m *Model) backgroundCommand(value string) (bool, tea.Cmd) {
 				break
 			}
 			if command == "/demand-resume" {
-				err = inbox.ResumeBackgroundDemand(context.Background(), rt.CurrentSessionID(), controlruntime.RunID(fields[1]))
+				err = inbox.ResumeBackgroundDemand(context.Background(), sessionID, controlruntime.RunID(fields[1]))
 				out = "需求已重新排队。"
 			} else {
-				err = inbox.DiscardBackgroundDemand(context.Background(), rt.CurrentSessionID(), controlruntime.RunID(fields[1]))
+				err = inbox.DiscardBackgroundDemand(context.Background(), sessionID, controlruntime.RunID(fields[1]))
 				out = "已忽略需求记录。"
 			}
 		}
@@ -141,11 +151,11 @@ func (m *Model) backgroundCommand(value string) (bool, tea.Cmd) {
 			out = "停止全部任务不可用"
 			break
 		}
-		err = controller.StopBackgroundTasks(context.Background(), rt.CurrentSessionID())
+		err = controller.StopBackgroundTasks(context.Background(), sessionID)
 		out = "已请求停止协调轮次、后台任务和排队需求。"
 	case "/background":
 		var tasks []controlruntime.BackgroundTask
-		tasks, err = rt.BackgroundTasks(rt.CurrentSessionID())
+		tasks, err = rt.BackgroundTasks(sessionID)
 		var lines []string
 		for _, task := range tasks {
 			lines = append(lines, fmt.Sprintf("%s  %s  %s · 待接收追加 %d · 验收 %s (%d 次) · %d tokens %s", task.ID, taskStatus(task.Status), task.Title, len(task.PendingUpdates), task.Delivery, task.DeliveryAttempts, task.Usage.TotalTokens, task.DeliveryError))
@@ -160,14 +170,14 @@ func (m *Model) backgroundCommand(value string) (bool, tea.Cmd) {
 			break
 		}
 		text := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(value), command)), fields[1]))
-		err = rt.AppendBackgroundTask(context.Background(), rt.CurrentSessionID(), fields[1], text)
+		err = rt.AppendBackgroundTask(context.Background(), sessionID, fields[1], text)
 		out = "追加内容已排队，子任务将在下一轮请求前接收。"
 	case "/task-stop":
 		if len(fields) != 2 {
 			out = "用法：/task-stop <任务 ID>"
 			break
 		}
-		err = rt.CancelBackgroundTask(context.Background(), rt.CurrentSessionID(), fields[1])
+		err = rt.CancelBackgroundTask(context.Background(), sessionID, fields[1])
 		out = "已请求停止该子任务。"
 	}
 	if err != nil {

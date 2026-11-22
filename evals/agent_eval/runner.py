@@ -1,3 +1,4 @@
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -8,7 +9,7 @@ import tempfile
 import threading
 import time
 
-from .storage import copy_tree, digest, tree_hash, write_json, evaluator_fingerprint, json_hash, EVALUATION_CONTRACT_VERSION
+from .storage import copy_tree, digest, tree_hash, workspace_change_ns, write_json, evaluator_fingerprint, json_hash, EVALUATION_CONTRACT_VERSION
 from .telemetry import coordination_audit, Telemetry, protocol_tool_cost
 from . import verifier_sandbox
 from .verification import verify, stop_process
@@ -48,13 +49,13 @@ def model_observation(selection, calls):
     return (json_hash({"selection": selection, "primary": primary}) if known else None), auxiliary
 
 
-def run_trial(case, binary, model, mode, telemetry_root, directory, repeat, policy="deny", config_fingerprint=None):
-    args = (case, binary, model, mode, telemetry_root, directory, repeat, policy, config_fingerprint)
-    with tempfile.TemporaryDirectory(prefix='nekocode-eval-work-') as temporary:
-        return _run_trial(*args, workspace=Path(temporary) / 'workspace')
+def run_trial(case, binary, model, mode, telemetry_root, directory, repeat, policy="deny", config_fingerprint=None, parallel_step_sharing=False, no_execution_budget=False):
+    with tempfile.TemporaryDirectory(prefix='nekocode-eval-work-') as temporary, closing(Telemetry(telemetry_root)) as telemetry:
+        args = (case, binary, model, mode, telemetry, directory, repeat, policy, config_fingerprint)
+        return _run_trial(*args, workspace=Path(temporary) / 'workspace', parallel_step_sharing=parallel_step_sharing, no_execution_budget=no_execution_budget)
 
 
-def _preparation_failed(case, directory, receipt, telemetry_root, started, exc):
+def _preparation_failed(case, directory, receipt, telemetry, started, exc):
     error = f'{type(exc).__name__}: {exc}'
     if not (directory / 'trace/preparation.log').exists():
         (directory / 'trace/preparation.log').write_text(error + '\n')
@@ -64,7 +65,7 @@ def _preparation_failed(case, directory, receipt, telemetry_root, started, exc):
                     'required_total': sum(r['required'] for r in case['manifest']['requirements']),
                     'product_passed': False, 'checks': [{'id': r['id'], 'status': 'not_run', 'evidence': error}
                     for r in case['manifest']['requirements']]}
-    cost = Telemetry(telemetry_root).cost()
+    cost = telemetry.cost()
     cost.update(protocol_tool_cost(directory / 'trace/protocol.jsonl', None))
     outcome = {'schema_version': 1, 'layout_version': 2, 'trial_id': directory.name,
                'stop_reason': 'preparation_failed', 'error': error, 'elapsed_s': receipt['preparation_elapsed_s'],
@@ -79,7 +80,7 @@ def _preparation_failed(case, directory, receipt, telemetry_root, started, exc):
     return outcome
 
 
-def execute_agent(binary, workspace, model, mode, policy, prompt, receipt, telemetry_root, layout):
+def execute_agent(binary, workspace, model, mode, policy, prompt, receipt, telemetry, layout):
     """Drive the public protocol and collect execution evidence before verification."""
     trace = layout.trace("protocol.jsonl").open("w")
     errors = layout.trace("stderr.log").open("w")
@@ -92,7 +93,6 @@ def execute_agent(binary, workspace, model, mode, policy, prompt, receipt, telem
             trace.flush()
     started = time.monotonic()
     proc = None
-    telemetry = Telemetry(telemetry_root)
     final_text, final_visible, task_result_seen = "", False, False
     coordinator_turns = set()
     stop, failure = "harness_error", None
@@ -133,12 +133,18 @@ def execute_agent(binary, workspace, model, mode, policy, prompt, receipt, telem
                     pass
         thread = threading.Thread(target=reader, daemon=True)
         thread.start()
-        control("initialize", "initialize", model_call_budget=receipt["budgets"]["model_calls"])
+        budgets = receipt["budgets"]
+        options = {}
+        if budgets["model_calls"] is not None:
+            options.update(model_call_budget=budgets["model_calls"], external_token_limit=budgets["total_tokens"])
+        if receipt.get("parallel_step_sharing"):
+            options["parallel_step_sharing"] = True
+        control("initialize", "initialize", **options)
         user("setup-mode", "/mode " + mode)
         while True:
             telemetry_updated = False
             elapsed = time.monotonic() - started
-            if elapsed >= receipt["budgets"]["wall_seconds"]:
+            if budgets["wall_seconds"] is not None and elapsed >= budgets["wall_seconds"]:
                 stop = "wall_budget"
                 break
             if reader_error:
@@ -183,6 +189,8 @@ def execute_agent(binary, workspace, model, mode, policy, prompt, receipt, telem
                 elif uid == "setup-info":
                     server_info = response.get("response", {})
                     native_budget = server_info.get("execution_budget")
+                    if receipt.get("parallel_step_sharing") and not (native_budget or {}).get("parallel_step_sharing"):
+                        raise RuntimeError("binary did not enable requested parallel step sharing")
                     control("setup-extensions", "extensions.list")
                 elif uid == "setup-extensions":
                     config_observed = response.get("response")
@@ -194,7 +202,7 @@ def execute_agent(binary, workspace, model, mode, policy, prompt, receipt, telem
                         raise RuntimeError("context.snapshot unavailable; refusing to guess settlement")
                     view = response.get("response", {})
                     native_budget = view.get("execution_budget", native_budget)
-                    telemetry.refresh()
+                    telemetry.refresh(live=True)
                     telemetry_updated = True
                     background = telemetry.background()
                     tasks = (background or {}).get("tasks", [])
@@ -245,12 +253,18 @@ def execute_agent(binary, workspace, model, mode, policy, prompt, receipt, telem
                 if frame.get("user_message_uuid") == "task":
                     final_visible = bool(final_text.strip())
                 if frame.get("is_error"):
-                    stop, failure = "harness_error", frame.get("subtype", "task failed")
+                    if frame.get("stop_reason") == "call_budget" and frame.get("subtype") == "error_call_budget":
+                        stop = "call_budget"
+                        native_budget = frame.get("execution_budget", native_budget)
+                    elif frame.get("stop_reason") in ("step_limit", "incomplete") and frame.get("subtype") == "error_" + frame["stop_reason"]:
+                        stop = frame["stop_reason"]
+                    else:
+                        stop, failure = "harness_error", frame.get("subtype", "task failed")
                     break
-            if task_sent and time.monotonic() - last_budget_check >= BUDGET_CHECK_INTERVAL:
+            if task_sent and budgets["model_calls"] is not None and time.monotonic() - last_budget_check >= BUDGET_CHECK_INTERVAL:
                 if not telemetry_updated:
-                    telemetry.refresh()
-                cost = telemetry.cost()
+                    telemetry.refresh(live=True)
+                cost = telemetry.model_cost()
                 last_budget_check = time.monotonic()
                 if cost["model_calls"] is not None and cost["model_calls"] >= receipt["budgets"]["model_calls"]:
                     # Native admission owns the exact ceiling. Let admitted
@@ -285,10 +299,10 @@ def execute_agent(binary, workspace, model, mode, policy, prompt, receipt, telem
         trace.close()
         errors.close()
     execution_elapsed = time.monotonic() - started
-    return telemetry, {'final_text': final_text, 'final_visible': final_visible, 'task_result_seen': task_result_seen, 'stop': stop, 'failure': failure, 'execution_elapsed': execution_elapsed, 'model_selection': model_selection, 'server_info': server_info, 'config_observed': config_observed, 'native_budget': native_budget, 'interactions': interactions}
+    return {'final_text': final_text, 'final_visible': final_visible, 'task_result_seen': task_result_seen, 'stop': stop, 'failure': failure, 'execution_elapsed': execution_elapsed, 'model_selection': model_selection, 'server_info': server_info, 'config_observed': config_observed, 'native_budget': native_budget, 'interactions': interactions}
 
 
-def _run_trial(case, binary, model, mode, telemetry_root, directory, repeat, policy, config_fingerprint, workspace):
+def _run_trial(case, binary, model, mode, telemetry, directory, repeat, policy, config_fingerprint, workspace, parallel_step_sharing=False, no_execution_budget=False):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=False)
     layout = TrialLayout(directory)
@@ -305,6 +319,11 @@ def _run_trial(case, binary, model, mode, telemetry_root, directory, repeat, pol
                "binary_sha256": digest(Path(binary).read_bytes()), "environment": environment_receipt(),
                "budgets": case["manifest"]["budgets"], "telemetry_adapter": "nekocode-local-journal-v1", "evaluator_fingerprint": evaluator_fingerprint(),
                "evaluation_contract_version": EVALUATION_CONTRACT_VERSION}
+    if no_execution_budget:
+        if parallel_step_sharing:
+            raise ValueError("parallel step sharing requires an execution budget")
+        receipt["budgets"] = {**receipt["budgets"], "model_calls": None, "total_tokens": None, "wall_seconds": None}
+    receipt["parallel_step_sharing"] = parallel_step_sharing
     write_json(directory / "receipt.json", receipt)
     write_json(directory / 'state.json', {'status': 'preparing'})
     preparation_started = time.monotonic()
@@ -318,28 +337,31 @@ def _run_trial(case, binary, model, mode, telemetry_root, directory, repeat, pol
             for args in [['init', '-q'], ['add', '-f', '.'], ['-c', 'user.name=Eval', '-c', 'user.email=eval@localhost', 'commit', '-qm', 'eval seed']]:
                 run_git('-C', str(workspace), *args, log=log)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
-        return _preparation_failed(case, directory, receipt, telemetry_root, preparation_started, exc)
+        return _preparation_failed(case, directory, receipt, telemetry, preparation_started, exc)
     receipt['preparation_elapsed_s'] = round(time.monotonic() - preparation_started, 3)
     write_json(directory / 'receipt.json', receipt)
     write_json(directory / "state.json", {"status": "running"})
-    telemetry, execution = execute_agent(binary, workspace, model, mode, policy, prompt, receipt, telemetry_root, layout)
+    execution = execute_agent(binary, workspace, model, mode, policy, prompt, receipt, telemetry, layout)
     verification_started = time.monotonic()
     telemetry.refresh()
-    relevant_runs = {e.get("run_id") for e in telemetry.events.values()
-                     if e.get("type") == "run_started" and
-                     (e.get("source", {}).get("kind") == "task_completion" or e.get("source", {}).get("id") == "task")}
-    failed_runs = [e.get("run_id") for e in telemetry.events.values()
-                   if e.get("run_id") in relevant_runs and e.get("type") in {"run_failed", "run_aborted"}]
+    relevant_runs = {e.get("run_id") for e in telemetry.event_rows("run_started")
+                     if (e.get("source", {}).get("kind") == "task_completion" or e.get("source", {}).get("id") == "task")}
+    failed_runs = [e.get("run_id") for e in telemetry.event_rows("run_failed", "run_aborted")
+                   if e.get("run_id") in relevant_runs]
     if execution['stop'] == "settled" and failed_runs:
         execution['stop'], execution['failure'] = "harness_error", "task/coordinator runtime failure: " + ", ".join(failed_runs)
     observed_model_fingerprint, auxiliary_models = model_observation(execution['model_selection'], list(telemetry.calls.values()))
+    if case["manifest"]["id"] == "relay-station":
+        receipt["workspace_change_ns"] = workspace_change_ns(workspace)
     receipt["auxiliary_models"] = auxiliary_models
     receipt["observed_model_fingerprint"] = observed_model_fingerprint
     write_json(directory / "receipt.json", receipt)
     (directory / "answer.txt").write_text(execution['final_text'])
     write_json(layout.trace("observed.json"), {"model": execution['model_selection'], "server": execution['server_info'], "extensions": execution['config_observed'], "session": telemetry.session})
-    for filename, rows in [("calls.jsonl", telemetry.safe_calls()), ("events.jsonl", list(telemetry.events.values()))]:
-        layout.trace(filename).write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
+    for filename, rows in [("calls.jsonl", telemetry.safe_calls()), ("events.jsonl", telemetry.event_rows())]:
+        with layout.trace(filename).open("w") as stream:
+            for row in rows:
+                stream.write(json.dumps(row, ensure_ascii=False) + "\n")
     if repository:
         # The verifier checks the temporary review tree against the trusted
         # pre-execution digest. No source copies enter the trial archive.
@@ -351,20 +373,24 @@ def _run_trial(case, binary, model, mode, telemetry_root, directory, repeat, pol
         copy_tree(workspace, directory / 'product')
         product_hash = tree_hash(directory / 'product')
         verification = verify(case, directory / 'product', layout.verification, execution['final_text'],
-                              events_path=layout.trace('events.jsonl'), original_workspace=workspace)
+                              events_path=layout.trace('events.jsonl'), original_workspace=workspace,
+                              workspace_change_ns=receipt.get("workspace_change_ns"))
     background_snapshot = telemetry.background()
     write_json(layout.trace("tasks.json"), background_snapshot if background_snapshot is not None else {"available": False})
-    coordination = coordination_audit(list(telemetry.events.values()), background_snapshot)
+    coordination = coordination_audit(telemetry.event_rows(), background_snapshot)
     cost = telemetry.cost()
     cost.update(protocol_tool_cost(layout.trace("protocol.jsonl"), telemetry.session))
-    completeness = {"calls_observed": bool(telemetry.calls), "events_observed": bool(telemetry.events),
+    completeness = {"calls_observed": bool(telemetry.calls), "events_observed": cost["tool_started"] is not None,
                     "public_task_result": execution['task_result_seen'], "background_state_observed": telemetry.background() is not None,
                     "all_call_ids_present": bool(telemetry.calls) and all(c.get("call_id") for c in telemetry.calls.values()),
                     "tool_counter_scope": {"repeated_tool_requests": "same name and JSON arguments with a distinct call ID in the same root run; includes legitimate rechecks", "tool_requests": "root task protocol, unique run/call IDs", "tool_result_errors": "root task protocol is_error results", "tool_started": "local session runtime events", "tool_blocked": "local session runtime events", "tool_calls": "compatibility alias of tool_started"},
                     "limitations": ["image_understand attempts are logged; providers can omit usage. Unknown usage is not zero, and token caps use the observed subtotal as a lower bound. Other uninstrumented model tools may still be absent.", "Local journal/calllog adapter; rotating or disabled logs can undercount.",
-                                    ("Native model admission counts in-flight requests; admitted work settles under the wall-clock budget. Token cap still polls observed usage and can overshoot." if execution['native_budget'] else "Call/token caps are checked after completed physical calls; in-flight calls can overshoot."),
+                                    ("Usage observed without execution cutoffs." if no_execution_budget else "Native model admission counts in-flight requests; admitted work settles under the wall-clock budget. Token cap still polls observed usage and can overshoot." if execution['native_budget'] else "Call/token caps are checked after completed physical calls; in-flight calls can overshoot."),
                                     "External configuration is not isolated; an explicit config fingerprint is required for strict comparison.",
                                     "Verifier and product checks run under Linux bubblewrap in private namespaces. This does not isolate the model execution stage or adjudicate malicious grading manipulation."]}
+    if telemetry.read_errors:
+        completeness["telemetry_read_errors"] = dict(telemetry.read_errors)
+        completeness["limitations"].append("Unreadable telemetry files can leave observed counts incomplete.")
     outcome = {"schema_version": 1, "layout_version": 2, "trial_id": directory.name, "session": telemetry.session, "stop_reason": execution['stop'],
                "error": execution['failure'], "elapsed_s": round(execution['execution_elapsed'], 3), "verification_elapsed_s": round(time.monotonic() - verification_started, 3), "cost": cost,
                "verification": verification, "success": execution['stop'] == "settled" and verification["product_passed"] and not execution['failure'],
@@ -384,7 +410,11 @@ def _run_trial(case, binary, model, mode, telemetry_root, directory, repeat, pol
               f"- Same-image rechecks (identical ordered image bytes): {cost['same_image_rechecks']}; image HTTP 429 results: {cost['image_rate_limits']}",
               f"- Context snapshot polls (harness control traffic): {cost['context_snapshot_polls']}",
               f"- Execution seconds (including shutdown, excluding verification): {outcome['elapsed_s']}",
-              f"- Host-mode requests denied: {execution['interactions']['host_requests']}", "", "## Independent checks", ""]
+              f"- Host-mode requests denied: {execution['interactions']['host_requests']}"]
+    if execution["stop"] == "call_budget" and execution["native_budget"]:
+        b = execution["native_budget"]
+        report.append(f"- Call budget: {b['admitted']}/{b['limit']} admitted; remaining ordinary {b['work_remaining']}, worker handoff {b['handoff_remaining']}, coordinator {b['coordinator_remaining']}")
+    report += ["", "## Independent checks", ""]
     report += [f"- {c['id']}: {c['status']} — {c['evidence']}" for c in verification["checks"]]
     report += ['', '## Files', '']
     if repository:

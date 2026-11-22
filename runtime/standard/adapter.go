@@ -273,6 +273,7 @@ func (a *adapter) services() controlruntime.ServiceGroups {
 			SubagentHistory:       a.SubagentHistory,
 			SubagentToolOutput:    a.SubagentToolOutput,
 			CurrentSessionID:      a.bot.CurrentSessionID,
+			EnsureSessionIdentity: a.bot.EnsureSessionIdentity,
 			CaptureDraft:          a.bot.CaptureSessionDraft,
 			ListSessions:          a.ListSessions,
 			SessionMessages:       a.SessionMessages,

@@ -109,6 +109,9 @@ func applyWorkspaceRoots(ctx context.Context, profile *sandbox.Profile, cwd stri
 		cwd = resolved
 	}
 	for _, root := range manager.Snapshot() {
+		if root.FileOnly {
+			continue
+		}
 		if root.Path == cwd {
 			continue // already covered by profile.Workspace
 		}

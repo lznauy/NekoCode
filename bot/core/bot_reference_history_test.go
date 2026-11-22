@@ -64,7 +64,10 @@ func TestColdReferenceProjectionRetainsOldOutputAfterThousandsOfMessages(t *test
 	b := newPersistTestBot(t)
 	addReferenceOutput(t, b, "old-output", false)
 	scope := b.CurrentSessionID()
-	first := b.modelContextReferences(t.Context(), scope, "")
+	first, err := b.readContextReferences(referenceActorContext(t, b), refbridge.Query{Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(first.Items) != 1 {
 		t.Fatal("missing initial output reference")
 	}
@@ -84,7 +87,10 @@ func TestColdReferenceProjectionRetainsOldOutputAfterThousandsOfMessages(t *test
 	if base < 10000 || len(tail) != 0 || !lazy {
 		t.Fatal("cold restore eagerly retained transcript")
 	}
-	page := b.modelContextReferences(t.Context(), scope, "")
+	page, err := b.readContextReferences(referenceActorContext(t, b), refbridge.Query{Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if page.Unavailable || len(page.Items) != 1 || page.Items[0].ID != first.Items[0].ID || page.Scanned != 1 || page.HasMore {
 		t.Fatalf("old output displaced after cold restore: %+v", page)
 	}

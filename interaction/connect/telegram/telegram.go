@@ -459,7 +459,7 @@ func (c *Connector) handleCallbackQuery(ctx context.Context, client *apiClient, 
 		}
 		if err != nil {
 			if connect.IsResolvedErr(err) {
-				c.terminalize(ctx, client, id, verdict)
+				c.terminalize(ctx, client, id, "已处理")
 				_ = client.answerCallbackQuery(ctx, cb.ID, "该请求已处理")
 				return
 			}
@@ -475,7 +475,7 @@ func (c *Connector) handleCallbackQuery(ctx context.Context, client *apiClient, 
 		}
 		if err != nil {
 			if connect.IsResolvedErr(err) {
-				c.terminalize(ctx, client, id, "已忽略")
+				c.terminalize(ctx, client, id, "已处理")
 				_ = client.answerCallbackQuery(ctx, cb.ID, "该请求已处理")
 				return
 			}
@@ -588,7 +588,7 @@ func (c *Connector) handleAnswerCallback(ctx context.Context, client *apiClient,
 		}
 		if err != nil {
 			if connect.IsResolvedErr(err) {
-				c.terminalize(ctx, client, id, "已回答")
+				c.terminalize(ctx, client, id, "已处理")
 				_ = client.answerCallbackQuery(ctx, cb.ID, "该请求已处理")
 				return
 			}
@@ -639,7 +639,7 @@ func (c *Connector) handleAnswerCallback(ctx context.Context, client *apiClient,
 	}
 	if err != nil {
 		if connect.IsResolvedErr(err) {
-			c.terminalize(ctx, client, id, "已回答")
+			c.terminalize(ctx, client, id, "已处理")
 			_ = client.answerCallbackQuery(ctx, cb.ID, "该请求已处理")
 			return
 		}

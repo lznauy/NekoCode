@@ -6,6 +6,12 @@ import "slices"
 // Empty State means no observation. ExitCodeKnown is true only for a normal
 // exit. OutputComplete concerns captured bytes before text normalization.
 type ProcessObservation struct {
+	// TestReportState is pending while exited Go test output is draining, or unreadable on a pipe error.
+	TestReportState string `json:"test_report_state,omitempty"`
+	// NoTestsRun records an explicit empty test report from a recognized runner.
+	NoTestsRun  bool   `json:"no_tests_run,omitempty"`
+	TestName    string `json:"test_name,omitempty"`
+	TestOutcome string `json:"test_outcome,omitempty"`
 	// SampleHash identifies the output preview before process handles and status labels are added.
 	SampleHash     string `json:"sample_hash,omitempty"`
 	Task           string `json:"task,omitempty"`
@@ -16,6 +22,11 @@ type ProcessObservation struct {
 	ExitCode       int    `json:"exit_code,omitempty"`
 	ExitCodeKnown  bool   `json:"exit_code_known,omitempty"`
 	OutputComplete bool   `json:"output_complete,omitempty"`
+}
+
+// FailedExit reports an observed process failure independently of the tool API error.
+func (p ProcessObservation) FailedExit() bool {
+	return p.ExitCodeKnown && p.ExitCode != 0
 }
 
 // ExecutionReceipt records one physical tool-function invocation. Success for

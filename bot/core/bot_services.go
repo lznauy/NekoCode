@@ -24,7 +24,7 @@ func (b *Bot) environment() prompt.Environment {
 		return env
 	}
 	for _, root := range b.toolbox.Workspace().Snapshot() {
-		env.Roots = append(env.Roots, prompt.Root{Path: root.Path, Access: string(root.Access)})
+		env.Roots = append(env.Roots, prompt.Root{Path: root.Path, Access: string(root.Access), FileOnly: root.FileOnly})
 	}
 	env.ManagedProcesses = b.toolbox.ManagedProcessSummary()
 	return env

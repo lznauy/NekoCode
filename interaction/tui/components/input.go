@@ -37,7 +37,8 @@ type InputImageAttachment struct {
 	Path  string
 }
 
-type inputDraft struct {
+// InputDraft preserves text, paste markers, image bindings and cursor position.
+type InputDraft struct {
 	displayText  string
 	pastedBlocks []pastedBlock
 	nextPasteID  int
@@ -60,7 +61,7 @@ type Input struct {
 	sending         bool
 	history         []string
 	historyIdx      int
-	savedDraft      *inputDraft
+	savedDraft      *InputDraft
 	historyActive   bool
 	pastedBlocks    []pastedBlock
 	nextPasteID     int
@@ -79,7 +80,7 @@ func NewInput(width int) *Input {
 	ta.MinHeight = 1
 	ta.DynamicHeight = true
 	ta.ShowLineNumbers = false
-	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter"))
+	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter", "ctrl+j"))
 
 	s := ta.Styles()
 	s.Focused.CursorLine = lipgloss.NewStyle()
@@ -92,6 +93,14 @@ func NewInput(width int) *Input {
 	ta.SetWidth(max(1, width))
 
 	return &Input{textarea: ta, width: width, follow: true, preferredColumn: -1}
+}
+
+// NewDraftEditor binds Enter to a newline while its parent handles saving.
+func NewDraftEditor(width int) *Input {
+	i := NewInput(width)
+	binding := &i.textarea.KeyMap.InsertNewline
+	binding.SetKeys(append(binding.Keys(), "enter")...)
+	return i
 }
 
 func (i *Input) SetTaskObserver(enabled bool) { i.taskObserver = enabled }
@@ -163,7 +172,6 @@ func (i *Input) clear(deleteImages bool) {
 
 func (i *Input) Reset() {
 	i.clear(false)
-	i.sending = false
 }
 
 func (i *Input) SetImageCleanup(cleanup func(string)) { i.onImageRemoved = cleanup }
@@ -196,8 +204,12 @@ func (i *Input) AddImage(path string) bool {
 }
 
 func (i *Input) ImageAttachments() []InputImageAttachment {
+	return draftImages(i.pastedBlocks)
+}
+
+func draftImages(blocks []pastedBlock) []InputImageAttachment {
 	var images []InputImageAttachment
-	for _, block := range i.pastedBlocks {
+	for _, block := range blocks {
 		if block.imagePath != "" {
 			images = append(images, InputImageAttachment{Label: block.marker, Path: block.imagePath})
 		}
@@ -220,7 +232,7 @@ func (i *Input) SetHistory(entries []string) {
 	if i.historyActive {
 		i.history = append(i.history[:0], entries...)
 		if len(i.history) == 0 {
-			i.restoreDraft(i.savedDraft)
+			i.RestoreDraft(i.savedDraft)
 			i.savedDraft = nil
 			i.historyIdx = 0
 			i.historyActive = false
@@ -253,7 +265,7 @@ func (i *Input) HistoryUp() {
 	}
 	capturedDraft := false
 	if i.historyIdx == len(i.history) {
-		i.savedDraft = i.captureDraft()
+		i.savedDraft = i.CaptureDraft()
 		capturedDraft = true
 	}
 	if i.historyIdx > 0 {
@@ -272,7 +284,7 @@ func (i *Input) HistoryDown() {
 	}
 	i.historyIdx++
 	if i.historyIdx == len(i.history) {
-		i.restoreDraft(i.savedDraft)
+		i.RestoreDraft(i.savedDraft)
 		i.savedDraft = nil
 		i.historyActive = false
 	} else {
@@ -361,7 +373,7 @@ func (i *Input) Update(msg tea.Msg) (*Input, tea.Cmd) {
 			return i, nil
 		}
 		i.preferredColumn = -1
-		if m.String() == "enter" {
+		if m.String() == "enter" && !key.Matches(m, i.textarea.KeyMap.InsertNewline) {
 			return i, nil
 		}
 		if (key.Matches(m, i.textarea.KeyMap.DeleteCharacterBackward) || key.Matches(m, i.textarea.KeyMap.DeleteWordBackward)) && i.deletePastedBlockAtCursor(true) {
@@ -432,8 +444,12 @@ func (i *Input) newPasteMarker(content string) string {
 }
 
 func (i *Input) expandedValue() string {
-	display := []rune(i.textarea.Value())
-	blocks := append([]pastedBlock(nil), i.pastedBlocks...)
+	return expandDraft(i.textarea.Value(), i.pastedBlocks)
+}
+
+func expandDraft(text string, pasted []pastedBlock) string {
+	display := []rune(text)
+	blocks := append([]pastedBlock(nil), pasted...)
 	sort.Slice(blocks, func(a, b int) bool { return blocks[a].start < blocks[b].start })
 	var expanded strings.Builder
 	position := 0
@@ -580,8 +596,8 @@ func (i *Input) releaseImages(blocks []pastedBlock) {
 	}
 }
 
-func (i *Input) captureDraft() *inputDraft {
-	return &inputDraft{
+func (i *Input) CaptureDraft() *InputDraft {
+	return &InputDraft{
 		displayText:  i.textarea.Value(),
 		pastedBlocks: append([]pastedBlock(nil), i.pastedBlocks...),
 		nextPasteID:  i.nextPasteID,
@@ -590,7 +606,7 @@ func (i *Input) captureDraft() *inputDraft {
 	}
 }
 
-func (i *Input) restoreDraft(draft *inputDraft) {
+func (i *Input) RestoreDraft(draft *InputDraft) {
 	i.cachedLayout = nil
 	i.preferredColumn = -1
 	i.draftGeneration++
@@ -695,17 +711,22 @@ func truncateRunes(value string, limit int) string {
 	return string(runes[:limit])
 }
 
-func (i *Input) View() string {
+func (i *Input) View() string { return i.ViewWithQueueHint(i.sending) }
+
+func (i *Input) ViewWithQueueHint(showQueue bool) string {
 	w := max(20, i.width)
 	line := styles.BorderStyle.Render(strings.Repeat(styles.Horizontal, w))
 
-	tv := i.textView()
+	tv := i.TextView()
 
 	txt := "Auto"
 	if !i.follow {
 		txt = "Manual"
 	}
 	prefix := styles.BorderStyle.Render(styles.Vertical + " ")
+	if showQueue {
+		prefix += styles.TealStyle.Render("Tab 排队") + styles.SubtleStyle.Render("  ·  ")
+	}
 	footer := prefix + i.modeControl(false) + styles.SubtleStyle.Render(" · ") +
 		styles.SubtleStyle.Render("Follow:") + " " +
 		styles.TealStyle.Render(txt)
@@ -763,3 +784,9 @@ func (i *Input) displayReasoningEffort() string {
 }
 
 func (i *Input) Init() tea.Cmd { return tea.Batch(textarea.Blink, BlinkTick()) }
+
+func (d *InputDraft) Value() string {
+	return strings.TrimRight(expandDraft(d.displayText, d.pastedBlocks), "\n\t\r ")
+}
+func (d *InputDraft) Preview() string                { return d.displayText }
+func (d *InputDraft) Images() []InputImageAttachment { return draftImages(d.pastedBlocks) }

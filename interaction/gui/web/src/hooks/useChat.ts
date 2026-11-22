@@ -1,3 +1,4 @@
+import { isSlashCommandInput } from '../lib/commandInput'
 import { useCallback, useRef, useState } from 'react'
 import type { MutableRefObject } from 'react'
 import { persistentTool } from '../lib/toolPolicy'
@@ -616,7 +617,7 @@ export function useChat(): UseChatReturn {
 	nextImageIDRef.current = 0
     const sid = genId()
     sidRef.current = sid
-    const optimisticTurn = { userSid, sid, awaitsAdmission: !t.startsWith('/'), replySettled: false }
+    const optimisticTurn = { userSid, sid, awaitsAdmission: !isSlashCommandInput(t), replySettled: false }
     optimisticTurnRef.current = optimisticTurn
     setMsgs((prev) => [...prev, emptyRunMsg(sid)])
 

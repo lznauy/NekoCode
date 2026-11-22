@@ -195,7 +195,14 @@ func TestPermissionObserverCancelledApprovalIsNotUserDenial(t *testing.T) {
 	reply := protocol.ConfirmReply{Cancelled: true}
 	seen := []PermissionEvent{}
 	executor.SetPermissionObserver(func(_ context.Context, event PermissionEvent) { seen = append(seen, event) })
-	confirm := executor.observeConfirm(t.Context(), func(protocol.ConfirmRequest) protocol.ConfirmReply { return reply })
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	confirm := executor.observeConfirm(ctx, func(req protocol.ConfirmRequest) protocol.ConfirmReply {
+		if req.Done != ctx.Done() {
+			t.Fatal("tool cancellation missing from approval request")
+		}
+		return reply
+	})
 	confirm(protocol.ConfirmRequest{ToolName: "shell"})
 	if len(seen) != 1 || seen[0].Denied {
 		t.Fatalf("cancellation produced user denial: %+v", seen)

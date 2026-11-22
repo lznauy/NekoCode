@@ -146,7 +146,7 @@ func (b *Bot) submitBackgroundTask(ctx context.Context, spec taskbridge.TaskSpec
 	if err := profile.CheckSource(ctx); err != nil {
 		return nil, err
 	}
-	profile, err = resolveTaskStepBudget(profile, spec, taskbridge.DefaultBackgroundSteps)
+	profile, err = resolveTaskStepBudget(profile, spec, taskbridge.DefaultBackgroundSteps, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -494,7 +494,7 @@ func (b *Bot) submitBackgroundTask(ctx context.Context, spec taskbridge.TaskSpec
 			emit(protocol.StepEvent{Action: o.Action, Output: o.Text, SubAgentReasoning: o.Reasoning, SubAgentMessageSeq: o.MessageSeq})
 		}
 		local.OnPhase = func(phase string) {
-			emit(protocol.StepEvent{Action: protocol.StepActionSubAgentUpdate, SubAgentStatus: "running", SubAgentPhase: phase})
+			emit(protocol.StepEvent{Action: protocol.StepActionSubAgentUpdate, SubAgentPhase: phase})
 		}
 		local.OnToolCall = func(ev subagent.ToolCallEvent) {
 			emit(protocol.StepEvent{Action: ev.Action, CallID: ev.CallID, ToolName: ev.ToolName, ToolArgs: ev.ToolArgs, ToolInput: ev.ToolInput, Output: ev.Output, IsError: ev.IsError, Evidence: ev.Evidence, NonExecution: ev.NonExecution, Decision: ev.Decision})
@@ -519,7 +519,7 @@ func (b *Bot) submitBackgroundTask(ctx context.Context, spec taskbridge.TaskSpec
 		if result.Status == subagent.StatusFailed || err != nil {
 			status = "failed"
 		}
-		if taskCtx.Err() != nil {
+		if result.Summary.StopReason == "cancelled" {
 			status = "interrupted"
 		}
 		emit(protocol.StepEvent{Action: protocol.StepActionSubAgentEnd, SubAgentStatus: status, Output: output, Summary: &result.Summary})

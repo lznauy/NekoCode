@@ -72,7 +72,7 @@ func TestCoordinatorUnfinishedPlanCorrectionIsBounded(t *testing.T) {
 			t.Fatal("correction stopped early")
 		}
 	}
-	if !a.turnRunner.handleText(&reasoningResult{Action: actionChat, ActionInput: "Partial review report."}, nil) || a.run.err != nil || !a.run.todoPartialCloseout {
+	if !a.turnRunner.handleText(&reasoningResult{Action: actionChat, ActionInput: "Partial review report."}, nil) || a.run.err != nil || !a.run.partialCloseout {
 		t.Fatal("stuck coordinator did not produce a partial closeout")
 	}
 	if !strings.Contains(a.run.finalText, "Partial review report.") || !strings.Contains(a.run.finalText, "verify") || !strings.Contains(a.run.finalText, "未完成") {
@@ -345,5 +345,48 @@ func TestCompletionTodoWithoutPlanIDUsesNotificationPlan(t *testing.T) {
 	a.deps.ctxMgr.SelectTodoGroup("other")
 	if got := a.deps.ctxMgr.Snapshot().Todos; len(got) != 1 || got[0].Content != "unrelated" {
 		t.Fatalf("foreign checklist modified: %+v", got)
+	}
+}
+
+func TestReopenedTodoDoesNotRenewCorrectionBudget(t *testing.T) {
+	a := coordinatorWithTodos(t, 0)
+	for i := 0; i < 4; i++ {
+		items := a.deps.ctxMgr.Todos()
+		if i%2 == 0 {
+			items[0].Status = "completed"
+		} else {
+			items[0].Status = "pending"
+		}
+		a.deps.ctxMgr.SetTodos(items)
+		if got := a.turnRunner.continueUnfinishedPlan(); got != (i < 3) {
+			t.Fatalf("attempt %d continued=%v", i+1, got)
+		}
+	}
+}
+
+func TestEmptyResponseAfterToolResultsReportsUnfinishedWork(t *testing.T) {
+	for _, summary := range []string{"The checklist was saved.", ""} {
+		a := newTestAgent()
+		tool := &todo.TodoWriteTool{}
+		tool.SetApplyFn(a.updateTodos)
+		a.deps.toolRegistry.Register(tool)
+		model := &evidenceSequenceLLM{scripts: [][]types.StreamToken{
+			{{ToolCallDelta: &types.ToolCallDelta{Index: 0, ID: "plan", Name: "todo_write", Arguments: `{"todos":[{"content":"verify changes","status":"pending"}]}`}}},
+			{{ReasoningContent: "thinking"}, {Content: "  "}},
+			{{Content: summary}},
+		}}
+		a.deps.llmClient = model
+		result := a.Run("Plan and verify changes.", nil, nil)
+		wantText := summary
+		if wantText == "" {
+			wantText = fallbackSynthesize
+		}
+		if result.Error != nil || result.StopReason != "incomplete" || model.calls != 3 ||
+			!strings.Contains(result.FinalOutput, wantText) || !strings.Contains(result.FinalOutput, "verify changes（未完成）") {
+			t.Fatalf("calls=%d result=%+v", model.calls, result)
+		}
+		if !containsMessage(model.messages, synthesizePrompt) || a.run.finalPersisted != (summary != "") {
+			t.Fatalf("summary=%q persisted=%t messages=%+v", summary, a.run.finalPersisted, model.messages)
+		}
 	}
 }

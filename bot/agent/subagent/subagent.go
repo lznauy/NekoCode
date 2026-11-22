@@ -50,6 +50,7 @@ type Config struct {
 }
 
 type runState struct {
+	processWait       processWaitHistory
 	writeDrafts       toolpolicy.WriteDrafts
 	startTime         time.Time
 	toolUseCount      int
@@ -86,8 +87,7 @@ func (s *runState) addTokens(cfg RunConfig) func(int, int) {
 	}
 }
 
-func (s *runState) meta(ctxMgr *ctxmgr.Manager) runMeta {
-	status := ctxMgr.Status()
+func (s *runState) meta(status ctxmgr.Status) runMeta {
 	return runMeta{
 		totalTokens:     s.totalTokens,
 		toolUseCount:    s.toolUseCount,
@@ -149,7 +149,7 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (result *Result, runErr
 		restored := *cfg.ResumeContext
 		restored.SystemPrompt = buildSystemPrompt(cfg)
 		ctxMgr.Restore(restored)
-		closeInterruptedTools(ctxMgr)
+		closeInterruptedTools(ctxMgr, restored.Messages)
 	}
 	// Mask any inherited reader, including standalone children with no durable identity.
 	ctx = refbridge.WithReader(ctx, referenceReader(cfg, ctxMgr, executor.ExecutionState().OutputStore))
@@ -171,8 +171,8 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (result *Result, runErr
 			return nil
 		}
 		snap := ctxMgr.Snapshot()
-		meta := state.meta(ctxMgr)
 		contextStatus := ctxMgr.Status()
+		meta := state.meta(contextStatus)
 		usage := AttemptUsage{TotalTokens: meta.totalTokens, CacheHitTokens: meta.cacheHitTokens, CacheMissTokens: meta.cacheMissTokens, ToolUseCount: meta.toolUseCount, DurationMs: meta.durationMs, ContextTokens: contextStatus.Tokens, ContextWindow: contextStatus.Budget}
 		if result != nil {
 			usage.Summary = result.Summary
@@ -203,24 +203,31 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (result *Result, runErr
 		if runErr != nil {
 			status = "failed"
 		}
-		if ctx.Err() != nil || errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
+		if ctx.Err() != nil {
+			if runErr == nil {
+				runErr = ctx.Err()
+			}
 			status = "interrupted"
 			if result != nil {
 				result.Summary.StopReason = "cancelled"
+				if result.Status == StatusCompleted {
+					result.Status = StatusPartial
+				}
 			}
 		}
 		if err := checkpoint(status, output); err != nil {
 			runErr = errors.Join(runErr, fmt.Errorf("save subagent: %w", err))
-		}
-		// Saving may itself return cancellation or race with a late cancel.
-		// Reconcile the returned summary after this final I/O boundary.
-		if result != nil {
-			if ctx.Err() != nil || errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
-				result.Summary.StopReason = "cancelled"
-			} else if runErr != nil {
+			if result != nil {
+				result.Status = StatusFailed
 				result.Summary.StopReason = "execution_error"
+				if ctx.Err() != nil {
+					result.Status = StatusPartial
+					result.Summary.StopReason = "cancelled"
+				}
 			}
 		}
+		// A successful terminal checkpoint commits the sampled outcome.
+		// Cancellation arriving during that write belongs after the commit.
 	}()
 	phase := phaseReporter(cfg)
 	phase("Waiting")
@@ -237,6 +244,11 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (result *Result, runErr
 		log:        subLog,
 	}
 
+	if cfg.ForegroundInterval > 0 {
+		var cancel context.CancelFunc
+		run.ctx, cancel = context.WithTimeoutCause(ctx, cfg.ForegroundInterval, errForegroundReview)
+		defer cancel()
+	}
 	kernel.RunLoop(kernel.Loop{
 		StepLimitReached: run.stepLimitReached,
 		Step: func() bool {
@@ -252,6 +264,14 @@ func (e *Engine) Run(ctx context.Context, cfg RunConfig) (result *Result, runErr
 		},
 	})
 
+	// The parent context owns cancellation and the terminal checkpoint. An
+	// expired scheduling interval only ends this attempt, after its executor
+	// has unwound. Never detach a worker that can still edit the workspace.
+	if ctx.Err() == nil && errors.Is(context.Cause(run.ctx), errForegroundReview) &&
+		(run.result == nil || run.result.Handoff == nil) &&
+		(run.err == nil || errors.Is(run.err, context.DeadlineExceeded) || errors.Is(run.err, context.Canceled)) && !protocol.EvidenceIncomplete(run.err) {
+		return run.foregroundPartial(), nil
+	}
 	return run.finish()
 }
 
@@ -290,26 +310,32 @@ func (r *engineRun) stepLimitReached() bool {
 	budget := modelbudget.FromContext(r.ctx)
 	if budget != nil && budget.Snapshot().WorkRemaining == 0 {
 		reason = "shared_budget"
+	} else if r.cfg.ForegroundInterval > 0 && r.state.processWait.reviewTask != "" {
+		reason = "process_wait_review"
 	} else if r.step < limit {
 		return false
 	}
 	if r.handoffPhase != handoffFinalizing {
 		r.handoffPhase = handoffFinalizing
 		r.finalizationReason = reason
-		r.ctxMgr.Add("user", "[Sub-agent stage handoff] Reason: "+reason+". Ordinary investigation is paused at a tool-batch boundary. Do not call ordinary tools. Call "+submitResultToolName+" as the only tool call. Preserve findings and decisive evidence. Put only actionable work remaining inside the delegated scope in unfinished; put unverified assumptions, blocked checks, and out-of-scope validation in verification_gaps. Include a concrete next action and stop condition for unfinished work. Do not mark remaining scoped work complete just because this stage ended. The coordinator can resume this same task and workspace after reviewing the evidence.", providertypes.MessageSourceRuntimeEvent)
+		detail := ""
+		if reason == "process_wait_review" {
+			detail = r.state.processWait.description() + " Report the prerequisite, current owner if known, and what the coordinator can do next. "
+		}
+		r.ctxMgr.Add("user", "[Sub-agent stage handoff] "+detail+"Reason: "+reason+". Ordinary investigation is paused at a tool-batch boundary. Do not call ordinary tools. Call "+submitResultToolName+" as the only tool call. Preserve findings and decisive evidence. Put only actionable work remaining inside the delegated scope in unfinished; put unverified assumptions, blocked checks, and out-of-scope validation in verification_gaps. Include a concrete next action and stop condition for unfinished work. Do not mark remaining scoped work complete just because this stage ended. The coordinator can resume this same task and workspace after reviewing the evidence.", providertypes.MessageSourceRuntimeEvent)
 		r.phase("Waiting")
 		return false
 	}
 
-	r.log("max steps reached: step=%d", r.step)
-	r.result = buildProtocolPartialResult(r.state.lastText, "sub-agent step limit reached before submit_result", r.state.meta(r.ctxMgr))
+	r.log("stage handoff ended: reason=%s step=%d", r.finalizationReason, r.step)
+	r.result = buildProtocolPartialResult(r.state.lastText, r.finalizationReason+" reached before submit_result. "+r.state.processWait.description(), r.state.meta(r.ctxMgr.Status()))
 	return true
 }
 
 func (r *engineRun) stepOnce() bool {
 	if r.ctx.Err() != nil {
 		r.log("interrupted: step=%d lastText=%q", r.step, r.state.lastText[:min(len(r.state.lastText), 200)])
-		r.result = buildPartialResult(r.state.lastText, r.state.meta(r.ctxMgr))
+		r.result = buildPartialResult(r.state.lastText, r.state.meta(r.ctxMgr.Status()))
 		r.err = r.ctx.Err()
 		return true
 	}
@@ -347,7 +373,7 @@ func (r *engineRun) stepOnce() bool {
 	output.finalizing = handoffOnly
 	calls, text, err := r.engine.reason(ctx, r.ctxMgr, allowedTools, buildSkillWorkflow(r.cfg), r.state.addTokens(r.cfg), r.cfg.RecordLLMUsage, r.cfg.SessionID, r.phase, output)
 	r.ctxMgr.SetHints("")
-	if errors.Is(err, modelbudget.ErrExhausted) && r.handoffPhase != handoffFinalizing {
+	if protocol.OnlyFailure(err, modelbudget.ErrExhausted) && r.handoffPhase != handoffFinalizing {
 		// Another in-flight sibling may consume the last ordinary admission after
 		// our boundary check. No request was sent; retry only the handoff boundary.
 		r.step--
@@ -355,7 +381,7 @@ func (r *engineRun) stepOnce() bool {
 	}
 	var requestBudgetError *ctxmgr.RequestBudgetError
 	if handoffOnly && errors.As(err, &requestBudgetError) {
-		r.result = buildProtocolPartialResult(r.state.lastText, "Final handoff context exceeds the model window. Full task history remains saved; no evidence was silently dropped. Resume this task with ordinary budget for compaction or narrower work.", r.state.meta(r.ctxMgr))
+		r.result = buildProtocolPartialResult(r.state.lastText, "Final handoff context exceeds the model window. Full task history remains saved; no evidence was silently dropped. Resume this task with ordinary budget for compaction or narrower work.", r.state.meta(r.ctxMgr.Status()))
 		return true
 	}
 	if err != nil {
@@ -363,10 +389,10 @@ func (r *engineRun) stepOnce() bool {
 		r.err = err
 		if r.state.lastText != "" {
 			r.log("partial_result: %q", r.state.lastText[:min(len(r.state.lastText), 300)])
-			r.result = buildPartialResult(r.state.lastText, r.state.meta(r.ctxMgr))
+			r.result = buildPartialResult(r.state.lastText, r.state.meta(r.ctxMgr.Status()))
 			return true
 		}
-		r.result = buildFailedResult(err.Error(), r.state.meta(r.ctxMgr))
+		r.result = buildFailedResult(err.Error(), r.state.meta(r.ctxMgr.Status()))
 		return true
 	}
 
@@ -399,9 +425,9 @@ func (r *engineRun) stepOnce() bool {
 		return r.retryRejectedHandoff()
 	}
 	if r.handoffPhase == handoffFinalizing {
-		const reason = "tool-use step limit reached; only submit_result is allowed"
+		reason := r.finalizationReason + " reached; only submit_result is allowed"
 		r.rejectToolBatch(calls, reason)
-		r.result = buildProtocolPartialResult(r.state.lastText, reason, r.state.meta(r.ctxMgr))
+		r.result = buildProtocolPartialResult(r.state.lastText, reason, r.state.meta(r.ctxMgr.Status()))
 		r.phase("done")
 		return true
 	}
@@ -410,7 +436,7 @@ func (r *engineRun) stepOnce() bool {
 	r.state.recordCalls(calls)
 	if err := r.engine.executeToolBatch(r.ctx, r.cfg, r.ctxMgr, r.executor, calls, r.state, r.phase, r.log); err != nil {
 		r.err = err
-		r.result = buildFailedResult(err.Error(), r.state.meta(r.ctxMgr))
+		r.result = buildFailedResult(err.Error(), r.state.meta(r.ctxMgr.Status()))
 		return true
 	}
 	r.phase("Waiting")
@@ -519,7 +545,7 @@ func (r *engineRun) rejectToolBatch(calls []core.ToolCallItem, reason string) {
 
 func (r *engineRun) retryCompletionProtocol(reason string) bool {
 	if r.state.completionRetries >= maxCompletionProtocolRetries {
-		r.result = buildProtocolPartialResult(r.state.lastText, reason, r.state.meta(r.ctxMgr))
+		r.result = buildProtocolPartialResult(r.state.lastText, reason, r.state.meta(r.ctxMgr.Status()))
 		r.phase("done")
 		return true
 	}
@@ -537,7 +563,7 @@ func (r *engineRun) retryRejectedHandoff() bool {
 		r.handoffPhase = handoffCorrecting
 	}
 	if r.state.completionRetries >= maxCompletionProtocolRetries {
-		r.result = buildProtocolPartialResult(r.state.lastText, "handoff schema was rejected after correction attempts", r.state.meta(r.ctxMgr))
+		r.result = buildProtocolPartialResult(r.state.lastText, "handoff schema was rejected after correction attempts", r.state.meta(r.ctxMgr.Status()))
 		r.phase("done")
 		return true
 	}
@@ -552,7 +578,7 @@ func (r *engineRun) retryRejectedHandoff() bool {
 
 func (r *engineRun) complete(handoff Handoff) {
 	r.phase("done")
-	r.result = buildHandoffResult(handoff, r.state.meta(r.ctxMgr))
+	r.result = buildHandoffResult(handoff, r.state.meta(r.ctxMgr.Status()))
 	r.log("result: tokens=%d tools=%d duration=%dms output=%q",
 		r.result.TotalTokens, r.result.ToolUseCount, r.result.DurationMs,
 		r.result.Content[:min(len(r.result.Content), 300)])
@@ -560,7 +586,7 @@ func (r *engineRun) complete(handoff Handoff) {
 
 func (r *engineRun) finish() (*Result, error) {
 	if r.result == nil {
-		r.result = buildPartialResult(r.state.lastText, r.state.meta(r.ctxMgr))
+		r.result = buildPartialResult(r.state.lastText, r.state.meta(r.ctxMgr.Status()))
 	}
 	reason := "completed"
 	if r.result.Status != StatusCompleted {
@@ -572,8 +598,8 @@ func (r *engineRun) finish() (*Result, error) {
 	if r.err != nil {
 		reason = "execution_error"
 	}
-	if r.ctx.Err() != nil || errors.Is(r.err, context.Canceled) || errors.Is(r.err, context.DeadlineExceeded) {
-		reason = "cancelled"
+	if reason == "process_wait_review" {
+		r.result.Content += "\n\n[Coordinator review] " + r.state.processWait.description()
 	}
 	r.result.Summary = protocol.RunSummary{StepCount: r.step, StopReason: reason}
 	return r.result, r.err
@@ -700,23 +726,28 @@ func buildProtocolPartialResult(lastText, reason string, meta runMeta) *Result {
 
 // A persisted request may have been interrupted before tool results committed.
 // Close those requests explicitly; never execute them again during recovery.
-func closeInterruptedTools(mgr *ctxmgr.Manager) {
-	snap := mgr.Snapshot()
+func closeInterruptedTools(mgr *ctxmgr.Manager, messages []providertypes.Message) {
 	answered := make(map[string]bool)
-	for _, msg := range snap.Messages {
-		if msg.ToolCallID != "" {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		switch {
+		case msg.Role == "tool":
 			answered[msg.ToolCallID] = true
-		}
-	}
-	var results []ctxmgr.ToolResultMsg
-	for _, msg := range snap.Messages {
-		for _, call := range msg.ToolCalls {
-			if !answered[call.ID] {
-				results = append(results, ctxmgr.ToolResultMsg{Message: providertypes.Message{ToolCallID: call.ID, Content: "Previous execution was interrupted. Tool outcome is unknown; inspect current state before proceeding. Do not assume this tool ran or replay it automatically.", IsError: true}, ToolName: call.Function.Name})
+		case msg.Role == "user" && !msg.IsConversationUser():
+			continue // A runtime notice may appear between results of a parallel batch.
+		case msg.Role == "assistant" && len(msg.ToolCalls) > 0:
+			var results []ctxmgr.ToolResultMsg
+			for _, call := range msg.ToolCalls {
+				if !answered[call.ID] {
+					results = append(results, ctxmgr.ToolResultMsg{Message: providertypes.Message{ToolCallID: call.ID, Content: "Previous execution was interrupted. Tool outcome is unknown; inspect current state before proceeding. Do not assume this tool ran or replay it automatically.", IsError: true}, ToolName: call.Function.Name})
+				}
 			}
+			if len(results) > 0 {
+				mgr.AddToolResultsBatch(results)
+			}
+			return
+		default:
+			return
 		}
-	}
-	if len(results) > 0 {
-		mgr.AddToolResultsBatch(results)
 	}
 }

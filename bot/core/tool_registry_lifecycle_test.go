@@ -165,8 +165,7 @@ func TestExtraToolsReachActualProviderRequest(t *testing.T) {
 				} `json:"context_data"`
 			}
 			if json.Unmarshal([]byte(msg.Content), &envelope) == nil {
-				switch envelope.Data.Kind {
-				case "context_references", "evidence_references", "task_references":
+				if envelope.Data.Kind == "task_references" {
 					prefixEnd = i
 				}
 			}

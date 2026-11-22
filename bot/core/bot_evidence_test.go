@@ -141,7 +141,10 @@ func TestModelEvidenceReferencesRestoreAndActorIsolation(t *testing.T) {
 	receipt := protocol.ExecutionReceipt{ID: uuid.NewString(), Tool: "shell", Status: "error"}
 	b.ctxMgr.AddToolResultsBatch([]contextmgr.ToolResultMsg{{ToolName: "shell", Message: types.Message{ToolCallID: "receipt-call", Content: "visible", ToolEvidence: protocol.ToolEvidence{Schema: 1, Executions: []protocol.ExecutionReceipt{receipt}}}}})
 	scope := b.CurrentSessionID()
-	page := b.modelContextReferences(t.Context(), scope, refbridge.EvidenceKind)
+	page, err := b.readContextReferences(referenceActorContext(t, b), refbridge.Query{Limit: 20, Kind: refbridge.EvidenceKind})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if page.Unavailable || len(page.Evidence) != 1 {
 		t.Fatalf("pending metadata: %+v", page)
 	}
@@ -152,7 +155,10 @@ func TestModelEvidenceReferencesRestoreAndActorIsolation(t *testing.T) {
 	if err := b.ResumeSession(scope); err != nil {
 		t.Fatal(err)
 	}
-	page = b.modelContextReferences(t.Context(), scope, refbridge.EvidenceKind)
+	page, err = b.readContextReferences(referenceActorContext(t, b), refbridge.Query{Limit: 20, Kind: refbridge.EvidenceKind})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if page.Unavailable || len(page.Evidence) != 1 || page.Evidence[0].ID != id {
 		t.Fatalf("restored metadata: %+v", page)
 	}
@@ -166,17 +172,17 @@ func TestModelEvidenceReferencesRestoreAndActorIsolation(t *testing.T) {
 			found = true
 		}
 	}
-	if !found {
-		t.Fatal("model did not receive restored evidence reference")
+	if found {
+		t.Fatal("model received unsolicited restored evidence reference")
 	}
 	wrongStore := toolcore.WithOutputStore(t.Context(), toolcore.NewOutputStore(t.TempDir()))
 	child := protocol.WithExecutionIdentity(t.Context(), protocol.ExecutionIdentity{TaskID: "child", AttemptID: "attempt"})
 	for _, ctx := range []context.Context{wrongStore, child} {
-		if rejected := b.modelContextReferences(ctx, scope, refbridge.EvidenceKind); !rejected.Unavailable || len(rejected.Evidence) != 0 {
+		if rejected, err := b.contextReferences(ctx, scope, refbridge.Query{Kind: refbridge.EvidenceKind, Limit: 20}); err == nil || len(rejected.Evidence) != 0 {
 			t.Fatal("foreign actor received main evidence")
 		}
 	}
-	if rejected := b.modelContextReferences(t.Context(), "other-session", refbridge.EvidenceKind); !rejected.Unavailable {
+	if _, err := b.contextReferences(referenceActorContext(t, b), "other-session", refbridge.Query{Kind: refbridge.EvidenceKind, Limit: 20}); err == nil {
 		t.Fatal("foreign session received evidence")
 	}
 }

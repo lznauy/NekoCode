@@ -3,6 +3,7 @@ package llmstream
 import (
 	"encoding/json"
 	"fmt"
+	"nekocode/protocol"
 	"sort"
 
 	"nekocode/bot/extension/tool/runtime/core"
@@ -24,11 +25,11 @@ func (s *StreamResult) CollectToolCalls() ([]core.ToolCallItem, error) {
 	for _, idx := range indices {
 		acc := s.TcAccum[idx]
 		if acc == nil {
-			return nil, fmt.Errorf("%w: missing tool call at index %d", ErrIncompleteResponse, idx)
+			return nil, fmt.Errorf("%w: missing tool call at index %d", protocol.ErrIncompleteResponse, idx)
 		}
 		var args map[string]any
 		if err := json.Unmarshal([]byte(acc.Args.String()), &args); err != nil || args == nil {
-			return nil, fmt.Errorf("%w: tool call %d arguments must be a JSON object", ErrIncompleteResponse, idx)
+			return nil, fmt.Errorf("%w: tool call %d arguments must be a JSON object", protocol.ErrIncompleteResponse, idx)
 		}
 		items = append(items, core.ToolCallItem{ID: acc.ID, Name: acc.Name, Args: args})
 	}

@@ -49,6 +49,23 @@ def tree_hash(root):
     return json_hash(files)
 
 
+def workspace_change_ns(root):
+    """Sample the original Linux tree before copying changes its inode timestamps."""
+    def latest(path):
+        timestamp = path.lstat().st_ctime_ns
+        if path.is_symlink() or not path.is_dir():
+            return timestamp
+        for entry in path.iterdir():
+            if entry.name not in (".git", "__pycache__") and not entry.name.endswith(".pyc"):
+                timestamp = max(timestamp, latest(entry))
+        return timestamp
+
+    try:
+        return latest(Path(root))
+    except (OSError, RecursionError):
+        return None
+
+
 def copy_tree(source, target):
     # Preserve symlinks as links, never follow agent-created links into host data.
     shutil.copytree(source, target, symlinks=True, ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"))

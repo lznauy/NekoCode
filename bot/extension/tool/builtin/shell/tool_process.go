@@ -47,6 +47,25 @@ func (t *ProcessTool) ExecutionMode(map[string]any) core.ExecutionMode {
 	return core.ModeSequential
 }
 
+// WaitReady checks whether wait/watch can return without waiting for a future
+// process event. It uses the caller's registry and leaves output cursors intact.
+func (t *ProcessTool) WaitReady(args map[string]any) bool {
+	if t.shell == nil {
+		return true // Execute reports the unavailable manager.
+	}
+	ref, _ := args["task"].(string)
+	task, err := t.shell.registryOnce().task(t.shell.CurrentSessionID(), ref)
+	if err != nil {
+		return true // Preserve the tool's normal missing-handle error.
+	}
+	action, _ := args["action"].(string)
+	event, _ := args["event"].(string)
+	watchOutput := strings.EqualFold(strings.TrimSpace(action), "watch") && strings.EqualFold(strings.TrimSpace(event), "output")
+	task.mu.Lock()
+	defer task.mu.Unlock()
+	return task.status != taskRunning || task.monitoring || (watchOutput && task.watchOffset < task.logEnd)
+}
+
 func (t *ProcessTool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {
 	if t.shell == nil {
 		return core.ToolOutput{}, fmt.Errorf("process manager is unavailable")
@@ -167,6 +186,18 @@ func formatProcessResult(result processResult) string {
 func shellCompletionHints(result processResult) string {
 	if result.info.status != "done" && result.info.status != "failed" {
 		return ""
+	}
+	switch result.observation.TestReportState {
+	case "pending":
+		return "\nverification_hint: Go test output is still draining. Use process wait on the returned task before accepting the check.\n"
+	case "unreadable":
+		return "\nverification_hint: Go test output could not be read completely. Review the check before acceptance.\n"
+	}
+	if result.observation.TestName != "" {
+		return fmt.Sprintf("\nverification: Go test %s: %s\n", result.observation.TestName, result.observation.TestOutcome)
+	}
+	if result.observation.NoTestsRun {
+		return "\nverification_hint: Go reported zero tests. Check the package and test selector before claiming test coverage.\n"
 	}
 	if result.info.hasScratch && missingTempInput(result.output, result.info.directory) {
 		return "\ntemp_hint: A /tmp input was reported missing. If created in an earlier isolated command, recreate it under $NEKOCODE_SCRATCH and use that path in later calls.\n"

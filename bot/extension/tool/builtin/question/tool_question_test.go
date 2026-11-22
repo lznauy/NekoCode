@@ -73,7 +73,10 @@ func TestQuestionCancelledWhileWaiting(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	tool := NewTool()
-	tool.SetQuestionFunc(func(protocol.QuestionRequest) protocol.QuestionReply {
+	tool.SetQuestionFunc(func(req protocol.QuestionRequest) protocol.QuestionReply {
+		if req.Done != ctx.Done() {
+			t.Fatal("missing originating tool cancellation")
+		}
 		cancel()
 		return protocol.QuestionReply{Rejected: true}
 	})

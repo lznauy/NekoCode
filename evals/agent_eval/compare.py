@@ -61,6 +61,8 @@ def compare(baseline, candidate, output):
         for field in ["case_fingerprint", "model_requested", "mode", "interaction_policy", "external_config_fingerprint", "environment", "budgets", "telemetry_adapter", "observed_model_fingerprint"]:
             if br.get(field) != cr.get(field):
                 row["reasons"].append(f"{field} differs")
+        if br.get("parallel_step_sharing", False) != cr.get("parallel_step_sharing", False):
+            row["reasons"].append("parallel_step_sharing differs")
         for role in br.get("auxiliary_models", {}).keys() & cr.get("auxiliary_models", {}).keys():
             if br["auxiliary_models"][role] != cr["auxiliary_models"][role]:
                 row["reasons"].append(f"auxiliary model/effort differs: {role}")

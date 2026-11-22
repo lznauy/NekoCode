@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"nekocode/interaction"
 	controlruntime "nekocode/runtime"
 )
 
@@ -46,7 +47,7 @@ func ApprovalDetails(p controlruntime.ApprovalView) []ApprovalDetail {
 		add("范围", scope)
 	}
 	if p.Approval.Workspace != "" {
-		add("工作区", p.Approval.Workspace)
+		add(interaction.WorkspaceApprovalLabel(p.Approval.WorkspaceTarget), p.Approval.Workspace)
 	}
 	if p.Approval.OutboundDomains != nil {
 		domains := strings.Join(p.Approval.OutboundDomains, "、")
@@ -55,7 +56,7 @@ func ApprovalDetails(p controlruntime.ApprovalView) []ApprovalDetail {
 		}
 		add("网络域名", domains)
 	}
-	add("可写目录", strings.Join(p.Approval.WritePaths, "、"))
+	add("可写路径", strings.Join(p.Approval.WritePaths, "、"))
 	return details
 }
 

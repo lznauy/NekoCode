@@ -13,12 +13,12 @@ import (
 	"nekocode/bot/contextmgr"
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/execution"
-	"nekocode/bot/extension/tool/runtime/refbridge"
 	"nekocode/bot/policy"
 	"nekocode/bot/provider"
 	"nekocode/bot/provider/types"
 	"nekocode/logger"
 	"nekocode/protocol"
+	"nekocode/util/modelbudget"
 )
 
 const synthesizePrompt = "Based on the information collected above, provide a final answer. Do NOT call any more tools. Output your conclusion directly. Explicitly report unfinished todo steps and blockers; a limit is not task completion."
@@ -38,19 +38,22 @@ func newModelRunner(agent *Agent) *modelRunner {
 func (r *modelRunner) reason(input string) *reasoningResult {
 	a := r.agent
 	a.stream.emitPhase(protocol.PhaseThinking)
-	if strings.HasPrefix(input, "/") && !strings.Contains(input, " ") {
-		return commandResult()
-	}
 
-	result, err := r.callLLMForTool(input)
+	ctx := a.getCtx()
+	result, err := r.callLLMForTool(ctx, input)
 	if err != nil {
 		a.stream.discardText()
-		if !errors.Is(err, context.Canceled) {
-			a.run.err = err
+		if errors.Is(err, context.Canceled) && (ctx.Err() != nil || a.life.Finished().Load() || a.run.stopReason == policy.StopInterrupted) {
+			return &reasoningResult{Interrupted: true}
 		}
-		return fromLLM(nil, "", err)
+		a.run.err = err
+		return &reasoningResult{}
 	}
-	reasoning := fromLLM(result.ToolCalls, result.Text, nil)
+	if len(result.ToolCalls) == 0 && strings.TrimSpace(result.Text) == "" {
+		a.stream.discardText()
+		return &reasoningResult{Action: actionEmptyResponse}
+	}
+	reasoning := fromLLM(result.ToolCalls, result.Text)
 	if reasoning.GarbledToolCall {
 		a.stream.discardText()
 	}
@@ -88,10 +91,9 @@ func mentionedFile(input string) string {
 	return candidate
 }
 
-func (r *modelRunner) callLLMForTool(input string) (*llmstream.LLMCallResult, error) {
+func (r *modelRunner) callLLMForTool(ctx context.Context, input string) (*llmstream.LLMCallResult, error) {
 	a := r.agent
 	toolDefs := core.ToToolDefs(a.deps.toolExecutor.ToolDescriptors())
-	ctx := a.getCtx()
 	policyHints, err := r.preModelHints(ctx)
 	if err != nil {
 		return nil, err
@@ -100,12 +102,17 @@ func (r *modelRunner) callLLMForTool(input string) (*llmstream.LLMCallResult, er
 	ctx = protocol.WithProfileConfiguration(ctx, "")
 	ctx = protocol.WithAccessObservation(ctx, a.deps.toolExecutor.AccessObservation())
 	reminder := a.todoProgressReminder()
+	hasTodoReminder := len(reminder) > 0
+	if remaining := maxAgentSteps - a.run.step; remaining == 20 || remaining == 5 {
+		reminder = append(reminder, types.Message{Role: "user", Source: types.MessageSourceHint,
+			Content: fmt.Sprintf("This run has %d working steps left, including this one. Use the remaining steps for the user's outstanding requirements and verification. Report any unfinished work accurately.", remaining)})
+	}
 	if a.run.step == 0 && !protocol.CoordinationFromContext(ctx).Notification && a.deps.toolExecutor.CheckToolPolicy("read") == nil && a.deps.toolRegistry != nil && a.deps.toolRegistry.Has("read") {
 		if path := mentionedFile(input); path != "" {
 			reminder = append(reminder, types.Message{Role: "user", Source: types.MessageSourceHint, Content: fmt.Sprintf("User-supplied path: %q. If inspecting this file, call read with this exact path first. Locate it with glob only if read reports it missing.", path)})
 		}
 	}
-	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{TaskReferences: r.taskReferences(ctx), ContextReferences: r.contextReferences(ctx, ""), EvidenceReferences: r.contextReferences(ctx, refbridge.EvidenceKind), Tools: toolDefs, PolicyHints: policyHints, ExtraMessages: reminder, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient)})
+	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{TaskReferences: r.taskReferences(ctx), Tools: toolDefs, PolicyHints: policyHints, ExtraMessages: reminder, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient)})
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +134,7 @@ func (r *modelRunner) callLLMForTool(input string) (*llmstream.LLMCallResult, er
 		return nil, err
 	}
 
-	if len(reminder) > 0 {
+	if hasTodoReminder {
 		a.run.todoBatches = 0
 	}
 
@@ -155,21 +162,27 @@ func (r *modelRunner) synthesize() string {
 	if a.run.err != nil {
 		return ""
 	}
-	text, err := r.streamSynthesize(a.getCtx())
+	ctx := a.getCtx()
+	text, err := r.streamSynthesize(ctx)
 	if a.run.err != nil {
 		a.stream.discardText()
 		return ""
 	}
 	usable := err == nil && usableFinalText(text)
 	garbled := isGarbledToolCall(text)
+	if ctx.Err() != nil || a.run.stopReason == policy.StopInterrupted {
+		a.stream.discardText()
+		a.run.stopReason = policy.StopInterrupted
+		return ""
+	}
 	if !usable {
 		a.stream.discardText()
-		if a.getCtx().Err() != nil || errors.Is(err, context.Canceled) {
-			a.run.stopReason = policy.StopInterrupted
+		if errors.Is(err, context.Canceled) || errors.Is(err, modelbudget.ErrExhausted) {
+			a.run.err = err
 			return ""
 		}
 		var budgetErr *contextmgr.RequestBudgetError
-		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && (errors.As(err, &budgetErr) || errors.Is(err, llmstream.ErrIncompleteResponse)) {
+		if !errors.Is(err, context.DeadlineExceeded) && (errors.As(err, &budgetErr) || errors.Is(err, protocol.ErrIncompleteResponse)) {
 			a.run.err = err
 			return ""
 		}
@@ -212,7 +225,7 @@ func (r *modelRunner) synthesize() string {
 
 // usableFinalText reports whether text is a non-empty, non-garbled final answer.
 func usableFinalText(text string) bool {
-	return text != "" && !isGarbledToolCall(text)
+	return strings.TrimSpace(text) != "" && !isGarbledToolCall(text)
 }
 
 func (r *modelRunner) streamSynthesize(ctx context.Context) (string, error) {
@@ -224,7 +237,7 @@ func (r *modelRunner) streamSynthesize(ctx context.Context) (string, error) {
 	ctx = protocol.WithPolicyConfiguration(ctx, a.deps.gov.Configuration())
 	ctx = protocol.WithProfileConfiguration(ctx, "")
 	ctx = protocol.WithAccessObservation(ctx, a.deps.toolExecutor.AccessObservation())
-	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{TaskReferences: r.taskReferences(ctx), ContextReferences: r.contextReferences(ctx, ""), EvidenceReferences: r.contextReferences(ctx, refbridge.EvidenceKind), PolicyHints: policyHints, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient), ExtraMessages: []types.Message{{Role: "user", Content: synthesizePrompt}}})
+	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{TaskReferences: r.taskReferences(ctx), PolicyHints: policyHints, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient), ExtraMessages: []types.Message{{Role: "user", Content: synthesizePrompt}}})
 	if err != nil {
 		return "", err
 	}
@@ -250,6 +263,10 @@ func (r *modelRunner) preModelHints(ctx context.Context) (string, error) {
 	}
 	out := policy.Resolve(gov.BeforeModel(ctx))
 	if out.StopReason == policy.StopInterrupted {
+		if ctx.Err() == nil {
+			r.agent.run.stopReason = policy.StopInterrupted
+			r.agent.life.Finished().Store(true)
+		}
 		return "", context.Canceled
 	}
 	if out.Action != policy.Continue {
@@ -288,17 +305,15 @@ func (r *modelRunner) streamCallbacks() llmstream.StreamCallbacks {
 	}
 }
 
-const fallbackNoAction = "Sorry, I couldn't determine what to do"
-
 type actionType int
 
 const (
 	actionChat actionType = iota
 	actionExecuteTool
+	actionEmptyResponse
 )
 
 type reasoningResult struct {
-	Thought            string
 	Action             actionType
 	ActionInput        string
 	ToolCalls          []core.ToolCallItem
@@ -307,56 +322,17 @@ type reasoningResult struct {
 	ReasoningSignature string
 	Interrupted        bool
 	GarbledToolCall    bool
-	IsError            bool
 }
 
-func commandResult() *reasoningResult {
-	return &reasoningResult{Thought: "User entered a command", Action: actionChat}
-}
-
-func fromLLM(toolCalls []core.ToolCallItem, textContent string, err error) *reasoningResult {
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return &reasoningResult{Thought: "User interrupted", Action: actionChat, Interrupted: true}
-		}
-		if textContent != "" && !isGarbledToolCall(textContent) && !garbledPrefix(textContent) {
-			return &reasoningResult{Thought: "Truncated reply", Action: actionChat, ActionInput: textContent}
-		}
-		return &reasoningResult{Thought: "LLM call failed", Action: actionChat, ActionInput: fmt.Sprintf("LLM call failed: %v", err), IsError: true}
+func fromLLM(toolCalls []core.ToolCallItem, text string) *reasoningResult {
+	if len(toolCalls) > 0 {
+		return &reasoningResult{Action: actionExecuteTool, ToolCalls: toolCalls, TextContent: text}
 	}
-
-	if len(toolCalls) == 0 {
-		if isGarbledToolCall(textContent) {
-			logger.Log("GarbledToolCall: XML leaked (len=%d)", len(textContent))
-			return &reasoningResult{Thought: "Format correction", Action: actionChat, GarbledToolCall: true}
-		}
-		if textContent == "" {
-			textContent = fallbackNoAction
-		}
-		return &reasoningResult{Thought: "Direct reply", Action: actionChat, ActionInput: textContent}
+	if isGarbledToolCall(text) {
+		logger.Log("GarbledToolCall: XML leaked (len=%d)", len(text))
+		return &reasoningResult{Action: actionChat, GarbledToolCall: true}
 	}
-
-	if len(toolCalls) == 1 {
-		tc := toolCalls[0]
-		return &reasoningResult{
-			Thought:     "Call tool: " + tc.Name,
-			Action:      actionExecuteTool,
-			ActionInput: tc.Name + ":" + core.FormatArgs(tc.Args),
-			ToolCalls:   toolCalls,
-			TextContent: textContent,
-		}
-	}
-
-	var names []string
-	for _, tc := range toolCalls {
-		names = append(names, tc.Name)
-	}
-	return &reasoningResult{
-		Thought:     "Parallel tool calls: " + strings.Join(names, ", "),
-		Action:      actionExecuteTool,
-		ToolCalls:   toolCalls,
-		TextContent: textContent,
-	}
+	return &reasoningResult{Action: actionChat, ActionInput: text}
 }
 
 func (r *modelRunner) taskReferences(ctx context.Context) contextmgr.TaskReferences {
@@ -375,11 +351,4 @@ func (r *modelRunner) taskReferences(ctx context.Context) contextmgr.TaskReferen
 		a.run.taskReferences = &refs
 	}
 	return refs
-}
-
-func (r *modelRunner) contextReferences(ctx context.Context, kind string) refbridge.Page {
-	if r.agent.deps.contextReferences == nil {
-		return refbridge.Page{}
-	}
-	return r.agent.deps.contextReferences(ctx, r.agent.sessionID(), kind)
 }

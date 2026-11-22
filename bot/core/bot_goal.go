@@ -8,6 +8,8 @@ import (
 	"strings"
 	"unicode"
 
+	"mvdan.cc/sh/v3/syntax"
+
 	"nekocode/bot/agent"
 	"nekocode/bot/command"
 	toolcore "nekocode/bot/extension/tool/runtime/core"
@@ -44,6 +46,9 @@ func goalStatus(g *session.Goal) string {
 	}
 	if g.Check != "" {
 		s += "\nAcceptance command: " + g.Check
+		if g.CheckTest != "" {
+			s += "\nRequired Go test: " + g.CheckTest
+		}
 	} else if g.Delegated {
 		s += "\nAcceptance delegated to the agent."
 	}
@@ -80,9 +85,7 @@ func (b *Bot) goalCommand(ctx context.Context, cmd *command.Command) (protocol.C
 	}
 	_, arg := splitGoalArg(cmd.Raw)
 	op, detail := splitGoalArg(arg)
-	if protocol.IsGoalPauseCommand(cmd.Raw) {
-		op = "pause"
-	}
+	op = strings.ToLower(op)
 	g := b.sess.CurrentGoal()
 	if arg == "" {
 		return handled(goalStatus(g))
@@ -131,15 +134,33 @@ func (b *Bot) goalCommand(ctx context.Context, cmd *command.Command) (protocol.C
 				g.Criteria += detail
 				g.Proposal = ""
 				g.Check = ""
+				g.CheckTest = ""
 				g.Delegated = false
 			}
 			if op == "check" {
+				g.CheckTest = ""
+				if flag, args := splitGoalArg(detail); flag == "--test" {
+					name, pkg := splitGoalArg(args)
+					if name == "" || len(strings.Fields(pkg)) > 1 || strings.HasPrefix(pkg, "-") {
+						return handled("Usage: /goal check --test <exact-go-test-name> [package]")
+					}
+					if pkg == "" {
+						pkg = "."
+					}
+					quoted, err := syntax.Quote(pkg, syntax.LangPOSIX)
+					if err != nil {
+						return handled("Invalid Go package argument.")
+					}
+					detail = "go test -json -count=1 " + quoted
+					g.CheckTest = name
+				}
 				g.Check = detail
 				g.Delegated = false
 			}
 			if op == "delegate" {
 				g.Delegated = true
 				g.Check = ""
+				g.CheckTest = ""
 			}
 			if op == "resume" && g.Status == "completed" {
 				return handled(goalStatus(g))
@@ -172,15 +193,17 @@ func (b *Bot) goalCommand(ctx context.Context, cmd *command.Command) (protocol.C
 		return protocol.CommandResult{}, err
 	}
 	if start {
-		return protocol.CommandResult{Action: protocol.CommandContinue, Output: goalStatus(g), AgentInput: "Work toward the active session goal: " + g.Objective}, nil
+		return protocol.CommandResult{Action: protocol.CommandContinue, Output: goalStatus(g), AgentInput: "Work toward the active session goal:\n" + g.Objective}, nil
 	}
 	return handled(goalStatus(g))
 }
 
 type goalAudit struct {
+	preservation    agent.GoalPreservation
 	goal            *session.Goal
 	runID           string
 	receipt         string
+	checkIssue      string
 	external        bool
 	pending         bool
 	task            string
@@ -198,10 +221,13 @@ func (a *goalAudit) prompt() string {
 	prompt := "Active user goal: " + g.Objective + "\nUser clarification: " + g.Criteria +
 		"\nPreserve the user's objective and constraints. For a vague goal, do useful reversible work, propose concrete acceptance criteria and distinguish suggestions from agreed criteria. Record a proposed criterion on a separate line starting with GOAL PROPOSE: before GOAL REVIEW. Explain results and outstanding gaps. When further progress needs a user decision, end with GOAL REVIEW. For unfinished actionable work, end with GOAL NEXT. These markers must be on their own final line."
 	if g.Check != "" {
-		prompt += "\nThe user selected this acceptance command. Run it alone as the final shell tool, and verify exit status: " + g.Check
+		prompt += "\nThe user selected this acceptance command. Run it alone as the final shell tool, and inspect its result. If the test runner selects zero tests, investigate discovery or request review of the selector: " + g.Check
+	}
+	if g.CheckTest != "" {
+		prompt += "\nRequire a passing test event for this exact Go test: " + g.CheckTest
 	}
 	if g.Delegated {
-		prompt += "\nThe user delegated acceptance. State the criteria applied and evidence. End with GOAL DONE only when all conditions hold."
+		prompt += "\nThe user delegated acceptance. State the criteria applied and evidence. For test criteria, verify that the intended tests ran. End with GOAL DONE only when all conditions hold."
 	}
 	if g.Evidence != "" {
 		prompt += "\nPrevious goal review: " + g.Evidence
@@ -225,6 +251,9 @@ func rememberGoalObservation(g *session.Goal, receipt protocol.ExecutionReceipt)
 		// Audit receipts identify a physical execution. Goal progress identifies
 		// a new result even when two launches use different process handles.
 		digest = fmt.Sprintf("%s/%s/%t/%d/%t", p.SampleHash, p.State, p.ExitCodeKnown, p.ExitCode, p.OutputComplete)
+		if p.TestName != "" {
+			digest += "/" + p.TestName + "/" + p.TestOutcome
+		}
 	}
 	observation := prefix + digest
 	if receipt.ErrorHash != "" {
@@ -247,6 +276,7 @@ func (a *goalAudit) observe(e protocol.StepEvent) (newObservation bool) {
 		return
 	}
 	if e.Action == protocol.StepActionToolStart {
+		a.checkIssue = ""
 		a.receipt = ""
 		if a.inflight == 0 {
 			a.batchParallel = false
@@ -263,6 +293,7 @@ func (a *goalAudit) observe(e protocol.StepEvent) (newObservation bool) {
 		a.inflight--
 	}
 	a.receipt = ""
+	a.checkIssue = ""
 	previousTask := a.task
 	a.task = ""
 	if e.Evidence.PreservationFailed || e.NonExecution.ID != "" {
@@ -297,9 +328,18 @@ func (a *goalAudit) observe(e protocol.StepEvent) (newObservation bool) {
 	}
 	if e.ToolName == "process" {
 		action := strings.ToLower(strings.TrimSpace(args.Action))
-		matching = previousTask != "" && args.Task == previousTask && receipt.Process.Task == previousTask && (action == "wait" || action == "watch")
+		matching = previousTask != "" && strings.TrimSpace(args.Task) == previousTask && receipt.Process.Task == previousTask && (action == "wait" || action == "watch")
 	}
 	if !matching {
+		return
+	}
+	if receipt.Process.TestReportState == "pending" {
+		a.task = receipt.Process.Task
+		a.checkIssue = "Go test output is still draining. Wait for the existing process before accepting the check."
+		return
+	}
+	if receipt.Process.TestReportState == "unreadable" {
+		a.checkIssue = "Go test output could not be read completely. Execution receipt: " + receipt.ID
 		return
 	}
 	if receipt.Process.State == "running" {
@@ -307,7 +347,17 @@ func (a *goalAudit) observe(e protocol.StepEvent) (newObservation bool) {
 		return
 	}
 	if receipt.Status == "success" && receipt.Process.ExitCodeKnown && receipt.Process.State == "exited" && receipt.Process.ExitCode == 0 {
-		a.receipt = receipt.ID
+		if name := a.goal.CheckTest; name != "" && (receipt.Process.TestName != name || receipt.Process.TestOutcome != "pass") {
+			outcome := "unverified"
+			if receipt.Process.TestName == name && receipt.Process.TestOutcome != "" {
+				outcome = receipt.Process.TestOutcome
+			}
+			a.checkIssue = fmt.Sprintf("Required Go test %s: %s. Execution receipt: %s", name, outcome, receipt.ID)
+		} else if receipt.Process.NoTestsRun {
+			a.checkIssue = "Acceptance command exited 0 but selected zero tests. Check the test selector or confirm that a compile-only check was intended. Execution receipt: " + receipt.ID
+		} else {
+			a.receipt = receipt.ID
+		}
 	}
 	return
 }
@@ -332,6 +382,13 @@ func (a *goalAudit) review(answer string) string {
 	a.delegatedDone = a.goal.Delegated && marker == "GOAL DONE" && len(lines) > 1
 	if marker == "GOAL NEXT" {
 		a.receipt = ""
+	}
+	if a.checkIssue != "" && marker != "GOAL NEXT" {
+		a.requestedReview = true
+	}
+	if a.preservation.NeedsReview {
+		a.requestedReview = true
+		a.delegatedDone = false
 	}
 	if a.requestedReview || a.receipt != "" || a.delegatedDone {
 		return ""
@@ -362,6 +419,9 @@ func (a *goalAudit) finish(result *agent.RunResult, cancelErr, persistenceErr er
 	switch {
 	case !a.settled || result.Interrupted || cancelErr != nil || result.Error != nil || persistenceErr != nil || result.StopReason != "completed":
 		g.Status = "paused"
+	case a.preservation.NeedsReview && !a.requestedReview:
+		g.Status = "review"
+		g.Evidence += "\nA file preservation requirement arrived after the final check. Review the recorded originals before accepting."
 	case a.pending:
 		g.Status = "active"
 		g.PendingFrom = a.runID
@@ -372,6 +432,12 @@ func (a *goalAudit) finish(result *agent.RunResult, cancelErr, persistenceErr er
 	case a.settled && !a.requestedReview && a.receipt != "":
 		g.Status = "completed"
 		g.Evidence = "Acceptance command exited 0. Execution receipt: " + a.receipt
+		if g.CheckTest != "" {
+			g.Evidence += "\nPassed Go test: " + g.CheckTest
+		}
+	case a.requestedReview && a.checkIssue != "":
+		g.Status = "review"
+		g.Evidence = a.checkIssue
 	case a.delegatedDone:
 		g.Status = "completed"
 	default:

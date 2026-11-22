@@ -11,8 +11,9 @@ import (
 var systemPrompt string
 
 type Root struct {
-	Path   string
-	Access string
+	Path     string
+	Access   string
+	FileOnly bool
 }
 
 type Environment struct {

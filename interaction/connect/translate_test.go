@@ -173,7 +173,15 @@ func TestApprovalDecisionAndVerdict(t *testing.T) {
 	if !IsResolvedErr(errString("runtime: approval a1 already resolved")) {
 		t.Fatal("already-resolved error not detected")
 	}
-	if IsResolvedErr(errString("connection refused")) {
+	for _, msg := range []string{"runtime: approval a1 expired", "runtime: question q1 expired"} {
+		if !IsResolvedErr(errString(msg)) {
+			t.Fatalf("expired request misclassified: %s", msg)
+		}
+	}
+	if ApprovalVerdict(controlruntime.ApprovalExpired) != "已过期" {
+		t.Fatal("missing expired approval verdict")
+	}
+	if IsResolvedErr(errString("connection refused")) || IsResolvedErr(errString("auth token expired")) {
 		t.Fatal("unrelated error misclassified as resolved")
 	}
 }

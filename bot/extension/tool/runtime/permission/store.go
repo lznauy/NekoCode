@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"nekocode/bot/extension/tool/runtime/core"
+	"nekocode/util/fs"
 )
 
 const permissionStoreVersion = 1
@@ -68,8 +69,34 @@ type Grant struct {
 }
 
 type WorkspaceRoot struct {
-	Path   string `json:"path"`
-	Access string `json:"access"`
+	FileOnly *bool  `json:"file_only,omitempty"`
+	Path     string `json:"path"`
+	Access   string `json:"access"`
+}
+
+func (root WorkspaceRoot) needsFileEncoding() bool {
+	return root.FileOnly != nil && *root.FileOnly && (root.Access == "read-only" || root.Access == "read-write")
+}
+
+// Older binaries ignore file_only but reject unknown access values. Keep
+// the scope in access so it survives their read-modify-write cycles.
+func (root WorkspaceRoot) MarshalJSON() ([]byte, error) {
+	if root.needsFileEncoding() {
+		root.Access = "file-" + root.Access
+		root.FileOnly = nil
+	}
+	type wireRoot WorkspaceRoot
+	return json.Marshal(wireRoot(root))
+}
+
+func (root WorkspaceRoot) decoded() WorkspaceRoot {
+	switch root.Access {
+	case "file-read-only", "file-read-write":
+		fileOnly := true
+		root.FileOnly = &fileOnly
+		root.Access = root.Access[len("file-"):]
+	}
+	return root
 }
 
 // CapabilityDecision distinguishes unavailable policy from an unmatched request.
@@ -181,14 +208,52 @@ func (s *Store) Allow(tool string, req core.PermissionRequest) error {
 	})
 }
 
+// Older approvals persisted the parent directory of a requested file. A
+// legacy temp-root record cannot identify which temp file was requested.
+func (root WorkspaceRoot) legacyTempRoot() bool {
+	if root.FileOnly != nil {
+		return false
+	}
+	return fs.IsTempRoot(root.Path)
+}
+
+func (root WorkspaceRoot) restorable() bool {
+	if !filepath.IsAbs(root.Path) || filepath.Clean(root.Path) != root.Path ||
+		(root.Access != "read-only" && root.Access != "read-write") || root.legacyTempRoot() {
+		return false
+	}
+	fileOnly := root.FileOnly != nil && *root.FileOnly
+	requiredPath := root.Path
+	if fileOnly {
+		// The approved file can be recreated, but its directory must still
+		// resolve to the original canonical path.
+		requiredPath = filepath.Dir(root.Path)
+	}
+	real, err := filepath.EvalSymlinks(requiredPath)
+	if err != nil || real != requiredPath {
+		return false
+	}
+	info, err := os.Lstat(root.Path)
+	if fileOnly {
+		return os.IsNotExist(err) || (err == nil && info.Mode().IsRegular())
+	}
+	return err == nil && info.IsDir()
+}
+
 func (s *Store) RememberWorkspaceRoot(root WorkspaceRoot) error {
+	if root.FileOnly == nil {
+		fileOnly := false
+		root.FileOnly = &fileOnly
+	}
 	return s.mutate(func(f *permissionFile) bool {
 		p := f.Projects[s.root]
 		for i, existing := range p.Workspaces {
-			if existing.Path != root.Path {
+			existing = existing.decoded()
+			existingFileOnly := existing.FileOnly != nil && *existing.FileOnly
+			if existing.Path != root.Path || existingFileOnly != *root.FileOnly {
 				continue
 			}
-			if root.Access == "read-write" || existing.Access != "read-write" {
+			if existing.legacyTempRoot() || root.Access == "read-write" || existing.Access != "read-write" {
 				p.Workspaces[i] = root
 				f.Projects[s.root] = p
 				return true
@@ -210,18 +275,22 @@ func (s *Store) WorkspaceRoots() []WorkspaceRoot {
 	if !ok {
 		return nil
 	}
+	if slices.ContainsFunc(p.Workspaces, WorkspaceRoot.needsFileEncoding) {
+		// Upgrade development-format grants before activating them. Reload
+		// under the store lock so a concurrent approval is preserved.
+		if err := s.mutate(func(latest *permissionFile) bool {
+			p = latest.Projects[s.root]
+			return slices.ContainsFunc(p.Workspaces, WorkspaceRoot.needsFileEncoding)
+		}); err != nil {
+			return nil
+		}
+	}
 	var roots []WorkspaceRoot
 	for _, root := range p.Workspaces {
-		// Approval stores a canonical directory, not a link whose target can
-		// change on restart. Never let Configure rebind a remembered grant.
-		if !filepath.IsAbs(root.Path) || (root.Access != "read-only" && root.Access != "read-write") {
-			continue
+		root = root.decoded()
+		if root.restorable() {
+			roots = append(roots, root)
 		}
-		real, err := filepath.EvalSymlinks(root.Path)
-		if err != nil || filepath.Clean(real) != filepath.Clean(root.Path) {
-			continue
-		}
-		roots = append(roots, root)
 	}
 	return roots
 }

@@ -26,7 +26,7 @@ func adaptPluginHook(h hookplugin.Hook) Hook {
 	return Hook{Name: h.Name, Point: HookPoint(h.Point), Guard: h.Guard, Timeout: h.Timeout, Once: h.Once, SessionScoped: h.SessionScoped,
 		Run: func(ctx context.Context, s State) (*Result, error) {
 			facts := s.Facts()
-			event := hookplugin.Event{HookID: h.Name, Context: ctx, Version: contract.Version, Point: string(h.Point), Tool: facts.Tool.Name, Error: facts.Tool.Error, Args: facts.Tool.Args, Output: facts.Tool.Output, ErrorMessage: facts.Tool.ErrorMessage, Batch: facts.Batch, Intent: string(facts.Response.Intent), Text: facts.Response.Text, State: pluginStateSnapshot(s), ActorID: "main"}
+			event := hookplugin.Event{HookID: h.Name, Context: ctx, Version: contract.Version, Point: string(h.Point), Tool: facts.Tool.Name, Error: facts.Tool.Error, Process: facts.Tool.Process, Args: facts.Tool.Args, Output: facts.Tool.Output, ErrorMessage: facts.Tool.ErrorMessage, Batch: facts.Batch, Intent: string(facts.Response.Intent), Text: facts.Response.Text, State: pluginStateSnapshot(s), ActorID: "main"}
 			if facts.ActorID != "" {
 				event.ActorID = facts.ActorID
 			}

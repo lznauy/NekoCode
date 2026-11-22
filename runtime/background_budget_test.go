@@ -120,3 +120,25 @@ func TestResultDeliveriesNeverMixExecutionBudgetsInOnePlan(t *testing.T) {
 		t.Fatal("deliveries mixed or charged historical budgets")
 	}
 }
+
+func TestPendingWorkerKeepsItsOwnBudgetReserve(t *testing.T) {
+	b := &backgroundTasks{entries: map[string]*backgroundEntry{}}
+	budget, _ := modelbudget.New(400)
+	other, _ := modelbudget.New(400)
+	ctx := modelbudget.WithBudget(t.Context(), budget)
+	for modelbudget.Admit(ctx) == nil {
+	}
+	for _, status := range []string{"queued", "waiting_dependencies", "running", "waiting_approval", "waiting_question"} {
+		b.entries["worker"] = &backgroundEntry{BackgroundTask: BackgroundTask{Status: status}, callBudget: budget}
+		b.releaseIdleHandoffs(budget)
+		if budget.Snapshot().HandoffRemaining != 8 {
+			t.Fatalf("released reserve while %s", status)
+		}
+	}
+	b.entries["worker"].Status = "completed"
+	b.entries["other"] = &backgroundEntry{BackgroundTask: BackgroundTask{Status: "running"}, callBudget: other}
+	b.releaseIdleHandoffs(budget)
+	if s := budget.Snapshot(); s.HandoffRemaining != 0 || s.CoordinatorRemaining != 12 {
+		t.Fatal(s)
+	}
+}

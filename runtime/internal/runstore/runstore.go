@@ -23,7 +23,6 @@ type RunStore struct {
 }
 
 type runRecord struct {
-	inputAccepted bool
 	snapshot      core.RunSnapshot
 	metadataBytes int
 	// Builders are append-only between replacements, so strings already handed
@@ -76,10 +75,11 @@ func (s *RunStore) Record(ev core.Event) {
 		p, ok := ev.Payload.(core.MessagePayload)
 		// Older recordings did not mark steering. Their first accepted input
 		// supplies the origin; later messages remain visible in event history.
-		if !ok || p.Steering || rec.inputAccepted {
+		if !ok || p.Steering || rec.snapshot.InputAccepted {
 			break
 		}
-		rec.inputAccepted = true
+
+		rec.snapshot.InputAccepted = true
 		rec.snapshot.Status = core.RunRunning
 		if rec.snapshot.StartedAt.IsZero() {
 			rec.snapshot.StartedAt = ev.Time
@@ -103,7 +103,7 @@ func (s *RunStore) Record(ev core.Event) {
 		// The runtime tags this frame with "runtime", which is the transport
 		// that emitted it, not who started the run. Only a concrete caller
 		// source overrides the later input_accepted payload.
-		if !rec.inputAccepted && ev.Source.Kind != "" && ev.Source.Kind != "runtime" {
+		if !rec.snapshot.InputAccepted && ev.Source.Kind != "" && ev.Source.Kind != "runtime" {
 			rec.snapshot.Source = ev.Source
 		}
 	case core.EventSystemMessage:

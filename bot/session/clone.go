@@ -15,6 +15,7 @@ func (g *Goal) clone() *Goal {
 		return nil
 	}
 	out := *g
+	out.PreservedFiles = slices.Clone(g.PreservedFiles)
 	out.RecentObservations = slices.Clone(g.RecentObservations)
 	return &out
 }

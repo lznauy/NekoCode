@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"nekocode/mode"
+	"nekocode/protocol"
 	"nekocode/util/modelbudget"
 	"strings"
 )
@@ -170,7 +171,7 @@ func (r *Runtime) DiscardBackgroundDemand(ctx context.Context, sessionID string,
 }
 
 func validBackgroundDemand(d BackgroundDemand, sessionID string) bool {
-	if !strings.HasPrefix(string(d.ID), "queued_") || strings.HasPrefix(strings.TrimSpace(d.Input.Text), "/") || d.SessionID != sessionID || strings.TrimSpace(d.Input.Text) == "" || len(d.Input.Text) > backgroundDemandTextLimit || len(d.Input.Images) > 0 {
+	if !strings.HasPrefix(string(d.ID), "queued_") || protocol.IsSlashCommandInput(d.Input.Text) || d.SessionID != sessionID || strings.TrimSpace(d.Input.Text) == "" || len(d.Input.Text) > backgroundDemandTextLimit || len(d.Input.Images) > 0 {
 		return false
 	}
 	switch d.Status {

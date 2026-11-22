@@ -212,11 +212,14 @@ func TestForkUsesCurrentParentSnapshotAndKeepsSourceWorkspace(t *testing.T) {
 
 func TestTaskBudgetCannotRaiseConfiguredLimit(t *testing.T) {
 	for _, tc := range []struct {
-		name                             string
-		profile, max, defaultSteps, want int
-		invalid                          bool
+		name                                           string
+		profile, max, defaultSteps, batchCeiling, want int
+		invalid                                        bool
 	}{
 		{name: "sync default", want: 150},
+		{name: "batch default", batchCeiling: 23, want: 23},
+		{name: "batch caps oversized attempt", max: 80, batchCeiling: 23, want: 23},
+		{name: "batch preserves smaller attempt", max: 5, batchCeiling: 23, want: 5},
 		{name: "background default", defaultSteps: 12, want: 12},
 		{name: "small resumed profile", profile: 3, defaultSteps: 12, want: 3},
 		{name: "small requested limit", max: 3, defaultSteps: 12, want: 3},
@@ -229,7 +232,7 @@ func TestTaskBudgetCannotRaiseConfiguredLimit(t *testing.T) {
 		{name: "invalid profile", profile: 201, invalid: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			profile, err := resolveTaskStepBudget(agentprofile.Profile{MaxSteps: tc.profile}, taskbridge.TaskSpec{MaxSteps: tc.max}, tc.defaultSteps)
+			profile, err := resolveTaskStepBudget(agentprofile.Profile{MaxSteps: tc.profile}, taskbridge.TaskSpec{MaxSteps: tc.max}, tc.defaultSteps, tc.batchCeiling)
 			if (err != nil) != tc.invalid {
 				t.Fatalf("unexpected validation: %v", err)
 			}

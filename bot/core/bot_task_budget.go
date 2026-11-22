@@ -8,7 +8,7 @@ import (
 
 // Resolve the attempt limit after loading the actual profile, including on resume.
 // Explicit requests must fit the profile; defaults may be lowered by the host.
-func resolveTaskStepBudget(profile agentprofile.Profile, spec taskbridge.TaskSpec, defaultSteps int) (agentprofile.Profile, error) {
+func resolveTaskStepBudget(profile agentprofile.Profile, spec taskbridge.TaskSpec, defaultSteps, batchCeiling int) (agentprofile.Profile, error) {
 	limit := profile.MaxSteps
 	if limit == 0 {
 		limit = agentprofile.DefaultMaxSteps
@@ -23,6 +23,9 @@ func resolveTaskStepBudget(profile agentprofile.Profile, spec taskbridge.TaskSpe
 		limit = spec.MaxSteps
 	} else if defaultSteps > 0 {
 		limit = min(defaultSteps, limit)
+	}
+	if batchCeiling > 0 {
+		limit = min(limit, batchCeiling)
 	}
 	profile = agentprofile.Clone(profile)
 	profile.MaxSteps = limit

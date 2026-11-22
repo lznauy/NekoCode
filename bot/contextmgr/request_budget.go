@@ -13,6 +13,7 @@ import (
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/provider"
 	"nekocode/bot/provider/types"
+	"nekocode/protocol"
 	"nekocode/util/modelbudget"
 )
 
@@ -114,7 +115,7 @@ func (m *Manager) PrepareRequest(ctx context.Context, request ModelRequest) ([]t
 				}
 				// A sibling may consume the last ordinary admission after our
 				// snapshot. Keep an already fitting request usable in that race.
-				if !errors.Is(err, modelbudget.ErrExhausted) || budget.Total() > budget.Window {
+				if !protocol.OnlyFailure(err, modelbudget.ErrExhausted) || budget.Total() > budget.Window {
 					return nil, &compactionFailure{budget: budget, cause: err}
 				}
 			}

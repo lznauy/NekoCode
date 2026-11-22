@@ -103,7 +103,7 @@ func (i *Input) Cursor() *tea.Cursor {
 	return c
 }
 
-func (i *Input) textView() string {
+func (i *Input) TextView() string {
 	if !i.HasContent() {
 		return strings.TrimRight(i.textarea.View(), "\n")
 	}

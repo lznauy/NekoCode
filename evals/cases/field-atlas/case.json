@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "id": "field-atlas",
+  "version": 2,
+  "title": "Field Atlas 多语言离线手册发布系统",
+  "kind": "product",
+  "tags": [
+    "long-project",
+    "incremental-build",
+    "reproducibility"
+  ],
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "compile",
+      "description": "完整多语言编译、索引顺序、Unicode 与 link 环",
+      "required": true
+    },
+    {
+      "id": "fallback",
+      "description": "缺失语言的回退与传递引用展开",
+      "required": true
+    },
+    {
+      "id": "plan",
+      "description": "plan 无写入、与 build 一致、语义等价输入零差异",
+      "required": true
+    },
+    {
+      "id": "incremental",
+      "description": "局部修改、删除与干净重建逐字节等价",
+      "required": true
+    },
+    {
+      "id": "rollback",
+      "description": "非法输入后保留上一版内容及修改时间",
+      "required": true
+    },
+    {
+      "id": "repair",
+      "description": "重启后识别并修复已损坏的产物",
+      "required": true
+    },
+    {
+      "id": "archive",
+      "description": "ZIP 内容、顺序与跨时间逐字节可重现",
+      "required": true
+    },
+    {
+      "id": "delivery",
+      "description": "使用与设计文档、完整候选测试和原始材料",
+      "required": true
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 3600,
+    "model_calls": 400,
+    "total_tokens": 9000000,
+    "verifier_seconds": 150
+  },
+  "source": "Original long-task generalization benchmark"
+}

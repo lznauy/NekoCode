@@ -151,7 +151,7 @@ func TestClipboardResultCannotChangeImageDraftAwaitingAcceptance(t *testing.T) {
 	scope := m.clipboardScope()
 	m.startChat(m.Input.Value(), inputImageAttachments(before))
 	m.Update(clipboardImageMsg{scope: scope, data: data.Bytes()})
-	if after := m.Input.ImageAttachments(); len(after) != 1 || after[0].Path != before[0].Path {
+	if m.Input.HasContent() || m.queue.awaiting == nil || m.queue.awaiting.Images()[0].Path != before[0].Path {
 		t.Fatal("late paste changed submitted image draft")
 	}
 }

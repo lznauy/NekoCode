@@ -23,6 +23,7 @@ type QuestionBroker struct {
 
 type questionRecord struct {
 	ownerID            core.RunID
+	done               <-chan struct{}
 	view               core.QuestionView
 	reply              chan protocol.QuestionReply
 	runID              core.RunID
@@ -58,9 +59,15 @@ func (b *QuestionBroker) RegisterForRun(runID core.RunID, req protocol.QuestionR
 
 // RegisterScoped separates cancellation ownership from the public event run ID.
 func (b *QuestionBroker) RegisterScoped(ownerID, runID core.RunID, req protocol.QuestionRequest) func() protocol.QuestionReply {
+	select {
+	case <-req.Done:
+		return nil
+	default:
+	}
 	id := fmt.Sprintf("q_%d", atomic.AddUint64(&b.nextID, 1))
 	rec := &questionRecord{
 		ownerID: ownerID,
+		done:    req.Done,
 		reply:   make(chan protocol.QuestionReply, 1),
 		runID:   runID,
 		view: core.QuestionView{
@@ -94,7 +101,13 @@ func (b *QuestionBroker) RegisterScoped(ownerID, runID core.RunID, req protocol.
 	}
 
 	return func() protocol.QuestionReply {
-		return <-rec.reply
+		select {
+		case reply := <-rec.reply:
+			return reply
+		case <-rec.done:
+			_ = b.Answer(id, protocol.QuestionReply{Rejected: true})
+			return <-rec.reply
+		}
 	}
 }
 
@@ -108,6 +121,13 @@ func (b *QuestionBroker) Answer(id string, reply protocol.QuestionReply) error {
 	if rec.view.Status != core.QuestionPending {
 		b.mu.Unlock()
 		return fmt.Errorf("runtime: question %s already resolved", id)
+	}
+	var decisionErr error
+	select {
+	case <-rec.done:
+		decisionErr = fmt.Errorf("runtime: question %s expired", id)
+		reply = protocol.QuestionReply{Rejected: true}
+	default:
 	}
 	resolvedAt := time.Now()
 	rec.view.ResolvedAt = &resolvedAt
@@ -124,7 +144,7 @@ func (b *QuestionBroker) Answer(id string, reply protocol.QuestionReply) error {
 	if publishResolved {
 		b.publishResolved([]*questionRecord{rec})
 	}
-	return nil
+	return decisionErr
 }
 
 func (b *QuestionBroker) Pending() []core.QuestionView {

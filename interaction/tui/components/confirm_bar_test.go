@@ -55,14 +55,15 @@ func TestWorkspacePermissionConfirmShowsPath(t *testing.T) {
 		},
 		Kind: controlruntime.ConfirmKindPermission,
 		Approval: &controlruntime.ApprovalContext{
-			Reason:    "add read-only workspace for read",
-			Scope:     controlruntime.ApprovalScopeProject,
-			Workspace: "/repo/other",
+			Reason:          "add read-only workspace for read",
+			Scope:           controlruntime.ApprovalScopeProject,
+			Workspace:       "/repo/other",
+			WorkspaceTarget: "directory",
 		},
 	}, nil)
 
 	view := cb.View(100, 40)
-	for _, want := range []string{"/repo/other", "/repo/other/src/a.go"} {
+	for _, want := range []string{"目录及其子项: /repo/other", "/repo/other/src/a.go"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("workspace confirm missing %q:\n%s", want, view)
 		}

@@ -2,11 +2,14 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"nekocode/bot/config"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,7 +17,9 @@ import (
 	"nekocode/bot/agent"
 	"nekocode/bot/command"
 	"nekocode/bot/contextmgr"
+	"nekocode/bot/extension/tool/builtin/shell"
 	toolcore "nekocode/bot/extension/tool/runtime/core"
+	"nekocode/bot/extension/tool/runtime/workspace"
 	"nekocode/bot/session"
 	"nekocode/protocol"
 )
@@ -46,7 +51,10 @@ func TestGoalCommandPersistsAndPreservesObjective(t *testing.T) {
 	if g := b.sess.CurrentGoal(); g.Criteria == "" || g.Status != "paused" || g.Objective != objective {
 		t.Fatal(g)
 	}
-	cmd("/goal resume")
+	cmd("/goal RESUME")
+	if got := b.sess.CurrentGoal(); got.Objective != objective || got.Status != "active" {
+		t.Fatalf("resume replaced goal: %+v", got)
+	}
 	cmd("/goal accept")
 	if b.sess.CurrentGoal().Status != "active" {
 		t.Fatal("accepted before review")
@@ -83,6 +91,7 @@ func TestGoalVerificationRequiresCurrentMatchingReceipt(t *testing.T) {
 		complete bool
 	}{
 		{"success", func(*protocol.ExecutionReceipt) {}, true},
+		{"unreadable report", func(r *protocol.ExecutionReceipt) { r.Process.TestReportState = "unreadable" }, false},
 		{"unknown exit", func(r *protocol.ExecutionReceipt) { r.Process.ExitCodeKnown = false }, false},
 		{"failed", func(r *protocol.ExecutionReceipt) { r.Process.ExitCode = 1 }, false},
 		{"another run", func(r *protocol.ExecutionReceipt) { r.Execution.RunID = "old" }, false},
@@ -212,6 +221,38 @@ func TestGoalFinalCheckMustRunAloneAndSurviveUntilCloseout(t *testing.T) {
 	if a.receipt != "" {
 		t.Fatal("accepted parallel final check")
 	}
+	t.Run("wait for exited process report", func(t *testing.T) {
+		audit := goalAudit{goal: &session.Goal{Check: cmd}, runID: "run"}
+		pending := event("shell", map[string]any{"command": cmd}, "exited")
+		pending.Evidence.Executions[0].Process.TestReportState = "pending"
+		audit.observe(pending)
+		if audit.receipt != "" || audit.task != "job" || audit.checkIssue == "" {
+			t.Fatalf("pending: %+v", audit)
+		}
+		audit.observe(wait)
+		if audit.receipt == "" || audit.checkIssue != "" {
+			t.Fatalf("drained: %+v", audit)
+		}
+	})
+	t.Run("empty selection then corrected discovery", func(t *testing.T) {
+		audit := goalAudit{goal: &session.Goal{Check: cmd}, runID: "run"}
+		audit.observe(shell)
+		empty := event("process", map[string]any{"action": "wait", "task": "job"}, "exited")
+		empty.Evidence.Executions[0].Process.NoTestsRun = true
+		audit.observe(empty)
+		audit.review("All tests passed.\nGOAL DONE")
+		audit.finish(&agent.RunResult{StopReason: "completed"}, nil, nil)
+		if audit.goal.Status != "review" || !strings.Contains(audit.goal.Evidence, "zero tests") {
+			t.Fatalf("empty selection accepted: %+v", audit.goal)
+		}
+		audit.observe(shell)
+		audit.observe(wait)
+		audit.review("The selected test ran.")
+		audit.finish(&agent.RunResult{StopReason: "completed"}, nil, nil)
+		if audit.goal.Status != "completed" {
+			t.Fatalf("fresh verification ignored: %+v", audit.goal)
+		}
+	})
 	t.Run("adopting a process started before an edit", func(t *testing.T) {
 		audit := goalAudit{goal: &session.Goal{Check: cmd}, runID: "run"}
 		audit.observe(shell)
@@ -318,5 +359,171 @@ func TestGoalProcessObservationIgnoresHandleAndTracksResult(t *testing.T) {
 		if got := rememberGoalObservation(g, r); got != tt.want {
 			t.Fatalf("%+v: got progress %v", tt, got)
 		}
+	}
+}
+
+func TestGoalPreservesFilesAcrossScheduledRuns(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	sessionID := make(chan string, 1)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		answer := "GOAL REVIEW"
+		if calls.Add(1) == 1 {
+			saved, err := session.New(dir).Load(<-sessionID)
+			if err != nil || saved.Goal == nil || len(saved.Goal.PreservedFiles) != 1 || saved.Goal.PreservedFiles[0].SHA256 != fmt.Sprintf("%x", sha256.Sum256([]byte("original"))) {
+				t.Errorf("missing original digest on disk before first model call (load error %v)", err)
+			}
+			answer = "GOAL NEXT"
+		}
+		fmt.Fprintf(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":%q}}]}\n\ndata: [DONE]\n\n", answer)
+	}))
+	defer server.Close()
+	if err := config.Save(config.Config{Active: "test/model", Providers: []config.ProviderConfig{{Name: "test", Protocol: "openai", APIKey: "fixture-secret", BaseURL: server.URL + "/v1", Models: []config.ModelDefinition{{Name: "model", Model: "gpt-4o-mini", ContextWindow: 128000}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "source.txt")
+	if err := os.WriteFile(path, []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := NewAt(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	host := &subagentDemoHost{}
+	if _, err := b.ExecuteCommand(t.Context(), "/goal Maintain the originals", host); err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := b.ExecuteCommand(t.Context(), "/goal refine Preserve files: source.txt", host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID <- b.CurrentSessionID()
+	ctx := protocol.WithGoalScheduling(t.Context())
+	if _, err := b.Run(ctx, cmd.AgentInput, nil, host); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := b.sess.Load(b.CurrentSessionID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Goal.PreservedFiles) != 1 || saved.Goal.PreservedFiles[0].SHA256 == "" || saved.Goal.PendingFrom == "" {
+		t.Fatalf("no durable baseline or pending continuation: %+v", saved.Goal)
+	}
+	if err := os.WriteFile(path, []byte("changed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	answer, err := b.Run(protocol.WithGoalContinuation(ctx), "Continue the active session goal from the last verified result.", nil, host)
+	if err != nil || !strings.Contains(answer, `原件校验未通过："source.txt"`) {
+		t.Fatalf("answer=%q err=%v", answer, err)
+	}
+	if g := b.sess.CurrentGoal(); g.Status != "review" || !strings.Contains(g.Evidence, "原件校验未通过") {
+		t.Fatalf("preservation verdict lost: %+v", g)
+	}
+	if _, err := b.ExecuteCommand(t.Context(), "/goal different objective", host); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.sess.CurrentGoal().PreservedFiles) != 0 {
+		t.Fatal("replacement goal inherited baseline")
+	}
+}
+
+func TestPreservationIssueOverridesAcceptance(t *testing.T) {
+	for _, marker := range []string{"GOAL NEXT", "GOAL DONE", "GOAL REVIEW"} {
+		audit := goalAudit{goal: &session.Goal{Check: "true"}, receipt: "success"}
+		audit.preservation.NeedsReview = true
+		if hint := audit.review("Original changed.\n" + marker); hint != "" {
+			t.Fatal(hint)
+		}
+		audit.finish(&agent.RunResult{StopReason: "completed", FinalOutput: "Original changed."}, nil, nil)
+		if audit.goal.Status != "review" || audit.goal.Evidence != "Original changed." {
+			t.Fatal(audit.goal)
+		}
+	}
+}
+
+func TestGoalNamedGoTestAcceptance(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	// The fixture is self-contained and has no external dependencies.
+	t.Setenv("GOTOOLCHAIN", "local")
+	t.Setenv("GOCACHE", filepath.Join(t.TempDir(), "cache"))
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module payments\n\ngo 1.24\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	b := &Bot{sess: session.New(dir), ctxMgr: contextmgr.New(contextmgr.Config{})}
+	b.cmd = command.New(command.Deps{CtxMgr: b.ctxMgr})
+	setup := func(input string) *session.Goal {
+		t.Helper()
+		r, err := b.goalCommand(t.Context(), &command.Command{Raw: input})
+		if err != nil || r.Action != protocol.CommandContinue {
+			t.Fatalf("command %s: %+v %v", input, r, err)
+		}
+		return b.sess.CurrentGoal()
+	}
+	setup("/goal Verify payments")
+	named := setup("/goal check --test TestPaymentRetry")
+	shellTool := &shell.ShellTool{}
+	defer shellTool.Shutdown()
+	for _, tc := range []struct{ target, body, expected, status string }{
+		{"TestPaymentRetry", "t.Skip()", "skip", "review"},
+		{"TestOther", "", "missing", "review"},
+		{"TestPaymentRetry", "", "pass", "completed"},
+		{"TestPaymentRetry", "t.Skip()", "", "completed"},
+	} {
+		if tc.expected == "" {
+			named = setup("/goal check go test -json -count=1 .")
+			if named.CheckTest != "" {
+				t.Fatal("stale target on whole-suite check")
+			}
+		}
+		source := "package payments\nimport \"testing\"\nfunc TestNeighbor(t *testing.T) {}\nfunc " + tc.target + "(t *testing.T){" + tc.body + "}\n"
+		if err := os.WriteFile(filepath.Join(dir, "payments_test.go"), []byte(source), 0600); err != nil {
+			t.Fatal(err)
+		}
+		ctx := workspace.WithManager(t.Context(), workspace.New(dir, nil))
+		ctx = protocol.WithGoalTest(ctx, named.Check, named.CheckTest)
+		args := map[string]any{"command": named.Check, "sandbox_mode": "host"}
+		out, err := shellTool.ExecuteWithPermission(ctx, args, toolcore.PermissionRequest{Capabilities: []string{toolcore.CapProcessHost}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tool := "shell"
+		audit := goalAudit{goal: named, runID: "run"}
+		observe := func() {
+			input := toolcore.JSONArgs(args)
+			r := protocol.ExecutionReceipt{ID: "receipt", CallID: "call", Tool: tool, Execution: protocol.ExecutionIdentity{RunID: "run"}, ArgumentsHash: toolcore.EvidenceHash(input), Status: "success", Process: out.Process}
+			audit.observe(protocol.StepEvent{Action: protocol.StepActionExecuteTool, CallID: "call", ToolName: tool, ToolInput: input, Evidence: protocol.ToolEvidence{Executions: []protocol.ExecutionReceipt{r}}})
+		}
+		observe()
+		for out.Process.State == "running" {
+			tool = "process"
+			args = map[string]any{"action": "wait", "task": out.Process.Task, "wait_timeout_ms": 10000}
+			out, err = shell.NewProcessTool(shellTool).Execute(ctx, args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			observe()
+		}
+		if out.Process.ExitCode != 0 || out.Process.TestOutcome != tc.expected {
+			t.Fatalf("expected %s: %+v\n%s", tc.expected, out.Process, out.Text)
+		}
+		audit.review("All tests passed.\nGOAL DONE")
+		audit.finish(&agent.RunResult{StopReason: "completed"}, nil, nil)
+		if named.Status != tc.status || named.CheckTest != "" && !strings.Contains(named.Evidence, "TestPaymentRetry") {
+			t.Fatalf("goal: %+v", named)
+		}
+	}
+}
+
+func TestLatePreservationPreventsGoalAcceptance(t *testing.T) {
+	a := goalAudit{goal: &session.Goal{Check: "true"}, receipt: "success"}
+	a.review("Verified.")
+	a.preservation.NeedsReview = true
+	a.finish(&agent.RunResult{StopReason: "completed", FinalOutput: "Verified."}, nil, nil)
+	if a.goal.Status != "review" || !strings.Contains(a.goal.Evidence, "after the final check") {
+		t.Fatalf("late requirement lost: %+v", a.goal)
 	}
 }

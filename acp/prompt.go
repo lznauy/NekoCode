@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"time"
 
 	controlruntime "nekocode/runtime"
@@ -124,6 +125,16 @@ func (s *server) prompt(ctx context.Context, params json.RawMessage) (response a
 	}
 	s.sessionMu.Unlock()
 
+	// Permission RPCs belong to individual approvals. A worker can time out
+	// while its parent turn continues and emits another approval or a result.
+	pending := make(map[string]context.CancelFunc)
+	var permissionRPCs sync.WaitGroup
+	defer func() {
+		for _, cancel := range pending {
+			cancel()
+		}
+		permissionRPCs.Wait()
+	}()
 	var updatesForTurn turnUpdates
 	for {
 		select {
@@ -148,9 +159,17 @@ func (s *server) prompt(ctx context.Context, params json.RawMessage) (response a
 			}
 			switch event.Type {
 			case controlruntime.EventApprovalRequested:
-				view, ok := event.Payload.(controlruntime.ApprovalView)
-				if ok {
-					s.handlePermission(turnCtx, request.SessionID, view)
+				view := event.Payload.(controlruntime.ApprovalView)
+				if pending[view.ID] == nil && turnCtx.Err() == nil {
+					permissionCtx, cancel := context.WithCancel(turnCtx)
+					pending[view.ID] = cancel
+					permissionRPCs.Go(func() { s.handlePermission(permissionCtx, request.SessionID, view) })
+				}
+			case controlruntime.EventApprovalResolved:
+				view := event.Payload.(controlruntime.ApprovalView)
+				if cancel := pending[view.ID]; cancel != nil {
+					cancel()
+					delete(pending, view.ID)
 				}
 			case controlruntime.EventQuestionRequested:
 				view, ok := event.Payload.(controlruntime.QuestionView)

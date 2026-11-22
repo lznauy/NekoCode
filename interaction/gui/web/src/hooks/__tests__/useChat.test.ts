@@ -269,7 +269,7 @@ describe('useChat', () => {
     expect(result.current.msgs[1].phase).toBe('running')
   })
 
-  it.each(['process', 'bash'])('retains %s output and steps when the run finishes', (toolName) => {
+  it.each(['process', 'bash', 'task_batch'])('retains %s output and steps when the run finishes', (toolName) => {
     const { result } = renderHook(() => useChat())
     act(() => result.current.send('run tool'))
     act(() => {
@@ -1172,25 +1172,25 @@ it.each([['gui', false], ['gui', true], ['gui_queue', true]] as const)('releases
   expect(send).toHaveBeenCalledTimes(2)
 })
 
-it.each([false, true])('replaces an unadmitted local turn after an older run finishes (RPC first: %s)', async (rpcFirst) => {
+it.each([[false, 'queued local demand'], [true, 'queued local demand'], [false, '/tmp/report.txt'], [true, '/tmp/report.txt']] as const)('replaces an unadmitted local turn after an older run finishes (RPC first: %s, input: %s)', async (rpcFirst, input) => {
   let acknowledge!: () => void
   ;(window as unknown as { go: unknown }).go = { main: { App: {
     SendMessage: () => new Promise<void>(resolve => { acknowledge = resolve }),
   } } }
   const { result } = renderHook(() => useChat())
-  act(() => result.current.send('queued local demand'))
+  act(() => result.current.send(input))
   if (rpcFirst) await act(async () => acknowledge())
   act(() => {
     emit('agent:delta', { id: 1, delta: 'older coordinator reply', done: false })
     emit('agent:done', { output: 'older coordinator reply', error: '' })
     emit('agent:status', { status: 'idle' })
     emit('agent:status', { status: 'running' })
-    emit('agent:input_accepted', { source: { kind: 'gui' }, queued: true, content: 'queued local demand' })
+    emit('agent:input_accepted', { source: { kind: 'gui' }, queued: true, content: input })
     emit('agent:done', { output: 'local reply', error: '' })
   })
   if (!rpcFirst) await act(async () => acknowledge())
   expect(result.current.msgs.map(message => [message.role, message.text])).toEqual([
-    ['assistant', 'older coordinator reply'], ['user', 'queued local demand'], ['assistant', 'local reply'],
+    ['assistant', 'older coordinator reply'], ['user', input], ['assistant', 'local reply'],
   ])
   expect(result.current.msgs.some(message => message.streaming)).toBe(false)
 })

@@ -102,7 +102,7 @@ func TestImageGenTool_UnsupportedProvider(t *testing.T) {
 
 func TestResolveOutputDirRequiresWorkspaceWriteAccess(t *testing.T) {
 	root, outside := t.TempDir(), t.TempDir()
-	ctx := workspace.WithManager(context.Background(), workspace.New(root, nil))
+	ctx := workspace.WithManager(context.Background(), workspace.New(root, []workspace.Root{{Path: filepath.Join(outside, "generated"), Access: workspace.AccessReadWrite, FileOnly: true}}))
 	if _, err := resolveOutputDir(ctx, map[string]any{"output_dir": filepath.Join(outside, "generated")}); err == nil {
 		t.Fatal("outside output directory was accepted")
 	}

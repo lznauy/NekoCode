@@ -209,6 +209,7 @@ func (t *ImageUnderstandTool) Execute(ctx context.Context, args map[string]any) 
 		record.ToolCallID = core.ToolCallIDFromContext(ctx)
 		record.UsageReported = &usage.reported
 		record.SetOutcome(usage.usage, &providertypes.RequestMeta{Model: cfg.Model, Protocol: protocol, BaseURL: cfg.BaseURL}, returnErr)
+		modelbudget.FromContext(ctx).ObserveTokens(record.TotalTokens, *record.UsageReported)
 		writeImageCallRecord(record)
 	}()
 	defer func() {

@@ -44,6 +44,7 @@ func registerAll(r *tools.Registry, imageUnderstandModels []config.ImageUndersta
 	r.RegisterWithOptions(questionTool, tools.RegistrationOptions{CoordinatorAllowed: true})
 	r.RegisterWithOptions(todoTool, tools.RegistrationOptions{CoordinatorAllowed: true, PlanAllowed: true})
 	r.Register(taskTool)
+	r.RegisterWithOptions(&task.BatchTool{}, tools.RegistrationOptions{StandardOnly: true})
 	r.RegisterWithOptions(taskListTool, tools.RegistrationOptions{PlanAllowed: true, CoordinatorAllowed: true})
 	r.RegisterWithOptions(referencesTool, plan)
 	r.RegisterWithOptions(evidenceTool, plan)

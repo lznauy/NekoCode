@@ -201,6 +201,8 @@ func TestAcceptedImageInputClearsDraftWithoutDeletingFile(t *testing.T) {
 	if !m.Input.AddImage(path) {
 		t.Fatal("AddImage failed")
 	}
+	m.startChat(m.Input.Value(), inputImageAttachments(m.Input.ImageAttachments()))
+	m.Input.SetValue("next message")
 	m.handleRuntimeEvent(controlruntime.Event{
 		Type:   controlruntime.EventInputAccepted,
 		Source: controlruntime.SourceRef{Kind: "tui"},
@@ -209,8 +211,8 @@ func TestAcceptedImageInputClearsDraftWithoutDeletingFile(t *testing.T) {
 			Images: []controlruntime.ImageAttachment{{Label: "[Image #1]", Path: path}},
 		},
 	})
-	if m.Input.HasContent() || len(m.Input.ImageAttachments()) != 0 {
-		t.Fatalf("accepted image draft remained: %q %#v", m.Input.Value(), m.Input.ImageAttachments())
+	if m.Input.Value() != "next message" || m.queue.awaiting != nil || len(m.Input.ImageAttachments()) != 0 {
+		t.Fatalf("acknowledgement changed composer or retained submitted draft: %q %#v", m.Input.Value(), m.Input.ImageAttachments())
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("accepted image file was deleted: %v", err)

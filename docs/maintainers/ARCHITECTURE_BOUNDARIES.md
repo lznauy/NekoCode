@@ -95,7 +95,7 @@ ToolCallResult.Evidence 的 schema=1 聚合当前调用至多两次物理调用�
 
 主、子代理沿既有工具结果接纳链路传入 Context。Context 在结果接纳及 Snapshot/TranscriptTail 导出、Restore 输入边界克隆执行列表，防止调用方通过快照修改权威凭证；只在该工具的权威 transcript 记录附加 ToolEvidence，并记录初次接纳时的可见正文摘要及 ready/budgeted/deferred；该摘要不是 provider 接收回执，也不随后续 deferred 恢复改写。活动消息和 session.json 不保存凭证正文，恢复时保留 transcript 元数据并从活动历史移除；provider wire 与 prefix 指纹也排除该字段。继续使用现有 transcript 水位和保存事务，没有独立事件仓库或凭证索引。旧记录缺字段不补造；旧版本重写可能丢失新附加字段。
 
-凭证已生成、保存，并开放当前执行者及父会话指定子 attempt 的 evidence 查询；模型自动有界引用及父子 evidence IDs 交接见下节。主、子代理工具完成回调携带 executor 交付时的 ToolEvidence 快照，回调前克隆执行列表，Runtime 事件总线在历史保存、观察者/订阅者交付和回放出口统一分离凭证切片，防止观察者污染其他消费者；凭证字段计入原有事件历史字节预算；只有 tool_completed 的 ToolPayload 可带可选 evidence。复用既有 ToolPayload codec 与 recording 序列化/回放，不新增事件或凭证仓库。该快照早于 Context 接纳，不含后续 visible_hash/admission，不能证明 transcript 已落盘，也不由 Runtime 的终端输出归一化重算哈希。headless 的工具结果 user 帧可带 nekocode_evidence；ACP 的 tool_call_update 通过 _meta["nekocode/evidence"] 携带。无凭证时字段省略，旧事件和旧客户端保持原结果结构；工具阻止、预览、收尾补齐不补造凭证。事件是派生观察，不能反向覆盖 transcript 或作为恢复重放工具的依据。历史保存失败仍由原有调用方返回错误，不把失败解释为工具未执行或自动重试的许可；历史及录制失败的结构化表达见下节。
+凭证已生成、保存，并开放当前执行者及父会话指定子 attempt 的 evidence 查询；按需查询及父子 evidence IDs 交接见下节。主、子代理工具完成回调携带 executor 交付时的 ToolEvidence 快照，回调前克隆执行列表，Runtime 事件总线在历史保存、观察者/订阅者交付和回放出口统一分离凭证切片，防止观察者污染其他消费者；凭证字段计入原有事件历史字节预算；只有 tool_completed 的 ToolPayload 可带可选 evidence。复用既有 ToolPayload codec 与 recording 序列化/回放，不新增事件或凭证仓库。该快照早于 Context 接纳，不含后续 visible_hash/admission，不能证明 transcript 已落盘，也不由 Runtime 的终端输出归一化重算哈希。headless 的工具结果 user 帧可带 nekocode_evidence；ACP 的 tool_call_update 通过 _meta["nekocode/evidence"] 携带。无凭证时字段省略，旧事件和旧客户端保持原结果结构；工具阻止、预览、收尾补齐不补造凭证。事件是派生观察，不能反向覆盖 transcript 或作为恢复重放工具的依据。历史保存失败仍由原有调用方返回错误，不把失败解释为工具未执行或自动重试的许可；历史及录制失败的结构化表达见下节。
 
 ## 未执行调用的决策记录
 
@@ -131,13 +131,13 @@ EventBus 的单一 recording sink 替换原录制观察者：分配原有事件�
 
 ## 执行凭证查询
 
-只读 evidence 复用 context_refs 的查询解析器、refbridge.Source 和执行者 reader 绑定，允许 Plan Mode。Kind 由工具实例固定，模型不能指定其他 session 或路径。主入口默认返回主会话凭证，可同时提供 task_id/attempt_id 查询当前父会话下指定的已保存子执行；子入口核对当前 task/attempt/OutputStore，只返回自身任务的凭证（含自身历史 attempt），不查询父会话或兄弟任务。完整执行身份缺失的子运行不能查询；内置 coder/explore 包含 evidence，自定义 Profile 白名单分别控制 evidence 与 context_refs。仅开放 evidence 不会获得 context_refs 自动投影。
+只读 evidence 复用 context_refs 的查询解析器、refbridge.Source 和执行者 reader 绑定，允许 Plan Mode。Kind 由工具实例固定，模型不能指定其他 session 或路径。主入口默认返回主会话凭证，可同时提供 task_id/attempt_id 查询当前父会话下指定的已保存子执行；子入口核对当前 task/attempt/OutputStore，只返回自身任务的凭证（含自身历史 attempt），不查询父会话或兄弟任务。完整执行身份缺失的子运行不能查询；内置 coder/explore 包含 evidence，自定义 Profile 白名单分别控制 evidence 与 context_refs。
 
 list 的 limit 为 1–20 条原始历史记录，并最多返回 20 条凭证摘要；它复用现有索引的单记录定位，倒序合并已确认持久化水位和 pending tail，不增加凭证索引或改动技能/产物索引资格。64 KiB 为来源软预算，首条不可拆分，边界处可能先解码一条候选记录再延后返回；scanned 计入该候选，但 before 不跳过它。并非全历史搜索或常数冷恢复 IO。稀疏页可以没有 evidence 条目但 has_more=true，必须沿 before 原始排他游标继续。返回上限不拆开同一条来源中的两次物理调用，旧页不会跳过被延后的来源。
 
 返回 evidence 数组中的 ID 是 `evidence.<原始序号>.<scope及凭证元数据SHA-256>`，receipt_id 为宿主生成的物理 UUID。inspect 只定位该序号的一条记录并核对完整 ID，匹配时 status=recorded，否则 missing；recorded 仅表示记录关联，不表示 verified、测试通过或任务完成。list 不返回正文；inspect 的 detail 仅含目标物理调用和交付摘要，剔除 artifact 路径，has_artifact 只表示来源声称携带产物。查询不访问文件系统核实产物，不授予文件读取或工具重放许可；底层错误转为固定错误，取消保持原有错误语义。
 
-父代理选择子任务时，从权威 session.json 验证 ID、parent、格式、attempt 起止序号及已提交水位；固定该区间，再核对每条 receipt 的 task 和精确 attempt。不读取未提交尾部，也不因子代理正在追加而修复历史或重建索引。复用只读历史定位，索引缺失或落后时流式扫描，可取消；不保证冷查询常数 IO。子入口拒绝所有 task_id/attempt_id 选择器。主模型、最终合成及允许 evidence 的子模型请求自动接收 `evidence_references`，最多 16 条，仅含 ID、原始序号、工具、状态及是否有产物。每次采样复用 evidence list 的最近 20 条原始记录和 64 KiB 软边界，不承诺稀疏旧凭证自动留存；较旧凭证可继续 list 分页或按已知 ID inspect。完整凭证、路径和输出不进入投影；投影不写回活动消息或 transcript。存在凭证页时，技能/产物先占最多 2 KiB，凭证使用 4 KiB 总额的余量；无凭证且没有更早页时原视图仍可用满 4 KiB，与任务视图合计保持 8 KiB。字节预算和 16 条上限均按原始记录整组裁剪，不拆开同一调用的普通执行与权限重试；游标锚定最旧保留记录，空页从 0 重查。扫描计数和移动原始页边界不进入缓存前缀。不可用只投影 unavailable，不暴露底层错误，不重放工具。查询本身作为工具调用也会产生正常凭证，返回前的来源水位不包含该次查询尚未接纳的结果。
+父代理选择子任务时，从权威 session.json 验证 ID、parent、格式、attempt 起止序号及已提交水位；固定该区间，再核对每条 receipt 的 task 和精确 attempt。不读取未提交尾部，也不因子代理正在追加而修复历史或重建索引。复用只读历史定位，索引缺失或落后时流式扫描，可取消；不保证冷查询常数 IO。子入口拒绝所有 task_id/attempt_id 选择器。模型按需调用 evidence 读取列表或详情。查询本身作为工具调用也会产生正常凭证，返回前的来源水位不包含该次查询尚未接纳的结果。
 
 ## 子代理凭证交接
 
@@ -222,15 +222,15 @@ bot/core 通过已有 TaskLister 取得当前父会话的任务元数据，Agent
 
 ## 产物引用与查询
 
-主代理的 `ContextReferences(ctx, sessionID, kind)` 单一回调由 bot/core 组装，宿主传入空 kind 查询技能/产物、evidence kind 查询凭证，不再分别配置 EvidenceReferences；Go 嵌入方需同步此回调签名。复用当前会话历史索引的引用链接，Context 只接收 refbridge.Page 值。主模型、合成请求和开放 context_refs 的子模型请求在 Archive、任务引用之后，活动 history 之前投影 user-role JSON `context_references`；不写回活动消息、transcript 或 session.json，不复制工具正文，不新增独立引用存储。技能最多 8 条、产物最多 16 条，与凭证引用共享不超过 4 KiB 的完整 JSON 预算，与任务引用合计最多 8 KiB。只投影最新的有界引用页；更早引用按原始序号分页读取，不生成全会话产物目录。
+主代理、最终合成和子代理的模型请求均省略技能、产物和凭证索引。技能和产物通过 `context_refs` 查询，执行凭证通过 `evidence` 查询。查询结果以工具消息交付。
 
 来源每次最多读取 20 条含引用的历史记录，复用 transcript.idx 跳过无关记录，使用 64 KiB 软预算；首条不可拆分，已有工具记录最高 4 MiB，底层记录解析上限为 16 MiB。已有索引每项从 32 字节增至 40 字节，增加引用链接和索引项校验，64 字节头不变；权威 transcript 和 session 格式不变。索引缺失或旧版格式时流式重建一次，可取消；查询不修复或改写 transcript。有效索引按引用跳转，新增历史仍需解析新增记录，尚未保存的尾部仍向后扫描，不能宣称冷恢复绝对恒定 IO。索引可删除重建，不缓存正文或增加全局状态。
 
-自动投影不携带扫描计数、移动窗口边界或文件路径，较旧查询的游标锚定最早保留的引用；引用集合不变时，不因普通消息推进而改变缓存前缀。超限移除条目后游标不会跳过被省略项。展示分页附带的 assistant header 不计入原始序号。
+展示分页附带的 assistant header 不计入原始序号。
 
 `context_refs` 是当前执行者的只读工具，允许 Plan Mode；list 每页读取 1–20 条含引用的来源记录，按新到旧返回产物或技能引用。`before` 是原始历史的排他游标，不是引用偏移，has_more 表示还有更早引用。模型不能指定会话或文件路径。ID 使用 `artifact.<原始序号>.<SHA-256>`，绑定执行者 scope、原始序号及结构化 ToolOutputArtifact；同一来源在压缩、保存和恢复后 ID 不变，fork/会话变化不会继承旧 ID 的 scope。
 
-inspect 按 ID 定位一条原始记录，核对 ID 与来源元数据，再验证执行者的 OutputStore、当前 workspace 读权限和文件归属，只有全部通过才返回文件位置；正文仍用现有 read 工具重取，读取时再次检查权限，不从引用恢复写前读许可。工具入口必须绑定执行者。主入口用 TaskID 和主 OutputStore 身份拒绝子执行者，包括未命名的旧子执行器；无执行者 context 的内部主模型投影只读取元数据。子执行每次 Run 在 context 注入自己的 reader，显式遮蔽继承的父 reader，不改共享 registry；查询核对当前 TaskID、AttemptID 及 actor OutputStore 指针。子 scope 为 `<parent>/subagents/<task>`，跨恢复 attempt 稳定，换父会话或任务即改变；Page.session_id 在子查询中返回此 scope。持久化来源绑定已打开的子会话，仅合并当前已确认水位与内存尾部，不使用活动消息推断历史引用。未提供完整执行身份的嵌入运行不开放查询。内置 coder/explore 包含 context_refs 和 evidence；自定义 Profile 仍需显式允许，未允许时不投影入口，已有 Profile 不被隐式扩权。恢复旧引用不自动增加文件访问权限，正文仍需当前 read/skill 工具许可。状态 missing 表示来源/已授权文件缺失，changed 表示来源元数据与 ID 不匹配，unavailable 表示当前权限、归属或存储不可用；存储错误不向模型透传原文，不修改已有历史。
+inspect 按 ID 定位一条原始记录，核对 ID 与来源元数据，再验证执行者的 OutputStore、当前 workspace 读权限和文件归属，只有全部通过才返回文件位置；正文仍用现有 read 工具重取，读取时再次检查权限，不从引用恢复写前读许可。工具入口必须绑定执行者。主入口用 TaskID 和主 OutputStore 身份拒绝子执行者，包括未命名的旧子执行器。子执行每次 Run 在 context 注入自己的 reader，显式遮蔽继承的父 reader，不改共享 registry；查询核对当前 TaskID、AttemptID 及 actor OutputStore 指针。子 scope 为 `<parent>/subagents/<task>`，跨恢复 attempt 稳定，换父会话或任务即改变；Page.session_id 在子查询中返回此 scope。持久化来源绑定已打开的子会话，仅合并当前已确认水位与内存尾部，不使用活动消息推断历史引用。未提供完整执行身份的嵌入运行不开放查询。内置 coder/explore 包含 context_refs 和 evidence；自定义 Profile 仍需显式允许，未允许时不投影入口，已有 Profile 不被隐式扩权。恢复旧引用不自动增加文件访问权限，正文仍需当前 read/skill 工具许可。状态 missing 表示来源/已授权文件缺失，changed 表示来源元数据与 ID 不匹配，unavailable 表示当前权限、归属或存储不可用；存储错误不向模型透传原文，不修改已有历史。
 
 ID 的摘要不是保存文件内容的版本指纹；available 只说明采样时的位置可读取，不保证文件从未被外部修改，也不证明工具成功、任务完成或允许重放。当前支持主会话或当前子任务保存的工具输出，不含其他执行者目录查询、任意生成文件或完整历史产物目录；技能引用使用同一工具，契约见下节。
 
@@ -242,7 +242,7 @@ ID 的摘要不是保存文件内容的版本指纹；available 只说明采样�
 
 完整 deferred 预览恢复前，在原有全批预检中核对正文摘要；不匹配则不改变消息、记账或历史。恢复成功只将活动消息改为 ready，并在现有 transcript 追加一条引用原始序号的 metadata-only runtime-event；旧 deferred 记录不改写，不复制正文。裁剪预览恢复后仍是 incomplete，不能登记已加载或形成 ready 引用。事件不加入活动模型上下文；重启时即便它来自未提交历史尾部，Context 恢复也将其留在 transcript、从活动上下文剔除。没有额外事件仓库、manager 或技能状态索引。
 
-`context_refs list` 在同一分页边界中返回带 kind 的产物或技能引用；只有 schema 与所有者来源匹配的 ready 记录生成 `skill.<原始序号>.<scope及元数据SHA-256>`。近期自动投影使用统一 `context_references`，技能和产物共享现有 4 KiB 配额，不为技能额外扩容；达到类型上限或字节预算时保留连续的较新来源前缀与可查询的旧游标。压缩或保存不改变原始序号和引用 ID，较旧引用可继续分页或按已知 ID 查询。
+`context_refs list` 在同一分页边界中返回带 kind 的产物或技能引用；只有 schema 与所有者来源匹配的 ready 记录生成 `skill.<原始序号>.<scope及元数据SHA-256>`。压缩或保存不改变原始序号和引用 ID，较旧引用可继续分页或按已知 ID 查询。
 
 技能 inspect 检查原始记录、当前执行者 scope 和当前 extension 注册版本的格式化正文摘要：缺技能为 missing，摘要不同为 changed，相同为 available，不能访问当前注册表或 actor 时为 unavailable。tool 来源按执行器相同的 ANSI/换行规范化后比较，selected/command/delegated 比较其原始选定文本。available 只说明当前注册内容匹配，不代表外部文件尚未修改、辅助文件相同、模型仍持有全文，或模型被允许重新加载；实际 skill/read 工具仍应用当前调用限制和权限。技能正文与辅助文件不复制进引用。
 

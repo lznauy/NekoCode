@@ -169,3 +169,10 @@ func (m *Manager) TranscriptTail() (int, []types.Message, bool) {
 	defer m.state.mu.RUnlock()
 	return m.state.transcriptBase, types.CloneMessages(m.state.transcript), m.state.transcriptLazy
 }
+
+// TranscriptPosition reads the acknowledged base, end and latest assistant sequence atomically.
+func (m *Manager) TranscriptPosition() (base, end, assistant int) {
+	m.state.mu.RLock()
+	defer m.state.mu.RUnlock()
+	return m.state.transcriptBase, m.state.transcriptBase + len(m.state.transcript), m.state.lastAssistantSequence
+}

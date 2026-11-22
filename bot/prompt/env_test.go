@@ -1,6 +1,7 @@
 package prompt
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -11,6 +12,7 @@ func TestFormatEnvironmentRendersFactsAndRoots(t *testing.T) {
 		Roots: []Root{
 			{Path: "/repo", Access: "read-write"},
 			{Path: "/docs", Access: "read-only"},
+			{Path: "/tmp/output", Access: "read-write", FileOnly: true},
 		},
 	}
 	got := FormatEnvironment(env, "2026-01-01", "bash", "linux", "amd64")
@@ -19,6 +21,7 @@ func TestFormatEnvironmentRendersFactsAndRoots(t *testing.T) {
 		"<current_date>2026-01-01</current_date>", "<os>linux</os>", "<arch>amd64</arch>",
 		"<workspace_roots>", `<root access="read-only">/docs</root>`,
 		`<root access="read-write">/repo</root>`,
+		`<file access="read-write">/tmp/output</file>`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("FormatEnvironment missing %q:\n%s", want, got)
@@ -64,5 +67,20 @@ func TestMCPInventoryOnlyEnvironmentEscapesMetadata(t *testing.T) {
 	b.SetEnvironmentProvider(func() Environment { return Environment{MCPCapabilities: "docs: starting"} })
 	if !strings.Contains(b.BuildEnvironment(), "docs: starting") {
 		t.Fatal("MCP-only runtime context was discarded")
+	}
+}
+
+func TestSiblingArtifactsKeepEnvironmentStable(t *testing.T) {
+	dir := t.TempDir()
+	parent := Root{Path: dir, Access: "read-only"}
+	child := Root{Path: filepath.Join(dir, "worker", "result.txt"), Access: "read-only"}
+	writer := Root{Path: filepath.Join(dir, "editable"), Access: "read-write"}
+	other := Root{Path: dir + "-other", Access: "read-only"}
+	render := func(roots ...Root) string {
+		return FormatEnvironment(Environment{Roots: roots}, "", "", "", "")
+	}
+	before := render(parent, writer, other)
+	if got := render(child, parent, writer, other); got != before || !strings.Contains(got, writer.Path) || !strings.Contains(got, other.Path) {
+		t.Fatalf("unexpected root projection: %s", got)
 	}
 }

@@ -91,16 +91,16 @@ func TestRunLoopNilCallbacksAreSafe(t *testing.T) {
 	}
 }
 
-func TestLifecycleCancelAndReplace(t *testing.T) {
+func TestLifecycleAbortAndReplace(t *testing.T) {
 	l := NewLifecycle(context.Background(), 4)
 
 	if l.Context().Err() != nil {
 		t.Fatal("fresh context should not be canceled")
 	}
 
-	l.Cancel()
+	l.Abort()
 	if l.Context().Err() == nil {
-		t.Fatal("after Cancel, context should be canceled")
+		t.Fatal("after Abort, context should be canceled")
 	}
 
 	l.ReplaceContext()
@@ -117,7 +117,7 @@ func TestLifecycleResetContextIfCanceled(t *testing.T) {
 		t.Fatal("reset on live context should keep it live")
 	}
 
-	l.Cancel()
+	l.Abort()
 	l.ResetContextIfCanceled()
 	if l.Context().Err() != nil {
 		t.Fatal("reset on canceled context should revive it")
@@ -234,5 +234,20 @@ func TestRunValuesSurviveContextReplacementAndClear(t *testing.T) {
 	lifecycle.SetValues(nil)
 	if lifecycle.Context().Value(key{}) != nil {
 		t.Fatal("run metadata leaked after cleanup")
+	}
+}
+
+func TestAbortCancelsBeforePublishingFinished(t *testing.T) {
+	l := NewLifecycle(t.Context(), 1)
+	cancel := l.cancelFn
+	l.cancelFn = func() {
+		if l.Finished().Load() {
+			t.Fatal("finished became visible before context cancellation")
+		}
+		cancel()
+	}
+	l.Abort()
+	if !l.Finished().Load() || l.Context().Err() == nil {
+		t.Fatal("abort must both cancel the context and stop the loop")
 	}
 }

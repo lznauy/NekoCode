@@ -44,8 +44,20 @@ func ValidatePathWritable(path string) (string, error) {
 }
 
 func ValidatePathWritableContext(ctx context.Context, path string) (string, error) {
+	return validateWritable(ctx, path, false)
+}
+
+func ValidateDirectoryWritableContext(ctx context.Context, path string) (string, error) {
+	return validateWritable(ctx, path, true)
+}
+
+func validateWritable(ctx context.Context, path string, directory bool) (string, error) {
 	manager := workspaceManager(ctx)
-	safePath, _, allowed, err := manager.CheckWrite(path)
+	check := manager.CheckWrite
+	if directory {
+		check = manager.CheckWriteDirectory
+	}
+	safePath, _, allowed, err := check(path)
 	if err != nil {
 		return "", err
 	}

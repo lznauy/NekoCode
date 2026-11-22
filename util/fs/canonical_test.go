@@ -43,3 +43,23 @@ func TestCanonicalPathRejectsBrokenAndCyclicLinks(t *testing.T) {
 		}
 	}
 }
+
+func TestIsTempRootIncludesBothCanonicalDirectories(t *testing.T) {
+	system, err := filepath.EvalSymlinks("/tmp")
+	if err != nil {
+		t.Skip("no system /tmp")
+	}
+	dir := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "tmp")
+	if err := os.Symlink(dir, alias); err != nil {
+		t.Skip(err)
+	}
+	t.Setenv("TMPDIR", alias)
+	process, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !IsTempRoot(system) || !IsTempRoot(process) || IsTempRoot(filepath.Join(process, "nested")) {
+		t.Fatalf("incorrect temp root classification for %q and %q", system, process)
+	}
+}

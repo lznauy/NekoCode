@@ -85,6 +85,20 @@ func (b *Bot) runAgent(ctx context.Context, input string, images []types.Message
 		defer b.goalRunning.Store(false)
 		audit = &goalAudit{external: protocol.GoalScheduling(ctx), goal: goal, runID: protocol.ExecutionFromContext(ctx).RunID}
 		prompt += "\n" + audit.prompt()
+		if goal.CheckTest != "" {
+			ctx = protocol.WithGoalTest(ctx, goal.Check, goal.CheckTest)
+		}
+		audit.preservation = agentcore.GoalPreservation{
+			Files: goal.PreservedFiles, Criteria: goal.Criteria,
+			Save: func(files []protocol.PreservedFile) error {
+				// Only update the last committed session. In-flight conversation
+				// history still belongs to the turn's normal closeout.
+				snapshot := b.sess.Current()
+				snapshot.Goal.PreservedFiles = slices.Clone(files)
+				return b.sess.Save(snapshot)
+			},
+		}
+		ctx = agentcore.WithGoalPreservation(ctx, &audit.preservation)
 		ctx = agentcore.WithGoalReview(ctx, func(answer string) string {
 			hint := audit.review(answer)
 			if h, ok := b.currentHost().(interface{ GoalContinuation(int) }); ok && hint != "" {
@@ -127,6 +141,7 @@ func (b *Bot) runAgent(ctx context.Context, input string, images []types.Message
 	}
 	var saveErr error
 	if audit != nil {
+		goal.PreservedFiles = audit.preservation.Files
 		audit.finish(result, ctx.Err(), errors.Join(checkpointErr, compactionErr))
 		saveErr = b.saveGoal(goal)
 		if status, ok := b.currentHost().(interface{ GoalStatus(string) }); ok && saveErr == nil {

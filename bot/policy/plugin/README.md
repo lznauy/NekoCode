@@ -45,7 +45,7 @@
 | PreModel | 模型工具循环及最终兜底合成请求前 |
 | PreToolUse | 单个工具执行前 |
 | PostToolUse | 单个未被阻断的工具执行后，包含成功和失败 |
-| PostToolUseFailure | 上述事件中失败的工具调用 |
+| PostToolUseFailure | 工具调用返回错误，或观察到已知的非零进程退出码。事件的 `error` 仅表示工具调用错误，进程状态与退出码见 `process` |
 | PostToolBatch | 工具批次处理后，batch 包含成功、失败和阻断结果 |
 | PermissionRequest | 执行器实际调用审批回调前；仅观察，不能授权或阻断 |
 | PermissionDenied | 用户或权限规则明确拒绝时；仅观察，source 区分 user/rule |

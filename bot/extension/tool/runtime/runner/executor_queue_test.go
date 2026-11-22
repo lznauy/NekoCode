@@ -9,6 +9,7 @@ import (
 
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/toolutil"
+	"nekocode/util/modelbudget"
 )
 
 type queueGateTool struct {
@@ -110,6 +111,27 @@ func TestTaskQueueBoundsHundredTasksAndDoesNotBlockOrdinaryTools(t *testing.T) {
 					}
 				}
 			})
+		}
+	}
+}
+
+func TestBudgetedBatchPassesAttemptLimitOnlyToDelegates(t *testing.T) {
+	budget, _ := modelbudget.NewWithLimits(100, true, 0)
+	ctx := modelbudget.WithBudget(t.Context(), budget)
+	want := budget.Snapshot().WorkRemaining/3 - 1
+	makeTool := func(name string, limit int) *queueGateTool {
+		return &queueGateTool{name: name, run: func(ctx context.Context) error {
+			if got := modelbudget.ParallelStepLimit(ctx); got != limit {
+				return fmt.Errorf("%s: got %d steps, want %d", name, got, limit)
+			}
+			return nil
+		}}
+	}
+	executor := NewExecutor(newTestRegistry(fakeRegistry{"task": makeTool("task", want), "read": makeTool("read", 0)}))
+	results := executor.ExecuteBatch(ctx, []core.ToolCallItem{{ID: "first", Name: "task"}, {ID: "read", Name: "read"}, {ID: "second", Name: "task"}})
+	for _, result := range results {
+		if result.Error != "" {
+			t.Fatal(result.Error)
 		}
 	}
 }

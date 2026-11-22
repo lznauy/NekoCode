@@ -103,6 +103,28 @@ func TestApprovalBrokerRejectsRememberForOnceScope(t *testing.T) {
 	}
 }
 
+func TestCancelledApprovalDiscardsGrant(t *testing.T) {
+	for _, scope := range []protocol.ApprovalScope{protocol.ApprovalScopeOnce, protocol.ApprovalScopeProject} {
+		t.Run(string(scope), func(t *testing.T) {
+			bus := eventbus.NewEventBus()
+			var status core.ApprovalStatus
+			bus.AddObserver(func(event core.Event) {
+				if event.Type == core.EventApprovalResolved {
+					status = event.Payload.(core.ApprovalView).Status
+				}
+			})
+			b := NewApprovalBroker(bus, core.SourceRef{}, nil)
+			wait := b.Register(protocol.ConfirmRequest{Approval: &protocol.ApprovalContext{Scope: scope}})
+			if err := b.Decide(b.Pending()[0].ID, core.ApprovalDecision{Cancelled: true, Allowed: true, Remember: true}); err != nil {
+				t.Fatal(err)
+			}
+			if reply := wait(); status != core.ApprovalExpired || reply != (protocol.ConfirmReply{Cancelled: true}) {
+				t.Fatalf("resolved status=%q, execution reply=%+v", status, reply)
+			}
+		})
+	}
+}
+
 func TestApprovalBrokerRequestAfterCloseIsRejected(t *testing.T) {
 	broker := NewApprovalBroker(nil, core.SourceRef{Kind: "test"}, nil)
 	broker.Close()
@@ -165,5 +187,24 @@ func TestApprovalBrokerCancellationProvenance(t *testing.T) {
 				t.Fatal("closed broker fabricated a decision")
 			}
 		})
+	}
+}
+
+func TestApprovalBrokerDecisionAfterToolCancellation(t *testing.T) {
+	bus := eventbus.NewEventBus()
+	b := NewApprovalBroker(bus, core.SourceRef{}, nil)
+	done := make(chan struct{})
+	wait := b.Register(protocol.ConfirmRequest{Done: done})
+	id := b.Pending()[0].ID
+	close(done)
+	if err := b.Decide(id, core.ApprovalDecision{Allowed: true, Remember: true}); err == nil {
+		t.Error("accepted remembered approval after tool cancellation")
+	}
+	if reply := wait(); !reply.Cancelled || reply.Allowed || reply.Remember {
+		t.Errorf("cancelled tool got %+v", reply)
+	}
+	events := bus.History(core.EventFilter{Types: []core.EventType{core.EventApprovalResolved}})
+	if len(events) != 1 || events[0].Payload.(core.ApprovalView).Status != core.ApprovalExpired {
+		t.Fatalf("expected one expired approval, got %+v", events)
 	}
 }

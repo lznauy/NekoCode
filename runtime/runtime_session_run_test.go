@@ -275,3 +275,15 @@ func TestStartRunInSessionBlocksRunsUntilFailedRestoreIsRecovered(t *testing.T) 
 		t.Fatal(err)
 	}
 }
+
+func TestStartRunIfCurrentRejectsMovedSession(t *testing.T) {
+	runner := &sessionCommandRunner{current: "new-session"}
+	rt := New(runner, sessionRunnerServices(runner))
+	defer rt.Close()
+	if _, err := rt.StartRunIfCurrent(t.Context(), "old-session", Input{Text: "queued work"}); err == nil {
+		t.Fatal("accepted queued work after session change")
+	}
+	if rt.Status().RunStatus != RunIdle {
+		t.Fatal("session mismatch started a run")
+	}
+}

@@ -88,6 +88,7 @@ var builtinRules = []Rule{
 	// --- Other tools: default allow (stateless / non-destructive) ---
 	{Tool: "todo_write", Effect: EffectAllow, Source: "builtin"},
 	{Tool: "task", Effect: EffectAllow, Source: "builtin"},
+	{Tool: "task_batch", Effect: EffectAllow, Source: "builtin"},
 	{Tool: "web_search", Effect: EffectAllow, Source: "builtin"},
 	{Tool: "web_fetch", Effect: EffectAllow, Source: "builtin"},
 	{Tool: "web_extract", Effect: EffectAllow, Source: "builtin"},

@@ -11,6 +11,18 @@ import (
 	"nekocode/util/text"
 )
 
+// WorkspaceApprovalLabel describes the extent of the workspace access being granted.
+func WorkspaceApprovalLabel(target string) string {
+	switch target {
+	case "file":
+		return "仅此文件"
+	case "directory":
+		return "目录及其子项"
+	default:
+		return "工作区"
+	}
+}
+
 // ToolBrief returns a short human-readable summary of a tool call's
 // arguments, suitable for rendering next to the tool name.
 func ToolBrief(toolName, rawArgs string) string {
@@ -45,7 +57,7 @@ func ToolBrief(toolName, rawArgs string) string {
 		return text.TruncateByRune(q, 60)
 	case "todo_write":
 		return todosBrief(args["todos"])
-	case "task":
+	case "task", "task_batch":
 		profile := args["profile"]
 		if profile == "" {
 			profile = "coder"

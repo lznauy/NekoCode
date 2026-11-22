@@ -116,7 +116,7 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 	dec := e.evaluatePermission(ctx, tc, predictedReq)
 	if dec.block {
 		e.observePermissionDenial(ctx, tc, dec.reason, predictedReq)
-		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: dec.reason}
+		return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: dec.reason, PermissionDenied: true}
 	}
 
 	// Resolve authority only after the lexical rule check, then evaluate the
@@ -139,7 +139,7 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 			dec = e.evaluatePermission(ctx, policyCall, predictedReq)
 			if dec.block {
 				e.observePermissionDenial(ctx, tc, dec.reason, predictedReq)
-				return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: dec.reason}
+				return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: dec.reason, PermissionDenied: true}
 			}
 			// Explicit asks on the lexical alias remain mandatory, even when
 			// the resolved target has an allow rule. Show the executed path.
@@ -160,7 +160,7 @@ func (e *Executor) executeOne(ctx context.Context, tc core.ToolCallItem) (result
 			// The user explicitly declined. A bare "cancelled" reads like a
 			// transient hiccup and invites the model to retry the very same
 			// call — popping the dialog again. Name the decision instead.
-			return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: "permission denied by user; do not retry the same request — change your approach or ask the user how to proceed"}
+			return core.ToolCallResult{ID: tc.ID, Name: resultName, PermissionDenied: true, Error: "permission denied by user; do not retry the same request — change your approach or ask the user how to proceed"}
 		}
 		if err := validateFileTargetBinding(boundFileTarget); err != nil {
 			return core.ToolCallResult{ID: tc.ID, Name: resultName, Error: err.Error()}
@@ -724,6 +724,5 @@ func (e *Executor) invalidateMutatedPaths(toolName string, paths []string) {
 // AllowOutputFile grants access to one generated artifact, never the shared
 // directory containing other sessions' results.
 func (e *Executor) AllowOutputFile(path string) error {
-	_, err := e.workspace.AddSessionRoot(path, workspace.AccessReadOnly)
-	return err
+	return e.workspace.AllowOutputFile(path)
 }

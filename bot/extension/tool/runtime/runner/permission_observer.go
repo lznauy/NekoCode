@@ -56,6 +56,7 @@ func (e *Executor) observeConfirm(ctx context.Context, confirm protocol.ConfirmF
 	return func(request protocol.ConfirmRequest) protocol.ConfirmReply {
 		args := map[string]any{"call_id": request.CallID, "source": "approval", "kind": request.Kind, "tool_args": protocol.ApprovalArgs(request.Args), "approval": request.Approval.Clone()}
 		e.emitPermission(ctx, PermissionEvent{Tool: canonicalPermissionTool(request.ToolName), Args: args})
+		request.Done = ctx.Done()
 		reply := confirm(request)
 		if !reply.Allowed && !reply.Cancelled {
 			// Construct a fresh snapshot: the request observer cannot mutate denial

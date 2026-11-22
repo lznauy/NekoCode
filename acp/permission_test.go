@@ -83,3 +83,12 @@ func TestPermissionDecisionDistinguishesRPCFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkspaceApprovalSummaryShowsTargetExtent(t *testing.T) {
+	for kind, label := range map[string]string{"file": "Only this file", "directory": "Directory and descendants", "": "Workspace"} {
+		summary := approvalSummary(controlruntime.ApprovalView{Approval: &controlruntime.ApprovalContext{Workspace: "/outside", WorkspaceTarget: kind}})
+		if !strings.Contains(summary, label+": /outside") {
+			t.Fatalf("workspace target %q: %s", kind, summary)
+		}
+	}
+}

@@ -25,6 +25,7 @@ type Root struct {
 	// Canonical pins a remembered grant to its approved path. Unlike an
 	// explicit configuration root, it must never follow a replacement link.
 	Canonical bool `json:"-"`
+	FileOnly  bool `json:"file_only,omitempty"`
 }
 
 // Manager owns workspace authority for one tool registry. Temporary roots are
@@ -157,7 +158,7 @@ func (m *Manager) snapshotLocked() []Root {
 }
 
 func (m *Manager) CheckRead(path string) (string, Root, bool, error) {
-	return m.check(path, AccessReadOnly)
+	return m.check(path, AccessReadOnly, false)
 }
 
 // CheckReadLexical checks an already configured root without resolving links
@@ -169,7 +170,7 @@ func (m *Manager) CheckReadLexical(path string) (string, Root, bool, error) {
 	}
 	clean := filepath.Clean(abs)
 	for _, root := range m.Snapshot() {
-		if rootAllows(root, AccessReadOnly) && insideRoot(clean, root.Path) {
+		if rootAllows(root, AccessReadOnly) && root.contains(clean) {
 			return clean, root, true, nil
 		}
 	}
@@ -177,10 +178,15 @@ func (m *Manager) CheckReadLexical(path string) (string, Root, bool, error) {
 }
 
 func (m *Manager) CheckWrite(path string) (string, Root, bool, error) {
-	return m.check(path, AccessReadWrite)
+	return m.check(path, AccessReadWrite, false)
 }
 
-func (m *Manager) check(path string, need Access) (string, Root, bool, error) {
+// CheckWriteDirectory requires a directory grant even when the target does not exist yet.
+func (m *Manager) CheckWriteDirectory(path string) (string, Root, bool, error) {
+	return m.check(path, AccessReadWrite, true)
+}
+
+func (m *Manager) check(path string, need Access, directory bool) (string, Root, bool, error) {
 	resolved, err := m.Resolve(path)
 	if err != nil {
 		return "", Root{}, false, err
@@ -191,10 +197,16 @@ func (m *Manager) check(path string, need Access) (string, Root, bool, error) {
 		}
 	}
 	for _, root := range m.Snapshot() {
-		if !rootAllows(root, need) {
+		if !rootAllows(root, need) || (directory && root.FileOnly) {
 			continue
 		}
-		if insideRoot(resolved, root.Path) {
+		if root.contains(resolved) {
+			if root.FileOnly {
+				info, err := os.Lstat(resolved)
+				if (err != nil && !os.IsNotExist(err)) || (err == nil && !info.Mode().IsRegular()) {
+					continue
+				}
+			}
 			return resolved, root, true, nil
 		}
 	}
@@ -236,15 +248,21 @@ func Resolve(path string) (string, error) {
 	return resolved, nil
 }
 
-func CandidateRoot(path string) (string, error) {
+func CandidateGrant(path string, access Access) (Root, error) {
 	resolved, err := Resolve(path)
 	if err != nil {
-		return "", err
+		return Root{}, err
 	}
 	if info, err := os.Stat(resolved); err == nil && info.IsDir() {
-		return resolved, nil
+		return Root{Path: resolved, Access: access}, nil
 	}
-	return filepath.Dir(resolved), nil
+	parent := filepath.Dir(resolved)
+	// A grant on the temp root would also be mounted into later shell calls,
+	// shadowing their private temp filesystem and nested workspaces.
+	if fs.IsTempRoot(parent) {
+		return Root{Path: resolved, Access: access, FileOnly: true}, nil
+	}
+	return Root{Path: parent, Access: access}, nil
 }
 
 func normalizeRoots(roots []Root) []Root {
@@ -261,8 +279,11 @@ func normalizeRoots(roots []Root) []Root {
 }
 
 func normalizeRoot(r Root) (Root, error) {
-	p := strings.TrimSpace(r.Path)
-	if p == "" {
+	p := r.Path
+	if !r.FileOnly {
+		p = strings.TrimSpace(p)
+	}
+	if strings.TrimSpace(p) == "" {
 		return Root{}, fmt.Errorf("workspace path is required")
 	}
 	p = expandHome(p)
@@ -270,7 +291,12 @@ func normalizeRoot(r Root) (Root, error) {
 	if err != nil {
 		return Root{}, err
 	}
-	if r.Canonical {
+	if r.FileOnly {
+		real, err := Resolve(abs)
+		if err != nil || real != filepath.Clean(abs) {
+			return Root{}, fmt.Errorf("file grant target changed")
+		}
+	} else if r.Canonical {
 		real, err := filepath.EvalSymlinks(abs)
 		if err != nil || filepath.Clean(real) != filepath.Clean(abs) {
 			return Root{}, fmt.Errorf("remembered workspace path changed")
@@ -298,7 +324,7 @@ func expandHome(p string) string {
 
 func upsertRoot(roots []Root, root Root) []Root {
 	for i, existing := range roots {
-		if existing.Path != root.Path {
+		if existing.Path != root.Path || existing.FileOnly != root.FileOnly {
 			continue
 		}
 		if rootAllows(root, AccessReadWrite) || !rootAllows(existing, AccessReadWrite) {
@@ -314,6 +340,13 @@ func rootAllows(root Root, need Access) bool {
 		return root.Access == AccessReadOnly || root.Access == AccessReadWrite
 	}
 	return root.Access == AccessReadWrite
+}
+
+func (r Root) contains(path string) bool {
+	if r.FileOnly {
+		return path == r.Path
+	}
+	return insideRoot(path, r.Path)
 }
 
 func insideRoot(path, root string) bool {

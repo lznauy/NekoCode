@@ -156,7 +156,7 @@ JS 每次调用都创建新的虚拟机，不能靠全局变量保存上一次�
 | `PreModel` | 请求模型前提供提示或检查 | 包括最终兜底合成请求；拒绝会结束当前 run |
 | `PreToolUse` | 检查工具名及参数 | 拒绝当前调用，结束决定会阻断尚未执行的整个批次 |
 | `PostToolUse` | 根据工具结果补充提示 | 包含成功、失败；已阻断工具不触发，不能撤销已发生的执行 |
-| `PostToolUseFailure` | 只处理工具失败 | 与 `PostToolUse` 共享内部触发点 |
+| `PostToolUseFailure` | 工具调用报错或进程以已知非零退出码结束；分别读取 `error` 和 `process.exit_code` | 与 `PostToolUse` 共享内部触发点 |
 | `PostToolBatch` | 查看一批工具的汇总结果 | `batch` 包含成功、失败和被阻断的调用 |
 | `PermissionRequest` | 记录即将交给用户的审批 | 仅观察；允许工具名 matcher，不能批准或拒绝 |
 | `PermissionDenied` | 记录用户或权限规则的明确拒绝 | `args.source` 区分 `user` 与 `rule`；仅观察 |

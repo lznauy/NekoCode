@@ -110,8 +110,8 @@ func TestConcurrentSubagentsUseLocalReadersWithoutRewiringTools(t *testing.T) {
 				t.Errorf("%s: %+v %v", name, result, err)
 				return
 			}
-			if !messagesContainText(llm.messages[0], id) {
-				t.Errorf("%s missing local projection", name)
+			if messagesContainText(llm.messages[0], id) {
+				t.Errorf("%s received unsolicited reference", name)
 			}
 			seen := map[string]refbridge.Page{}
 			for _, m := range llm.messages[2] {
@@ -185,8 +185,8 @@ func TestSubagentReferencesSurviveColdResumeAndCompactedHistory(t *testing.T) {
 	if err != nil || result.Status != StatusCompleted {
 		t.Fatalf("%+v %v", result, err)
 	}
-	if !messagesContainText(llm.messages[0], id.ID) {
-		t.Fatal("cold projection lost old reference")
+	if messagesContainText(llm.messages[0], id.ID) {
+		t.Fatal("cold resume injected old reference")
 	}
 	found := false
 	for _, m := range llm.messages[1] {
@@ -296,8 +296,8 @@ func TestEvidenceOnlySubagentsUseOwnConcurrentReadersWithoutContextProjection(t 
 			if messagesContainText(model.messages[0], `"kind":"context_references"`) {
 				t.Error("evidence-only profile gained context_refs projection")
 			}
-			if !messagesContainText(model.messages[0], `"kind":"evidence_references"`) || !messagesContainText(model.messages[0], `"session_id":"`+referenceScope(cfg)+`"`) {
-				t.Error("child model lacks its own automatic evidence projection")
+			if messagesContainText(model.messages[0], `"kind":"evidence_references"`) || messagesContainText(model.messages[0], `"session_id":"`+referenceScope(cfg)+`"`) {
+				t.Error("child model received unsolicited evidence metadata")
 			}
 			found := false
 			for _, m := range model.messages[1] {

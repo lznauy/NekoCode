@@ -234,6 +234,12 @@ function approvalReason(entry: ConfirmEntry): string {
   return reasons.join(' ') || '此操作需要你明确授权。'
 }
 
+function workspaceLabel(approval?: ApprovalContext) {
+  if (approval?.workspace_target === 'file') return '仅此文件'
+  if (approval?.workspace_target === 'directory') return '目录及其子项'
+  return '工作区'
+}
+
 function PermissionDetails({ entry, canRemember }: { entry: ConfirmEntry; canRemember: boolean }) {
   const approval = entry.approval
   const rows = [
@@ -241,9 +247,9 @@ function PermissionDetails({ entry, canRemember }: { entry: ConfirmEntry; canRem
     ['动态结构', friendlyShellStructures(approval?.structures)],
     ['能力', approval?.capabilities?.join('、') ?? ''],
     ['授权范围', approval?.scope === 'once' ? '仅本次' : approval?.scope === 'project' ? '当前项目' : approval?.scope ?? ''],
-    ['工作区', approval?.workspace ?? ''],
+    [workspaceLabel(approval), approval?.workspace ?? ''],
     ['网络域名', approval?.outbound_domains != null ? (approval.outbound_domains.join('、') || '禁止联网') : ''],
-    ['可写目录', approval?.write_paths?.join('、') ?? ''],
+    ['可写路径', approval?.write_paths?.join('、') ?? ''],
     ['命令类别', permissionText(entry, 'commandClass')],
     ['沙箱', approval?.sandbox ?? ''],
   ].filter(([, value]) => value)
@@ -284,7 +290,7 @@ function RememberPreview({ entry, canRemember }: { entry: ConfirmEntry; canRemem
     </div>)}
     {(approval?.approved_rules ?? []).map((rule, i) => <p key={`approved-${i}`} className="mt-1 break-all">已允许：{rule.literal || `${rule.tool}(${rule.specifier ?? ''})`}</p>)}
     {hasCapabilities && <p className="mt-2">同时记住所使用的目录和网络授权范围。</p>}
-    {workspaceRequest && <p className="mt-2 break-all">工作区访问：{approval?.workspace || String(entry.args.path ?? '')}（{String(entry.args.access ?? '')}）</p>}
+    {workspaceRequest && <p className="mt-2 break-all">{workspaceLabel(approval)}：{approval?.workspace || String(entry.args.path ?? '')}（{String(entry.args.access ?? '')}）</p>}
     {!rules.length && !hasCapabilities && !workspaceRequest && <p className="mt-1 text-text-3">未提供规则预览，建议仅本次允许。</p>}
     <p className="mt-2 text-text-3">仅本次允许不保存规则；已有询问、拒绝规则和风险检查仍生效。</p>
   </div>

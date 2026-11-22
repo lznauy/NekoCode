@@ -193,7 +193,7 @@ for line in proc.stdout:                       # 每行一个 JSON 帧
 | `user` | `message.content` | `tool_result`（与 `tool_use` 使用同一 `tool_use_id`） |
 | `stream_event` | `content_block_start/delta/stop` | 仅 `--include-partial-messages` 时输出，**合成**增量块 |
 | `subagent` | `text_delta` / `reasoning_delta` / `message` | `event` 区分输出类型；携带 `subagent_id`，增量仅在开启 partial messages 时发送 |
-| `result` | `success` / `error_during_execution` / `error_cancelled` / `error_step_limit` / `error_incomplete` | 每轮恰好一条；含 `is_error`、`result`、`duration_ms`、可选 `errors`、`nekocode_usage` |
+| `result` | `success` / `error_during_execution` / `error_cancelled` / `error_call_budget` / `error_step_limit` / `error_incomplete` | 每轮恰好一条；含 `is_error`、`result`、`duration_ms`、可选 `errors`、`nekocode_usage` |
 | `control_request` | `can_use_tool` / `nekocode_question` | 反向请求，必须用 `control_response` 作答 |
 | `control_response` | — | 对宿主 `control_request` 的应答 |
 | `control_cancel_request` | — | 审批/提问因运行取消或 EOF 作废 |

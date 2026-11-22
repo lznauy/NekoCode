@@ -17,6 +17,7 @@ import (
 	"nekocode/bot/extension/tool/runtime/taskbridge"
 	"nekocode/bot/extension/tool/runtime/toolutil"
 	workspacectx "nekocode/bot/extension/tool/runtime/workspace"
+	"nekocode/protocol"
 )
 
 const (
@@ -174,6 +175,7 @@ func (t *ShellTool) run(ctx context.Context, args map[string]any, grant core.Per
 		owner:       t.CurrentSessionID(),
 		actor:       taskbridge.TaskIDFromCtx(ctx),
 		command:     command,
+		testName:    protocol.GoalTestForCommand(ctx, command),
 		directory:   workspace,
 		profile:     profile,
 		host:        host,

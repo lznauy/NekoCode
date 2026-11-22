@@ -8,6 +8,34 @@ import (
 	"testing"
 )
 
+func TestAllowOutputFileThroughDirectoryAlias(t *testing.T) {
+	m := New(t.TempDir(), nil)
+	dir := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "outputs")
+	if err := os.Symlink(dir, alias); err != nil {
+		t.Skipf("directory symlinks unavailable: %v", err)
+	}
+	file := filepath.Join(dir, "result")
+	if err := os.WriteFile(file, []byte("output"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.AllowOutputFile(filepath.Join(alias, "result")); err != nil {
+		t.Fatal(err)
+	}
+	if _, grant, ok, err := m.CheckRead(file); err != nil || !ok || !grant.FileOnly || grant.Access != AccessReadOnly {
+		t.Fatalf("unexpected output grant %+v, allowed=%t, err=%v", grant, ok, err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(file, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{link, dir, filepath.Join(dir, "missing")} {
+		if err := m.AllowOutputFile(path); err == nil {
+			t.Errorf("accepted non-regular output path %q", path)
+		}
+	}
+}
+
 func TestPermanentRootApprovalSurvivesSessionSwitch(t *testing.T) {
 	for _, permanent := range []bool{false, true} {
 		m := New(t.TempDir(), nil)
@@ -123,5 +151,46 @@ func TestParallelRootApprovalsInSameSessionRemainUsable(t *testing.T) {
 		if _, _, allowed, err := m.CheckWrite(filepath.Join(root, "file.txt")); err != nil || !allowed {
 			t.Fatalf("parallel approval missing: allowed=%t err=%v", allowed, err)
 		}
+	}
+}
+
+func TestFileGrantMatchesOnlyTheApprovedFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TMPDIR", dir)
+	path := filepath.Join(dir, "item ")
+	if err := os.WriteFile(path, []byte("data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	grant, err := CandidateGrant(path, AccessReadWrite)
+	if err != nil || !grant.FileOnly {
+		t.Fatalf("grant=%+v err=%v", grant, err)
+	}
+	m := New(t.TempDir(), nil)
+	approval, err := m.PrepareGrant(grant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = m.CommitRootApproval(approval, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok, err := m.CheckRead(path); !ok || err != nil {
+		t.Fatalf("file: %v %v", ok, err)
+	}
+	if _, _, allowed, err := m.CheckWrite(filepath.Join(dir, "item")); err != nil || allowed {
+		t.Fatalf("granted a different filename: allowed=%t err=%v", allowed, err)
+	}
+	if err = os.Rename(path, path+".old"); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range []string{path, filepath.Join(path, "child")} {
+		if _, _, ok, err := m.CheckWrite(candidate); ok || err != nil {
+			t.Fatalf("directory access for %s: %v %v", candidate, ok, err)
+		}
+	}
+	if _, _, ok, _ := m.CheckReadLexical(filepath.Join(path, "child")); ok {
+		t.Fatal("lexical access exceeded file grant")
 	}
 }

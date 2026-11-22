@@ -181,3 +181,37 @@ func TestTempHintForMissingCrossCallInput(t *testing.T) {
 		}
 	}
 }
+
+func TestWaitReadyPreservesOutputAndExitResult(t *testing.T) {
+	shell := testShellTool()
+	shell.SetSessionID("owner")
+	process := NewProcessTool(shell)
+	task := &shellTask{name: "build", owner: "owner", status: taskRunning, done: make(chan struct{}), drained: make(chan struct{}), changed: make(chan struct{}, 1)}
+	shell.registryOnce().tasks[reservationKey(task.owner, task.name)] = task
+	wait := map[string]any{"action": "wait", "task": "build"}
+	watch := map[string]any{"action": " WATCH ", "event": " OUTPUT ", "task": " build "}
+	watchExit := map[string]any{"action": "watch", "event": "exit", "task": "build"}
+	if process.WaitReady(wait) || process.WaitReady(watch) {
+		t.Fatal("silent running process appeared ready")
+	}
+	task.appendLogs([]byte("new output"))
+	if process.WaitReady(wait) || process.WaitReady(watchExit) {
+		t.Fatal("new output cannot satisfy a wait for exit")
+	}
+	if !process.WaitReady(watch) || !process.WaitReady(watch) {
+		t.Fatal("readiness probe consumed the output")
+	}
+	output, err := process.Execute(t.Context(), watch)
+	if err != nil || output.Process.Reason != "output" || !strings.Contains(output.Text, "new output") || process.WaitReady(watch) {
+		t.Fatalf("watch: %+v %v", output, err)
+	}
+	task.markEnded(taskExited, 1)
+	close(task.drained)
+	if !process.WaitReady(wait) || !process.WaitReady(watch) || !process.WaitReady(watchExit) {
+		t.Fatal("completed process was deferred")
+	}
+	output, err = process.Execute(t.Context(), wait)
+	if err != nil || !output.Process.ExitCodeKnown || output.Process.ExitCode != 1 {
+		t.Fatalf("lost exit result: %+v %v", output, err)
+	}
+}

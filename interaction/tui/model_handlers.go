@@ -395,6 +395,7 @@ func (m *Model) handleProcessingKey(msg tea.KeyPressMsg) tea.Cmd {
 				m.notifyImageDraftPreserved("命令已提交；图片未发送，草稿已保留。")
 			} else {
 				m.Input.Reset()
+				m.Input.SetSending(m.state == stateProcessing)
 			}
 		}
 	case "esc":
@@ -785,6 +786,12 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) (cmd tea.Cmd) {
 		m.resizeMessages()
 	}
 	switch ev.Type {
+	case controlruntime.EventRunDone, controlruntime.EventRunCancelled, controlruntime.EventRunFailed:
+		m.finishQueuedInput(ev)
+		wait := m.waitQueuedTurn(ev.RunID)
+		defer func() { cmd = tea.Batch(cmd, wait) }()
+	}
+	switch ev.Type {
 	case controlruntime.EventInteractionModeChanged:
 		m.modePicker = false
 		if m.sessionName == nil {
@@ -799,15 +806,12 @@ func (m *Model) handleRuntimeEvent(ev controlruntime.Event) (cmd tea.Cmd) {
 	case controlruntime.EventInputAccepted:
 		m.sessionHistoryDirty = true
 		if p, ok := ev.Payload.(controlruntime.MessagePayload); ok {
+			if !p.Steering && p.Source.Kind == "tui" && m.queue.awaitingRun == ev.RunID {
+				m.queue.awaiting = nil
+				m.queue.awaitingRun = ""
+			}
 			m.showRunMode(p)
 			m.turnInput = p.Content
-			if p.Source.Kind == "tui" {
-				if len(p.Images) > 0 || len(m.Input.ImageAttachments()) == 0 {
-					m.Input.Reset()
-				} else {
-					m.notifyImageDraftPreserved("命令已执行；图片未发送，草稿已保留。")
-				}
-			}
 			title := ""
 			if p.Source.Kind != "" && p.Source.Kind != "tui" {
 				title = "You · " + p.Source.Kind

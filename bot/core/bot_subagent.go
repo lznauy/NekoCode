@@ -22,6 +22,7 @@ import (
 	"nekocode/bot/worktree"
 	interactionmode "nekocode/mode"
 	"nekocode/protocol"
+	"nekocode/util/modelbudget"
 	"time"
 )
 
@@ -80,7 +81,7 @@ func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provi
 		if err != nil {
 			return nil, err
 		}
-		profile, err = resolveTaskStepBudget(profile, spec, 0)
+		profile, err = resolveTaskStepBudget(profile, spec, 0, modelbudget.ParallelStepLimit(ctx))
 		if err != nil {
 			return nil, err
 		}
@@ -133,6 +134,10 @@ func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provi
 			contextSnapshot := snapshot.ContextSnapshot()
 			restored = &contextSnapshot
 		}
+		skillNames, skillContents, err := b.delegatedSkills(append(profile.Skills, spec.Skills...))
+		if err != nil {
+			return nil, err
+		}
 		runRegistry := registry
 		var isolated *catalog.Toolbox
 		var workInfo worktree.Info
@@ -174,10 +179,6 @@ func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provi
 		engine := subagent.New(subagent.Config{
 			LLM: subLLM, Tools: runRegistry, CompactionModel: compactionModel,
 		})
-		skillNames, skillContents, err := b.delegatedSkills(append(profile.Skills, spec.Skills...))
-		if err != nil {
-			return nil, err
-		}
 		if err := child.Begin(profile.Name, spec.Prompt, skillNames, spec.Title); err != nil {
 			return nil, err
 		}
@@ -186,12 +187,10 @@ func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provi
 			return nil, fmt.Errorf("subagent attempt was not initialized")
 		}
 		cfg := buildSubagentRunConfig(ctx, spec, profile, skillContents, effectiveModelWindow(selectedModel), autoCompactPercent, ag, parentID, b.environment, attempt.ID, attempt.Seq)
+		cfg.ForegroundInterval = subagent.DefaultForegroundInterval
 		cfg.SkillNames = skillNames
 		if isolated != nil {
-			if err := child.SetWorkspaceKind("head"); err != nil {
-				return nil, err
-			}
-			if err := child.SetWorkspaceBaseline(workInfo.Base, workInfo.SourceHead); err != nil {
+			if err := child.PrepareHeadWorkspace(workInfo.Base, workInfo.SourceHead); err != nil {
 				return nil, err
 			}
 			cfg.IsolatedWorkspace = true
@@ -251,7 +250,7 @@ func (b *Bot) wireTaskTool(parentModel config.ModelConfig, compactionModel provi
 			if err != nil || result == nil || result.Status == subagent.StatusFailed {
 				status = "failed"
 			}
-			if ctx.Err() != nil || result != nil && result.Summary.StopReason == "cancelled" {
+			if (result == nil && ctx.Err() != nil) || (result != nil && result.Summary.StopReason == "cancelled") {
 				status = "interrupted"
 			}
 			ag.Governance().Observe(cleanup, policy.SubagentStop, policy.Facts{ActorID: id, Tool: policy.ToolFacts{Args: map[string]any{"profile": profile.Name, "attempt_id": attempt.ID, "status": status}}})

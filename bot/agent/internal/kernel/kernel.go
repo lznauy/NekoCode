@@ -120,10 +120,12 @@ func (l *Lifecycle) ResetContextIfCanceled() {
 	}
 }
 
-// Cancel aborts the current context.
-func (l *Lifecycle) Cancel() {
+// Abort publishes cancellation before marking the loop finished. A normally
+// finished loop may still be synthesizing a report on a live context.
+func (l *Lifecycle) Abort() {
 	l.mu.Lock()
 	l.cancelFn()
+	l.finished.Store(true)
 	l.mu.Unlock()
 }
 

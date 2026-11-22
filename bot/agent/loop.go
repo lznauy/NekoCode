@@ -7,12 +7,12 @@ import (
 
 	"github.com/google/uuid"
 	"nekocode/bot/agent/internal/kernel"
-	"nekocode/bot/agent/internal/llmstream"
 	"nekocode/bot/contextmgr"
 	"nekocode/bot/policy"
 	"nekocode/bot/provider/types"
 	"nekocode/logger"
 	"nekocode/protocol"
+	"nekocode/util/modelbudget"
 )
 
 // maxAgentSteps is the hard ceiling on agent loop iterations. Prevents
@@ -24,10 +24,6 @@ const maxAgentSteps = 150
 // injections without any intervening tool calls. Beyond this the agent
 // is stuck in a text-only loop and should stop.
 const maxConsecutiveHints = 3
-
-// maxConsecutiveFailures is the maximum number of consecutive LLM call
-// failures (after retries). Beyond this the LLM is likely broken.
-const maxConsecutiveFailures = 5
 
 const msgInterrupted = "Interrupted"
 
@@ -59,8 +55,13 @@ func (r *loopRunner) runContext(ctx context.Context, input string, images []type
 	a.life.SetValues(ctx)
 	defer a.life.SetValues(nil)
 	beforeRun := a.deps.ctxMgr.Snapshot()
-	r.startRun(input, images)
+	err := r.startRun(input, images)
 	defer a.life.StopTiming()
+	if err != nil {
+		result := &RunResult{Error: err}
+		r.publishSummary(result, callback)
+		return result
+	}
 	// Reset in startRun replaces canceled lifecycle contexts. Install the
 	// watcher afterwards so startup can never erase this run's cancellation.
 	finished, watchDone := make(chan struct{}), make(chan struct{})
@@ -117,12 +118,12 @@ const interruptedMarker = "The user interrupted the previous run. The tool calls
 // active context can still contain a new turn and its tool side effects.
 func (r *loopRunner) settleTurnHistory(before contextmgr.ManagerSnapshot, result *RunResult) {
 	manager := r.agent.deps.ctxMgr
-	after := manager.Snapshot()
+	base, end, assistant := manager.TranscriptPosition()
 	start := before.TranscriptBase + len(before.Transcript)
-	if after.TranscriptBase+len(after.Transcript) <= start {
+	if end <= start {
 		return
 	}
-	if after.LastAssistantSequence > start {
+	if assistant > start {
 		if result.Interrupted {
 			manager.Add("user", interruptedMarker, types.MessageSourceHint)
 		}
@@ -130,10 +131,10 @@ func (r *loopRunner) settleTurnHistory(before contextmgr.ManagerSnapshot, result
 	}
 	// Pre-compaction backup can already have committed some or all of the
 	// transcript. Roll back working context without rewriting durable records.
-	if after.TranscriptBase > before.TranscriptBase {
-		acknowledged := min(after.TranscriptBase-before.TranscriptBase, len(before.Transcript))
+	if base > before.TranscriptBase {
+		acknowledged := min(base-before.TranscriptBase, len(before.Transcript))
 		before.Transcript = before.Transcript[acknowledged:]
-		before.TranscriptBase = after.TranscriptBase
+		before.TranscriptBase = base
 		before.TranscriptLazy = true
 	}
 	manager.Restore(before)
@@ -141,7 +142,6 @@ func (r *loopRunner) settleTurnHistory(before contextmgr.ManagerSnapshot, result
 
 func (r *loopRunner) runTurn(input string, callback RunCallback) (finished bool) {
 	a := r.agent
-	msgCountBefore := a.deps.ctxMgr.Len()
 
 	a.applyTurnHints(nil)
 	defer a.deps.ctxMgr.SetHints("")
@@ -151,7 +151,7 @@ func (r *loopRunner) runTurn(input string, callback RunCallback) (finished bool)
 	}
 
 	reasoning := a.modelRunner.reason(input)
-	if a.turnRunner.retryAfterInterruptedReasoning(reasoning, msgCountBefore) {
+	if a.turnRunner.retryAfterInterruptedReasoning(reasoning) {
 		return false
 	}
 	if a.run.stopReason == policy.StopInterrupted {
@@ -162,6 +162,18 @@ func (r *loopRunner) runTurn(input string, callback RunCallback) (finished bool)
 		return true
 	}
 
+	if reasoning.Action == actionEmptyResponse {
+		a.clearFinalState()
+		if a.run.hasToolResults {
+			// finishRun will summarize the tool results without running more tools.
+			a.run.partialCloseout = true
+			a.run.step++
+		} else {
+			a.run.err = fmt.Errorf("%w: model returned no visible text or tool calls", protocol.ErrIncompleteResponse)
+		}
+		return true
+	}
+
 	if len(reasoning.ToolCalls) > 0 {
 		return a.turnRunner.handleToolCalls(reasoning.ToolCalls, reasoning, callback)
 	}
@@ -169,9 +181,18 @@ func (r *loopRunner) runTurn(input string, callback RunCallback) (finished bool)
 	return a.turnRunner.handleText(reasoning, callback)
 }
 
-func (r *loopRunner) startRun(input string, images []types.MessageImage) {
+func (r *loopRunner) startRun(input string, images []types.MessageImage) error {
 	a := r.agent
 	a.Reset()
+	runtimeInput := protocol.CoordinationFromContext(a.getCtx()).Notification || protocol.IsGoalContinuation(a.getCtx())
+	preservationInput := input
+	if runtimeInput {
+		preservationInput = ""
+	}
+	if goal, ok := a.getCtx().Value(goalPreservationKey{}).(*GoalPreservation); ok {
+		a.run.preserved = goal.Files
+		preservationInput = goal.Criteria + "\n" + preservationInput
+	}
 	a.run.identity = protocol.ExecutionFromContext(a.life.Context())
 	if a.run.identity.RunID == "" {
 		a.run.identity.RunID = uuid.NewString()
@@ -180,18 +201,17 @@ func (r *loopRunner) startRun(input string, images []types.MessageImage) {
 	if group == "" {
 		group = a.run.identity.RunID
 	}
+	if err := a.capturePreservedFiles(preservationInput); err != nil {
+		return err
+	}
 	a.deps.ctxMgr.SelectTodoGroup(group)
 	a.deps.ctxMgr.BeginModelTurn()
-	// AddUser is exactly Add("user", input, "user") when images is empty,
-	// so the single path covers both.
-	if protocol.CoordinationFromContext(a.getCtx()).Notification || protocol.IsGoalContinuation(a.getCtx()) {
+	if runtimeInput {
 		a.deps.ctxMgr.Add("user", input, types.MessageSourceRuntimeEvent)
 	} else {
 		a.deps.ctxMgr.AddUser(input, images)
-		if a.deps.toolRegistry != nil {
-			a.run.preserved = a.capturePreservedFiles(input)
-		}
 	}
+	return nil
 }
 
 func (r *loopRunner) applyUserSubmitHooks() {
@@ -229,12 +249,14 @@ func (r *loopRunner) publishSummary(result *RunResult, callback RunCallback) {
 	if r.stepLimitHit {
 		reason = "step_limit"
 	}
-	if a := r.agent; a.run.todoPartialCloseout {
+	if a := r.agent; a.run.partialCloseout {
 		reason = "incomplete"
 	}
 	if result.Error != nil {
 		reason = "execution_error"
-		if errors.Is(result.Error, llmstream.ErrIncompleteResponse) {
+		if protocol.OnlyFailure(result.Error, modelbudget.ErrExhausted) {
+			reason = "call_budget"
+		} else if protocol.OnlyIncompleteResponse(result.Error) {
 			reason = "incomplete"
 		}
 	}

@@ -34,3 +34,17 @@ func CanonicalPath(path string) (string, error) {
 		missing = append(missing, filepath.Base(candidate))
 	}
 }
+
+// IsTempRoot recognizes the system and process temp directories and their
+// canonical names (for example /tmp and /private/tmp on macOS).
+func IsTempRoot(path string) bool {
+	for _, dir := range []string{"/tmp", os.TempDir()} {
+		if path == dir {
+			return true
+		}
+		if real, err := filepath.EvalSymlinks(dir); err == nil && path == real {
+			return true
+		}
+	}
+	return false
+}

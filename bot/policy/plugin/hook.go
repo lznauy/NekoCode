@@ -18,7 +18,7 @@ func makePluginHook(point Point, eventType, pluginRoot string, eh eventHook, req
 			if !matcher.MatchString(e.Tool) {
 				return nil
 			}
-			if requireError && !e.Error {
+			if requireError && !e.Error && !e.Process.FailedExit() {
 				return nil
 			}
 			result := runPluginActions(pluginRoot, eventType, e, eh.Hooks)

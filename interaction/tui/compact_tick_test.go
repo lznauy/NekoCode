@@ -25,6 +25,12 @@ func (b *tickFakeBot) StartRun(_ context.Context, input controlruntime.Input) (c
 	b.mu.Unlock()
 	return "", nil
 }
+func (b *tickFakeBot) StartRunIfCurrent(ctx context.Context, session string, input controlruntime.Input) (controlruntime.RunID, error) {
+	if session != b.CurrentSessionID() {
+		return "", fmt.Errorf("queued session changed")
+	}
+	return b.StartRun(ctx, input)
+}
 func (*tickFakeBot) SteerRun(context.Context, controlruntime.RunID, controlruntime.Input) error {
 	return nil
 }

@@ -228,6 +228,7 @@ func (m *Manager) writeCompactionCall(ctx context.Context, client provider.LLM, 
 		meta = &value
 	}
 	rec.SetOutcome(usage, meta, callErr)
+	modelbudget.FromContext(ctx).ObserveTokens(rec.TotalTokens, *rec.UsageReported)
 	writeCompactionRecord(rec)
 }
 

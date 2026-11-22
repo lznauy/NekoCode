@@ -257,3 +257,35 @@ func TestCodecWriteFailureInterruptsInput(t *testing.T) {
 type errorWriter struct{}
 
 func (errorWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestExpiredPermissionQueuedBehindBlockedWriterIsDiscarded(t *testing.T) {
+	var wire bytes.Buffer
+	c := newConnection(&wire)
+	c.writeQ = make(chan outboundMessage, 2)
+	c.stopQ = make(chan struct{})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- c.request(ctx, "session/request_permission", struct{}{}, nil) }()
+	queued := <-c.writeQ
+	cancel()
+	select {
+	case err := <-result:
+		if err != context.Canceled {
+			t.Fatalf("request error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled request waited for its queued write")
+	}
+	c.writeQ <- queued
+	drained := make(chan error, 1)
+	c.writeQ <- outboundMessage{done: drained}
+	go c.writeLoop()
+	defer close(c.stopQ)
+	if err := <-drained; err != nil {
+		t.Fatal(err)
+	}
+	if wire.Len() != 0 {
+		t.Fatalf("sent stale request: %s", wire.Bytes())
+	}
+}

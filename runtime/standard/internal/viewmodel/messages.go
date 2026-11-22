@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 
+	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/provider/types"
 	controlruntime "nekocode/runtime"
 	textutil "nekocode/util/text"
@@ -204,10 +205,17 @@ func displayAssistantTurn(msgs []types.Message, idx int, toolNames, toolArgs map
 
 func appendDisplayToolResult(blocks []controlruntime.DisplayBlock, images []controlruntime.ImageRef, name, args string, msg types.Message) ([]controlruntime.DisplayBlock, []controlruntime.ImageRef) {
 	if isPersistentTool(name) {
+		text := msg.Content
+		if name == "task_batch" && msg.ToolOutput.Path != "" {
+			header := core.ArtifactHeader(msg.ToolOutput)
+			if !strings.HasPrefix(text, header) {
+				text = header + text
+			}
+		}
 		blocks = append(blocks, controlruntime.DisplayBlock{
 			ToolName: name,
 			Args:     args,
-			Content:  textutil.NormalizeTerminalOutput(msg.Content),
+			Content:  textutil.NormalizeTerminalOutput(text),
 			IsError:  msg.IsError,
 		})
 	}
@@ -218,7 +226,7 @@ func appendDisplayToolResult(blocks []controlruntime.DisplayBlock, images []cont
 }
 
 func isPersistentTool(name string) bool {
-	return name == "edit" || name == "diff" || name == "write" || name == "shell" || name == "bash" || name == "process"
+	return name == "task_batch" || name == "edit" || name == "diff" || name == "write" || name == "shell" || name == "bash" || name == "process"
 }
 
 func isImageTool(name string) bool {

@@ -203,8 +203,55 @@ func (s *SubagentSession) SetIsolation(mode string) error {
 	return nil
 }
 
+// PrepareHeadWorkspace stages foreground worktree metadata for the first engine
+// checkpoint. A rejected resume must leave the previous committed attempt intact.
+func (s *SubagentSession) PrepareHeadWorkspace(base, head string) error {
+	if err := s.validateWorkspaceKind("head"); err != nil {
+		return err
+	}
+	if err := s.validateWorkspaceBaseline("head", base, head); err != nil {
+		return err
+	}
+	meta := s.snapshot.Subagent
+	meta.WorkspaceKind, meta.WorkspaceBase, meta.SourceHead = "head", base, head
+	return nil
+}
+
 // SetWorkspaceKind records how the private workspace was constructed.
 func (s *SubagentSession) SetWorkspaceKind(kind string) error {
+	if err := s.validateWorkspaceKind(kind); err != nil {
+		return err
+	}
+	meta := s.snapshot.Subagent
+	previous := meta.WorkspaceKind
+	meta.WorkspaceKind = kind
+	if err := s.snapshot.saveAt(s.root); err != nil {
+		meta.WorkspaceKind = previous
+		return err
+	}
+	return nil
+}
+
+// SetWorkspaceBaseline records immutable Git content identities, never file times.
+// These are observational references; they do not authorize worktree operations.
+func (s *SubagentSession) SetWorkspaceBaseline(base, head string) error {
+	if s.lock == nil || s.snapshot == nil || s.snapshot.Subagent == nil {
+		return fmt.Errorf("subagent is not open")
+	}
+	meta := s.snapshot.Subagent
+	if err := s.validateWorkspaceBaseline(meta.WorkspaceKind, base, head); err != nil {
+		return err
+	}
+	oldBase, oldHead := meta.WorkspaceBase, meta.SourceHead
+	meta.WorkspaceBase, meta.SourceHead = base, head
+	if err := s.snapshot.saveAt(s.root); err != nil {
+		meta.WorkspaceBase, meta.SourceHead = oldBase, oldHead
+		return err
+	}
+	return nil
+}
+
+func (s *SubagentSession) validateWorkspaceKind(kind string) error {
 	if s.lock == nil || s.snapshot == nil || s.snapshot.Subagent == nil {
 		return fmt.Errorf("subagent is not open")
 	}
@@ -218,21 +265,10 @@ func (s *SubagentSession) SetWorkspaceKind(kind string) error {
 	if meta.RunCount > 0 && meta.WorkspaceKind != "" && meta.WorkspaceKind != kind {
 		return fmt.Errorf("cannot change workspace kind on resume")
 	}
-	previous := meta.WorkspaceKind
-	meta.WorkspaceKind = kind
-	if err := s.snapshot.saveAt(s.root); err != nil {
-		meta.WorkspaceKind = previous
-		return err
-	}
 	return nil
 }
 
-// SetWorkspaceBaseline records immutable Git content identities, never file times.
-// These are observational references; they do not authorize worktree operations.
-func (s *SubagentSession) SetWorkspaceBaseline(base, head string) error {
-	if s.lock == nil || s.snapshot.Subagent == nil {
-		return fmt.Errorf("subagent is not open")
-	}
+func (s *SubagentSession) validateWorkspaceBaseline(kind, base, head string) error {
 	valid := func(id string) bool {
 		if len(id) != 40 && len(id) != 64 {
 			return false
@@ -244,7 +280,7 @@ func (s *SubagentSession) SetWorkspaceBaseline(base, head string) error {
 		}
 		return true
 	}
-	if !valid(base) || (head != "" && !valid(head)) || (s.snapshot.Subagent.WorkspaceKind == "snapshot" && head == "") {
+	if !valid(base) || (head != "" && !valid(head)) || (kind == "snapshot" && head == "") {
 		return fmt.Errorf("invalid workspace baseline object ID")
 	}
 	meta := s.snapshot.Subagent
@@ -253,12 +289,6 @@ func (s *SubagentSession) SetWorkspaceBaseline(base, head string) error {
 	}
 	if meta.WorkspaceBase != "" && (meta.WorkspaceBase != base || meta.SourceHead != head) {
 		return fmt.Errorf("cannot change workspace baseline on resume")
-	}
-	oldBase, oldHead := meta.WorkspaceBase, meta.SourceHead
-	meta.WorkspaceBase, meta.SourceHead = base, head
-	if err := s.snapshot.saveAt(s.root); err != nil {
-		meta.WorkspaceBase, meta.SourceHead = oldBase, oldHead
-		return err
 	}
 	return nil
 }

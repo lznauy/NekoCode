@@ -21,6 +21,13 @@ func (b *busyWindowRuntime) StartRun(ctx context.Context, input controlruntime.I
 	return b.tickFakeBot.StartRun(ctx, input)
 }
 
+func (b *busyWindowRuntime) StartRunIfCurrent(ctx context.Context, session string, input controlruntime.Input) (controlruntime.RunID, error) {
+	if session != b.CurrentSessionID() {
+		return "", errors.New("queued session changed")
+	}
+	return b.StartRun(ctx, input)
+}
+
 func TestPendingChatWaitsForRunThatStartsDuringHistoryLoad(t *testing.T) {
 	b := &busyWindowRuntime{}
 	m, err := NewModel(b)

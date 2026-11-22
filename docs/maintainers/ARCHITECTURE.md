@@ -356,7 +356,7 @@ Run() 主循环 → runTurn(state)
 Agent 循环硬限制：
 - `maxAgentSteps = 150`：最大迭代步数
 - `maxConsecutiveHints = 3`：连续纯文本提示上限
-- `maxConsecutiveFailures = 5`：连续 LLM 调用失败上限
+- 普通模型调用重试后仍失败时，当前运行返回该错误。
 - `maxFinalCheckHints = 2`：最终检查重试上限
 
 ### Agent 相关包结构

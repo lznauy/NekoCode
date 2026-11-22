@@ -50,6 +50,7 @@ type RegistrationOptions struct {
 	PlanAllowed        bool
 	CoordinatorAllowed bool
 	CoordinatorOnly    bool // Hide and reject outside the coordination tool policy.
+	StandardOnly       bool // Hide and reject outside the standard tool policy.
 	DelegationAllowed  bool
 }
 
@@ -63,6 +64,7 @@ type Entry struct {
 	PlanAllowed        bool
 	CoordinatorAllowed bool
 	CoordinatorOnly    bool
+	StandardOnly       bool
 	DelegationAllowed  bool
 }
 
@@ -89,7 +91,7 @@ func (r *Registry) RegisterWithOptions(item core.Tool, options RegistrationOptio
 	r.items.Register(Entry{
 		Tool: item, ResolveTarget: options.ResolveTarget, Preview: options.Preview,
 		Privileged: options.Privileged, PermissionPlan: options.PermissionPlan,
-		PlanAllowed: options.PlanAllowed, CoordinatorAllowed: options.CoordinatorAllowed, CoordinatorOnly: options.CoordinatorOnly, DelegationAllowed: options.DelegationAllowed,
+		PlanAllowed: options.PlanAllowed, CoordinatorAllowed: options.CoordinatorAllowed, CoordinatorOnly: options.CoordinatorOnly, StandardOnly: options.StandardOnly, DelegationAllowed: options.DelegationAllowed,
 	})
 }
 

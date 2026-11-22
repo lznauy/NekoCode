@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"nekocode/interaction"
 	"nekocode/interaction/tui/styles"
 	"nekocode/protocol"
 	controlruntime "nekocode/runtime"
@@ -397,7 +398,7 @@ func (c *ConfirmBar) formatPermissionFields(includeCommand bool) string {
 		lines = append(lines, "范围: "+friendlyPermissionScope(string(approval.Scope)))
 	}
 	if approval.Workspace != "" {
-		lines = append(lines, "工作区: "+approval.Workspace)
+		lines = append(lines, interaction.WorkspaceApprovalLabel(approval.WorkspaceTarget)+": "+approval.Workspace)
 	}
 	if approval.OutboundDomains != nil {
 		domains := strings.Join(approval.OutboundDomains, "、")
@@ -407,7 +408,7 @@ func (c *ConfirmBar) formatPermissionFields(includeCommand bool) string {
 		lines = append(lines, "网络域名: "+domains)
 	}
 	if len(approval.WritePaths) > 0 {
-		lines = append(lines, "可写目录: "+strings.Join(approval.WritePaths, "、"))
+		lines = append(lines, "可写路径: "+strings.Join(approval.WritePaths, "、"))
 	}
 	// Decisions come first: what the user has to decide is the only part that
 	// changes the outcome. Reusable grants are grouped behind it as context.

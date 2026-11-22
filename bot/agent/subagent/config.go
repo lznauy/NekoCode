@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	ctxmgr "nekocode/bot/contextmgr"
+	"time"
 
 	"nekocode/bot/extension/agentprofile"
 	"nekocode/bot/extension/tool/runtime/execution"
@@ -57,6 +58,9 @@ type OutputEvent struct {
 // version on inspect, without changing the selected workflow or tool ceiling.
 type RunConfig struct {
 	finalizing bool
+	// ForegroundInterval bounds one synchronous attempt. Background workers have
+	// their own coordinator and leave this zero.
+	ForegroundInterval time.Duration
 	// PendingUpdates is read only between model turns, never during a tool call.
 	PendingUpdates func(func([]protocol.BackgroundUpdate) error) error
 	// ResumeContext restores a task; persistence remains owned by the assembly layer.

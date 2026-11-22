@@ -66,8 +66,8 @@ func (r *turnRunner) continueUnfinishedPlan() bool {
 	completed := protocol.CountCompleted(todos)
 	if completed > a.run.todoCompleted {
 		a.run.todoCompletionChecks = 0
+		a.run.todoCompleted = completed
 	}
-	a.run.todoCompleted = completed
 	var remaining []string
 	for _, item := range todos {
 		if protocol.TodoActionable(item) {
@@ -81,7 +81,7 @@ func (r *turnRunner) continueUnfinishedPlan() bool {
 	// follow the plan must surface the unfinished work instead of looping or
 	// losing the answer it was trying to deliver.
 	if a.run.todoCompletionChecks >= 3 {
-		a.run.todoPartialCloseout = true
+		a.run.partialCloseout = true
 		return false
 	}
 	a.stream.discardText()
@@ -108,7 +108,7 @@ func (r *turnRunner) todoDispositionSummary(includeOpen bool) string {
 		label := ""
 		switch item.Status {
 		case "pending", "in_progress":
-			if includeOpen || a.run.todoPartialCloseout {
+			if includeOpen || a.run.partialCloseout {
 				label = "未完成"
 			}
 		case "blocked":

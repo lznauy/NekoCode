@@ -1,6 +1,9 @@
 package policy
 
-import "nekocode/bot/policy/contract"
+import (
+	"nekocode/bot/policy/contract"
+	"nekocode/protocol"
+)
 
 // ToolRequest describes a tool before execution. TargetExists is supplied by
 // the tool runtime because path resolution belongs to the tool layer.
@@ -41,6 +44,7 @@ type ToolFacts struct {
 	Args          map[string]any
 	Error         bool
 	Output        string
+	Process       protocol.ProcessObservation `json:"process,omitzero"`
 	ErrorMessage  string
 	TargetPath    string
 	TargetExists  bool

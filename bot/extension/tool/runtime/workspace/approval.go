@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 )
 
@@ -16,6 +17,25 @@ type RootApproval struct {
 
 func (a RootApproval) Root() Root { return a.root }
 
+// AllowOutputFile makes one generated regular file readable in the current
+// session. The output directory can use a platform alias such as /var on macOS.
+func (m *Manager) AllowOutputFile(path string) error {
+	path = m.anchor(path)
+	dir, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	grant, err := m.PrepareGrant(Root{Path: filepath.Join(dir, filepath.Base(path)), Access: AccessReadOnly, FileOnly: true})
+	if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(grant.root.Path); err != nil {
+		return err
+	}
+	_, err = m.CommitRootApproval(grant, nil)
+	return err
+}
+
 // ApprovalRevision changes when configuration or session identity changes,
 // including a switch away and back, but not for parallel additive grants.
 func (m *Manager) ApprovalRevision() uint64 {
@@ -28,13 +48,17 @@ func (m *Manager) ApprovalRevision() uint64 {
 }
 
 func (m *Manager) PrepareRootApproval(path string, access Access) (RootApproval, error) {
+	return m.PrepareGrant(Root{Path: path, Access: access})
+}
+
+func (m *Manager) PrepareGrant(grant Root) (RootApproval, error) {
 	m.mu.RLock()
 	primary, session, revision := m.primary, m.sessionID, m.approvalRevision
 	m.mu.RUnlock()
 	if session == "" {
 		return RootApproval{}, fmt.Errorf("workspace session is not active")
 	}
-	path = expandHome(path)
+	path := expandHome(grant.Path)
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(primary, path)
 	}
@@ -42,7 +66,11 @@ func (m *Manager) PrepareRootApproval(path string, access Access) (RootApproval,
 	if err != nil {
 		return RootApproval{}, err
 	}
-	root, err := normalizeRoot(Root{Path: resolved, Access: access})
+	if grant.FileOnly && filepath.Clean(path) != resolved {
+		return RootApproval{}, fmt.Errorf("file approval target changed")
+	}
+	grant.Path = resolved
+	root, err := normalizeRoot(grant)
 	if err != nil {
 		return RootApproval{}, err
 	}
@@ -64,6 +92,12 @@ func (m *Manager) CommitRootApproval(approval RootApproval, persist func(Root) e
 	resolved, err := Resolve(approval.root.Path)
 	if err != nil {
 		return Root{}, err
+	}
+	if approval.root.FileOnly {
+		info, statErr := os.Lstat(resolved)
+		if statErr != nil && !os.IsNotExist(statErr) || statErr == nil && !info.Mode().IsRegular() {
+			return Root{}, fmt.Errorf("approved file type changed")
+		}
 	}
 	if resolved != approval.root.Path {
 		return Root{}, fmt.Errorf("workspace approval target changed; do not retry automatically")

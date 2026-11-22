@@ -3,7 +3,7 @@ package runner
 import (
 	"fmt"
 	"nekocode/protocol"
-	"path/filepath"
+
 	"strings"
 
 	"nekocode/bot/extension/tool/runtime/core"
@@ -67,7 +67,9 @@ func (e *Executor) ensureFilePathAccess(toolName, callID, path string, access wo
 	var safePath string
 	var allowed bool
 	var err error
-	if access == workspace.AccessReadWrite {
+	if toolName == "image_gen" {
+		safePath, _, allowed, err = e.workspace.CheckWriteDirectory(path)
+	} else if access == workspace.AccessReadWrite {
 		safePath, _, allowed, err = e.workspace.CheckWrite(path)
 	} else {
 		safePath, _, allowed, err = e.workspace.CheckRead(path)
@@ -78,14 +80,19 @@ func (e *Executor) ensureFilePathAccess(toolName, callID, path string, access wo
 	if allowed {
 		return safePath, "", true
 	}
-	// Full-takeover mode: grant session-scoped workspace access without the
-	// prompt, consistent with bypassing every other approval.
-	if e.FullAccess() {
-		rootPath, err := candidateWorkspaceRoot(toolName, safePath)
+	grant := workspace.Root{Path: safePath, Access: access}
+	if toolName != "image_gen" {
+		grant, err = workspace.CandidateGrant(safePath, access)
 		if err != nil {
 			return "", err.Error(), false
 		}
-		if _, err := e.workspace.AddSessionRoot(rootPath, access); err != nil {
+	}
+	rootApproval, err := e.workspace.PrepareGrant(grant)
+	if err != nil {
+		return "", err.Error(), false
+	}
+	if e.FullAccess() {
+		if _, err := e.workspace.CommitRootApproval(rootApproval, nil); err != nil {
 			return "", err.Error(), false
 		}
 		return safePath, "", true
@@ -93,31 +100,27 @@ func (e *Executor) ensureFilePathAccess(toolName, callID, path string, access wo
 	if confirmFn == nil {
 		return "", fmt.Sprintf("workspace access required for %s: %s", access, safePath), false
 	}
-
-	rootPath, err := candidateWorkspaceRoot(toolName, safePath)
-	if err != nil {
-		return "", err.Error(), false
+	root := rootApproval.Root()
+	target := "directory"
+	if root.FileOnly {
+		target = "file"
 	}
-	rootApproval, err := e.workspace.PrepareRootApproval(rootPath, access)
-	if err != nil {
-		return "", err.Error(), false
-	}
-	rootPath = rootApproval.Root().Path
 	approval := &protocol.ApprovalContext{
 		Source:            "workspace",
 		Reason:            fmt.Sprintf("add %s workspace for %s", access, toolName),
 		Scope:             protocol.ApprovalScopeProject,
-		Workspace:         rootPath,
+		Workspace:         root.Path,
+		WorkspaceTarget:   target,
 		RememberWorkspace: policy.workspace,
 	}
 	if policy.store == nil || policy.workspace == "" {
 		approval.Scope = protocol.ApprovalScopeOnce
 	}
 	if access == workspace.AccessReadWrite {
-		approval.WritePaths = []string{rootPath}
+		approval.WritePaths = []string{root.Path}
 	}
 	req := protocol.NewApprovalRequest("workspace", map[string]any{
-		"path":           rootPath,
+		"path":           root.Path,
 		"access":         string(access),
 		"requested_path": safePath,
 	}, protocol.ConfirmKindPermission, approval)
@@ -148,7 +151,7 @@ func (e *Executor) commitWorkspaceApproval(policy permissionSnapshot, approval w
 	}
 	if remember && policy.store != nil {
 		persist = func(root workspace.Root) error {
-			if err := policy.store.RememberWorkspaceRoot(permission.WorkspaceRoot{Path: root.Path, Access: string(root.Access)}); err != nil {
+			if err := policy.store.RememberWorkspaceRoot(permission.WorkspaceRoot{Path: root.Path, Access: string(root.Access), FileOnly: &root.FileOnly}); err != nil {
 				return fmt.Errorf("cannot save workspace approval; access was not granted: %w", err)
 			}
 			return nil
@@ -178,13 +181,6 @@ func fileToolPath(tc core.ToolCallItem) string {
 		paths[i] = target.Path
 	}
 	return strings.Join(paths, "\x00")
-}
-
-func candidateWorkspaceRoot(toolName, safePath string) (string, error) {
-	if toolName == "image_gen" {
-		return filepath.Abs(safePath)
-	}
-	return workspace.CandidateRoot(safePath)
 }
 
 func (e *Executor) normalizeFilePolicyPath(tc core.ToolCallItem) core.ToolCallItem {

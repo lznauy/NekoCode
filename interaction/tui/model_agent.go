@@ -25,9 +25,21 @@ func (m *Model) startChat(value string, images []controlruntime.ImageAttachment)
 		return cmd
 	}
 	if m.sessionHistoryPaging && m.sessionHistoryPage > 0 {
-		m.sessionPendingChat = &pendingSessionChat{text: value, images: images}
+		if len(images) > 0 {
+			// Loading the latest history page is asynchronous. The composer may be
+			// edited or cleared before admission, so transfer image ownership now.
+			if !m.enqueueInputDraft() {
+				return nil
+			}
+		} else {
+			m.sessionPendingChat = &pendingSessionChat{text: value}
+		}
 		return m.loadSessionWindow(0, 0)
 	}
+	return m.beginChat(value, images, false)
+}
+
+func (m *Model) beginChat(value string, images []controlruntime.ImageAttachment, queued bool) tea.Cmd {
 	m.transitionTo(stateProcessing)
 	m.Messages.SetSpinnerView(m.Spinner.View())
 	status := PhaseWaiting
@@ -38,11 +50,31 @@ func (m *Model) startChat(value string, images []controlruntime.ImageAttachment)
 	}
 	m.setPhase(status)
 	m.Messages.SetProcessingStatus(status)
-	if _, err := m.Runtime.StartRun(protocol.WithCommandStatusDisplay(context.Background()), controlruntime.Input{
-		Source: controlruntime.SourceRef{Kind: "tui"},
+	source := controlruntime.SourceRef{Kind: "tui"}
+	if queued {
+		source.ID = queuedSourceID
+	}
+	input := controlruntime.Input{
+		Source: source,
 		Text:   value,
 		Images: images,
-	}); err != nil {
+	}
+	ctx := protocol.WithCommandStatusDisplay(context.Background())
+	var err error
+	var id controlruntime.RunID
+	if queued {
+		if scoped, ok := m.Runtime.(interface {
+			CurrentSessionID() string
+			StartRunIfCurrent(context.Context, string, controlruntime.Input) (controlruntime.RunID, error)
+		}); ok {
+			id, err = scoped.StartRunIfCurrent(ctx, m.queue.session, input)
+		} else {
+			err = fmt.Errorf("当前运行时不支持按会话发送排队消息，草稿已保留")
+		}
+	} else {
+		id, err = m.Runtime.StartRun(ctx, input)
+	}
+	if err != nil {
 		m.transitionTo(stateReady)
 		m.Messages.AddMessage(message.ChatMessage{
 			Role:    "error",
@@ -50,12 +82,24 @@ func (m *Model) startChat(value string, images []controlruntime.ImageAttachment)
 		})
 		return nil
 	}
-	// Text-only input can be cleared immediately. Image ownership transfers
-	// only after EventInputAccepted confirms that the agent received it.
-	// Invalidate pending paste results even while an image draft waits for ack.
+	if queued {
+		m.queue.awaiting = m.queue.items[0]
+		m.queue.awaitingRun = id
+		return spinnerTick()
+	}
+	// Detach submitted images immediately. An acknowledgement belongs to the
+	// submitted draft, even if the composer already contains the next message.
 	m.clipboardGeneration++
-	if len(m.Input.ImageAttachments()) == 0 {
+	if len(images) > 0 {
+		m.queue.awaiting = m.Input.CaptureDraft()
+		m.queue.awaitingRun = id
+		if owner, ok := m.Runtime.(interface{ CurrentSessionID() string }); ok {
+			m.queue.session = owner.CurrentSessionID()
+		}
+	}
+	if len(images) > 0 || len(m.Input.ImageAttachments()) == 0 {
 		m.Input.Reset()
+		m.Input.SetSending(true)
 	}
 	return spinnerTick()
 }
@@ -92,13 +136,17 @@ func (m *Model) tryLocalCommand(value string) (bool, tea.Cmd) {
 	if m.changeModelSetting(value) {
 		return true, nil
 	}
-	if handled, cmd := m.backgroundCommand(value); handled {
+	if handled, cmd := m.backgroundCommand(value, nil); handled {
 		return true, cmd
 	}
 	if handled, cmd := m.taskCommand(value); handled {
 		return true, cmd
 	}
 	out, status := m.Runtime.ExecuteLocalCommand(protocol.WithCommandStatusDisplay(context.Background()), value)
+	return m.showLocalCommandResult(value, out, status)
+}
+
+func (m *Model) showLocalCommandResult(value, out string, status controlruntime.LocalCommandResult) (bool, tea.Cmd) {
 	addSystem := func(content string) {
 		m.Messages.AddMessage(message.ChatMessage{Role: "system", Content: content, RenderedContent: content})
 		m.Messages.GotoBottom()
@@ -132,8 +180,7 @@ func interactiveTool(toolName string) bool {
 }
 
 type pendingSessionChat struct {
-	text   string
-	images []controlruntime.ImageAttachment
+	text string
 }
 
 type completedTurn struct {
@@ -206,6 +253,7 @@ func (m *Model) loadSessionMessages() tea.Cmd {
 	}
 	m.sessionLoadDone = nil
 	m.sessionPendingChat = nil
+	m.clearQueue()
 	m.sessionLoadNotices = nil
 	m.sessionLoading = false
 	m.sessionHistoryDirty = false
@@ -316,6 +364,10 @@ func (m *Model) applySessionLoaded(msg sessionLoadedMsg) tea.Cmd {
 	}
 	m.sessionLoading = false
 	if msg.err != nil {
+		if len(m.queue.items) > 0 && !m.queue.managing {
+			m.queue.selected = 0
+			m.queue.managing = true
+		}
 		m.sessionPendingChat = nil
 		m.Messages.AddMessage(message.ChatMessage{Role: "error", Content: msg.err.Error()})
 	} else {
@@ -389,7 +441,7 @@ func (m *Model) continuePendingChat(cmd tea.Cmd) tea.Cmd {
 	}
 	pending := m.sessionPendingChat
 	m.sessionPendingChat = nil
-	return tea.Batch(cmd, m.startChat(pending.text, pending.images))
+	return tea.Batch(cmd, m.startChat(pending.text, nil))
 }
 
 func (m *Model) requestHistoryPage(older bool) tea.Cmd {

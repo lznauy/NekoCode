@@ -86,6 +86,7 @@ func TestWorkingSetDoesNotShrinkErrorsExecutionLogsOrUnrecoverableResults(t *tes
 	foreign := core.NewOutputStore(t.TempDir())
 	appendWorkingSetBatch(t, m, foreign, "foreign", "read", false)
 	appendWorkingSetBatch(t, m, store, "missing", "read", false)
+	appendWorkingSetBatch(t, m, store, "batch", "task_batch", false)
 	for i := 0; i < 12; i++ {
 		appendWorkingSetBatch(t, m, store, fmt.Sprint(i), "grep", false)
 	}
@@ -95,7 +96,7 @@ func TestWorkingSetDoesNotShrinkErrorsExecutionLogsOrUnrecoverableResults(t *tes
 	}
 	m.checkpointWorkingSet()
 	after := m.Snapshot()
-	for _, i := range []int{1, 3, 5, 7} {
+	for _, i := range []int{1, 3, 5, 7, 9} {
 		if before.Messages[i].Content != after.Messages[i].Content {
 			t.Fatalf("protected result %d shrank", i)
 		}

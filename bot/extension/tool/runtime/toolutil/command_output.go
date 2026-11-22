@@ -31,7 +31,7 @@ func CaptureCommand(ctx context.Context, bin string, args []string, dir string) 
 	}
 	if path := output.Artifact.Path; path != "" {
 		if manager, ok := workspace.FromContext(ctx); ok {
-			if _, err := manager.AddSessionRoot(path, workspace.AccessReadOnly); err != nil {
+			if err := manager.AllowOutputFile(path); err != nil {
 				return core.ToolOutput{}, err
 			}
 		}

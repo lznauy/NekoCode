@@ -3,10 +3,14 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"nekocode/runtime/internal/broker"
+	"nekocode/runtime/internal/recording"
 )
 
 func TestRedactInputText(t *testing.T) {
@@ -721,4 +725,329 @@ func TestSuperAgentSteerBindsExplicitRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertConflict(demands[0].ID)
+}
+
+func TestToolCancellationReleasesOnlyItsInteraction(t *testing.T) {
+	bot := &testBot{}
+	hosts := make(chan RunHost, 1)
+	release := make(chan struct{})
+	defer close(release)
+	bot.run = func(_ string, host RunHost) (string, error) {
+		hosts <- host
+		<-release
+		return "done", nil
+	}
+	rt := newTestRuntime(bot)
+	runID, err := rt.StartRun(t.Context(), Input{Source: SourceRef{Kind: "test"}, Text: "run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := <-hosts
+	confirm := func(name string, done <-chan struct{}) <-chan ConfirmReply {
+		replies := make(chan ConfirmReply, 1)
+		go func() { replies <- host.Confirm(ConfirmRequest{ToolName: "shell", SubAgentID: name, Done: done}) }()
+		return replies
+	}
+	requireCancelled := func(replies <-chan ConfirmReply) {
+		t.Helper()
+		select {
+		case reply := <-replies:
+			if !reply.Cancelled || reply.Allowed {
+				t.Fatalf("approval cancellation returned %+v", reply)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("tool cancellation left approval blocked")
+		}
+	}
+
+	active, cancelActive := context.WithCancel(t.Context())
+	defer cancelActive()
+	pending := confirm("active", active.Done())
+	waitForStatus(t, rt, RunWaitingApproval)
+	queued, cancelQueued := context.WithCancel(t.Context())
+	waiter := confirm("queued", queued.Done())
+	cancelQueued()
+	requireCancelled(waiter)
+	queue := rt.events.History(EventFilter{RunID: runID, Types: []EventType{EventInteractionQueue}})
+	if len(queue) != 2 {
+		t.Fatalf("queue boundaries: %+v", queue)
+	}
+	start, end := queue[0].Payload.(InteractionQueuePayload), queue[1].Payload.(InteractionQueuePayload)
+	if start.SubAgentID != "queued" || !start.Waiting || end.Waiting || start.ID != end.ID {
+		t.Fatalf("queue boundaries %v %v", start, end)
+	}
+	records := rt.approvals.Pending()
+	ask := func(done <-chan struct{}) <-chan QuestionReply {
+		replies := make(chan QuestionReply, 1)
+		go func() { replies <- host.Ask(QuestionRequest{SubAgentID: "child", Done: done}) }()
+		return replies
+	}
+	requireRejected := func(replies <-chan QuestionReply) {
+		t.Helper()
+		select {
+		case reply := <-replies:
+			if !reply.Rejected {
+				t.Fatal("cancelled question accepted")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("question did not release on tool cancellation")
+		}
+	}
+	requireRejected(ask(queued.Done()))
+	if len(records) != 1 || records[0].SubAgentID != "active" {
+		t.Fatalf("queued cancellation disturbed pending approval: %+v", records)
+	}
+	cancelActive()
+	requireCancelled(pending)
+	resolved := rt.events.History(EventFilter{RunID: runID, Types: []EventType{EventApprovalResolved}})
+	if len(resolved) != 1 || resolved[0].Payload.(ApprovalView).Status != ApprovalExpired {
+		t.Fatalf("cancelled approval recorded as a decision: %+v", resolved)
+	}
+	if len(rt.approvals.Pending()) != 0 {
+		t.Fatal("cancelled tool left a pending approval")
+	}
+	if err := rt.DecideApproval(t.Context(), records[0].ID, ApprovalDecision{Allowed: true}); err == nil {
+		t.Fatal("late approval accepted after tool cancellation")
+	}
+	if events := rt.events.History(EventFilter{RunID: runID, Types: []EventType{EventApprovalRequested}}); len(events) != 1 {
+		t.Fatalf("queued tool published an approval after cancellation: %v", events)
+	}
+	question, cancelQuestion := context.WithCancel(t.Context())
+	defer cancelQuestion()
+	answer := ask(question.Done())
+	waitForStatus(t, rt, RunWaitingQuestion)
+	cancelQuestion()
+	requireRejected(answer)
+	if len(rt.questions.Pending()) != 0 {
+		t.Fatal("cancelled tool left a pending question")
+	}
+	if events := rt.events.History(EventFilter{RunID: runID, Types: []EventType{EventQuestionRequested}}); len(events) != 1 {
+		t.Fatalf("queued question was published after cancellation: %v", events)
+	}
+}
+
+func TestQueuedChildReleasesInteractionSlot(t *testing.T) {
+	rt := newTestRuntime(&testBot{})
+	defer rt.Close()
+	host := runHost{runtime: rt, runID: "run", lease: newRunLease()}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	first, ok := host.acquireInteraction("first", ctx.Done())
+	if !ok {
+		t.Fatal("first child could not acquire the slot")
+	}
+	var events []InteractionQueuePayload
+	rt.events.AddObserver(func(e Event) {
+		if e.Type != EventInteractionQueue {
+			return
+		}
+		event := e.Payload.(InteractionQueuePayload)
+		events = append(events, event)
+		if len(events) > 2 {
+			t.Fatalf("duplicate queue event: %+v", event)
+		}
+		if event.Waiting {
+			// Release the first child only after the second has queued.
+			first()
+		} else {
+			// A synchronous observer of the end must be able to take the slot.
+			next, ok := host.acquireInteraction("", ctx.Done())
+			if !ok {
+				t.Fatal("queue end observer could not take the released slot")
+			}
+			next()
+		}
+	})
+	second, ok := host.acquireInteraction("second", ctx.Done())
+	if !ok {
+		t.Fatal("queued child could not acquire the slot")
+	}
+	second()
+
+	third, ok := host.acquireInteraction("", ctx.Done())
+	if !ok {
+		t.Fatal("queued child did not release the slot")
+	}
+	third()
+	if len(events) != 2 || events[0].SubAgentID != "second" || !events[0].Waiting {
+		t.Fatalf("unexpected queue events: %+v", events)
+	}
+	wantEnd := events[0]
+	wantEnd.Waiting = false
+	if events[1] != wantEnd {
+		t.Fatalf("queue end = %+v, want %+v", events[1], wantEnd)
+	}
+}
+
+func TestCancelDuringInteractionRegistration(t *testing.T) {
+	for _, kind := range []string{"approval", "question"} {
+		t.Run(kind, func(t *testing.T) {
+			entered, resume := make(chan struct{}), make(chan struct{})
+			replied := make(chan bool, 1)
+			rt := New(RunnerFunc(func(_ context.Context, _ string, host RunHost) (string, error) {
+				if kind == "approval" {
+					replied <- host.Confirm(ConfirmRequest{ToolName: "shell"}).Cancelled
+				} else {
+					replied <- host.Ask(QuestionRequest{}).Rejected
+				}
+				return "", nil
+			}), ServiceGroups{})
+			defer rt.Close()
+			// Registration has entered the run lease, but the broker has not
+			// inserted the request into its pending map yet.
+			current := func() RunID {
+				close(entered)
+				<-resume
+				return rt.currentRunID()
+			}
+			rt.approvals = broker.NewApprovalBroker(rt.events, SourceRef{}, current)
+			rt.questions = broker.NewQuestionBroker(rt.events, SourceRef{}, current)
+			run, err := rt.StartRun(t.Context(), Input{Text: "ask"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			<-entered
+			ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
+			err = rt.CancelRun(ctx, run)
+			cancel()
+			close(resume)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("cancel = %v", err)
+			}
+			select {
+			case rejected := <-replied:
+				if !rejected {
+					t.Fatal("late registration accepted after cancellation")
+				}
+			case <-time.After(time.Second):
+				rt.approvals.RejectRun(run)
+				rt.questions.RejectRun(run)
+				t.Fatal("cancel waited for a runner that was still waiting for its interaction")
+			}
+			if err := rt.WaitRun(t.Context(), run); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestConcurrentChildApprovalsAndQuestions(t *testing.T) {
+	const children = 16
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	rt := New(RunnerFunc(func(ctx context.Context, _ string, host RunHost) (string, error) {
+		replies := make(chan bool, children)
+		for i := range children {
+			go func() {
+				child := fmt.Sprintf("child-%d", i)
+				if i%2 == 0 {
+					replies <- host.Confirm(ConfirmRequest{SubAgentID: child, ToolName: "shell", Done: ctx.Done()}).Allowed
+				} else {
+					replies <- !host.Ask(QuestionRequest{SubAgentID: child, Done: ctx.Done()}).Rejected
+				}
+			}()
+		}
+		for range children {
+			if !<-replies {
+				return "", errors.New("child interaction rejected")
+			}
+		}
+		return "done", nil
+	}), ServiceGroups{})
+	defer rt.Close()
+	if err := rt.EnableEventRecording(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	stream, err := rt.events.Subscribe(ctx, EventFilter{Types: []EventType{
+		EventInteractionQueue, EventApprovalRequested, EventQuestionRequested, EventApprovalResolved, EventQuestionResolved, EventRunDone, EventRunFailed,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID, err := rt.StartRun(ctx, Input{Text: "parallel interactions"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Hold the first reply until every other child has queued.
+	queued := map[uint64]string{}
+	starts, ends, resolved := 0, 0, 0
+	var active string
+	var answer func() error
+	for event := range stream {
+		switch event.Type {
+		case EventInteractionQueue:
+			p := event.Payload.(InteractionQueuePayload)
+			if p.Waiting {
+				if _, found := queued[p.ID]; found {
+					t.Fatalf("duplicate start: %+v", p)
+				}
+				queued[p.ID] = p.SubAgentID
+				starts++
+			} else {
+				if queued[p.ID] != p.SubAgentID || p.SubAgentID == "" {
+					t.Fatalf("unmatched end: %+v", p)
+				}
+				delete(queued, p.ID)
+				ends++
+			}
+		case EventApprovalRequested, EventQuestionRequested:
+			if active != "" {
+				t.Fatalf("new request before resolution of %s", active)
+			}
+			switch p := event.Payload.(type) {
+			case ApprovalView:
+				active = p.ID
+				answer = func() error { return rt.DecideApproval(ctx, p.ID, ApprovalDecision{Allowed: true}) }
+			case QuestionView:
+				active = p.ID
+				answer = func() error { return rt.AnswerQuestion(ctx, p.ID, QuestionReply{}) }
+			}
+		case EventApprovalResolved, EventQuestionResolved:
+			var id string
+			switch p := event.Payload.(type) {
+			case ApprovalView:
+				id = p.ID
+			case QuestionView:
+				id = p.ID
+			}
+			if id != active {
+				t.Fatalf("resolved %q, active %q", id, active)
+			}
+			active = ""
+			resolved++
+		case EventRunDone:
+			if starts != children-1 || ends != starts || len(queued) != 0 || resolved != children || active != "" {
+				t.Fatalf("starts=%d ends=%d resolved=%d active=%q queued=%v", starts, ends, resolved, active, queued)
+			}
+			if err := rt.WaitRun(ctx, runID); err != nil {
+				t.Fatal(err)
+			}
+			rt.mu.Lock()
+			path := rt.archivedRuns[runID].Path
+			rt.mu.Unlock()
+			var recorded int
+			if err := recording.WalkRecordedEventFile(path, func(ev Event) {
+				if ev.Type == EventInteractionQueue {
+					recorded++
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if recorded != starts+ends {
+				t.Fatalf("journal has %d queue events, observed %d", recorded, starts+ends)
+			}
+			return
+		case EventRunFailed:
+			t.Fatalf("run failed: %+v", event.Payload)
+		}
+		if starts >= children-1 && answer != nil {
+			if err := answer(); err != nil {
+				t.Fatal(err)
+			}
+			answer = nil
+		}
+	}
+	t.Fatalf("stream closed before all children finished: %v", ctx.Err())
 }

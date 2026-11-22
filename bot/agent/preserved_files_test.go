@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"errors"
+	"nekocode/protocol"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +11,7 @@ import (
 	"nekocode/bot/extension/tool/builtin/filesystem/read"
 	"nekocode/bot/extension/tool/runtime/permission"
 	"nekocode/bot/policy"
+	"nekocode/bot/provider/types"
 )
 
 func preservedTestAgent(t *testing.T, dir string) *Agent {
@@ -34,7 +37,7 @@ func TestPreservedFileCloseout(t *testing.T) {
 			}
 			write("original")
 			a.loopRunner.startRun("保留原件：archive.json、archive.json", nil)
-			if len(a.run.preserved) != 1 || !a.run.preserved[0].known {
+			if len(a.run.preserved) != 1 || a.run.preserved[0].SHA256 == "" {
 				t.Fatal(a.run.preserved)
 			}
 			finish := func() bool {
@@ -71,12 +74,14 @@ func TestPreservedFilesRequireExplicitPaths(t *testing.T) {
 	if err := os.Symlink(t.TempDir(), filepath.Join(dir, "outside")); err != nil {
 		t.Skip(err)
 	}
-	files := preservedTestAgent(t, dir).capturePreservedFiles("Keep the original sample.json unchanged.\nPreserve files: ../private, outside/file, missing")
+	a := preservedTestAgent(t, dir)
+	a.capturePreservedFiles("Keep the original sample.json unchanged.\nPreserve files: ../private, outside/file, missing")
+	files := a.run.preserved
 	if len(files) != 3 {
 		t.Fatal(files)
 	}
 	for _, file := range files {
-		if file.known {
+		if file.SHA256 != "" {
 			t.Fatal(file)
 		}
 	}
@@ -95,12 +100,12 @@ func TestPreservedFilePermissionsAtBaselineAndCloseout(t *testing.T) {
 		a.deps.toolExecutor.SetPermissionPolicy(decl, dir, dir)
 		capture := func() { a.loopRunner.startRun("Preserve files: archive.json", nil) }
 		capture()
-		if got := a.run.preserved; len(got) != 1 || got[0].known {
+		if got := a.run.preserved; len(got) != 1 || got[0].SHA256 != "" {
 			t.Fatalf("captured restricted baseline: %+v", got)
 		}
 		a.deps.toolExecutor.SetPermissionPolicy(permission.PermissionsDecl{}, dir, dir)
 		capture()
-		if !a.run.preserved[0].known {
+		if a.run.preserved[0].SHA256 == "" {
 			t.Fatal("missing permitted baseline")
 		}
 		a.deps.toolExecutor.SetPermissionPolicy(decl, dir, dir)
@@ -126,8 +131,9 @@ func TestPreservedFileRejectsSymlinksWithinWorkspace(t *testing.T) {
 	}
 	a := preservedTestAgent(t, dir)
 	a.deps.toolExecutor.SetPermissionPolicy(permission.PermissionsDecl{Deny: []string{"read(/private/**)"}}, dir, dir)
-	files := a.capturePreservedFiles("Preserve files: file.txt, alias/source.txt")
-	if len(files) != 2 || files[0].known || files[1].known {
+	a.capturePreservedFiles("Preserve files: file.txt, alias/source.txt")
+	files := a.run.preserved
+	if len(files) != 2 || files[0].SHA256 != "" || files[1].SHA256 != "" {
 		t.Fatalf("followed symlink: %+v", files)
 	}
 }
@@ -189,8 +195,74 @@ func TestPreserveNestedDocumentedPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := preservedTestAgent(t, dir)
-	files := a.capturePreservedFiles("Preserve files: archive/source")
-	if len(files) != 1 || !files[0].known {
+	a.capturePreservedFiles("Preserve files: archive/source")
+	files := a.run.preserved
+	if len(files) != 1 || files[0].SHA256 == "" {
 		t.Fatalf("nested portable path: %+v", files)
+	}
+}
+
+func TestSteeringAddsOriginalWithoutReplacingBaseline(t *testing.T) {
+	dir := t.TempDir()
+	a := preservedTestAgent(t, dir)
+	for _, name := range []string{"first", "second"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("original"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a.loopRunner.startRun("Preserve files: first", nil)
+	if err := os.WriteFile(filepath.Join(dir, "first"), []byte("changed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.TrySteer("保留原件：first、second"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.drainSteering(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "second"), []byte("changed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	text := "done"
+	a.turnRunner.reviewPreservedFiles(&text, false)
+	if !strings.Contains(text, `"first", "second"`) {
+		t.Fatal(text)
+	}
+	a.loopRunner.startRun("new unrelated request", nil)
+	if len(a.run.preserved) != 0 {
+		t.Fatal("new request inherited old baselines")
+	}
+}
+
+func TestBaselineSaveFailureStopsBeforeModel(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "original"), []byte("before"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a := preservedTestAgent(t, dir)
+	llm := &fakeLLM{}
+	a.deps.llmClient = llm
+	cause := errors.New("cannot persist baseline")
+	goal := &GoalPreservation{Save: func([]protocol.PreservedFile) error { return cause }}
+	result := a.RunContext(WithGoalPreservation(t.Context(), goal), "Preserve files: original", nil, nil)
+	if llm.calls != 0 || !errors.Is(result.Error, cause) || !protocol.EvidenceIncomplete(result.Error) {
+		t.Fatalf("calls=%d result=%+v", llm.calls, result)
+	}
+}
+
+func TestFinalSteeringLeavesNewOriginalPendingReview(t *testing.T) {
+	a := preservedTestAgent(t, t.TempDir())
+	a.deps.llmClient = &fakeLLM{tokens: []types.StreamToken{{Content: "Verified.\nGOAL DONE"}}}
+	goal := new(GoalPreservation)
+	ctx := WithGoalReview(WithGoalPreservation(t.Context(), goal), func(string) string { return "" })
+	result := a.RunContext(ctx, "check", nil, func(e protocol.StepEvent) {
+		if e.Action == protocol.StepActionChat {
+			if err := a.TrySteer("Preserve files: absent.txt"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	if result.Error != nil || len(goal.Files) != 1 || !goal.NeedsReview {
+		t.Fatalf("result=%+v goal=%+v", result, goal)
 	}
 }

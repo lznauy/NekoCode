@@ -1,8 +1,10 @@
 package session
 
 import (
+	"errors"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/extension/tool/runtime/taskbridge"
+	"os"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -261,5 +263,37 @@ func TestWorkspaceBaselinePersistsAndIsExposedOnEveryResultPage(t *testing.T) {
 				t.Fatalf("lost content identity: %+v", page)
 			}
 		}
+	}
+}
+
+func TestForegroundWorkspaceCommitsWithFirstCheckpoint(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	child, err := OpenSubagent("parent", "private", "/project", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Close()
+	if err := child.SetIsolation("worktree"); err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Begin("explore", "inspect", nil); err != nil {
+		t.Fatal(err)
+	}
+	base := strings.Repeat("a", 40)
+	if err := child.PrepareHeadWorkspace(base, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadSubagentMetadata("parent", "private"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("attempt visible before first checkpoint: %v", err)
+	}
+	if err := child.Checkpoint(ctxmgr.ManagerSnapshot{}, "completed", "finished"); err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Close(); err != nil {
+		t.Fatal(err)
+	}
+	page, err := ReadSubagentResult(t.Context(), "parent", taskbridge.ResultQuery{ID: "private", Limit: 100})
+	if err != nil || page.WorkspaceKind != "head" || page.WorkspaceBase != base || page.Content != "finished" {
+		t.Fatalf("result=%+v, err=%v", page, err)
 	}
 }

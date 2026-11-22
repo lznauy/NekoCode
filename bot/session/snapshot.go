@@ -21,17 +21,19 @@ import (
 )
 
 type Goal struct {
-	Proposal           string   `json:"proposal,omitempty"`
-	RecentObservations []string `json:"recent_observations,omitempty"`
-	LastObservation    string   `json:"last_observation,omitempty"`
-	PendingFrom        string   `json:"pending_from,omitempty"`
-	Objective          string   `json:"objective"`
-	Criteria           string   `json:"criteria,omitempty"`
-	Status             string   `json:"status"`
-	Check              string   `json:"check,omitempty"`
-	Delegated          bool     `json:"delegated,omitempty"`
-	Attempts           int      `json:"attempts,omitempty"`
-	Evidence           string   `json:"evidence,omitempty"`
+	PreservedFiles     []protocol.PreservedFile `json:"preserved_files,omitempty"`
+	Proposal           string                   `json:"proposal,omitempty"`
+	RecentObservations []string                 `json:"recent_observations,omitempty"`
+	LastObservation    string                   `json:"last_observation,omitempty"`
+	PendingFrom        string                   `json:"pending_from,omitempty"`
+	Objective          string                   `json:"objective"`
+	Criteria           string                   `json:"criteria,omitempty"`
+	Status             string                   `json:"status"`
+	CheckTest          string                   `json:"check_test,omitempty"`
+	Check              string                   `json:"check,omitempty"`
+	Delegated          bool                     `json:"delegated,omitempty"`
+	Attempts           int                      `json:"attempts,omitempty"`
+	Evidence           string                   `json:"evidence,omitempty"`
 }
 
 type Snapshot struct {

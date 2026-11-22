@@ -7,6 +7,7 @@ import (
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/taskbridge"
 	"nekocode/protocol"
+	"nekocode/util/modelbudget"
 )
 
 type indexedCall struct {
@@ -49,6 +50,7 @@ func (e *Executor) executeParallel(ctx context.Context, calls []indexedCall, res
 			ordinary = append(ordinary, call)
 		}
 	}
+	taskCtx := modelbudget.WithParallelWorkers(ctx, len(tasks))
 	var wg sync.WaitGroup
 	e.fnMu.RLock()
 	limit := e.maxConcurrentTasks
@@ -57,7 +59,7 @@ func (e *Executor) executeParallel(ctx context.Context, calls []indexedCall, res
 		limit = taskbridge.DefaultMaxConcurrentTasks
 	}
 	wg.Add(1)
-	go func() { defer wg.Done(); e.executeWorkers(ctx, tasks, results, limit) }()
+	go func() { defer wg.Done(); e.executeWorkers(taskCtx, tasks, results, limit) }()
 	e.executeWorkers(ctx, ordinary, results, 16)
 	wg.Wait()
 }

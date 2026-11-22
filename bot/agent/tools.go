@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"nekocode/bot/agent/internal/toolpolicy"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/taskbridge"
@@ -32,49 +33,12 @@ func (r *toolRunner) executeAndFeedback(calls []core.ToolCallItem, textContent s
 		callback(protocol.StepEvent{Action: protocol.StepActionThink, Output: textContent})
 	}
 
-	for i := range calls {
-		calls[i] = r.agent.deps.toolRegistry.EnrichCall(calls[i])
-	}
-	filtered := r.filterToolCalls(calls)
-
-	cleanupSubagents, deniedSubagents, kept := r.prepareSubagentCallbacks(filtered.Allowed, filtered.AllowedIdx, callback)
-	filtered.Allowed = kept
-	maps.Copy(filtered.Blocked, deniedSubagents)
-	defer cleanupSubagents()
-
-	r.agent.deps.toolExecutor.PreparePreviewsContext(r.agent.getCtx(), filtered.Allowed)
-	// Filtering copies call records. Carry prepared arguments back by original
-	// position so start events and execution use the same per-call previews.
-	prepared := 0
-	for i := range calls {
-		if _, blocked := filtered.Blocked[i]; !blocked {
-			calls[i] = filtered.Allowed[prepared]
-			prepared++
-		}
-	}
-	nonExecution := make(map[int]protocol.ToolNonExecution, len(filtered.Blocked))
-	for i, reason := range filtered.Blocked {
-		stage := filtered.BlockStages[i]
-		if stage == "" {
-			stage = "governance"
-		}
-		if _, denied := deniedSubagents[i]; denied {
-			stage = "task_admission"
-		}
-		nonExecution[i] = core.NotExecuted(r.agent.getCtx(), calls[i], stage, reason).NonExecution
-	}
-	emitStartCallbacks(calls, filtered.Blocked, nonExecution, callback)
-
 	dispatchPlan := r.agent.deps.ctxMgr.ActiveTodoPlanID()
-	execResults := r.executeAllowedTools(filtered.Allowed, callback)
-	results := mergeResults(calls, filtered.Blocked, execResults)
-	for i, record := range nonExecution {
-		results[i].NonExecution = record
-	}
-	policyResults := r.recordToolResults(calls, filtered.Blocked, results)
+	filtered, results, policyResults := r.dispatchToolCalls(r.agent.getCtx(), calls, callback)
 
 	msgs := emitResultCallbacks(calls, filtered.Blocked, results, callback)
 	r.addToolResultsAndHints(calls, msgs, filtered.PreToolHints)
+	r.agent.run.hasToolResults = true
 	r.agent.observeShellRetry(results)
 	for _, result := range results {
 		if result.Name == "todo_write" {
@@ -95,9 +59,9 @@ func (r *toolRunner) executeAndFeedback(calls []core.ToolCallItem, textContent s
 			r.agent.run.todoDispatchPlan = dispatchPlan
 		}
 	}
-	r.agent.observeTodoProgress(execResults)
+	r.agent.observeTodoProgress(results)
 
-	if filtered.Terminated {
+	if filtered.Terminated || r.agent.run.hookStopped {
 		return true
 	}
 	if r.applyPolicyResults(policyResults) {
@@ -105,6 +69,52 @@ func (r *toolRunner) executeAndFeedback(calls []core.ToolCallItem, textContent s
 	}
 	r.agent.run.step++
 	return false
+}
+
+// dispatchToolCalls applies the same policy, permissions, admission and evidence
+// pipeline to provider calls and to individual members of a foreground batch.
+func (r *toolRunner) dispatchToolCalls(ctx context.Context, calls []core.ToolCallItem, callback RunCallback) (filteredCalls, []core.ToolCallResult, []policy.Result) {
+	for i := range calls {
+		calls[i] = r.agent.deps.toolRegistry.EnrichCall(calls[i])
+	}
+	filtered := r.filterToolCalls(calls)
+
+	cleanupSubagents, deniedSubagents, kept := r.prepareSubagentCallbacks(filtered.Allowed, filtered.AllowedIdx, callback)
+	filtered.Allowed = kept
+	maps.Copy(filtered.Blocked, deniedSubagents)
+	defer cleanupSubagents()
+
+	r.agent.deps.toolExecutor.PreparePreviewsContext(ctx, filtered.Allowed)
+	// Filtering copies call records. Carry prepared arguments back by original
+	// position so start events and execution use the same per-call previews.
+	prepared := 0
+	for i := range calls {
+		if _, blocked := filtered.Blocked[i]; !blocked {
+			calls[i] = filtered.Allowed[prepared]
+			prepared++
+		}
+	}
+	nonExecution := make(map[int]protocol.ToolNonExecution, len(filtered.Blocked))
+	for i, reason := range filtered.Blocked {
+		stage := filtered.BlockStages[i]
+		if stage == "" {
+			stage = "governance"
+		}
+		if _, denied := deniedSubagents[i]; denied {
+			stage = "task_admission"
+		}
+		nonExecution[i] = core.NotExecuted(ctx, calls[i], stage, reason).NonExecution
+	}
+	emitStartCallbacks(calls, filtered.Blocked, nonExecution, callback)
+
+	execResults := r.executeAllowedTools(ctx, filtered.Allowed, callback)
+	results := mergeResults(calls, filtered.Blocked, execResults)
+	for i, record := range nonExecution {
+		results[i].NonExecution = record
+	}
+	policyResults := r.recordToolResults(calls, filtered.Blocked, results)
+
+	return filtered, results, policyResults
 }
 
 const todoReminderBatches = 6
@@ -251,7 +261,7 @@ func emitResultCallbacks(calls []core.ToolCallItem, blocked map[int]string, resu
 	for i, r := range results {
 		call := effectiveToolCall(calls[i])
 		content := r.EffectiveOutput()
-		msgs[i] = types.Message{Content: r.TextOutput().Text, ToolOutput: r.Artifact, ToolCallID: r.ID, IsError: r.Error != "", ReadID: r.ReadID, ToolEvidence: r.Evidence, NonExecution: r.NonExecution}
+		msgs[i] = toolpolicy.Message(r)
 		if callback != nil {
 			if _, isBlocked := blocked[i]; isBlocked {
 				continue
@@ -262,7 +272,7 @@ func emitResultCallbacks(calls []core.ToolCallItem, blocked map[int]string, resu
 	return msgs
 }
 
-func (r *toolRunner) executeAllowedTools(allowed []core.ToolCallItem, callback RunCallback) []core.ToolCallResult {
+func (r *toolRunner) executeAllowedTools(ctx context.Context, allowed []core.ToolCallItem, callback RunCallback) []core.ToolCallResult {
 	executor := r.agent.deps.toolExecutor
 	if callback != nil {
 		executor.SetPreviewDecisionFn(func(callID, toolName string, _ map[string]any, preview string, decision protocol.ToolDecision) {
@@ -274,7 +284,32 @@ func (r *toolRunner) executeAllowedTools(allowed []core.ToolCallItem, callback R
 	if len(allowed) == 0 {
 		return nil
 	}
-	results := executor.ExecuteBatch(r.agent.getCtx(), allowed)
+	// Batch wrappers run in the sequential phase, after any direct foreground
+	// tasks have settled. Their children therefore share the executor and its
+	// configured worker limit without recursively occupying a worker slot.
+	var stopDispatch context.CancelFunc
+	for i, c := range allowed {
+		if c.Name != "task_batch" {
+			continue
+		}
+		if stopDispatch == nil {
+			ctx, stopDispatch = context.WithCancel(ctx)
+			defer stopDispatch()
+		}
+		c.Args = maps.Clone(c.Args)
+		if c.Args == nil {
+			c.Args = make(map[string]any)
+		}
+		c.Args["_sub_callback"] = taskbridge.BatchDispatch(func(ctx context.Context, shared map[string]any, items []taskbridge.BatchItem) (core.ToolOutput, error) {
+			result, err := r.dispatchTaskBatch(ctx, shared, items, callback)
+			if r.agent.run.hookStopped {
+				stopDispatch()
+			}
+			return result, err
+		})
+		allowed[i] = c
+	}
+	results := executor.ExecuteBatch(ctx, allowed)
 	for _, result := range results {
 		if r.agent.run.evidenceErr == nil && protocol.EvidenceIncomplete(result.Cause) {
 			r.agent.run.evidenceErr = result.Cause
@@ -301,18 +336,13 @@ func (r *toolRunner) recordToolResults(calls []core.ToolCallItem, blocked map[in
 		if msg, ok := blocked[i]; ok {
 			events = append(events, policy.ToolResult{
 				Name:        tc.Name,
-				Args:        tc.Args,
+				Args:        core.PublicArgs(tc.Args),
 				Blocked:     true,
 				BlockReason: msg,
 			})
 			continue
 		}
-		events = append(events, policy.ToolResult{
-			Name:   tc.Name,
-			Args:   tc.Args,
-			Output: results[i].Output,
-			Error:  results[i].Error,
-		})
+		events = append(events, toolpolicy.Outcome(tc.Name, tc.Args, results[i]))
 	}
 	return gov.RecordTools(events, r.agent.getCtx())
 }

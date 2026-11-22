@@ -100,3 +100,23 @@ func TestUnusedWorkerReserveCanFinishSynthesisWithoutRaisingCeiling(t *testing.T
 		t.Fatal("repeated transfer created capacity")
 	}
 }
+
+func TestParallelAttemptSizeIsStableWithinBatch(t *testing.T) {
+	plain, _ := New(400)
+	if got := ParallelStepLimit(WithParallelWorkers(WithBudget(t.Context(), plain), 13)); got != 0 {
+		t.Fatalf("experimental ceiling enabled by default: %d", got)
+	}
+	b, _ := NewWithLimits(400, true, 0)
+	ctx := WithBudget(t.Context(), b)
+	batch := WithParallelWorkers(ctx, 13)
+	want := b.Snapshot().WorkRemaining/14 - 1
+	if err := Admit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := ParallelStepLimit(WithRole(batch, Work, "last-in-queue")); got != want {
+		t.Fatalf("got %d, want %d", got, want)
+	}
+	if ParallelStepLimit(ctx) != 0 || ParallelStepLimit(WithParallelWorkers(ctx, 1)) != 0 || ParallelStepLimit(WithParallelWorkers(t.Context(), 13)) != 0 {
+		t.Fatal("unexpected limit outside a budgeted batch")
+	}
+}

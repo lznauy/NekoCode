@@ -188,6 +188,7 @@ export interface ApprovalContext {
   capabilities?: string[]
   scope?: 'once' | 'project' | string
   workspace?: string
+  workspace_target?: 'file' | 'directory'
   sandbox?: string
   write_paths?: string[]
   outbound_domains?: string[] | null

@@ -17,8 +17,9 @@ import (
 )
 
 type fakeLLM struct {
-	tokens []types.StreamToken
-	calls  int
+	messages []types.Message
+	tokens   []types.StreamToken
+	calls    int
 }
 
 func (f *fakeLLM) Chat(context.Context, []types.Message, []types.ToolDef) (*types.Response, error) {
@@ -26,6 +27,7 @@ func (f *fakeLLM) Chat(context.Context, []types.Message, []types.ToolDef) (*type
 }
 
 func (f *fakeLLM) ChatStream(ctx context.Context, messages []types.Message, tools []types.ToolDef) (<-chan types.StreamToken, <-chan error) {
+	f.messages = messages
 	f.calls++
 	tokenCh := make(chan types.StreamToken, len(f.tokens))
 	errCh := make(chan error, 1)
@@ -45,6 +47,23 @@ func (f *fakeLLM) GetMaxTokens() int { return 0 }
 func (f *fakeLLM) SetDisableThinking(bool) {}
 
 func (f *fakeLLM) GetDisableThinking() bool { return false }
+
+func TestWorkingStepReminderInModelRequest(t *testing.T) {
+	a, llm := newTestAgentWithLLM(types.StreamToken{Content: "ok"})
+	for _, tc := range []struct {
+		remaining int
+		present   bool
+	}{{21, false}, {20, true}, {19, false}, {5, true}, {4, false}} {
+		a.run.step = maxAgentSteps - tc.remaining
+		a.run.todoBatches = 2
+		if _, err := a.modelRunner.callLLMForTool(t.Context(), ""); err != nil {
+			t.Fatal(err)
+		}
+		if messagesContain(llm.messages, "working steps left") != tc.present || a.run.todoBatches != 2 {
+			t.Fatalf("remaining=%d reminder or todo counter incorrect", tc.remaining)
+		}
+	}
+}
 
 // failingLLM simulates a misconfigured model: the stream errors immediately
 // on every call, so no assistant content ever reaches the context.
@@ -70,16 +89,11 @@ func newTestAgentWithLLM(tokens ...types.StreamToken) (*Agent, *fakeLLM) {
 	return a, llm
 }
 
-func TestReasonCommandSkipsLLM(t *testing.T) {
-	a, llm := newTestAgentWithLLM(types.StreamToken{Content: "should not be used"})
-
-	result := a.modelRunner.reason("/status")
-
-	if llm.calls != 0 {
-		t.Fatalf("LLM calls = %d, want 0", llm.calls)
-	}
-	if result.Action != actionChat || result.Thought != "User entered a command" {
-		t.Fatalf("unexpected command result: %+v", result)
+func TestReasonAbsolutePathUsesModel(t *testing.T) {
+	a, llm := newTestAgentWithLLM(types.StreamToken{Content: "answer"})
+	result := a.modelRunner.reason("/tmp/example.py")
+	if llm.calls != 1 || result.ActionInput != "answer" {
+		t.Fatalf("result=%+v calls=%d", result, llm.calls)
 	}
 }
 
@@ -314,6 +328,14 @@ func TestNativeToolCallsOnlyRetractProtocolText(t *testing.T) {
 	}
 }
 
+func TestSynthesisWhitespaceIsNotPersisted(t *testing.T) {
+	a, _ := newTestAgentWithLLM(types.StreamToken{Content: " \n\t"})
+	before := a.deps.ctxMgr.Len()
+	if got := a.modelRunner.synthesize(); got != fallbackSynthesize || a.run.finalPersisted || a.deps.ctxMgr.Len() != before {
+		t.Fatalf("blank response treated as an answer: %q, persisted=%v", got, a.run.finalPersisted)
+	}
+}
+
 // A leaked call cannot be used as the synthesized final answer either.
 func TestSynthesizeRejectsLeakedCall(t *testing.T) {
 	a, _ := newTestAgentWithLLM(types.StreamToken{Content: `<invoke name="edit"></invoke>`})
@@ -334,25 +356,6 @@ func TestUsableFinalTextAllowsQuotedCall(t *testing.T) {
 	}
 	if usableFinalText("") {
 		t.Fatal("empty text must not be usable")
-	}
-}
-
-// On a truncated stream the partial text survives only if it is not a leaked
-// call; the same detector gates both paths.
-func TestFromLLMTruncatedReplyKeepsProse(t *testing.T) {
-	truncated := context.DeadlineExceeded
-
-	prose := fromLLM(nil, "正文里提到 tool_use 这个词只是说明。", truncated)
-	if prose.IsError {
-		t.Fatalf("prose should survive truncation: %+v", prose)
-	}
-	if prose.ActionInput != "正文里提到 tool_use 这个词只是说明。" {
-		t.Fatalf("ActionInput = %q", prose.ActionInput)
-	}
-
-	leaked := fromLLM(nil, `<invoke name="read">`, truncated)
-	if !leaked.IsError {
-		t.Fatalf("truncated leak should not be surfaced as an answer: %+v", leaked)
 	}
 }
 
@@ -425,16 +428,15 @@ func TestSteeringDuringBudgetCompactionDoesNotLeaveFatalError(t *testing.T) {
 	llm := &outputLimitedLLM{maxOutput: 1500}
 	llm.tokens = []types.StreamToken{{Content: "continued"}}
 	a.deps.llmClient = llm
-	before := m.Len()
 	first := a.modelRunner.reason("initial task")
 	if !first.Interrupted || a.run.err != nil {
 		t.Fatalf("steering became fatal: %+v err=%v", first, a.run.err)
 	}
-	if !a.turnRunner.retryAfterInterruptedReasoning(first, before) {
+	if !a.turnRunner.retryAfterInterruptedReasoning(first) {
 		t.Fatal("steering did not resume")
 	}
 	next := a.modelRunner.reason("updated task")
-	if next.Interrupted || next.IsError || next.ActionInput != "continued" || a.run.err != nil || llm.calls != 1 {
+	if next.Interrupted || next.ActionInput != "continued" || a.run.err != nil || llm.calls != 1 {
 		t.Fatalf("resumed request failed: %+v err=%v calls=%d", next, a.run.err, llm.calls)
 	}
 }
@@ -525,16 +527,15 @@ func TestSteeringDuringPreModelDoesNotBecomeGuardRejection(t *testing.T) {
 		}
 		return nil, nil
 	}})
-	before := a.deps.ctxMgr.Len()
 	first := a.modelRunner.reason("initial task")
 	if !first.Interrupted || a.run.err != nil || llm.calls != 0 {
 		t.Fatalf("steering became rejection: %+v err=%v calls=%d", first, a.run.err, llm.calls)
 	}
-	if !a.turnRunner.retryAfterInterruptedReasoning(first, before) {
+	if !a.turnRunner.retryAfterInterruptedReasoning(first) {
 		t.Fatal("steering did not resume")
 	}
 	next := a.modelRunner.reason("updated task")
-	if next.Interrupted || next.IsError || next.ActionInput != "continued" || llm.calls != 1 {
+	if next.Interrupted || next.ActionInput != "continued" || llm.calls != 1 {
 		t.Fatalf("resume failed: %+v calls=%d", next, llm.calls)
 	}
 }
@@ -586,5 +587,113 @@ data: [DONE]
 	result := a.loopRunner.runContext(t.Context(), "review the request", nil, nil)
 	if result.StopReason != "incomplete" || result.FinalOutput != "" || result.Error == nil || !strings.Contains(result.Error.Error(), "refusal") {
 		t.Fatalf("provider refusal reported as answer: %+v", result)
+	}
+}
+
+func TestInterruptedTurnKeepsPreviouslyDrainedSteering(t *testing.T) {
+	a, _ := newTestAgentWithLLM(types.StreamToken{Content: "continued"})
+	if err := a.TrySteer("preserve the original"); err != nil {
+		t.Fatal(err)
+	}
+	a.deps.gov.Register(policy.Hook{Name: "second-steer", Point: policy.PreModel, Run: func(ctx context.Context, _ policy.State) (*policy.Result, error) {
+		if err := a.TrySteer("use the smaller dataset"); err != nil {
+			t.Fatal(err)
+		}
+		return nil, ctx.Err()
+	}})
+	if a.loopRunner.runTurn("initial", nil) {
+		t.Fatal("expected retry")
+	}
+	snap := a.deps.ctxMgr.Snapshot()
+	for _, messages := range [][]types.Message{snap.Messages, snap.Transcript} {
+		if len(messages) < 2 || messages[len(messages)-2].Content != "preserve the original" || messages[len(messages)-1].Content != "use the smaller dataset" {
+			t.Fatalf("lost steering: %+v", messages)
+		}
+	}
+}
+
+type detachedCancellationLLM struct{ fakeLLM }
+
+func (f *detachedCancellationLLM) ChatStream(context.Context, []types.Message, []types.ToolDef) (<-chan types.StreamToken, <-chan error) {
+	f.calls++
+	tokens := make(chan types.StreamToken)
+	close(tokens)
+	errs := make(chan error, 1)
+	errs <- context.Canceled
+	close(errs)
+	return tokens, errs
+}
+
+func TestDetachedProviderCancellationEndsRun(t *testing.T) {
+	a := newTestAgent()
+	llm := new(detachedCancellationLLM)
+	a.deps.llmClient = llm
+	result := a.Run("inspect", nil, nil)
+	if llm.calls != 1 || result.Interrupted || !errors.Is(result.Error, context.Canceled) || result.StopReason != "execution_error" {
+		t.Fatalf("calls=%d result=%+v", llm.calls, result)
+	}
+}
+
+func TestReasoningWithoutDeliveryEndsIncomplete(t *testing.T) {
+	a, llm := newTestAgentWithLLM(types.StreamToken{ReasoningContent: "considering"}, types.StreamToken{Content: "  "}, types.StreamToken{FinishReason: "stop"})
+	result := a.Run("inspect", nil, nil)
+	if llm.calls != 1 || result.StopReason != "incomplete" || result.FinalOutput != "" || len(a.deps.ctxMgr.Snapshot().Messages) != 0 {
+		t.Fatalf("calls=%d result=%+v", llm.calls, result)
+	}
+}
+
+func TestExplicitPreModelInterruptStopsWithoutProvider(t *testing.T) {
+	a, llm := newTestAgentWithLLM(types.StreamToken{Content: "unused"})
+	a.deps.gov.Register(policy.Hook{Name: "explicit-interrupt", Point: policy.PreModel, On: func(policy.State) *policy.Result {
+		reason := policy.StopInterrupted
+		return &policy.Result{Stop: &reason}
+	}})
+	r := a.Run("request", nil, nil)
+	if llm.calls != 0 || r.StopReason != "cancelled" || !r.Interrupted {
+		t.Fatalf("calls=%d result=%+v", llm.calls, r)
+	}
+}
+
+func TestAbortFlagBeforeContextCancellationEndsInterrupted(t *testing.T) {
+	a, llm := newTestAgentWithLLM(types.StreamToken{Content: "unused"})
+	a.deps.gov.Register(policy.Hook{Name: "abort-window", Point: policy.PreModel, On: func(policy.State) *policy.Result {
+		// Hold Abort between publishing Finished and cancelling the context.
+		a.life.Finished().Store(true)
+		return nil
+	}})
+	result := a.Run("inspect", nil, nil)
+	if llm.calls != 1 || !result.Interrupted || result.Error != nil || result.StopReason != "cancelled" {
+		t.Fatalf("calls=%d result=%+v", llm.calls, result)
+	}
+}
+
+func TestCancellationDuringPartialSynthesis(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		abort  bool
+		reason string
+	}{{"provider", false, "execution_error"}, {"abort", true, "cancelled"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTestAgent()
+			a.deps.llmClient = new(detachedCancellationLLM)
+			// Normal loop completion also sets Finished before requesting a summary.
+			a.life.Finished().Store(true)
+			a.run.partialCloseout = true
+			if tc.abort {
+				a.deps.gov.Register(policy.Hook{Name: "abort-summary", Point: policy.PreModel, On: func(policy.State) *policy.Result {
+					a.Abort()
+					return nil
+				}})
+			}
+			result := a.loopRunner.finishRun(nil)
+			a.loopRunner.publishSummary(result, nil)
+			var wantErr error
+			if !tc.abort {
+				wantErr = context.Canceled
+			}
+			if result.StopReason != tc.reason || result.Interrupted != tc.abort || !errors.Is(result.Error, wantErr) {
+				t.Fatalf("unexpected synthesis result: %+v", result)
+			}
+		})
 	}
 }

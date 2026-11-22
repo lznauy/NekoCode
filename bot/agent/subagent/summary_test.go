@@ -25,7 +25,8 @@ func TestRunSummaryMatchesExitAndFinalCheckpoint(t *testing.T) {
 		{name: "incomplete", scripts: [][]types.StreamToken{{{Content: "progress"}}, {{Content: "progress"}}, {{Content: "progress"}}}, want: protocol.RunSummary{StepCount: 3, StopReason: "incomplete"}},
 		{name: "step limit", limit: 1, scripts: [][]types.StreamToken{toolCall, completionScript()}, want: protocol.RunSummary{StepCount: 2, StopReason: "step_limit"}},
 		{name: "cancelled", cancel: true, want: protocol.RunSummary{StopReason: "cancelled"}},
-		{name: "model error", scripts: [][]types.StreamToken{{}}, errors: []error{context.DeadlineExceeded}, want: protocol.RunSummary{StepCount: 1, StopReason: "cancelled"}},
+		{name: "provider cancelled", scripts: [][]types.StreamToken{{}}, errors: []error{context.Canceled}, want: protocol.RunSummary{StepCount: 1, StopReason: "execution_error"}},
+		{name: "provider timeout", scripts: [][]types.StreamToken{{}}, errors: []error{context.DeadlineExceeded}, want: protocol.RunSummary{StepCount: 1, StopReason: "execution_error"}},
 		{name: "save failure", saveFailure: true, scripts: [][]types.StreamToken{completionScript()}, want: protocol.RunSummary{StepCount: 1, StopReason: "execution_error"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -61,12 +62,13 @@ func TestRunSummaryMatchesExitAndFinalCheckpoint(t *testing.T) {
 	}
 }
 
-func TestFinalCheckpointCancellationIsReflectedInReturnedSummary(t *testing.T) {
+func TestFinalCheckpointCommitsOutcomeOnlyOnSuccess(t *testing.T) {
 	for _, mode := range []string{"cancelled error", "deadline error", "late context cancellation"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			var cause error
+			var saved protocol.RunSummary
 			if mode == "cancelled error" {
 				cause = context.Canceled
 			}
@@ -75,17 +77,25 @@ func TestFinalCheckpointCancellationIsReflectedInReturnedSummary(t *testing.T) {
 			}
 			result, err := New(Config{LLM: &scriptedLLM{scripts: [][]types.StreamToken{completionScript()}}, Tools: tools.New()}).Run(ctx, RunConfig{
 				Prompt: "inspect", Profile: Profile{Name: "test"},
-				SaveContext: func(_ ctxmgr.ManagerSnapshot, status, _ string, _ AttemptUsage) error {
+				SaveContext: func(_ ctxmgr.ManagerSnapshot, status, _ string, usage AttemptUsage) error {
 					if status == "running" {
 						return nil
 					}
 					if cause == nil {
+						saved = usage.Summary
 						cancel()
 					}
 					return cause
 				},
 			})
-			if result == nil || result.Summary.StopReason != "cancelled" || result.Summary.StepCount != 1 {
+			want := "execution_error"
+			if mode == "late context cancellation" {
+				want = "completed"
+				if err != nil || result == nil || result.Status != StatusCompleted || saved != result.Summary {
+					t.Fatalf("lost committed completion: %+v, %v", result, err)
+				}
+			}
+			if result == nil || result.Summary.StopReason != want || result.Summary.StepCount != 1 {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}
 			if cause != nil && (!errors.Is(err, cause) || !protocol.EvidenceIncomplete(err)) {

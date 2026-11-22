@@ -368,6 +368,30 @@ func TestExecutorWorkspacePromptAddsReadRoot(t *testing.T) {
 	}
 }
 
+func TestReadTempFileApprovalKeepsSiblingPathsOutsideWorkspace(t *testing.T) {
+	tempRoot := t.TempDir()
+	t.Setenv("TMPDIR", tempRoot)
+	target := filepath.Join(tempRoot, "test-output.log")
+	primary := filepath.Join(tempRoot, "project")
+	if err := os.Mkdir(primary, 0700); err != nil {
+		t.Fatal(err)
+	}
+	e := newTestExecutor(fakeRegistry{"read": &captureTool{fakeTool: fakeTool{name: "read", mode: core.ModeParallel}}})
+	e.workspace.Configure(primary, nil)
+	var granted any
+	e.SetConfirmFn(func(req protocol.ConfirmRequest) protocol.ConfirmReply {
+		granted = req.Args["path"]
+		return protocol.AllowOnce()
+	})
+	result := e.ExecuteBatch(t.Context(), []core.ToolCallItem{{ID: "read-log", Name: "read", Args: map[string]any{"path": target}}})[0]
+	if result.Error != "" || granted != target {
+		t.Fatalf("result=%+v grant=%v", result, granted)
+	}
+	if _, _, ok, err := e.workspace.CheckRead(filepath.Join(tempRoot, "another.log")); err != nil || ok {
+		t.Fatalf("sibling allowed=%v err=%v", ok, err)
+	}
+}
+
 func TestExecutorWorkspaceDenialBlocksBeforeExecute(t *testing.T) {
 	primary := t.TempDir()
 	extra := t.TempDir()
@@ -1200,8 +1224,8 @@ func TestToolOutputArtifactsAreRecoverableAndIsolated(t *testing.T) {
 	if err != nil || string(raw) != original {
 		t.Fatalf("lost task evidence: %v", err)
 	}
-	if _, _, allowed, err := first.workspace.CheckRead(path); err != nil || !allowed {
-		t.Fatal("own artifact is unreadable")
+	if _, grant, allowed, err := first.workspace.CheckRead(path); err != nil || !allowed || !grant.FileOnly || grant.Access != workspace.AccessReadOnly {
+		t.Fatalf("artifact needs an exact read grant: %+v, %v", grant, err)
 	}
 	if _, _, allowed, err := second.workspace.CheckRead(path); err != nil || allowed {
 		t.Fatal("another executor can read the artifact")

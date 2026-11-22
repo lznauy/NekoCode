@@ -107,3 +107,43 @@ func TestResumedTaskInteractionsSurviveOldAttemptCleanup(t *testing.T) {
 		})
 	}
 }
+
+func TestBackgroundTaskWaitsUntilLastInteractionResolves(t *testing.T) {
+	rt := New(RunnerFunc(func(context.Context, string, RunHost) (string, error) { return "", nil }), backgroundServices(t.TempDir()))
+	defer rt.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	host := backgroundHost{runtime: rt, ctx: ctx, id: "worker", sessionID: "session", interactionID: "scope"}
+	b := rt.background
+	b.mu.Lock()
+	b.entries[host.id] = &backgroundEntry{interactionID: host.interactionID, cancel: cancel, BackgroundTask: BackgroundTask{ID: host.id, SessionID: host.sessionID, Status: "running"}}
+	b.mu.Unlock()
+
+	events, err := rt.Events(ctx, EventFilter{Types: []EventType{EventSubAgentUpdated}, SubAgentID: host.id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextStatus := func(want string) {
+		t.Helper()
+		select {
+		case ev := <-events:
+			if got := ev.Payload.(SubAgentPayload).Status; got != want {
+				t.Fatalf("worker status = %s, want %s", got, want)
+			}
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+	}
+	go host.Ask(protocol.QuestionRequest{Done: ctx.Done()})
+	nextStatus("waiting_question")
+	go host.Confirm(protocol.ConfirmRequest{Done: ctx.Done()})
+	nextStatus("waiting_approval")
+	if err := rt.approvals.Decide(rt.approvals.Pending()[0].ID, ApprovalDecision{Allowed: true}); err != nil {
+		t.Fatal(err)
+	}
+	nextStatus("waiting_question")
+	if err := rt.questions.Answer(rt.questions.Pending()[0].ID, protocol.QuestionReply{}); err != nil {
+		t.Fatal(err)
+	}
+	nextStatus("running")
+}

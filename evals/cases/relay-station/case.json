@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "id": "relay-station",
+  "version": 1,
+  "title": "Relay Station 多代理并发项目交付",
+  "kind": "product",
+  "tags": [
+    "multi-agent-project",
+    "sqlite",
+    "concurrency",
+    "integration"
+  ],
+  "prompt": "prompt.md",
+  "fixture": "fixture",
+  "verifier": "verify.py",
+  "requirements": [
+    {
+      "id": "workers",
+      "description": "至少 12 个不同子任务有可核实的工具工作并成功交付",
+      "required": true
+    },
+    {
+      "id": "parallelism",
+      "description": "成功交付的不同子任务实际同时运行峰值至少 8",
+      "required": true
+    },
+    {
+      "id": "integration_run",
+      "description": "在子任务交付后主代理在最终工作区成功执行项目测试",
+      "required": true
+    },
+    {
+      "id": "design",
+      "description": "用户指南、架构与功能设计、目录链接对应实际交付",
+      "required": true
+    },
+    {
+      "id": "scale",
+      "description": "relay/ 与 tests/ 至少 1000 个有效 Python 代码行，生产代码至少 500 行",
+      "required": true
+    },
+    {
+      "id": "project-tests",
+      "description": "项目自带测试全部通过，至少 12 个测试并能发现 CLI 计算错误",
+      "required": true
+    },
+    {
+      "id": "network",
+      "description": "网络增量导入、输入验证与原子性",
+      "required": true
+    },
+    {
+      "id": "routing",
+      "description": "确定性选路与三级排序",
+      "required": true
+    },
+    {
+      "id": "lifecycle",
+      "description": "包裹冻结路由与多段运输状态转换",
+      "required": true
+    },
+    {
+      "id": "ledger",
+      "description": "持久化台账、查询和分页",
+      "required": true
+    },
+    {
+      "id": "recovery",
+      "description": "跨进程容量竞争、重启恢复和幂等重放",
+      "required": true
+    },
+    {
+      "id": "contract",
+      "description": "原始接口契约完整保留",
+      "required": true
+    }
+  ],
+  "budgets": {
+    "wall_seconds": 3600,
+    "model_calls": 400,
+    "total_tokens": 9000000,
+    "verifier_seconds": 150
+  },
+  "source": "Original NekoCode high-concurrency project benchmark"
+}

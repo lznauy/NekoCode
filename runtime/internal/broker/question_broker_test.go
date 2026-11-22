@@ -73,3 +73,22 @@ func TestQuestionBrokerRequestAfterCloseIsRejected(t *testing.T) {
 		t.Fatalf("pending questions = %d, want 0", len(pending))
 	}
 }
+
+func TestQuestionBrokerAnswerAfterToolCancellation(t *testing.T) {
+	bus := eventbus.NewEventBus()
+	b := NewQuestionBroker(bus, core.SourceRef{}, nil)
+	done := make(chan struct{})
+	wait := b.Register(protocol.QuestionRequest{Done: done})
+	id := b.Pending()[0].ID
+	close(done)
+	if err := b.Answer(id, protocol.QuestionReply{Answers: [][]string{{"yes"}}}); err == nil {
+		t.Error("accepted answer after tool cancellation")
+	}
+	if reply := wait(); !reply.Rejected || len(reply.Answers) != 0 {
+		t.Errorf("cancelled tool got %+v", reply)
+	}
+	events := bus.History(core.EventFilter{Types: []core.EventType{core.EventQuestionResolved}})
+	if len(events) != 1 || events[0].Payload.(core.QuestionView).Status != core.QuestionRejected {
+		t.Fatalf("expected one rejected question, got %+v", events)
+	}
+}

@@ -14,6 +14,7 @@ type RunSnapshot struct {
 	Status          RunStatus           `json:"status"`
 	Source          SourceRef           `json:"source"`
 	Sender          SenderRef           `json:"sender"`
+	InputAccepted   bool                `json:"input_accepted,omitempty"`
 	Input           string              `json:"input,omitempty"`
 	Phase           string              `json:"phase,omitempty"`
 	StartedAt       time.Time           `json:"started_at"`

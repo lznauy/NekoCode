@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"nekocode/protocol"
 	"regexp"
 	"strings"
 	"time"
@@ -15,8 +16,6 @@ import (
 	"nekocode/logger"
 	"nekocode/util/modelbudget"
 )
-
-var ErrIncompleteResponse = errors.New("model response incomplete")
 
 // StreamCallbacks holds per-token callbacks for ConsumeStream.
 type StreamCallbacks struct {
@@ -90,7 +89,9 @@ func CallLLM(client provider.LLM, opts LLMCallOptions) (*LLMCallResult, error) {
 		err := fmt.Errorf("chat stream failed")
 		select {
 		case streamErr := <-errCh:
-			err = streamErr
+			if streamErr != nil {
+				err = streamErr
+			}
 		default:
 		}
 		writeCallRecord(opts, &StreamResult{}, start, err, "request")
@@ -117,13 +118,13 @@ func CallLLM(client provider.LLM, opts LLMCallOptions) (*LLMCallResult, error) {
 			return err
 		}
 		if stream.refused {
-			return fmt.Errorf("%w: provider returned a refusal", ErrIncompleteResponse)
+			return fmt.Errorf("%w: provider returned a refusal", protocol.ErrIncompleteResponse)
 		}
 		switch stream.finishReason {
 		case "length", "max_tokens", "model_context_window_exceeded":
-			return fmt.Errorf("%w: provider output token limit reached", ErrIncompleteResponse)
+			return fmt.Errorf("%w: provider output token limit reached", protocol.ErrIncompleteResponse)
 		case "content_filter", "refusal":
-			return fmt.Errorf("%w: provider stopped generation (%s)", ErrIncompleteResponse, stream.finishReason)
+			return fmt.Errorf("%w: provider stopped generation (%s)", protocol.ErrIncompleteResponse, stream.finishReason)
 		}
 		return nil
 	}()
@@ -150,6 +151,7 @@ var writeRecord = calllog.Write
 func writeCallRecord(opts LLMCallOptions, stream *StreamResult, start time.Time, callErr error, failureStage ...string) {
 	rec := calllog.NewRecord(opts.Ctx, opts.Source, opts.SessionID, start)
 	rec.SetOutcome(stream.Usage, stream.Request, callErr)
+	modelbudget.FromContext(opts.Ctx).ObserveTokens(rec.TotalTokens, *rec.UsageReported)
 	if callErr != nil && len(failureStage) > 0 {
 		rec.FailureStage = failureStage[0]
 	}
@@ -195,16 +197,13 @@ func CallLLMWithRetry(ctx context.Context, client provider.LLM, buildOptions fun
 		disabled := true
 		retryOpts.Request.DisableThinking = &disabled
 		retry, retryErr := CallLLM(client, retryOpts)
-		if errors.Is(retryErr, ErrIncompleteResponse) {
-			return retry, retryErr
+		if retryErr != nil {
+			if retry != nil && retry.Text != "" && retryOpts.Callbacks.OnTextReset != nil {
+				retryOpts.Callbacks.OnTextReset()
+			}
+			return result, retryErr
 		}
-		if retryErr == nil && retry != nil {
-			return retry, nil
-		}
-		if retry != nil && retry.Text != "" && retryOpts.Callbacks.OnTextReset != nil {
-			retryOpts.Callbacks.OnTextReset()
-		}
-		logger.Log("llmstream: thinking-disabled retry failed (err=%v), keeping the original result", retryErr)
+		return retry, nil
 	}
 	return result, nil
 }

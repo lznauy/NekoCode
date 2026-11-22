@@ -47,6 +47,7 @@ type ToolEvent struct {
 	Output    string
 	Error     string
 	Blocked   bool
+	Process   protocol.ProcessObservation `json:"process,omitzero"`
 	BlockText string
 }
 
@@ -117,7 +118,7 @@ func (l *Ledger) recordTool(ev ToolEvent, authorizeRead bool) {
 		l.blockedTools = append(l.blockedTools, ev)
 		return
 	}
-	if ev.Error != "" {
+	if ev.Error != "" || ev.Process.FailedExit() {
 		l.toolErrors = append(l.toolErrors, ev)
 		return
 	}

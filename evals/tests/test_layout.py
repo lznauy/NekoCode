@@ -83,7 +83,7 @@ class LayoutTests(unittest.TestCase):
         from agent_eval.runner import run_trial
         from agent_eval.catalog import load_case
         observed = []
-        def interrupted(*args, workspace):
+        def interrupted(*args, workspace, **options):
             workspace.mkdir()
             (workspace/'partial').write_text('partial source')
             observed.append(workspace)

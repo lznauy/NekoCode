@@ -47,9 +47,9 @@ func (r *turnRunner) interruptedBeforeReasoning(callback RunCallback) bool {
 }
 
 // retryAfterInterruptedReasoning handles an interrupted LLM response:
-// it rolls back the partial output, drains steering messages, and signals
+// it drains steering messages and signals
 // the loop to retry — unless the agent is already finishing.
-func (r *turnRunner) retryAfterInterruptedReasoning(reasoning *reasoningResult, msgCountBefore int) bool {
+func (r *turnRunner) retryAfterInterruptedReasoning(reasoning *reasoningResult) bool {
 	a := r.agent
 	if !reasoning.Interrupted {
 		return false
@@ -61,7 +61,8 @@ func (r *turnRunner) retryAfterInterruptedReasoning(reasoning *reasoningResult, 
 	// Count interrupted responses toward the step limit to prevent
 	// unbounded loops when the LLM repeatedly produces interrupted output.
 	a.run.step++
-	a.deps.ctxMgr.TruncateTo(msgCountBefore)
+	// The model runner commits assistant messages only after a successful call.
+	// Steering already admitted before this attempt must survive cancellation.
 	if err := a.drainSteering(); err != nil {
 		a.run.err = err
 		a.clearFinalState()
@@ -71,33 +72,19 @@ func (r *turnRunner) retryAfterInterruptedReasoning(reasoning *reasoningResult, 
 }
 
 // handleToolCalls executes the requested tool calls and feeds the results
-// back into the context. Tool activity resets the consecutive-hint/failure
+// back into the context. Tool activity resets the consecutive-hint
 // counters and the policy-block gate. Returns true when the run should finish.
 func (r *turnRunner) handleToolCalls(calls []core.ToolCallItem, reasoning *reasoningResult, callback RunCallback) bool {
 	a := r.agent
 	a.run.consecutiveHints = 0
-	a.run.consecutiveFailures = 0
 	a.gate.Reset()
 	return a.toolRunner.executeAndFeedback(calls, reasoning.TextContent, callback)
 }
 
-// handleText processes a text-only response (no tool calls): it tracks
-// consecutive LLM failures, runs Stop hooks, and — unless a hook took
+// handleText processes a text-only response (no tool calls): it runs Stop hooks and — unless a hook took
 // over — completes the run with the text as the final answer.
 func (r *turnRunner) handleText(reasoning *reasoningResult, callback RunCallback) (finished bool) {
 	a := r.agent
-	if reasoning.IsError {
-		a.run.consecutiveFailures++
-		if a.run.consecutiveFailures >= maxConsecutiveFailures {
-			a.run.step++
-			a.run.stopReason = policy.StopCompleted
-			a.clearFinalState()
-			return true
-		}
-	} else {
-		a.run.consecutiveFailures = 0
-	}
-
 	recordable := isRecordableText(reasoning)
 	if handled, finished := r.applyStopHooks(reasoning, recordable, callback); handled {
 		return finished
@@ -107,6 +94,7 @@ func (r *turnRunner) handleText(reasoning *reasoningResult, callback RunCallback
 		return false
 	}
 	review, goalActive := a.getCtx().Value(goalReviewKey{}).(func(string) string)
+	answer := reasoning.ActionInput
 	marker := ""
 	if recordable && goalActive {
 		marker = GoalMarker(reasoning.ActionInput)
@@ -120,7 +108,7 @@ func (r *turnRunner) handleText(reasoning *reasoningResult, callback RunCallback
 		return false
 	}
 	if goalActive && recordable {
-		if hint := review(reasoning.ActionInput); hint != "" {
+		if hint := review(answer); hint != "" {
 			// The next model step needs the preceding progress report even
 			// though this response is not the run's final answer.
 			r.recordReasoningText(reasoning, recordable)
@@ -138,7 +126,7 @@ func (r *turnRunner) handleText(reasoning *reasoningResult, callback RunCallback
 // isRecordableText reports whether the response is a clean final chat text
 // (non-error, non-garbled) that should be persisted to the context.
 func isRecordableText(reasoning *reasoningResult) bool {
-	return !reasoning.IsError && !reasoning.GarbledToolCall && reasoning.Action == actionChat
+	return !reasoning.GarbledToolCall && reasoning.Action == actionChat
 }
 
 // completeWithText finishes the run with a text answer: it records the
@@ -181,29 +169,15 @@ func (r *turnRunner) applyStopHooks(reasoning *reasoningResult, recordable bool,
 	if a.deps.gov == nil {
 		return false, false
 	}
-	var intent policy.FinalIntent
+	intent := policy.FinalIntentNonFinal
 	if recordable {
 		intent = policy.FinalIntentFinal
-	} else {
-		intent = finalIntentForReasoning(reasoning)
+	} else if reasoning.GarbledToolCall {
+		intent = policy.FinalIntentFormatError
 	}
 
 	out := policy.Resolve(a.deps.gov.BeforeStop(policy.TurnResult{Intent: intent, Garbled: reasoning.GarbledToolCall, Text: reasoning.ActionInput}, a.getCtx()))
 	return r.applyStopOutcome(out, reasoning, recordable, callback)
-
-}
-
-// finalIntentForReasoning maps a non-recordable response to the final-intent
-// label reported to Stop hooks.
-func finalIntentForReasoning(reasoning *reasoningResult) policy.FinalIntent {
-	switch {
-	case reasoning.IsError:
-		return policy.FinalIntentError
-	case reasoning.GarbledToolCall:
-		return policy.FinalIntentFormatError
-	default:
-		return policy.FinalIntentNonFinal
-	}
 }
 
 // applyStopHint injects a Stop hint so the model revises its answer
@@ -221,7 +195,7 @@ func (r *turnRunner) applyStopHint(reasoning *reasoningResult, hint *policy.Hint
 		}
 		a.run.step++
 		a.run.stopReason = policy.StopCompleted
-		if reasoning.IsError || reasoning.GarbledToolCall {
+		if reasoning.GarbledToolCall {
 			a.clearFinalState()
 		} else {
 			if recordable {

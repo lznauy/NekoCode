@@ -45,6 +45,15 @@ for line in sys.stdin:
    logs=root/'logs';logs.mkdir(parents=True,exist_ok=True)
    call={'session':sid,'call_id':'call-one','source':'main','model':'' if os.environ.get('EVAL_TEST_BEHAVIOR')=='missing-model' else 'fixed','in':100,'out':20,'total':120,'new':80,'cached':20,'cache_usage_reported':True,'execution':{'run_id':'run-one'},'seq':1}
    (logs/'llm-calls.jsonl').write_text(json.dumps(call)+'\n')
+  if uid=='task' and os.environ.get('EVAL_TEST_BEHAVIOR')=='step-limit':
+   emit({'type':'result','user_message_uuid':uid,'is_error':True,'stop_reason':'step_limit','subtype':'error_step_limit','result':'Outstanding verification'})
+   continue
+  if uid=='task' and os.environ.get('EVAL_TEST_BEHAVIOR')=='incomplete':
+   emit({'type':'result','user_message_uuid':uid,'is_error':True,'stop_reason':'incomplete','subtype':'error_incomplete','result':'incomplete'})
+   continue
+  if uid=='task' and os.environ.get('EVAL_TEST_BEHAVIOR')=='budget-result':
+   emit({'type':'result','user_message_uuid':uid,'is_error':True,'stop_reason':'call_budget','subtype':'error_call_budget','execution_budget':{'limit':400,'admitted':398,'work_remaining':0,'handoff_remaining':2,'coordinator_remaining':0}})
+   continue
   if uid!='task' or os.environ.get('EVAL_TEST_BEHAVIOR')!='undelivered-answer':emit({'type':'result','user_message_uuid':uid,'result':answer if uid=='task' else '', 'is_error':False})
   if uid=='task' and os.environ.get('EVAL_TEST_BEHAVIOR')=='public-coordinator':
    emit({'type':'system','subtype':'init','user_message_uuid':'coordinator-run','nekocode_source':{'kind':'task_completion'}})
@@ -141,11 +150,25 @@ class EvalTests(unittest.TestCase):
         self.assertEqual(outcome['cost']['model_calls'],1)
         self.assertEqual(outcome['cost']['total_tokens'],120)
         self.assertEqual(tree_hash(self.root/'trial/product'),tree_hash(case['paths']['fixture']))
-        self.assertTrue((self.root/'trial/trace/protocol.jsonl').exists())
+        frames = [json.loads(line)["message"] for line in (self.root/'trial/trace/protocol.jsonl').read_text().splitlines()]
+        initialize = next(f["request"] for f in frames if f.get("request_id") == "initialize")
+        self.assertEqual(initialize["external_token_limit"], case["manifest"]["budgets"]["total_tokens"])
         self.assertFalse((self.root/'trial/analysis').exists())
         self.assertFalse((self.root/'trial/workspace').exists())
         with self.assertRaises(FileExistsError):
             run_trial(case,self.fake_binary(),'fixed','standard',self.root/'telemetry',self.root/'trial',1)
+
+    def test_unreadable_journal_preserves_trial_outcome(self):
+        telemetry = self.root / "telemetry"
+        trial = self.root / "trial"
+        journal = Path("sessions/test-session/runs/unreadable/events.jsonl")
+        (telemetry / journal).mkdir(parents=True)
+        with patch.dict(os.environ, {"EVAL_TEST_TELEMETRY": str(telemetry)}):
+            run_trial(load_case("review-clean"), self.fake_binary(), "fixed", "standard", telemetry, trial, 1)
+        outcome = json.loads((trial / "outcome.json").read_text())
+        self.assertEqual(outcome["integrity"]["telemetry_read_errors"], {str(journal): "NotRegularFile"})
+        self.assertEqual(outcome["cost"]["tool_started"], 1)
+        self.assertEqual(json.loads((trial / "state.json").read_text())["status"], "finished")
 
     def test_private_log_cannot_replace_public_answer(self):
         trial = self.root / 'public-answer'
@@ -201,6 +224,44 @@ class EvalTests(unittest.TestCase):
         self.assertFalse(result['verification']['product_passed'])
         self.assertFalse(result['public_final_answer_present'])
         self.assertEqual((self.root/'budget/answer.txt').read_text(), '')
+
+    def test_unbudgeted_run_observes_cost_without_enforcing_case_limits(self):
+        case = load_case('review-clean')
+        case['manifest']['budgets'].update(model_calls=1, total_tokens=1, wall_seconds=1)
+        path = self.root/'unbudgeted'
+        with patch.dict(os.environ, {'EVAL_TEST_TELEMETRY': str(self.root/'telemetry')}):
+            result = run_trial(case, self.fake_binary(), 'fixed', 'standard', self.root/'telemetry', path, 1, no_execution_budget=True)
+        self.assertTrue(result['success'], result)
+        self.assertEqual(result['cost']['total_tokens'], 120)
+        receipt = json.loads((path/'receipt.json').read_text())
+        for key in ('model_calls', 'total_tokens', 'wall_seconds'):
+            self.assertIsNone(receipt['budgets'][key])
+        frames = [json.loads(line)['message'] for line in (path/'trace/protocol.jsonl').read_text().splitlines()]
+        init = next(f['request'] for f in frames if f.get('request_id') == 'initialize')
+        self.assertEqual(init, {'subtype': 'initialize'})
+
+    def test_step_limit_preserves_partial_delivery(self):
+        path = self.root/'step-limit'
+        with patch.dict(os.environ, {'EVAL_TEST_TELEMETRY': str(self.root/'telemetry'), 'EVAL_TEST_BEHAVIOR': 'step-limit'}):
+            result = run_trial(load_case('review-clean'), self.fake_binary(), 'fixed', 'standard', self.root/'telemetry', path, 1)
+        self.assertEqual(result['stop_reason'], 'step_limit')
+        self.assertFalse(result['success'])
+        self.assertEqual((path/'answer.txt').read_text().strip(), 'Outstanding verification')
+
+    def test_incomplete_model_result_preserves_stop_reason(self):
+        telemetry = self.root/'telemetry'
+        with patch.dict(os.environ, {'EVAL_TEST_TELEMETRY': str(telemetry), 'EVAL_TEST_BEHAVIOR': 'incomplete'}):
+            result = run_trial(load_case('review-clean'), self.fake_binary(), 'fixed', 'standard', telemetry, self.root/'trial', 1)
+        self.assertEqual(result['stop_reason'], 'incomplete')
+        self.assertFalse(result['success'])
+
+    def test_budget_result_preserves_role_balances(self):
+        path = self.root/'budget-result'
+        with patch.dict(os.environ, {'EVAL_TEST_TELEMETRY':str(self.root/'telemetry'), 'EVAL_TEST_BEHAVIOR':'budget-result'}):
+            result = run_trial(load_case('review-clean'),self.fake_binary(),'fixed','standard',self.root/'telemetry',path,1)
+        self.assertEqual(result['stop_reason'], 'call_budget')
+        self.assertFalse(result['success'])
+        self.assertIn('398/400 admitted; remaining ordinary 0, worker handoff 2, coordinator 0', (path/'report.md').read_text())
 
     def test_native_budget_exact_ceiling_can_settle(self):
         case=load_case('review-clean');case['manifest']['budgets']['model_calls']=1
@@ -294,6 +355,17 @@ class EvalTests(unittest.TestCase):
             self.assertEqual(compare(base,other,self.root/('compare-'+field))['counts'],{'incomparable':1})
         incomplete=self.make_run('incomplete');(incomplete/'trials/one/outcome.json').unlink()
         self.assertEqual(compare(base,incomplete,self.root/'compare-incomplete')['counts'],{'incomparable':1})
+
+    def test_comparison_treats_legacy_parallel_step_sharing_as_disabled(self):
+        base = self.make_run("baseline")
+        candidate = self.make_run("candidate")
+        path = candidate / "trials/one/receipt.json"
+        receipt = read_json(path)
+        for enabled, expected in [(False, "both_success"), (True, "incomparable")]:
+            receipt["parallel_step_sharing"] = enabled
+            write_json(path, receipt)
+            result = compare(base, candidate, self.root / f"compare-{enabled}")
+            self.assertEqual(result["counts"], {expected: 1})
 
     def test_delivery_cost_counts_failed_attempts_without_imputing_unknown_cost(self):
         from agent_eval.compare import delivery_cost
@@ -406,12 +478,17 @@ class ToolCostTests(unittest.TestCase):
             self.assertIsNone(protocol_tool_cost(path, 's')['tool_requests'])
 
     def test_runtime_counts_preserve_compatibility_and_unknown(self):
-        t = Telemetry('/missing')
-        self.assertIsNone(t.cost()['tool_started'])
-        t.events = {'a': {'type': 'tool_started'}, 'b': {'type': 'tool_blocked'}}
-        self.assertEqual(t.cost()['tool_started'], 1)
-        self.assertEqual(t.cost()['tool_calls'], 1)
-        self.assertEqual(t.cost()['tool_blocked'], 1)
+        with tempfile.TemporaryDirectory() as root:
+            t = Telemetry(root, 's')
+            self.addCleanup(t.close)
+            self.assertIsNone(t.cost()['tool_started'])
+            journal = Path(root)/'sessions/s/runs/run/events.jsonl'
+            journal.parent.mkdir(parents=True)
+            journal.write_text('{"id":"a","type":"tool_started"}\n{"id":"b","type":"tool_blocked"}\n')
+            t.refresh()
+            self.assertEqual(t.cost()['tool_started'], 1)
+            self.assertEqual(t.cost()['tool_calls'], 1)
+            self.assertEqual(t.cost()['tool_blocked'], 1)
 
 class ImageUsageCompletenessTests(unittest.TestCase):
     def test_image_unknown_usage_preserves_known_subtotal_and_attempt_count(self):

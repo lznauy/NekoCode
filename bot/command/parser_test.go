@@ -195,3 +195,12 @@ func TestReasoningEffortCommand(t *testing.T) {
 		t.Fatalf("invalid effort: output=%q handled=%v current=%q", out, handled, current)
 	}
 }
+
+func TestAbsolutePathFallsThroughCommandRouting(t *testing.T) {
+	p := NewParser()
+	for _, input := range []string{"/tmp/example.py", "/tmp/path with spaces/file"} {
+		if _, handled := p.Execute(context.Background(), p.Parse(input)); handled {
+			t.Errorf("path handled as command: %q", input)
+		}
+	}
+}

@@ -33,7 +33,7 @@ export const RunCard = memo(function RunCard({ msg, toggleStep }: RunCardProps) 
   const persistentSteps = allSteps.filter((s) => persistentTool(s.toolName))
   const steps = streaming ? allSteps : persistentSteps
   const toolCount = allSteps.length
-  const persistCount = persistentSteps.length
+  const persistCount = persistentSteps.filter((s) => s.toolName !== 'task_batch').length
   const visibleToolCount = steps.length
   const hiddenToolCount = Math.max(0, toolCount - visibleToolCount)
   const activity = msg.activity

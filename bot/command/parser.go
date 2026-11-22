@@ -294,7 +294,7 @@ func normalizePrefix(prefix string) string {
 }
 
 func commandPrefix(input string) string {
-	if strings.HasPrefix(input, SlashPrefix) {
+	if protocol.IsSlashCommandInput(input) {
 		return SlashPrefix
 	}
 	if strings.HasPrefix(input, DollarPrefix) {

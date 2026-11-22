@@ -55,6 +55,15 @@ func RedactInputText(input string) string {
 }
 
 func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
+	return r.startCurrentRun(ctx, input, nil)
+}
+
+// StartRunIfCurrent admits a queued message only in the session that owns it.
+func (r *Runtime) StartRunIfCurrent(ctx context.Context, sessionID string, input Input) (RunID, error) {
+	return r.startCurrentRun(ctx, input, &sessionID)
+}
+
+func (r *Runtime) startCurrentRun(ctx context.Context, input Input, expected *string) (RunID, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -62,7 +71,43 @@ func (r *Runtime) StartRun(ctx context.Context, input Input) (RunID, error) {
 		return "", err
 	}
 	defer r.mutationMu.Unlock()
+	if expected != nil {
+		if err := r.checkQueuedSessionLocked(*expected); err != nil {
+			return "", err
+		}
+	}
 	return r.startRunLocked(ctx, input, nil, "")
+}
+
+// ExecuteLocalCommandIfCurrent keeps queued local commands inside the same
+// session selection barrier as queued foreground runs.
+func (r *Runtime) ExecuteLocalCommandIfCurrent(ctx context.Context, sessionID, input string) (string, LocalCommandResult, error) {
+	if err := r.mutationMu.LockContext(ctx); err != nil {
+		return "", LocalCommandNotCommand, err
+	}
+	defer r.mutationMu.Unlock()
+	if err := r.checkQueuedSessionLocked(sessionID); err != nil {
+		return "", LocalCommandNotCommand, err
+	}
+	out, status := r.ExecuteLocalCommand(ctx, input)
+	return out, status, nil
+}
+
+// Caller owns mutationMu. A competing run must never absorb queued input
+// through Super Agent's separate background inbox.
+func (r *Runtime) checkQueuedSessionLocked(sessionID string) error {
+	if sessionID != r.CurrentSessionID() {
+		return protocolError(ErrorConflict, "queued_input", "queued message belongs to a different session")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return protocolError(ErrorClosed, "queued_input", "runtime closed")
+	}
+	if r.status != RunIdle {
+		return protocolError(ErrorBusy, "queued_input", "another run is still active")
+	}
+	return nil
 }
 
 // startRunLocked preserves normal admission while the caller holds mutationMu.
@@ -117,7 +162,7 @@ func (r *Runtime) startRunLocked(ctx context.Context, input Input, finishSession
 		}
 		return runID, protocolError(ErrorBusy, "start_run", fmt.Sprintf("run %s is %s", runID, status))
 	}
-	if r.services.Modes.Current != nil && r.services.Modes.Current() == mode.Standard && !strings.HasPrefix(strings.TrimSpace(input.Text), "/") {
+	if r.services.Modes.Current != nil && r.services.Modes.Current() == mode.Standard && !protocol.IsSlashCommandInput(input.Text) {
 		r.background.mu.Lock()
 		writing := len(r.background.workspaces) > 0
 		r.background.mu.Unlock()
@@ -132,6 +177,9 @@ func (r *Runtime) startRunLocked(ctx context.Context, input Input, finishSession
 		runID = queued
 	}
 	r.mu.Unlock()
+	if input.Source.Kind == "tui" && sessionID == "" && r.services.Sessions.EnsureSessionIdentity != nil {
+		sessionID = r.services.Sessions.EnsureSessionIdentity()
+	}
 	// Registration precedes Running: steering must not publish into the
 	// previous run's recording destination while this run is starting.
 	if err := r.beginRecordedRun(runID); err != nil {
@@ -183,7 +231,7 @@ func (r *Runtime) SteerRun(ctx context.Context, runID RunID, input Input) error 
 		return protocolError(ErrorBusy, "steer_run", "runtime operation in progress")
 	}
 	super := r.services.Modes.Current != nil && r.services.Modes.Current() == mode.SuperAgent
-	if super && !strings.HasPrefix(strings.TrimSpace(input.Text), "/") {
+	if super && !protocol.IsSlashCommandInput(input.Text) {
 		defer r.mutationMu.Unlock()
 		_, err := r.startRunLocked(ctx, input, nil, runID)
 		return err
@@ -279,9 +327,11 @@ func (r *Runtime) CancelRun(ctx context.Context, runID RunID) error {
 
 func (r *Runtime) publishCancellation(control cancelControl, message string) {
 	_ = control.lease.wait(context.Background())
-	control.execution.wait()
+	// A registration admitted just before deactivation can miss the first
+	// rejection sweep. No registrations can arrive after the lease drains.
 	r.approvals.RejectRun(control.runID)
 	r.questions.RejectRun(control.runID)
+	control.execution.wait()
 	if control.execution.hasMetrics() {
 		r.publishMetrics(control.runID)
 	}

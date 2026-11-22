@@ -1,7 +1,10 @@
 // Package contract defines the versioned wire contract shared by hook adapters.
 package contract
 
-import "context"
+import (
+	"context"
+	"nekocode/protocol"
+)
 
 const Version = 1
 
@@ -47,35 +50,37 @@ type StatePatch struct {
 }
 
 type Event struct {
-	Context      context.Context `json:"-"`
-	Version      int             `json:"version"`
-	Point        string          `json:"event"`
-	HookID       string          `json:"hook_id"`
-	ActionIndex  int             `json:"action_index"`
-	EvaluationID uint64          `json:"evaluation_id"`
-	SessionID    string          `json:"session_id"`
-	RunID        string          `json:"run_id"`
-	ActorID      string          `json:"actor_id"`
-	Tool         string          `json:"tool"`
-	Error        bool            `json:"error"`
-	Args         map[string]any  `json:"args"`
-	Output       string          `json:"output,omitempty"`
-	ErrorMessage string          `json:"error_message,omitempty"`
-	Batch        []ToolResult    `json:"batch,omitempty"`
-	Input        string          `json:"input,omitempty"`
-	Intent       string          `json:"intent"`
-	Text         string          `json:"text,omitempty"`
-	PluginRoot   string          `json:"pluginRoot"`
-	State        StatePatch      `json:"state"`
+	Context      context.Context             `json:"-"`
+	Version      int                         `json:"version"`
+	Point        string                      `json:"event"`
+	HookID       string                      `json:"hook_id"`
+	ActionIndex  int                         `json:"action_index"`
+	EvaluationID uint64                      `json:"evaluation_id"`
+	SessionID    string                      `json:"session_id"`
+	RunID        string                      `json:"run_id"`
+	ActorID      string                      `json:"actor_id"`
+	Tool         string                      `json:"tool"`
+	Error        bool                        `json:"error"`
+	Args         map[string]any              `json:"args"`
+	Output       string                      `json:"output,omitempty"`
+	Process      protocol.ProcessObservation `json:"process,omitzero"`
+	ErrorMessage string                      `json:"error_message,omitempty"`
+	Batch        []ToolResult                `json:"batch,omitempty"`
+	Input        string                      `json:"input,omitempty"`
+	Intent       string                      `json:"intent"`
+	Text         string                      `json:"text,omitempty"`
+	PluginRoot   string                      `json:"pluginRoot"`
+	State        StatePatch                  `json:"state"`
 }
 
 type ToolResult struct {
-	Name        string         `json:"name"`
-	Args        map[string]any `json:"args"`
-	Output      string         `json:"output"`
-	Error       string         `json:"error"`
-	Blocked     bool           `json:"blocked"`
-	BlockReason string         `json:"block_reason,omitempty"`
+	Name        string                      `json:"name"`
+	Args        map[string]any              `json:"args"`
+	Output      string                      `json:"output"`
+	Error       string                      `json:"error"`
+	Blocked     bool                        `json:"blocked"`
+	Process     protocol.ProcessObservation `json:"process,omitzero"`
+	BlockReason string                      `json:"block_reason,omitempty"`
 }
 
 type Hint struct {

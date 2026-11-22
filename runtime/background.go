@@ -64,12 +64,15 @@ type BackgroundTask struct {
 }
 
 type backgroundEntry struct {
-	callBudget    *modelbudget.Budget
-	recording     bool
-	interactionID RunID
-	workerStatus  string
-	settling      bool // completion owns the attempt after this boundary
-	workerSummary protocol.RunSummary
+	callBudget           *modelbudget.Budget
+	recording            bool
+	interactionID        RunID
+	waitingApprovals     int
+	waitingQuestions     int
+	publishingWaitStatus bool
+	workerStatus         string
+	settling             bool // completion owns the attempt after this boundary
+	workerSummary        protocol.RunSummary
 	BackgroundTask
 	work   protocol.BackgroundWork
 	cancel context.CancelFunc
@@ -386,10 +389,6 @@ func (h runHost) SubmitBackground(ctx context.Context, work protocol.BackgroundW
 	if work.SessionID != h.runtime.CurrentSessionID() || work.ID == "" || work.Run == nil {
 		return protocol.BackgroundReceipt{}, fmt.Errorf("invalid background execution identity")
 	}
-	budget := modelbudget.FromContext(ctx)
-	if budget != nil && budget.Snapshot().WorkRemaining == 0 {
-		return protocol.BackgroundReceipt{}, modelbudget.ErrExhausted
-	}
 	var receipt protocol.BackgroundReceipt
 	var err error
 	if !h.lease.guard(func() { receipt, err = h.runtime.background.submit(ctx, work) }) {
@@ -432,6 +431,11 @@ func (b *backgroundTasks) submit(ctx context.Context, work protocol.BackgroundWo
 	if b.closed || ctx.Err() != nil {
 		b.unlockMutation()
 		return protocol.BackgroundReceipt{}, fmt.Errorf("task service closed or coordinator cancelled")
+	}
+	budget := modelbudget.FromContext(ctx)
+	if budget != nil && budget.Snapshot().WorkRemaining == 0 {
+		b.unlockMutation()
+		return protocol.BackgroundReceipt{}, modelbudget.ErrExhausted
 	}
 	if len(work.After) > 8 {
 		b.unlockMutation()
@@ -510,7 +514,7 @@ func (b *backgroundTasks) submit(ctx context.Context, work protocol.BackgroundWo
 		b.unlockMutation()
 		return protocol.BackgroundReceipt{}, fmt.Errorf("background history full; consume pending results first")
 	}
-	entry := &backgroundEntry{callBudget: modelbudget.FromContext(ctx), interactionID: RunID("task_scope_" + uuid.NewString()), BackgroundTask: BackgroundTask{ResultVersion: 1, Prompt: work.Prompt, UpdateSequence: work.UpdateSequenceFloor, ID: work.ID, SessionID: work.SessionID, GroupID: work.GroupID, Title: work.Title, Profile: work.Profile, Status: "queued"}, work: work}
+	entry := &backgroundEntry{callBudget: budget, interactionID: RunID("task_scope_" + uuid.NewString()), BackgroundTask: BackgroundTask{ResultVersion: 1, Prompt: work.Prompt, UpdateSequence: work.UpdateSequenceFloor, ID: work.ID, SessionID: work.SessionID, GroupID: work.GroupID, Title: work.Title, Profile: work.Profile, Status: "queued"}, work: work}
 	if old != nil {
 		entry.PendingUpdates = append([]string(nil), old.PendingUpdates...)
 		// Retained sidecar history may lag behind the child's committed receipt.

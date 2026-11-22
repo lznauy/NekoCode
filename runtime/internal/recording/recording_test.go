@@ -114,3 +114,35 @@ func TestPruneEmptyBatches(t *testing.T) {
 		t.Fatalf("empty session directory was removed: %v", err)
 	}
 }
+
+func TestWalkRecordedEventFileDoesNotChaseActiveWriter(t *testing.T) {
+	recorder, err := newTestRecorder(t, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recorder.Close()
+	write := func() {
+		t.Helper()
+		err := recorder.RecordError(core.Event{RunID: "run_1", Type: core.EventInteractionQueue, Payload: core.InteractionQueuePayload{ID: 1, SubAgentID: "child"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	write()
+	path := filepath.Join(recorder.RunDir("run_1"), "events.jsonl")
+	n := 0
+	err = WalkRecordedEventFile(path, func(core.Event) {
+		n++
+		if n < 5 {
+			write()
+		}
+	})
+	if err != nil || n != 1 {
+		t.Fatalf("replayed %d events, want the one present at open; err=%v", n, err)
+	}
+	n = 0
+	err = WalkRecordedEventFile(path, func(core.Event) { n++ })
+	if err != nil || n != 2 {
+		t.Fatalf("next replay saw %d events, want 2; err=%v", n, err)
+	}
+}

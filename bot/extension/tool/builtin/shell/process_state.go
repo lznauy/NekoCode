@@ -39,6 +39,9 @@ func (s taskStatus) String() string {
 }
 
 type shellTask struct {
+	goReport    *emptyGoReport
+	testName    string
+	testOutcome string // readable after drained closes
 	directory   string
 	name        string
 	owner       string
@@ -280,6 +283,25 @@ func (t *shellTask) resultLocked(reason string, output []byte, fromStart, clippe
 	observation := core.ProcessObservation{State: t.status.String(), OutputComplete: complete, Task: t.name, Reason: reason, NewOutputBytes: newBytes, UnchangedWaits: t.unchangedWaits}
 	if t.status == taskExited {
 		observation.ExitCode, observation.ExitCodeKnown = t.exitCode, true
+		// The exit code can arrive before the Go report has finished draining.
+		select {
+		case <-t.drained:
+			if t.testName != "" && !t.readFailed {
+				observation.TestName = t.testName
+				observation.TestOutcome = t.testOutcome
+			}
+			if t.exitCode == 0 && t.goReport != nil {
+				if t.readFailed {
+					observation.TestReportState = "unreadable"
+				} else {
+					observation.NoTestsRun = t.goReport.finish()
+				}
+			}
+		default:
+			if t.exitCode == 0 && t.goReport != nil {
+				observation.TestReportState = "pending"
+			}
+		}
 	}
 	text := toolutil.StripAnsi(string(output))
 	if t.captureErr != nil {

@@ -268,7 +268,7 @@ func (b *Bot) configuredWorkspaceRoots() []workspace.Root {
 		}
 	}
 	for _, r := range permission.NewStore(b.cwd).WorkspaceRoots() {
-		roots = append(roots, workspace.Root{Path: r.Path, Access: workspace.Access(r.Access), Canonical: true})
+		roots = append(roots, workspace.Root{Path: r.Path, Access: workspace.Access(r.Access), Canonical: true, FileOnly: r.FileOnly != nil && *r.FileOnly})
 	}
 	return roots
 }
@@ -343,7 +343,6 @@ func (b *Bot) initAgent() {
 		SessionID:              b.sess.CurrentID,
 		TaskReferences:         b.taskReferences,
 		PersistTodos:           b.saveSession,
-		ContextReferences:      b.modelContextReferences,
 		Output: agent.Output{
 			Text:      b.stream,
 			Reason:    b.reasoning,

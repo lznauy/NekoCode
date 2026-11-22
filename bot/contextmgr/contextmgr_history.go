@@ -124,7 +124,12 @@ func (m *Manager) AddToolResultsBatch(results []ToolResultMsg) {
 				if err == nil && r.AllowOutputFile != nil {
 					err = r.AllowOutputFile(bounded.Artifact.Path)
 				}
-				if err != nil {
+				if err == nil && r.ToolName == "task_batch" && !r.Message.IsError && bounded.Artifact.Path != "" {
+					// Head/tail truncation would turn the ordered manifest into
+					// invalid JSON. The artifact retains the entire batch reply.
+					bounded.Text = `{"batch_reply_in_artifact":true}`
+				}
+				if err != nil || len(bounded.Render()) > limit {
 					deferred = true
 				} else {
 					output = bounded

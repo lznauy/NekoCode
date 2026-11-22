@@ -55,16 +55,3 @@ func (b *Bot) referenceSkill(name string) (string, bool) {
 	skill, ok := b.ext.Skill(name)
 	return skill.Context, ok
 }
-
-// Both model reference views use the same scope/actor boundary. Only evidence
-// needs a host store binding; an existing foreign binding is never replaced.
-func (b *Bot) modelContextReferences(ctx context.Context, sessionID, kind string) refbridge.Page {
-	if kind == refbridge.EvidenceKind && toolcore.OutputStoreFromContext(ctx) == nil {
-		ctx = toolcore.WithOutputStore(ctx, b.sessionOutput.store)
-	}
-	page, err := b.contextReferences(ctx, sessionID, refbridge.Query{Kind: kind, Limit: refbridge.MaxPageRecords})
-	if err != nil {
-		return refbridge.Page{SessionID: sessionID, Unavailable: true}
-	}
-	return page
-}

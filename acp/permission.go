@@ -19,6 +19,9 @@ func (s *server) handlePermission(ctx context.Context, sessionID string, view co
 		toolCallID = view.ToolCallHash
 	}
 	toolCall := map[string]any{"toolCallId": toolCallID, "title": view.ToolName, "status": "pending", "rawInput": view.Args}
+	if view.Approval != nil && view.Approval.WorkspaceTarget != "" {
+		toolCall["_meta"] = map[string]any{"nekocode/workspace_target": view.Approval.WorkspaceTarget}
+	}
 	if summary := approvalSummary(view); summary != "" {
 		toolCall["content"] = []any{map[string]any{
 			"type": "content", "content": map[string]any{"type": "text", "text": summary},
@@ -28,7 +31,9 @@ func (s *server) handlePermission(ctx context.Context, sessionID string, view co
 	err := s.conn.request(ctx, "session/request_permission", map[string]any{
 		"sessionId": sessionID, "options": options, "toolCall": toolCall,
 	}, &response)
-	_ = s.backend.DecideApproval(context.Background(), view.ID, permissionDecision(response, err == nil, allowAlways))
+	if ctx.Err() == nil {
+		_ = s.backend.DecideApproval(ctx, view.ID, permissionDecision(response, err == nil, allowAlways))
+	}
 }
 
 func permissionDecision(response permissionResponse, valid, allowAlways bool) controlruntime.ApprovalDecision {
@@ -64,7 +69,14 @@ func approvalSummary(view controlruntime.ApprovalView) string {
 	appendValue("Capabilities", strings.Join(view.Approval.Capabilities, ", "))
 	appendValue("Operations", strings.Join(view.Approval.Structures, ", "))
 	appendValue("Write paths", strings.Join(view.Approval.WritePaths, ", "))
-	appendValue("Workspace", view.Approval.Workspace)
+	workspaceLabel := "Workspace"
+	switch view.Approval.WorkspaceTarget {
+	case "file":
+		workspaceLabel = "Only this file"
+	case "directory":
+		workspaceLabel = "Directory and descendants"
+	}
+	appendValue(workspaceLabel, view.Approval.Workspace)
 	appendValue("Sandbox", view.Approval.Sandbox)
 	if view.Approval.OutboundDomains != nil {
 		domains := strings.Join(view.Approval.OutboundDomains, ", ")

@@ -3,6 +3,7 @@ package prompt
 import (
 	"fmt"
 	"html"
+	"path/filepath"
 	"strings"
 	"unicode"
 )
@@ -25,9 +26,23 @@ func FormatEnvironment(env Environment, date, shell, goos, goarch string) string
 	writeEnvField(&b, "arch", goarch)
 	if len(env.Roots) > 0 {
 		b.WriteString("<workspace_roots>\n")
+		// A saved tool result can have its own read root under the session
+		// output directory. Listing each such file makes every worker's
+		// environment change when a sibling saves output.
+		grants := make(map[Root]bool, len(env.Roots))
 		for _, root := range env.Roots {
-			fmt.Fprintf(&b, "  <root access=\"%s\">%s</root>\n",
-				escapeEnvValue(root.Access), escapeEnvValue(root.Path))
+			grants[root] = true
+		}
+		for _, root := range env.Roots {
+			if coveredRoot(root, grants) {
+				continue
+			}
+			element := "root"
+			if root.FileOnly {
+				element = "file"
+			}
+			fmt.Fprintf(&b, "  <%s access=\"%s\">%s</%s>\n",
+				element, escapeEnvValue(root.Access), escapeEnvValue(root.Path), element)
 		}
 		b.WriteString("</workspace_roots>\n")
 	}
@@ -37,6 +52,24 @@ func FormatEnvironment(env Environment, date, shell, goos, goarch string) string
 	writeEnvField(&b, "mcp_capabilities", env.MCPCapabilities)
 	b.WriteString("</environment_context>")
 	return b.String()
+}
+
+// Compare path components and equal access only. Authority checks still use
+// the full workspace snapshot, including nested grants of a different kind.
+func coveredRoot(root Root, grants map[Root]bool) bool {
+	if !filepath.IsAbs(root.Path) || filepath.Clean(root.Path) != root.Path {
+		return false
+	}
+	for path := root.Path; ; {
+		parent := filepath.Dir(path)
+		if parent == path {
+			return false
+		}
+		if grants[Root{Path: parent, Access: root.Access}] {
+			return true
+		}
+		path = parent
+	}
 }
 
 func writeEnvField(b *strings.Builder, name, value string) {

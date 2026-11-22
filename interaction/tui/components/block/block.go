@@ -42,7 +42,7 @@ func NewTool(name, callID, arguments string) ContentBlock {
 func FilterFinalBlocks(blocks []ContentBlock) []ContentBlock {
 	out := make([]ContentBlock, 0, len(blocks))
 	for _, b := range blocks {
-		if b.Type == BlockTool && (IsPersistent(b.ToolName) || b.JevNote != "") {
+		if b.Type == BlockTool && (IsPersistent(b.ToolName) || b.ToolName == "task_batch" || b.JevNote != "") {
 			out = append(out, b)
 		}
 	}

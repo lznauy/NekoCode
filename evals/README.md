@@ -54,6 +54,8 @@ evals/
 | `catalog-recovery` | 迁移 v1 归档、重放日志、处理冲突与墓碑并原子发布 v2 快照 | Python 标准库 | `capabilities` |
 | `release-window` | 修复发布排程 CLI，合并修订、处理依赖和班组禁作窗口，交付值班计划与能检出旧版缺陷的测试 | Python 标准库 | `capabilities` |
 | `depot-ledger` | 从 v1 查看器交付多仓预留服务，黑盒检查迁移、跨进程重试、并发争抢、库存与审计一致性 | Python 标准库，预算上限 200 次模型调用 | `capabilities` |
+| `field-atlas` | 离线多语言手册编译、引用传播、无副作用预览、发布失败恢复、可重现归档；按产物与行为验收 | Python 标准库，standard 模式，并行委派与主代理集成，评分只看交付物 | `long-projects` |
+| `relay-station` | 约 16 名子代理协作交付千行 Python/SQLite 中转站，验收 12 名有效交付者、8 路同时运行、设计与最终集成测试 | Python 标准库；standard 模式，同批并行 task；并发上限至少 8 | `long-projects` |
 | `goal-night-shift` | 单次 /goal 经两个阶段检查点交付三关推箱子；浏览器独立求解通关、检查存档和触控，并保存截图供美术复核 | Node、Chrome、Playwright，standard 模式 | 单独用 `--case goal-night-shift` |
 | `goal-checkpoint` | 单条 /goal 输入在阶段答复后自动继续，交付净订座表并进入待验收；独立核查运行轨迹 | Python 标准库，standard 模式 | 单独用 `--case goal-checkpoint` |
 | `unittest-triage` | 运行固定失败的 Python 测试，沿回溯核查计费字段，只读报告根因 | Python 标准库 | 单独用 `--case unittest-triage` |
@@ -218,6 +220,7 @@ python3 -m agent_eval run --suite smoke --repeat 3 \
 | `--output` | 默认 `evals/runs`；也可指定如 `/tmp/nekocode-eval-runs` |
 | `--telemetry-root` | 默认 `~/.nekocode`，用于读取应用配置指纹和会话计量；不会替应用切换配置目录 |
 | `--label` | 可选，便于在历史中识别运行 |
+| `--no-execution-budget` | 关闭本次 Agent 执行的调用数、token 与墙钟上限，仍记录消耗。Agent 自身的步数上限和独立验收器的超时仍生效。主代理达到步数上限时，评测记录为 `step_limit`，保留已返回的答复并继续验收产物。 |
 | `--config-fingerprint` | 可选，有效外部配置的 SHA256，不是密钥或配置原文 |
 
 `allow` 仍拒绝显式 `sandbox_mode=host` 升级，问题请求一律拒绝。需要人工回答的任务可能因此受阻，所选策略会记录在试验中。

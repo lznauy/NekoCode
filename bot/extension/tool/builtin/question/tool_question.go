@@ -84,6 +84,7 @@ func (t *Tool) Execute(ctx context.Context, args map[string]any) (core.ToolOutpu
 	}
 
 	req := protocol.NewQuestionRequest(questions)
+	req.Done = ctx.Done()
 	req.SubAgentID = taskbridge.TaskIDFromCtx(ctx)
 	reply := fn(req)
 	if err := ctx.Err(); err != nil {
