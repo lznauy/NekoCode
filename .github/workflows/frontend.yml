@@ -53,9 +53,9 @@ jobs:
         env:
           NEKOCODE_MODEL_CATALOG_OFFLINE: "1"
         run: |
-          xvfb-run -a bash -ec '
+          xvfb-run -a bash -es <<'BASH'
             ./nekocode-gui &
             app_pid=$!
-            trap "kill $app_pid 2>/dev/null || true" EXIT
+            trap 'kill "$app_pid" 2>/dev/null || true' EXIT
             timeout 60 xdotool search --sync --all --onlyvisible --pid "$app_pid" --name "^NekoCode$"
-          '
+          BASH
