@@ -320,7 +320,7 @@ func checkPlugin(ctx context.Context, installed *plugin.Plugin, hasTool func(str
 			continue
 		}
 		if cfg.URL != "" {
-			if err := utilhttp.ValidateSecureURL(cfg.URL); err != nil {
+			if err := utilhttp.ValidateServiceURL(cfg.URL, cfg.AllowInsecureHTTP); err != nil {
 				add("error", path, err.Error())
 				continue
 			}

@@ -21,6 +21,11 @@ func (m *Manager) BackupCurrent(compactionID string) (string, error) {
 	if err := validateID(compactionID); err != nil {
 		return "", fmt.Errorf("invalid compaction id: %w", err)
 	}
+	unlock, err := lockSession(id)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	source := filepath.Join(dir(), id, "session.json")
 	data, err := os.ReadFile(source)
 	if err != nil {

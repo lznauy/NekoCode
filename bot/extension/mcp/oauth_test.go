@@ -359,6 +359,55 @@ func TestLogoutClearsCredentialsWhenServerIsOffline(t *testing.T) {
 		t.Fatalf("credential survived logout: %v", err)
 	}
 }
+func TestRemoteHTTPHostnameOptIn(t *testing.T) {
+	mcpServer := sdk.NewServer(&sdk.Implementation{Name: "fixture", Version: "1"}, nil)
+	server := httptest.NewServer(sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return mcpServer }, nil))
+	defer server.Close()
+
+	// localhost exercises hostname validation and connects to the test listener.
+	endpoint := strings.Replace(server.URL, "127.0.0.1", "localhost", 1)
+	client := newRemoteClient("plain", ServerConfig{URL: endpoint, AllowInsecureHTTP: true})
+	defer client.Close()
+	if _, err := client.ListTools(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if client.auth.loaded {
+		t.Fatal("loaded OAuth credentials for a cleartext remote")
+	}
+}
+
+func TestHTTPHostnameRejectsOAuthLogin(t *testing.T) {
+	m := New()
+	defer m.Close()
+	c := newClient("docs", ServerConfig{URL: "http://mcp.lan", AllowInsecureHTTP: true})
+	m.mu.Lock()
+	m.servers["config:docs"] = &server{name: "docs", client: c}
+	m.owners["docs"] = "config:docs"
+	m.mu.Unlock()
+	if err := m.AuthorizationAction("docs", "login"); err == nil || !strings.Contains(err.Error(), "HTTPS") {
+		t.Fatalf("HTTP OAuth login returned %v", err)
+	}
+	if c.remote.ctx.Err() != nil {
+		t.Fatal("unsupported login disconnected the server")
+	}
+}
+
+func TestHTTPHostnameRejectsOAuthChallenge(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"private fixture message"}}`)
+	}))
+	defer server.Close()
+	endpoint := strings.Replace(server.URL, "127.0.0.1", "localhost", 1)
+	client := newRemoteClient("docs", ServerConfig{URL: endpoint, AllowInsecureHTTP: true})
+	defer client.Close()
+	err := client.Start(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "HTTPS") || strings.Contains(err.Error(), "private fixture message") {
+		t.Fatalf("unexpected HTTP authorization challenge result: %v", err)
+	}
+}
+
 func TestRemoteSessionReconnectsAfterClose(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f := newOAuthFixture(t)

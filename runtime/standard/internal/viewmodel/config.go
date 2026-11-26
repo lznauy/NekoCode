@@ -1,6 +1,8 @@
 package viewmodel
 
 import (
+	"maps"
+
 	"nekocode/bot/config"
 	controlruntime "nekocode/runtime"
 )
@@ -127,7 +129,8 @@ func mcpServerConfigsToView(in map[string]config.MCPServerConfig) map[string]con
 	for name, srv := range in {
 		view := controlruntime.MCPServerConfig(srv)
 		view.Args = append([]string(nil), srv.Args...)
-		view.Env = stringMap(srv.Env)
+		view.Env = maps.Clone(srv.Env)
+		view.Headers = maps.Clone(srv.Headers)
 		out[name] = view
 	}
 	return out
@@ -141,7 +144,8 @@ func mcpServerConfigsFromView(in map[string]controlruntime.MCPServerConfig) map[
 	for name, srv := range in {
 		cfg := config.MCPServerConfig(srv)
 		cfg.Args = append([]string(nil), srv.Args...)
-		cfg.Env = stringMap(srv.Env)
+		cfg.Env = maps.Clone(srv.Env)
+		cfg.Headers = maps.Clone(srv.Headers)
 		out[name] = cfg
 	}
 	return out
@@ -219,17 +223,6 @@ func workspaceConfigsFromView(in []controlruntime.WorkspaceConfig) []config.Work
 	out := make([]config.WorkspaceConfig, 0, len(in))
 	for _, w := range in {
 		out = append(out, config.WorkspaceConfig{Path: w.Path, Access: w.Access})
-	}
-	return out
-}
-
-func stringMap(in map[string]string) map[string]string {
-	if in == nil {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
 	}
 	return out
 }

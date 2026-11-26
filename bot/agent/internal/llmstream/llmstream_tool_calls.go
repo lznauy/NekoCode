@@ -3,11 +3,13 @@ package llmstream
 import (
 	"encoding/json"
 	"fmt"
-	"nekocode/protocol"
+	"io"
 	"sort"
+	"strings"
 
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/provider/types"
+	"nekocode/protocol"
 )
 
 // CollectToolCalls converts accumulated tool call deltas into ToolCallItems.
@@ -28,8 +30,13 @@ func (s *StreamResult) CollectToolCalls() ([]core.ToolCallItem, error) {
 			return nil, fmt.Errorf("%w: missing tool call at index %d", protocol.ErrIncompleteResponse, idx)
 		}
 		var args map[string]any
-		if err := json.Unmarshal([]byte(acc.Args.String()), &args); err != nil || args == nil {
+		decoder := json.NewDecoder(strings.NewReader(acc.Args.String()))
+		decoder.UseNumber()
+		if err := decoder.Decode(&args); err != nil || args == nil {
 			return nil, fmt.Errorf("%w: tool call %d arguments must be a JSON object", protocol.ErrIncompleteResponse, idx)
+		}
+		if err := decoder.Decode(new(json.RawMessage)); err != io.EOF {
+			return nil, fmt.Errorf("%w: trailing data in tool call %d arguments", protocol.ErrIncompleteResponse, idx)
 		}
 		items = append(items, core.ToolCallItem{ID: acc.ID, Name: acc.Name, Args: args})
 	}

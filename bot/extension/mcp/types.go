@@ -1,14 +1,11 @@
 package mcp
 
-import (
-	"encoding/json"
-
-	"nekocode/bot/provider/types"
-)
+import "encoding/json"
 
 // ServerConfig defines how to launch an MCP server.
 type ServerConfig struct {
 	URL                    string            `json:"url,omitempty"`
+	AllowInsecureHTTP      bool              `json:"allow_insecure_http,omitempty"`
 	Headers                map[string]string `json:"headers,omitempty"`
 	OAuthClientID          string            `json:"oauth_client_id,omitempty"`
 	OAuthClientSecret      string            `json:"oauth_client_secret,omitempty"`
@@ -32,16 +29,9 @@ type Registration struct {
 
 // toolDef represents a tool discovered from an MCP server.
 type toolDef struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description,omitempty"`
-	InputSchema inputSchema `json:"inputSchema"`
-}
-
-// inputSchema is JSON Schema for tool parameters.
-type inputSchema struct {
-	Type       string                    `json:"type"`
-	Properties map[string]types.Property `json:"properties,omitempty"`
-	Required   []string                  `json:"required,omitempty"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"inputSchema"`
 }
 
 type jsonrpcRequest struct {

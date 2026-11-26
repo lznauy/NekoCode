@@ -34,7 +34,7 @@ SDK 在 `INPUT_REQUIRED` 后结束本次执行，但 Runtime 仍可能等待审�
 
 后续发送或取消请求在 SDK 读取 Task 前停止 monitor，并等待其退出。请求级 foreground 预约与 `monitorPauses` 保护交接；失败的重复请求只释放自己的预约，不能替另一个前台执行启动 monitor。流式请求可能多次进入 `After`，释放操作必须幂等。
 
-交互回复必须核对 `interactionId`，文本回复的 ID 放在消息 metadata，结构化回复可放在 Data Part。无效回复应保留当前提示信息，不得仅凭 Task ID 批准最新 pending 交互。
+同一 Run 的并行交互按请求顺序向 A2A 客户端逐项展示。任一入口解决某项交互后，只移除对应 ID；当前项解决后，剩余问题继续保持 `INPUT_REQUIRED`，客户端重连可从 Task 快照读取下一项。交互回复必须核对 `interactionId`，文本回复的 ID 放在消息 metadata，结构化回复可放在 Data Part。无效回复应保留当前提示信息，不得仅凭 Task ID 批准最新 pending 交互。
 
 订阅沿用 SDK 的拦截器边界，通过底层 store 检查 owner。订阅先取得变更通知 channel，再读取快照，覆盖两者之间的更新；持有 entry 引用以便索引淘汰后仍能交付终态。客户端断开只结束其订阅，不取消 Runtime Run。
 

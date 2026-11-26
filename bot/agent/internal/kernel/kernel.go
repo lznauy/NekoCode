@@ -63,20 +63,21 @@ func (loop Loop) stepLimitReached() bool {
 	return loop.StepLimitReached != nil && loop.StepLimitReached()
 }
 
-// Lifecycle is the interruptible, revivable execution context of an agent
-// run: Cancel aborts the current context, ReplaceContext derives a fresh one
-// from the parent (used to retry after interruption), and the steering
-// mailbox lets callers inject messages while a run is in flight.
+// Lifecycle owns the current run and its replaceable model/tool attempt.
+// Steering cancels one attempt. Aborting a bound run cancels every attempt.
 type Lifecycle struct {
-	mu        sync.Mutex
-	parentCtx context.Context
-	values    context.Context
-	curCtx    context.Context
-	cancelFn  context.CancelFunc
-	steering  chan string
-	startTime time.Time
-	endTime   time.Time
-	finished  atomic.Bool
+	mu            sync.Mutex
+	parentCtx     context.Context
+	attemptParent context.Context
+	cancelRun     context.CancelCauseFunc
+	otherParent   context.Context
+	stopOther     func() bool
+	curCtx        context.Context
+	cancelFn      context.CancelFunc
+	steering      chan string
+	startTime     time.Time
+	endTime       time.Time
+	finished      atomic.Bool
 }
 
 // NewLifecycle derives the initial context from parent and creates a
@@ -84,10 +85,11 @@ type Lifecycle struct {
 func NewLifecycle(parent context.Context, steeringBuf int) *Lifecycle {
 	ctx, cancel := context.WithCancel(parent)
 	return &Lifecycle{
-		parentCtx: parent,
-		curCtx:    ctx,
-		cancelFn:  cancel,
-		steering:  make(chan string, steeringBuf),
+		parentCtx:     parent,
+		attemptParent: parent,
+		curCtx:        ctx,
+		cancelFn:      cancel,
+		steering:      make(chan string, steeringBuf),
 	}
 }
 
@@ -95,9 +97,6 @@ func NewLifecycle(parent context.Context, steeringBuf int) *Lifecycle {
 func (l *Lifecycle) Context() context.Context {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.values != nil {
-		return contextValues{Context: l.curCtx, values: l.values}
-	}
 	return l.curCtx
 }
 
@@ -107,7 +106,7 @@ func (l *Lifecycle) ReplaceContext() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.cancelFn()
-	l.curCtx, l.cancelFn = context.WithCancel(l.parentCtx)
+	l.newAttemptLocked()
 }
 
 // ResetContextIfCanceled derives a fresh context from the parent only when
@@ -116,7 +115,7 @@ func (l *Lifecycle) ResetContextIfCanceled() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.curCtx.Err() != nil {
-		l.curCtx, l.cancelFn = context.WithCancel(l.parentCtx)
+		l.newAttemptLocked()
 	}
 }
 
@@ -124,6 +123,9 @@ func (l *Lifecycle) ResetContextIfCanceled() {
 // finished loop may still be synthesizing a report on a live context.
 func (l *Lifecycle) Abort() {
 	l.mu.Lock()
+	if l.cancelRun != nil {
+		l.cancelRun(context.Canceled)
+	}
 	l.cancelFn()
 	l.finished.Store(true)
 	l.mu.Unlock()
@@ -179,22 +181,57 @@ func (l *Lifecycle) Steering() chan string {
 	return l.steering
 }
 
-// SetValues binds per-run metadata without replacing the revivable cancellation
-// context. Steering may replace curCtx while the run's authority stays fixed.
-func (l *Lifecycle) SetValues(values context.Context) {
+// SetRunContext binds the caller for the duration of one owned run. Steering
+// can replace an attempt, but every such attempt remains a child of this run.
+// Passing nil ends the binding and releases its cancellation registrations.
+func (l *Lifecycle) SetRunContext(caller context.Context) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.values = values
-}
-
-type contextValues struct {
-	context.Context
-	values context.Context
-}
-
-func (c contextValues) Value(key any) any {
-	if value := c.values.Value(key); value != nil {
-		return value
+	l.cancelFn()
+	if l.cancelRun != nil {
+		l.stopOther()
+		l.cancelRun(context.Canceled)
+		l.cancelRun, l.otherParent, l.stopOther = nil, nil, nil
 	}
-	return c.Context.Value(key)
+	l.attemptParent = l.parentCtx
+	if caller != nil {
+		// Derive directly from the parent with the earlier deadline so the
+		// standard library propagates its deadline, Err and Cause together.
+		primary, other := caller, l.parentCtx
+		ownerDeadline, ownerTimed := l.parentCtx.Deadline()
+		callerDeadline, callerTimed := caller.Deadline()
+		if ownerTimed && (!callerTimed || ownerDeadline.Before(callerDeadline)) {
+			primary, other = l.parentCtx, caller
+		}
+		base := runParents{primary, context.WithoutCancel(caller), context.WithoutCancel(l.parentCtx)}
+		run, cancel := context.WithCancelCause(base)
+		l.stopOther = context.AfterFunc(other, func() { cancel(context.Cause(other)) })
+		l.attemptParent, l.cancelRun, l.otherParent = run, cancel, other
+	}
+	l.newAttemptLocked()
+}
+
+// A steer can race the secondary parent's asynchronous cancellation callback.
+func (l *Lifecycle) newAttemptLocked() {
+	if l.otherParent != nil && l.otherParent.Err() != nil {
+		l.cancelRun(context.Cause(l.otherParent))
+	}
+	l.curCtx, l.cancelFn = context.WithCancel(l.attemptParent)
+}
+
+// The value-only views keep run metadata ahead of construction defaults.
+// Cancellation internals come exclusively from the actual parent.
+type runParents struct {
+	context.Context
+	callerValues, ownerValues context.Context
+}
+
+func (p runParents) Value(key any) any {
+	if v := p.callerValues.Value(key); v != nil {
+		return v
+	}
+	if v := p.ownerValues.Value(key); v != nil {
+		return v
+	}
+	return p.Context.Value(key)
 }

@@ -3,7 +3,6 @@ package a2aapi
 import (
 	"context"
 	"errors"
-	"fmt"
 	"iter"
 	"strings"
 	"sync"
@@ -43,6 +42,7 @@ type pendingInteraction struct {
 	kind      pendingKind
 	id        string
 	questions int
+	message   *a2a.Message
 }
 
 type taskBinding struct {
@@ -56,7 +56,7 @@ type taskBinding struct {
 	artifactID       a2a.ArtifactID
 	artifactText     strings.Builder
 	confirmedText    string
-	pending          *pendingInteraction
+	pending          []*pendingInteraction
 	terminal         bool
 	contextID        string
 	contextHeld      bool
@@ -146,7 +146,7 @@ func (e *executor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContext)
 		}
 
 		binding.mu.Lock()
-		pending := binding.pending
+		pending := binding.firstInteraction()
 		runID := binding.runID
 		binding.mu.Unlock()
 		if pending != nil {
@@ -155,8 +155,15 @@ func (e *executor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContext)
 				return
 			}
 			binding.mu.Lock()
-			binding.pending = nil
+			binding.removeInteraction(pending.id)
+			next := binding.firstInteraction()
 			binding.mu.Unlock()
+			if next != nil {
+				if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateInputRequired, next.message), nil) {
+					e.abandonRun(execCtx.TaskID, binding)
+				}
+				return
+			}
 			if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateWorking, nil), nil) {
 				e.abandonRun(execCtx.TaskID, binding)
 				return
@@ -342,11 +349,30 @@ func (e *executor) streamRunMode(ctx context.Context, execCtx *a2asrv.ExecutorCo
 				}
 			}
 		case controlruntime.EventApprovalResolved, controlruntime.EventQuestionResolved:
+			var id string
+			switch view := event.Payload.(type) {
+			case controlruntime.ApprovalView:
+				id = view.ID
+			case controlruntime.QuestionView:
+				id = view.ID
+			}
 			binding.mu.Lock()
-			binding.pending = nil
+			changed := binding.removeInteraction(id)
+			next := binding.firstInteraction()
 			binding.mu.Unlock()
-			if monitoring && !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateWorking, nil), nil) {
+			if !changed {
+				continue
+			}
+			state := a2a.TaskStateWorking
+			var message *a2a.Message
+			if next != nil {
+				state, message = a2a.TaskStateInputRequired, next.message
+			}
+			if !yield(a2a.NewStatusUpdateEvent(execCtx, state, message), nil) {
 				e.abandonRun(execCtx.TaskID, binding)
+				return
+			}
+			if next != nil && !monitoring {
 				return
 			}
 		case controlruntime.EventAssistantMessage:
@@ -358,42 +384,27 @@ func (e *executor) streamRunMode(ctx context.Context, execCtx *a2asrv.ExecutorCo
 				e.abandonRun(execCtx.TaskID, binding)
 				return
 			}
-		case controlruntime.EventApprovalRequested:
-			view, ok := event.Payload.(controlruntime.ApprovalView)
-			if !ok {
+		case controlruntime.EventApprovalRequested, controlruntime.EventQuestionRequested:
+			pending := interactionRequest(execCtx, event)
+			if pending == nil {
 				continue
 			}
 			binding.mu.Lock()
-			binding.pending = &pendingInteraction{kind: pendingApproval, id: view.ID}
+			first := len(binding.pending) == 0
+			binding.pending = append(binding.pending, pending)
 			binding.mu.Unlock()
-			data := map[string]any{"type": "approval", "interactionId": view.ID, "toolName": view.ToolName, "args": view.Args}
-			msg := statusMessage(execCtx, fmt.Sprintf("Approval required for tool %q. Reply with allow or deny.", view.ToolName), data)
-			if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateInputRequired, msg), nil) {
+			// A2A exposes one actionable prompt per task. The monitor keeps
+			// later requests until the visible one resolves on any transport.
+			if !first {
+				continue
+			}
+			if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateInputRequired, pending.message), nil) {
 				e.abandonRun(execCtx.TaskID, binding)
 				return
 			}
-			if monitoring {
-				continue
-			}
-			return
-		case controlruntime.EventQuestionRequested:
-			view, ok := event.Payload.(controlruntime.QuestionView)
-			if !ok {
-				continue
-			}
-			binding.mu.Lock()
-			binding.pending = &pendingInteraction{kind: pendingQuestion, id: view.ID, questions: len(view.Questions)}
-			binding.mu.Unlock()
-			data := map[string]any{"type": "question", "interactionId": view.ID, "questions": view.Questions}
-			msg := statusMessage(execCtx, formatQuestions(view), data)
-			if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateInputRequired, msg), nil) {
-				e.abandonRun(execCtx.TaskID, binding)
+			if !monitoring {
 				return
 			}
-			if monitoring {
-				continue
-			}
-			return
 		case controlruntime.EventRunDone:
 			if !e.emitTerminalArtifact(execCtx, binding, event.Payload, yield) {
 				e.abandonRun(execCtx.TaskID, binding)

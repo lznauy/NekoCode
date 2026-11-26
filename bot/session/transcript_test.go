@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"nekocode/bot/policy/ledger"
 	"nekocode/bot/provider/types"
 )
 
@@ -466,7 +467,7 @@ func TestLoadTranscriptRepairsMissingFinalNewline(t *testing.T) {
 	}
 
 	// The next append must stay on its own line.
-	if _, err := appendTranscript(dir, 1, []types.Message{
+	if _, err := appendTranscriptFrom(dir, 1, 0, []types.Message{
 		{Role: "user", Content: "one"}, {Role: "assistant", Content: "two"},
 	}); err != nil {
 		t.Fatal(err)
@@ -502,7 +503,7 @@ func TestLargeCRLFTranscriptRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	want := strings.Repeat("a", 16<<20)
 	messages := []types.Message{{Role: "user", Content: want}, {Role: "assistant", Content: "done"}}
-	if _, err := appendTranscript(dir, 0, messages); err != nil {
+	if _, err := appendTranscriptFrom(dir, 0, 0, messages); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, transcriptFileName)
@@ -535,12 +536,12 @@ func TestLargeCRLFTranscriptRoundTrip(t *testing.T) {
 func TestOversizedTranscriptRecordRollsBackBatch(t *testing.T) {
 	dir := t.TempDir()
 	messages := []types.Message{{Role: "user", Content: "saved"}}
-	if _, err := appendTranscript(dir, 0, messages); err != nil {
+	if _, err := appendTranscriptFrom(dir, 0, 0, messages); err != nil {
 		t.Fatal(err)
 	}
 	before := string(mustReadTranscript(t, dir))
 	messages = append(messages, types.Message{Role: "assistant", Content: "pending"}, types.Message{Role: "user", Content: strings.Repeat("x", maxTranscriptRecordBytes)})
-	if count, err := appendTranscript(dir, 1, messages); err == nil || count != 1 {
+	if count, err := appendTranscriptFrom(dir, 1, 0, messages); err == nil || count != 1 {
 		t.Fatalf("oversized append: count=%d err=%v", count, err)
 	}
 	if string(mustReadTranscript(t, dir)) != before {
@@ -553,5 +554,31 @@ func TestOversizedTranscriptRecordRollsBackBatch(t *testing.T) {
 	}
 	if _, err := loadTranscript(dir, 1); err == nil {
 		t.Fatal("oversized record was accepted")
+	}
+}
+
+func TestSaveAdjacentTaskSequencesAboveFloatPrecision(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	manager := New(t.TempDir())
+	snapshot := manager.Current()
+	snapshot.Goal = &Goal{Status: "active"}
+	snapshot.Ledger.ToolErrors = []ledger.ToolEvent{{Args: map[string]any{"id": json.Number("9007199254740993")}}}
+	snapshot.TaskUpdateSequence = 1 << 53
+	if err := manager.Save(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.TaskUpdateSequence++
+	if err := manager.Save(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := manager.Load(snapshot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Ledger.ToolErrors[0].Args["id"]; got != json.Number("9007199254740993") {
+		t.Fatalf("reloaded tool argument = %v (%T)", got, got)
+	}
+	if loaded.TaskUpdateSequence != snapshot.TaskUpdateSequence {
+		t.Fatalf("saved sequence = %d, want %d", loaded.TaskUpdateSequence, snapshot.TaskUpdateSequence)
 	}
 }

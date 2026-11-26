@@ -12,8 +12,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"nekocode/bot/provider/types"
 )
 
 // startMockMCP builds and starts a minimal MCP server that responds to
@@ -119,12 +117,7 @@ func TestClientInitialize(t *testing.T) {
 		{
 			Name:        "mock-tool",
 			Description: "A mock tool",
-			InputSchema: inputSchema{
-				Type: "object",
-				Properties: map[string]types.Property{
-					"input": {Type: "string", Description: "input param"},
-				},
-			},
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"input":{"type":"string","description":"input param"}}}`),
 		},
 	}
 
@@ -170,7 +163,7 @@ func TestClientInitialize(t *testing.T) {
 
 func TestClientStartStop(t *testing.T) {
 	mockTools := []toolDef{
-		{Name: "test", Description: "test tool", InputSchema: inputSchema{Type: "object"}},
+		{Name: "test", Description: "test tool", InputSchema: json.RawMessage(`{"type":"object"}`)},
 	}
 	cmd, cleanup := startMockMCP(t, mockTools)
 	defer cleanup()
@@ -201,7 +194,7 @@ func TestClientStartStop(t *testing.T) {
 
 func TestClientDoubleStart(t *testing.T) {
 	mockTools := []toolDef{
-		{Name: "test", Description: "test", InputSchema: inputSchema{Type: "object"}},
+		{Name: "test", Description: "test", InputSchema: json.RawMessage(`{"type":"object"}`)},
 	}
 	cmd, cleanup := startMockMCP(t, mockTools)
 	defer cleanup()

@@ -58,7 +58,7 @@ func (s *server) initialize(params json.RawMessage) (any, *wireError) {
 		ProtocolVersion: protocolVersion,
 		AgentCapabilities: agentCapabilities{
 			LoadSession:         true,
-			PromptCapabilities:  promptCapabilities{},
+			PromptCapabilities:  promptCapabilities{Image: true},
 			MCPCapabilities:     mcpCapabilities{},
 			SessionCapabilities: sessionCapabilities{List: &struct{}{}, Delete: &struct{}{}},
 		},

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -88,8 +89,8 @@ func TestManagerCloseStopsStagedRemoteReplacement(t *testing.T) {
 
 func TestManagerAddServer(t *testing.T) {
 	mockTools := []toolDef{
-		{Name: "alpha", Description: "tool alpha", InputSchema: inputSchema{Type: "object"}},
-		{Name: "beta", Description: "tool beta", InputSchema: inputSchema{Type: "object"}},
+		{Name: "alpha", Description: "tool alpha", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		{Name: "beta", Description: "tool beta", InputSchema: json.RawMessage(`{"type":"object"}`)},
 	}
 	cmd, cleanup := startMockMCP(t, mockTools)
 	defer cleanup()
@@ -133,7 +134,7 @@ func TestManagerAddServerStartFailure(t *testing.T) {
 
 func TestManagerRemoveServer(t *testing.T) {
 	cmd, cleanup := startMockMCP(t, []toolDef{
-		{Name: "alpha", InputSchema: inputSchema{Type: "object"}},
+		{Name: "alpha", InputSchema: json.RawMessage(`{"type":"object"}`)},
 	})
 	defer cleanup()
 
@@ -157,12 +158,12 @@ func TestManagerRemoveServer(t *testing.T) {
 func TestManagerReAddReplacesTools(t *testing.T) {
 	// First generation exposes alpha+beta; second exposes only gamma.
 	cmd1, cleanup1 := startMockMCP(t, []toolDef{
-		{Name: "alpha", InputSchema: inputSchema{Type: "object"}},
-		{Name: "beta", InputSchema: inputSchema{Type: "object"}},
+		{Name: "alpha", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		{Name: "beta", InputSchema: json.RawMessage(`{"type":"object"}`)},
 	})
 	defer cleanup1()
 	cmd2, cleanup2 := startMockMCP(t, []toolDef{
-		{Name: "gamma", InputSchema: inputSchema{Type: "object"}},
+		{Name: "gamma", InputSchema: json.RawMessage(`{"type":"object"}`)},
 	})
 	defer cleanup2()
 
@@ -181,9 +182,9 @@ func TestManagerReAddReplacesTools(t *testing.T) {
 }
 
 func TestManagerReplaceIsAtomic(t *testing.T) {
-	oldCmd, cleanupOld := startMockMCP(t, []toolDef{{Name: "old", InputSchema: inputSchema{Type: "object"}}})
+	oldCmd, cleanupOld := startMockMCP(t, []toolDef{{Name: "old", InputSchema: json.RawMessage(`{"type":"object"}`)}})
 	defer cleanupOld()
-	newCmd, cleanupNew := startMockMCP(t, []toolDef{{Name: "new", InputSchema: inputSchema{Type: "object"}}})
+	newCmd, cleanupNew := startMockMCP(t, []toolDef{{Name: "new", InputSchema: json.RawMessage(`{"type":"object"}`)}})
 	defer cleanupNew()
 
 	m := New()
@@ -207,7 +208,7 @@ func TestManagerReplaceIsAtomic(t *testing.T) {
 }
 
 func TestManagerReplaceCancellationLeavesOldSet(t *testing.T) {
-	oldCmd, cleanupOld := startMockMCP(t, []toolDef{{Name: "old", InputSchema: inputSchema{Type: "object"}}})
+	oldCmd, cleanupOld := startMockMCP(t, []toolDef{{Name: "old", InputSchema: json.RawMessage(`{"type":"object"}`)}})
 	defer cleanupOld()
 	slowCmd, cleanupSlow := startMockMCPWithDelay(t, nil, 5*time.Second)
 	defer cleanupSlow()
@@ -232,11 +233,11 @@ func TestManagerReplaceCancellationLeavesOldSet(t *testing.T) {
 
 func TestManagerRejectsDuplicateNameFromDifferentOwner(t *testing.T) {
 	cmd1, cleanup1 := startMockMCP(t, []toolDef{
-		{Name: "alpha", InputSchema: inputSchema{Type: "object"}},
+		{Name: "alpha", InputSchema: json.RawMessage(`{"type":"object"}`)},
 	})
 	defer cleanup1()
 	cmd2, cleanup2 := startMockMCP(t, []toolDef{
-		{Name: "beta", InputSchema: inputSchema{Type: "object"}},
+		{Name: "beta", InputSchema: json.RawMessage(`{"type":"object"}`)},
 	})
 	defer cleanup2()
 
@@ -257,7 +258,7 @@ func TestManagerRejectsDuplicateNameFromDifferentOwner(t *testing.T) {
 
 func TestManagerClose(t *testing.T) {
 	cmd, cleanup := startMockMCP(t, []toolDef{
-		{Name: "alpha", InputSchema: inputSchema{Type: "object"}},
+		{Name: "alpha", InputSchema: json.RawMessage(`{"type":"object"}`)},
 	})
 	defer cleanup()
 
@@ -276,7 +277,7 @@ func TestManagerClose(t *testing.T) {
 
 func TestManagerAddBackgroundDoesNotWaitForServer(t *testing.T) {
 	cmd, cleanup := startMockMCPWithDelay(t, []toolDef{
-		{Name: "alpha", InputSchema: inputSchema{Type: "object"}},
+		{Name: "alpha", InputSchema: json.RawMessage(`{"type":"object"}`)},
 	}, 300*time.Millisecond)
 	defer cleanup()
 
@@ -351,7 +352,7 @@ func TestManagerCloseCancelsBackgroundStartup(t *testing.T) {
 
 func TestAuthOverrideSurvivesRebuildAndIsConsumed(t *testing.T) {
 	cmd, cleanup := startMockMCP(t, []toolDef{
-		{Name: "alpha", InputSchema: inputSchema{Type: "object"}},
+		{Name: "alpha", InputSchema: json.RawMessage(`{"type":"object"}`)},
 	})
 	defer cleanup()
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"nekocode/bot/calllog"
+	"nekocode/bot/provider"
 	"nekocode/bot/provider/types"
 	"nekocode/protocol"
 )
@@ -185,5 +186,80 @@ func TestAbandoningModelStreamCancelsOnlyCurrentRequest(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+type channelModel struct {
+	fakeStreamClient
+	tokens chan types.StreamToken
+	errs   chan error
+}
+
+func (m *channelModel) ChatStream(context.Context, []types.Message, []types.ToolDef) (<-chan types.StreamToken, <-chan error) {
+	return m.tokens, m.errs
+}
+
+func TestCallLLMReadsUnbufferedErrorBeforeTokenClosure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		model := &channelModel{tokens: make(chan types.StreamToken), errs: make(chan error)}
+		want := errors.New("provider failed")
+		record := captureRecord(t)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		go func() {
+			defer close(model.tokens)
+			defer close(model.errs)
+			model.tokens <- types.StreamToken{Content: "partial"}
+			select {
+			case model.errs <- want:
+			case <-ctx.Done():
+			}
+		}()
+		result, err := CallLLM(model, LLMCallOptions{Ctx: ctx})
+		cancel()
+		if !errors.Is(err, want) || result.Text != "partial" || record.FailureStage != "completion" {
+			t.Fatalf("text=%q err=%v stage=%s", result.Text, err, record.FailureStage)
+		}
+	})
+}
+
+func TestCallLLMHonorsCancellationWhileProviderIsSilent(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		record := captureRecord(t)
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		start := time.Now()
+		model := &channelModel{tokens: make(chan types.StreamToken), errs: make(chan error)}
+		_, err := CallLLM(model, LLMCallOptions{Ctx: ctx})
+		if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) != time.Second || record.FailureStage != "cancelled" {
+			t.Fatalf("returned after %v with %v, stage=%s", time.Since(start), err, record.FailureStage)
+		}
+	})
+}
+
+func TestLaterStopCannotCompleteTruncatedToolCall(t *testing.T) {
+	model := &fakeStreamClient{tokens: []types.StreamToken{
+		{ToolCallDelta: &types.ToolCallDelta{ID: "edit", Name: "edit", Arguments: "{}"}},
+		{FinishReason: "length"},
+		{FinishReason: "stop"},
+	}}
+	result, err := CallLLM(model, LLMCallOptions{Ctx: t.Context()})
+	if !errors.Is(err, protocol.ErrIncompleteResponse) || len(result.ToolCalls) != 0 {
+		t.Fatalf("calls=%v, err=%v", result.ToolCalls, err)
+	}
+}
+
+func TestWithRetryUsesLegacyProviderDefaults(t *testing.T) {
+	previous := provider.DefaultRetryConfig
+	t.Cleanup(func() { provider.DefaultRetryConfig = previous })
+	provider.DefaultRetryConfig = provider.RetryConfig{MaxAttempts: 2}
+	failure := errors.New("connection reset")
+	calls := 0
+	err := WithRetry(t.Context(), func() error {
+		calls++
+		return failure
+	})
+	if calls != 2 || !errors.Is(err, failure) {
+		t.Fatalf("calls=%d, err=%v", calls, err)
 	}
 }

@@ -234,3 +234,83 @@ func TestSystemOutputDoesNotSuppressFinalAnswer(t *testing.T) {
 		t.Fatalf("output=%v", output)
 	}
 }
+
+// This runtime keeps waiting for the parallel question after approval settles.
+type parallelInteractionRuntime struct{ *interactiveRuntime }
+
+func (r parallelInteractionRuntime) DecideApproval(ctx context.Context, id string, decision controlruntime.ApprovalDecision) error {
+	if err := r.fakeRuntime.DecideApproval(ctx, id, decision); err != nil {
+		return err
+	}
+	r.publish(controlruntime.EventApprovalResolved, controlruntime.ApprovalView{ID: id})
+	return nil
+}
+
+func TestRESTKeepsParallelQuestionUntilAnswered(t *testing.T) {
+	for _, external := range []bool{false, true} {
+		name := "A2A reply"
+		if external {
+			name = "external resolution"
+		}
+		t.Run(name, func(t *testing.T) {
+			r := parallelInteractionRuntime{newInteractiveRuntime(t, "approval")}
+			server, err := New(r, Options{Endpoint: "http://localhost/a2a"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			task := startInteractiveTask(t, server)
+			r.publish(controlruntime.EventQuestionRequested, controlruntime.QuestionView{ID: "question_2", Questions: []protocol.QuestionItem{{Question: "Choose a branch"}}})
+			// The artifact confirms the monitor has consumed the second request.
+			r.publish(controlruntime.EventSystemMessage, controlruntime.MessagePayload{Content: "worker ready"})
+			expectStored := func(id string) {
+				t.Helper()
+				deadline := time.Now().Add(2 * time.Second)
+				for {
+					response := serveA2ARequest(t, server, http.MethodGet, "/tasks/"+string(task.ID), nil)
+					var stored a2a.Task
+					if err := json.Unmarshal(response.Body.Bytes(), &stored); err != nil {
+						t.Fatal(err)
+					}
+					if len(stored.Artifacts) != 0 && stored.Status.State == a2a.TaskStateInputRequired && stored.Status.Message != nil {
+						for _, part := range stored.Status.Message.Parts {
+							if data, ok := part.Data().(map[string]any); ok && data["interactionId"] == id {
+								return
+							}
+						}
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("wanted pending %s, got %s", id, response.Body.String())
+					}
+					time.Sleep(time.Millisecond)
+				}
+			}
+			reply := func(id, text string) a2a.TaskState {
+				t.Helper()
+				msg := interactionMessage(id, a2a.NewTextPart(text))
+				msg.TaskID, msg.ContextID = task.ID, task.ContextID
+				body, err := json.Marshal(a2a.SendMessageRequest{Message: msg})
+				if err != nil {
+					t.Fatal(err)
+				}
+				response := serveA2ARequest(t, server, http.MethodPost, "/message:send", body)
+				var result struct{ Task a2a.Task }
+				if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+					t.Fatal(err)
+				}
+				return result.Task.Status.State
+			}
+			expectStored("approval_1")
+			if external {
+				if err := r.DecideApproval(t.Context(), "approval_1", controlruntime.ApprovalDecision{Allowed: true}); err != nil {
+					t.Fatal(err)
+				}
+			} else if state := reply("approval_1", "allow"); state != a2a.TaskStateInputRequired {
+				t.Fatalf("follow-up lost the second request: %s", state)
+			}
+			expectStored("question_2")
+			if state := reply("question_2", "main"); state != a2a.TaskStateCompleted {
+				t.Fatalf("final task state = %s", state)
+			}
+		})
+	}
+}

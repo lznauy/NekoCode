@@ -132,7 +132,7 @@ func (b *Bot) runAgent(ctx context.Context, input string, images []types.Message
 	// The trailing compaction is housekeeping, not part of the run's outcome:
 	// after a caller-side cancellation it reports context.Canceled, which
 	// would surface as a run failure even though the turn itself was fine.
-	compactionCtx := protocol.WithPolicyConfiguration(context.WithoutCancel(ctx), b.policy.Configuration())
+	compactionCtx := protocol.WithPolicyConfiguration(ctx, b.policy.Configuration())
 	compactionCtx = protocol.WithProfileConfiguration(compactionCtx, "")
 	compactionCtx = protocol.WithAccessObservation(compactionCtx, ag.Executor().AccessObservation())
 	_, compactionErr := b.ctxMgr.AutoCompactIfNeeded(compactionCtx)

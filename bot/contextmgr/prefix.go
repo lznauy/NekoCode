@@ -7,7 +7,6 @@ import (
 
 	"nekocode/bot/calllog"
 	"nekocode/bot/provider/types"
-	"nekocode/protocol"
 )
 
 type prefixShape struct {
@@ -99,13 +98,15 @@ func decodePrefixDigest(value string) ([32]byte, bool) {
 	return digest, true
 }
 
-func buildPrefixShape(system, history []types.Message, tools []types.ToolDef) prefixShape {
-	skills, count := skillDeliveryDigest(history)
+func buildPrefixShape(messages []types.Message, systemEnd, historyEnd int, tools []types.ToolDef) prefixShape {
+	// Volatile workflow/reference messages count toward skill delivery, while
+	// only the persisted history participates in the append-only check.
+	skills, count := skillDeliveryDigest(messages[systemEnd:])
 	return prefixShape{
 		skills: skills, skillMessages: count, skillsKnown: true,
-		system:  digestJSON(canonicalMessages(system)),
+		system:  digestJSON(canonicalMessages(messages[:systemEnd])),
 		tools:   digestJSON(nonNilTools(tools)),
-		history: digestMessages(history),
+		history: digestMessages(messages[systemEnd:historyEnd]),
 	}
 }
 
@@ -279,24 +280,29 @@ func historyIsAppendOnly(previous, current [][32]byte) bool {
 
 func digestMessages(messages []types.Message) [][32]byte {
 	digests := make([][32]byte, len(messages))
-	for i, message := range canonicalMessages(messages) {
-		digests[i] = digestJSON(message)
+	for i, message := range messages {
+		digests[i] = digestJSON(prefixMessage(message))
 	}
 	return digests
 }
 
 func canonicalMessages(messages []types.Message) []types.Message {
-	out := append([]types.Message(nil), messages...)
-	for i := range out {
-		out[i].Source = ""
-		out[i].SkillDelivery = types.SkillDelivery{}
-		out[i].ToolEvidence = protocol.ToolEvidence{}
-		out[i].NonExecution = protocol.ToolNonExecution{}
-	}
-	if out == nil {
-		out = []types.Message{}
+	out := make([]types.Message, len(messages))
+	for i, message := range messages {
+		out[i] = prefixMessage(message)
 	}
 	return out
+}
+
+// Select fields that can affect provider input. Local recovery metadata and
+// skill delivery have independent lifecycles and must not imply a rewrite.
+func prefixMessage(m types.Message) types.Message {
+	return types.Message{
+		Role: m.Role, Content: m.Content, Name: m.Name,
+		ReasoningContent: m.ReasoningContent, ReasoningSignature: m.ReasoningSignature,
+		ToolCalls: m.ToolCalls, ToolCallID: m.ToolCallID, IsError: m.IsError,
+		Images: m.Images,
+	}
 }
 
 func nonNilTools(tools []types.ToolDef) []types.ToolDef {

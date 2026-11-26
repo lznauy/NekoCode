@@ -3,12 +3,14 @@ package session
 import (
 	"bytes"
 	"encoding/json"
-	ctxmgr "nekocode/bot/contextmgr"
-	"nekocode/bot/provider/types"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	ctxmgr "nekocode/bot/contextmgr"
+	"nekocode/bot/provider/types"
+	"nekocode/util/filelock"
 )
 
 func TestRejectedResumeDoesNotRepairHistory(t *testing.T) {
@@ -54,7 +56,7 @@ func TestResumeToleratesShortObservationLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := trySubagentLock(probe); err != nil || !ok {
+	if ok, err := filelock.TryLock(probe); err != nil || !ok {
 		probe.Close()
 		t.Fatal("could not simulate observation lock", err)
 	}

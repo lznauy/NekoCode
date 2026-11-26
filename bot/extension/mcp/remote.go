@@ -13,39 +13,36 @@ import (
 	utilhttp "nekocode/util/http"
 )
 
-// Remote requests never forward credentials through redirects.
-func remoteHTTPClient() *http.Client {
-	return &http.Client{Timeout: 30 * time.Second, Transport: endpointTransport{base: http.DefaultTransport}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-}
-
 func mcpHTTPClient(ctx context.Context, cfg ServerConfig) *http.Client {
-	c := remoteHTTPClient()
-	// SSE tool responses may outlive ordinary OAuth HTTP round trips.
-	c.Timeout = 0
-	if base, ok := http.DefaultTransport.(*http.Transport); ok {
-		transport := base.Clone()
-		c.Transport = endpointTransport{base: transport, lifetime: ctx, headers: cfg.Headers}
-	} else {
-		c.Transport = endpointTransport{base: http.DefaultTransport, lifetime: ctx, headers: cfg.Headers}
+	base := http.DefaultTransport
+	if transport, ok := base.(*http.Transport); ok {
+		base = transport.Clone()
 	}
-	return c
+	// SSE tool responses may outlive ordinary OAuth HTTP round trips.
+	return &http.Client{
+		Transport:     endpointTransport{base: base, lifetime: ctx, headers: cfg.Headers, allowInsecureHTTP: cfg.AllowInsecureHTTP},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 }
 
 type endpointTransport struct {
-	base     http.RoundTripper
-	lifetime context.Context
-	headers  map[string]string
+	base              http.RoundTripper
+	lifetime          context.Context
+	headers           map[string]string
+	allowInsecureHTTP bool
 }
 
 func (t endpointTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	if err := utilhttp.ValidateSecureURL(r.URL.String()); err != nil {
+	if err := utilhttp.ValidateServiceURL(r.URL.String(), t.allowInsecureHTTP); err != nil {
 		return nil, err
 	}
-	// Static credentials travel on every endpoint request unless the OAuth
-	// handler already set them, so token-based servers need no OAuth flow.
-	for key, value := range t.headers {
-		if r.Header.Get(key) == "" {
-			r.Header.Set(key, value)
+	// Attach static credentials only to the outgoing copy of the request.
+	if len(t.headers) > 0 {
+		r = r.Clone(r.Context())
+		for key, value := range t.headers {
+			if r.Header.Get(key) == "" {
+				r.Header.Set(key, value)
+			}
 		}
 	}
 	if t.lifetime == nil {
@@ -54,7 +51,7 @@ func (t endpointTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	ctx, cancel := context.WithCancel(r.Context())
 	stop := context.AfterFunc(t.lifetime, cancel)
 	cleanup := func() { stop(); cancel() }
-	resp, err := t.base.RoundTrip(r.Clone(ctx))
+	resp, err := t.base.RoundTrip(r.WithContext(ctx))
 	if err != nil {
 		cleanup()
 		return nil, err
@@ -99,7 +96,7 @@ func (r *remoteClient) Start(ctx context.Context) error {
 	if r.cfg.Command != "" {
 		return fmt.Errorf("MCP server must specify command or URL, not both")
 	}
-	if err := utilhttp.ValidateSecureURL(r.cfg.URL); err != nil {
+	if err := utilhttp.ValidateServiceURL(r.cfg.URL, r.cfg.AllowInsecureHTTP); err != nil {
 		return err
 	}
 	if err := r.ctx.Err(); err != nil {
@@ -174,15 +171,11 @@ func (r *remoteClient) ListTools(ctx context.Context) ([]toolDef, error) {
 		if err != nil {
 			return nil, err
 		}
-		data, err := json.Marshal(tool)
+		schema, err := json.Marshal(tool.InputSchema)
 		if err != nil {
 			return nil, err
 		}
-		var def toolDef
-		if err := json.Unmarshal(data, &def); err != nil {
-			return nil, err
-		}
-		defs = append(defs, def)
+		defs = append(defs, toolDef{Name: tool.Name, Description: tool.Description, InputSchema: schema})
 	}
 	return defs, nil
 }

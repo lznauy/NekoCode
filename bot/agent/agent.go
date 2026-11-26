@@ -20,7 +20,7 @@ import (
 	"nekocode/bot/extension/tool/runtime/refbridge"
 	"nekocode/bot/extension/tool/runtime/runner"
 	aggov "nekocode/bot/policy"
-	"nekocode/bot/provider"
+	"nekocode/bot/provider/llm"
 	"nekocode/bot/provider/types"
 	"nekocode/logger"
 	"nekocode/protocol"
@@ -34,7 +34,7 @@ type Config struct {
 	// The callback must not mutate todo state.
 	PersistTodos func() error
 	Context      *ctxmgr.Manager
-	Model        provider.LLM
+	Model        llm.Client
 	Tools        *tools.Registry
 	Policy       *aggov.Policy
 	Output       Output
@@ -69,7 +69,7 @@ type Interaction struct {
 type agentDeps struct {
 	persistTodos   func() error
 	ctxMgr         *ctxmgr.Manager
-	llmClient      provider.LLM
+	llmClient      llm.Client
 	toolRegistry   *tools.Registry
 	toolExecutor   *runner.Executor
 	checkpoints    *checkpoint.Manager
@@ -157,7 +157,7 @@ func (a *Agent) Run(input string, images []types.MessageImage, callback RunCallb
 	return a.RunContext(context.Background(), input, images, callback)
 }
 
-// RunContext binds cancellation only after the run lifecycle is initialized.
+// RunContext binds caller cancellation and deadlines for the entire owned run.
 func (a *Agent) RunContext(ctx context.Context, input string, images []types.MessageImage, callback RunCallback) *RunResult {
 	if !a.runMu.TryLock() {
 		return &RunResult{Error: fmt.Errorf("agent: another run is active")}

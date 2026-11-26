@@ -13,7 +13,8 @@ import (
 	"nekocode/bot/contextmgr/token"
 	"nekocode/bot/decision"
 	"nekocode/bot/extension/tool/runtime/core"
-	"nekocode/bot/provider"
+	"nekocode/bot/internal/modelretry"
+	"nekocode/bot/provider/llm"
 	"nekocode/bot/provider/types"
 	"nekocode/protocol"
 	"nekocode/util/modelbudget"
@@ -98,7 +99,7 @@ type Config struct {
 	AutoCompactPercent int
 	Memory             *memory.File
 	Summarizer         Summarizer
-	CompactionModel    provider.LLM
+	CompactionModel    llm.Client
 	Reasoning          types.ReasoningSettings
 	RuntimePrompt      func() string
 	// ToolPruner is an optional fail-open relevance judge consulted before
@@ -119,7 +120,7 @@ func (m *Manager) SetToolPruner(pruner decision.ToolPruner) {
 
 // One closure belongs to one compaction and shares its physical-call budget
 // across batches and empty-response retries.
-func (m *Manager) streamingSummarizer(ctx context.Context, client provider.LLM, delta func(string)) Summarizer {
+func (m *Manager) streamingSummarizer(ctx context.Context, client llm.Client, delta func(string)) Summarizer {
 	remaining := maxSummaryCalls
 	return func(msgs []types.Message, prevSummary string) (string, error) {
 		var summary string
@@ -135,7 +136,7 @@ func (m *Manager) streamingSummarizer(ctx context.Context, client provider.LLM, 
 			summary, err = m.summarizeStreamOnce(ctx, client, msgs, prevSummary, delta)
 			// Never replay streamed deltas. Retry an empty response or a
 			// transient failure before the first token, within the call budget.
-			if strings.TrimSpace(summary) != "" || ctx.Err() != nil || (err != nil && !provider.IsRetryable(err)) {
+			if strings.TrimSpace(summary) != "" || ctx.Err() != nil || (err != nil && !modelretry.IsRetryable(err)) {
 				return summary, err
 			}
 		}
@@ -151,7 +152,7 @@ func (m *Manager) streamingSummarizer(ctx context.Context, client provider.LLM, 
 	}
 }
 
-func (m *Manager) summarizeStreamOnce(ctx context.Context, client provider.LLM, msgs []types.Message, prevSummary string, delta func(string)) (string, error) {
+func (m *Manager) summarizeStreamOnce(ctx context.Context, client llm.Client, msgs []types.Message, prevSummary string, delta func(string)) (string, error) {
 	start := time.Now()
 	m.state.mu.RLock()
 	window := 0
@@ -166,42 +167,27 @@ func (m *Manager) summarizeStreamOnce(ctx context.Context, client provider.LLM, 
 	if err := modelbudget.Admit(modelbudget.WithRole(ctx, modelbudget.Work, "")); err != nil {
 		return "", err
 	}
-	tokens, errs := client.ChatStream(ctx, requestMessages, nil)
+	requestCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	tokens, errs := client.ChatStream(requestCtx, requestMessages, nil)
 	var summary strings.Builder
 	var usage types.StreamUsage
-	cancelled := ctx.Done()
-	for tokens != nil || errs != nil {
-		select {
-		case <-cancelled:
-			err = ctx.Err()
-			// Providers may already be blocked sending a token. Drain their
-			// cancelled request to closure and retain final usage accounting.
-			cancelled = nil
-		case tok, ok := <-tokens:
-			if !ok {
-				tokens = nil
-				continue
-			}
-			if tok.Usage != nil {
-				usage.Merge(tok.Usage)
-			}
-			if tok.Content != "" && ctx.Err() == nil {
-				summary.WriteString(tok.Content)
-				if delta != nil {
-					delta(tok.Content)
-				}
-			}
-		case streamErr, ok := <-errs:
-			if !ok {
-				errs = nil
-				continue
-			}
-			if streamErr != nil {
-				err = streamErr
+	err = llm.ReadStream(requestCtx, tokens, errs, func(tok types.StreamToken) error {
+		if tok.Usage != nil {
+			usage.Merge(tok.Usage)
+		}
+		if tok.Content != "" && ctx.Err() == nil {
+			summary.WriteString(tok.Content)
+			if delta != nil {
+				delta(tok.Content)
 			}
 		}
-	}
+		return nil
+	})
 	if ctx.Err() != nil {
+		// Account for usage a producer was already sending when cancelled.
+		// A stalled custom provider must not hold the session open.
+		drainCancelledSummary(tokens, errs, &usage)
 		err = ctx.Err()
 	}
 	// An empty stream with no error is reported by the caller
@@ -213,7 +199,28 @@ func (m *Manager) summarizeStreamOnce(ctx context.Context, client provider.LLM, 
 	return summary.String(), err
 }
 
-func (m *Manager) writeCompactionCall(ctx context.Context, client provider.LLM, usage types.StreamUsage, start time.Time, callErr error) {
+const summaryDrainTimeout = 250 * time.Millisecond
+
+func drainCancelledSummary(tokens <-chan types.StreamToken, errs <-chan error, usage *types.StreamUsage) {
+	timer := time.NewTimer(summaryDrainTimeout)
+	defer timer.Stop()
+	for tokens != nil || errs != nil {
+		select {
+		case <-timer.C:
+			return
+		case tok, ok := <-tokens:
+			if !ok {
+				tokens = nil
+			} else if tok.Usage != nil {
+				usage.Merge(tok.Usage)
+			}
+		case <-errs:
+			errs = nil
+		}
+	}
+}
+
+func (m *Manager) writeCompactionCall(ctx context.Context, client llm.Client, usage types.StreamUsage, start time.Time, callErr error) {
 	m.usageMu.RLock()
 	sessionIDProvider := m.sessionIDProvider
 	m.usageMu.RUnlock()

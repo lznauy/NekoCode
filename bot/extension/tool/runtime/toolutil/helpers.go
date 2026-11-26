@@ -1,8 +1,10 @@
 package toolutil
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
 	"os"
 	"strconv"
 
@@ -47,6 +49,23 @@ func StringArg(args map[string]any, key string) (string, error) {
 	return v, nil
 }
 
+// FloatArgValue reads numeric inputs for tools accepting fractional values or
+// explicitly clamping a value before conversion. Integer identifiers stay exact
+// until an integer consumer calls RequireIntArg.
+func FloatArgValue(value any) (float64, bool) {
+	switch n := value.(type) {
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	case int:
+		return float64(n), true
+	case float64:
+		return n, true
+	default:
+		return 0, false
+	}
+}
+
 func RequireIntArg(args map[string]any, key string) (int, error) {
 	v, ok := args[key]
 	if !ok || v == nil {
@@ -54,6 +73,21 @@ func RequireIntArg(args map[string]any, key string) (int, error) {
 	}
 	if n, ok := v.(int); ok {
 		return n, nil
+	}
+	if number, ok := v.(json.Number); ok {
+		if n, err := strconv.ParseInt(string(number), 10, strconv.IntSize); err == nil {
+			return int(n), nil
+		}
+		// JSON permits integral decimal and exponent forms. Reject fractions
+		// and out-of-range integers without rounding through float64.
+		if f, err := number.Float64(); err == nil && math.Abs(f) <= math.Ldexp(1, strconv.IntSize-1) {
+			if rational, ok := new(big.Rat).SetString(string(number)); ok && rational.IsInt() && rational.Num().IsInt64() {
+				n := rational.Num().Int64()
+				if int64(int(n)) == n {
+					return int(n), nil
+				}
+			}
+		}
 	}
 	f, ok := v.(float64)
 	// The upper bound is exclusive: float64(maxInt) rounds up on 64-bit

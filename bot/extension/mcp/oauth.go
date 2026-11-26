@@ -23,6 +23,8 @@ import (
 	"golang.org/x/oauth2"
 )
 
+var errOAuthRequiresSecureEndpoint = errors.New("MCP OAuth requires HTTPS or a literal loopback IP")
+
 var errAuthorizationRequired = errors.New("MCP requires authorization; use the Authorize button or /mcp-login <name>")
 
 type oauthHandler struct {
@@ -49,7 +51,11 @@ type oauthHandler struct {
 }
 
 func newOAuthHandler(ctx context.Context, name string, cfg ServerConfig) *oauthHandler {
-	return &oauthHandler{ctx: ctx, cfg: cfg, name: name, oauthClient: oauthHTTPClient(cfg.URL), interactive: cfg.interactive, scopes: append([]string(nil), cfg.authorizationScopes...), openBrowser: func(raw string) error { return openAuthorizationBrowser(ctx, raw) }}
+	var oauthClient *http.Client
+	if utilhttp.ValidateSecureURL(cfg.URL) == nil {
+		oauthClient = oauthHTTPClient(cfg.URL)
+	}
+	return &oauthHandler{ctx: ctx, cfg: cfg, name: name, oauthClient: oauthClient, interactive: cfg.interactive, scopes: append([]string(nil), cfg.authorizationScopes...), openBrowser: func(raw string) error { return openAuthorizationBrowser(ctx, raw) }}
 }
 func (h *oauthHandler) state() (string, string) {
 	h.mu.Lock()
@@ -80,7 +86,8 @@ func (h *oauthHandler) isClosed() bool {
 func (h *oauthHandler) load() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.loaded {
+	// Only secure endpoints may load locally stored OAuth credentials.
+	if h.oauthClient == nil || h.loaded {
 		return nil
 	}
 	// Explicit login must work even when persisted credentials are unusable.
@@ -146,6 +153,10 @@ func (h *oauthHandler) Authorize(ctx context.Context, req *http.Request, resp *h
 			resp.Body.Close()
 			return fmt.Errorf("MCP access denied")
 		}
+	}
+	if h.oauthClient == nil {
+		resp.Body.Close()
+		return errOAuthRequiresSecureEndpoint
 	}
 	h.rememberChallengeScopes(resp)
 	h.authorizeMu.Lock()

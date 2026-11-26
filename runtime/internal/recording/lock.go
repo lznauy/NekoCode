@@ -3,6 +3,8 @@ package recording
 import (
 	"os"
 	"path/filepath"
+
+	"nekocode/util/filelock"
 )
 
 func lockRun(dir string) (*os.File, bool, error) {
@@ -10,7 +12,7 @@ func lockRun(dir string) (*os.File, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	ok, err := tryRunLock(f)
+	ok, err := filelock.TryLock(f)
 	if err != nil || !ok {
 		_ = f.Close()
 		return nil, ok, err

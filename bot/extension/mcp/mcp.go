@@ -244,9 +244,8 @@ func (m *Manager) Add(ctx context.Context, id, name string, cfg ServerConfig) er
 		return fmt.Errorf("list tools: %w", err)
 	}
 
-	serverTools := append([]toolDef(nil), defs...)
-	m.servers[id].tools = serverTools
-	m.health[name] = Health{Status: StatusReady, ToolCount: len(serverTools)}
+	m.servers[id].tools = defs
+	m.health[name] = Health{Status: StatusReady, ToolCount: len(defs)}
 	m.consumeAuthOverrideLocked(id, gen)
 	m.mu.Unlock()
 	return nil
@@ -317,7 +316,7 @@ func (m *Manager) Replace(ctx context.Context, oldIDs []string, registrations []
 			cleanupStaged()
 			return fmt.Errorf("list tools %s: %w", registration.Name, err)
 		}
-		item.tools = append([]toolDef(nil), defs...)
+		item.tools = defs
 	}
 	if err := stageCtx.Err(); err != nil {
 		cleanupStaged()
@@ -476,7 +475,7 @@ func (m *Manager) startBackground(ctx context.Context, id string, s *server) {
 		m.mu.Unlock()
 		return
 	}
-	s.tools = append([]toolDef(nil), defs...)
+	s.tools = defs
 	m.health[s.name] = Health{Status: StatusReady, ToolCount: len(defs)}
 	m.mu.Unlock()
 }
@@ -556,6 +555,10 @@ func (m *Manager) AuthorizationAction(name, action string) error {
 	var scopes []string
 	switch action {
 	case "login":
+		if s.client.remote.auth.oauthClient == nil {
+			m.mu.Unlock()
+			return errOAuthRequiresSecureEndpoint
+		}
 		scopes = s.client.remote.auth.authorizationScopes()
 	case "logout", "cancel":
 	default:

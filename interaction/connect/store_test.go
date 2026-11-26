@@ -2,8 +2,10 @@ package connect
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -137,6 +139,44 @@ func TestFileStoreConcurrentInstancesPreserveSections(t *testing.T) {
 	}
 }
 
+func TestFileStorePersistsSectionsAcrossProcesses(t *testing.T) {
+	const entries = 12
+	if section := os.Getenv("NEKOCODE_TEST_CONNECT_SECTION"); section != "" {
+		store := &FileStore{path: os.Getenv("NEKOCODE_TEST_CONNECT_PATH")}
+		for i := range entries {
+			if err := store.Save(fmt.Sprintf("%s-%d", section, i), true); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return
+	}
+
+	path := filepath.Join(t.TempDir(), "connect.json")
+	const writers = 4
+	var wg sync.WaitGroup
+	for n := range writers {
+		wg.Go(func() {
+			cmd := exec.Command(os.Args[0], "-test.run=^TestFileStorePersistsSectionsAcrossProcesses$")
+			cmd.Env = append(os.Environ(), "NEKOCODE_TEST_CONNECT_PATH="+path, fmt.Sprintf("NEKOCODE_TEST_CONNECT_SECTION=writer%d", n))
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Errorf("writer %d: %v: %s", n, err, output)
+			}
+		})
+	}
+	wg.Wait()
+	sections, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved map[string]bool
+	if err := json.Unmarshal(sections, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if len(saved) != writers*entries {
+		t.Fatalf("saved %d of %d sections", len(saved), writers*entries)
+	}
+}
+
 func TestFileStoreRejectsInvalidExistingJSON(t *testing.T) {
 	for _, original := range []string{"broken json", "{", "[]", "true"} {
 		t.Run(original, func(t *testing.T) {
@@ -177,7 +217,7 @@ func TestFileStoreSaveNullAndPrivatePermissions(t *testing.T) {
 	if info.Mode().Perm() != 0600 {
 		t.Fatalf("permissions = %o", info.Mode().Perm())
 	}
-	files, err := filepath.Glob(filepath.Join(filepath.Dir(store.path), ".connect-*.tmp"))
+	files, err := filepath.Glob(filepath.Join(filepath.Dir(store.path), ".connect.json-*.tmp"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,5 +269,42 @@ func TestFileStoreReadersSeeCompleteJSON(t *testing.T) {
 	close(done)
 	if err := <-result; err != nil {
 		t.Fatalf("reader saw incomplete config: %v", err)
+	}
+}
+
+func TestVersionedConfigComparesOnlyItsSectionUnderLock(t *testing.T) {
+	store := &FileStore{path: filepath.Join(t.TempDir(), "connect.json")}
+	// Handwritten config from before versions existed. Saving another section reformats the file.
+	if err := os.WriteFile(store.path, []byte(`{"legacy": { "app_id" : "x&y" }}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]string
+	version, err := store.LoadVersioned("legacy", &config)
+	if err != nil || config["app_id"] != "x&y" {
+		t.Fatalf("load legacy: %v, %v", config, err)
+	}
+	if err := store.SaveVersioned("other", map[string]string{"app_id": "other"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	results := make(chan error, 2)
+	for _, id := range []string{"first", "second"} {
+		wg.Go(func() { results <- store.SaveVersioned("legacy", map[string]string{"app_id": id}, version) })
+	}
+	wg.Wait()
+	first, second := <-results, <-results
+	if !(first == nil && errors.Is(second, ErrConfigChanged) || second == nil && errors.Is(first, ErrConfigChanged)) {
+		t.Fatalf("expected one commit and one conflict: %v, %v", first, second)
+	}
+	version, err = store.LoadVersioned("legacy", &config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config["app_id"] = "manually replaced"
+	if err := store.Save("legacy", config); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveVersioned("legacy", config, version); !errors.Is(err, ErrConfigChanged) {
+		t.Fatalf("manual edit with the same revision was overwritten: %v", err)
 	}
 }

@@ -21,6 +21,7 @@ const maxMCPBytes = 1024 * 1024
 // Server is a complete project override, never a field-wise merge.
 type Server struct {
 	URL                    string            `json:"url,omitempty"`
+	AllowInsecureHTTP      bool              `json:"allow_insecure_http,omitempty"`
 	Headers                map[string]string `json:"headers,omitempty"`
 	OAuthClientID          string            `json:"oauth_client_id,omitempty"`
 	OAuthClientSecret      string            `json:"oauth_client_secret,omitempty"`
@@ -121,6 +122,7 @@ func readServers(path, root string) (map[string]Server, error) {
 	var document struct {
 		Servers map[string]struct {
 			URL                    string            `json:"url,omitempty"`
+			AllowInsecureHTTP      bool              `json:"allow_insecure_http,omitempty"`
 			Headers                map[string]string `json:"headers,omitempty"`
 			OAuthClientID          string            `json:"oauth_client_id,omitempty"`
 			OAuthClientSecret      string            `json:"oauth_client_secret,omitempty"`
@@ -155,7 +157,7 @@ func readServers(path, root string) (map[string]Server, error) {
 		enabled := raw.Enabled == nil || *raw.Enabled
 		raw.Command = strings.TrimSpace(raw.Command)
 		var err error
-		raw.URL, err = utilhttp.NormalizeSecureURL(raw.URL)
+		raw.URL, err = utilhttp.NormalizeServiceURL(raw.URL, raw.AllowInsecureHTTP)
 		if err != nil {
 			return nil, fmt.Errorf("%s: server %q URL: %w", path, name, err)
 		}
@@ -202,7 +204,7 @@ func readServers(path, root string) (map[string]Server, error) {
 		if !filepath.IsAbs(command) && strings.ContainsAny(command, `/\`) {
 			command = filepath.Join(cwd, command)
 		}
-		servers[name] = Server{URL: raw.URL, Headers: raw.Headers, OAuthClientID: raw.OAuthClientID, OAuthClientSecret: raw.OAuthClientSecret, OAuthClientMetadataURL: raw.OAuthClientMetadataURL, OAuthCallbackPort: raw.OAuthCallbackPort, Command: command, Args: raw.Args, Env: raw.Env,
+		servers[name] = Server{URL: raw.URL, AllowInsecureHTTP: raw.AllowInsecureHTTP, Headers: raw.Headers, OAuthClientID: raw.OAuthClientID, OAuthClientSecret: raw.OAuthClientSecret, OAuthClientMetadataURL: raw.OAuthClientMetadataURL, OAuthCallbackPort: raw.OAuthCallbackPort, Command: command, Args: raw.Args, Env: raw.Env,
 			CWD: filepath.Clean(cwd), Enabled: enabled}
 	}
 	return servers, nil

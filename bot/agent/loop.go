@@ -47,13 +47,13 @@ func newLoopRunner(agent *Agent) *loopRunner {
 }
 
 func (r *loopRunner) runContext(ctx context.Context, input string, images []types.MessageImage, callback RunCallback) *RunResult {
-	if err := ctx.Err(); err != nil {
-		return &RunResult{Error: err, Interrupted: true}
-	}
 	a := r.agent
 	r.stepLimitHit = false
-	a.life.SetValues(ctx)
-	defer a.life.SetValues(nil)
+	a.life.SetRunContext(ctx)
+	defer a.life.SetRunContext(nil)
+	if err := a.life.Context().Err(); err != nil {
+		return &RunResult{Error: err, Interrupted: true}
+	}
 	beforeRun := a.deps.ctxMgr.Snapshot()
 	err := r.startRun(input, images)
 	defer a.life.StopTiming()
@@ -61,21 +61,6 @@ func (r *loopRunner) runContext(ctx context.Context, input string, images []type
 		result := &RunResult{Error: err}
 		r.publishSummary(result, callback)
 		return result
-	}
-	// Reset in startRun replaces canceled lifecycle contexts. Install the
-	// watcher afterwards so startup can never erase this run's cancellation.
-	finished, watchDone := make(chan struct{}), make(chan struct{})
-	go func() {
-		defer close(watchDone)
-		select {
-		case <-ctx.Done():
-			a.Abort()
-		case <-finished:
-		}
-	}()
-	defer func() { close(finished); <-watchDone }()
-	if ctx.Err() != nil {
-		a.Abort()
 	}
 	defer r.logGovernanceSummary()
 	if a.deps.gov != nil {
@@ -88,7 +73,7 @@ func (r *loopRunner) runContext(ctx context.Context, input string, images []type
 			a.deps.gov.EndRun(a.getCtx(), policy.TurnResult{Intent: intent, Text: a.run.finalText})
 		}()
 	}
-	if ctx.Err() == nil && !a.life.Finished().Load() {
+	if a.life.Context().Err() == nil && !a.life.Finished().Load() {
 		r.applyUserSubmitHooks()
 	}
 

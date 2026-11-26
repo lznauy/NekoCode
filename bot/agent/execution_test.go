@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"nekocode/bot/contextmgr"
 	"nekocode/bot/extension/tool"
@@ -51,10 +52,15 @@ func TestExecutionIdentitySurvivesSteeringAndDoesNotLeakToNextRun(t *testing.T) 
 			t.Fatal("steering lost the active execution identity")
 		}
 	}
-	if result := a.RunContext(protocol.WithExecutionIdentity(t.Context(), identity), "question", nil, nil); result.Error != nil {
+	caller, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	if result := a.RunContext(protocol.WithExecutionIdentity(caller, identity), "question", nil, nil); result.Error != nil || result.Interrupted {
 		t.Fatal(result.Error)
 	}
 	before := len(model.contexts)
+	if before != 2 {
+		t.Fatalf("expected one steered model call and one replacement, got %d", before)
+	}
 	for range 2 {
 		if result := a.Run("next question", nil, nil); result.Error != nil {
 			t.Fatal(result.Error)
@@ -66,6 +72,11 @@ func TestExecutionIdentitySurvivesSteeringAndDoesNotLeakToNextRun(t *testing.T) 
 		t.Fatalf("direct runs reused execution identity: %+v / %+v", first, last)
 	}
 	for _, ctx := range model.contexts[:before] {
+		got, ok := ctx.Deadline()
+		want, _ := caller.Deadline()
+		if !ok || !got.Equal(want) {
+			t.Fatalf("model deadline after steering = %v, want %v", got, want)
+		}
 		if protocol.ExecutionFromContext(ctx) != identity {
 			t.Fatal("model call diverged from runtime execution identity")
 		}

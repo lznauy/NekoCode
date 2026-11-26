@@ -30,6 +30,9 @@ func TestEndpointTransportInjectsConfiguredHeaders(t *testing.T) {
 	}
 	resp.Body.Close()
 
+	if req.Header.Get("Authorization") != "" || req.Header.Get("X-Custom") != "" {
+		t.Fatal("endpoint transport modified caller headers")
+	}
 	if got.Get("Authorization") != "Bearer static-token" {
 		t.Fatalf("Authorization = %q", got.Get("Authorization"))
 	}

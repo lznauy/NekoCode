@@ -879,7 +879,7 @@ function McpServerCard({
           <select className="field" value={remote ? 'http' : 'stdio'} onChange={(e) => {
             const isRemote = e.target.value === 'http'
             setRemote(isRemote)
-            onChange(isRemote ? { command: '', args: [], env: {}, url: '' } : { url: '', oauth_client_id: '', oauth_client_secret: '', oauth_client_metadata_url: '', oauth_callback_port: 0 })
+            onChange(isRemote ? { command: '', args: [], env: {}, url: '' } : { url: '', allow_insecure_http: false, oauth_client_id: '', oauth_client_secret: '', oauth_client_metadata_url: '', oauth_callback_port: 0 })
           }}>
             <option value="stdio">本地命令（stdio）</option>
             <option value="http">远程 URL（Streamable HTTP）</option>
@@ -889,6 +889,10 @@ function McpServerCard({
           <Field label="MCP URL">
             <input className="field font-mono" placeholder="https://example.com/mcp" value={server.url ?? ''} onChange={(e) => onChange({ url: e.target.value })} />
           </Field>
+          <label className="flex items-center gap-2 text-xs text-text-2">
+            <input type="checkbox" checked={server.allow_insecure_http ?? false} onChange={(e) => onChange({ allow_insecure_http: e.target.checked })} />
+            允许此服务使用明文 HTTP
+          </label>
           <details className="md:col-span-2 text-xs text-text-2">
             <summary className="cursor-pointer">OAuth 高级设置</summary>
             <div className="mt-3 grid gap-3 md:grid-cols-2">
@@ -1088,15 +1092,14 @@ function trimMcpServers(servers: Record<string, MCPServerConfig>): Record<string
     const trimmedName = name.trim()
     if (!trimmedName) continue
     out[trimmedName] = {
+      ...server,
       url: server.url?.trim(),
       oauth_client_id: server.oauth_client_id?.trim(),
       oauth_client_secret: server.oauth_client_secret?.trim(),
       oauth_client_metadata_url: server.oauth_client_metadata_url?.trim(),
-      oauth_callback_port: server.oauth_callback_port,
       command: server.command.trim(),
       args: (server.args ?? []).map((arg) => arg.trim()).filter(Boolean),
       env: trimEnv(server.env ?? {}),
-      enabled: server.enabled,
     }
   }
   return out

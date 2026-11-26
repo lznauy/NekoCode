@@ -74,6 +74,26 @@ func WriteFileWithDir(path string, data []byte, perm os.FileMode) error {
 	return os.Chmod(path, perm)
 }
 
+// WritePrivateAtomic replaces path with a complete 0600 file. The parent
+// directory must already exist. Readers opening path see either version.
+func WritePrivateAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err = tmp.Write(data); err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
 // ReadJSONFile reads a JSON file and unmarshals it into T.
 func ReadJSONFile[T any](path string) (T, error) {
 	var zero T

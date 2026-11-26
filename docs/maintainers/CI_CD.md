@@ -13,7 +13,7 @@
       路径感知 CI
           │
           ├── Go 变化：格式、构建、测试、vet、race、漏洞检查
-          ├── GUI 变化：测试与前端构建
+          ├── GUI 变化：前端测试、资源一致性、桌面启动
           ├── 官网变化：lint 与构建
           ├── 脚本/CI 变化：ShellCheck、安装器测试
           └── 文档变化：链接与 fragment 检查
@@ -54,8 +54,8 @@ Pull Request 的路径分类器从目标分支对应提交读取，不执行 PR 
 
 | 变化范围 | 运行的检查 |
 | --- | --- |
-| `*.go`、`go.mod`、`go.sum`、Go 构建配置、`//go:embed` 资源 | Go core |
-| `interaction/gui/web`、`wails.json` | GUI frontend |
+| `*.go`、`go.mod`、`go.sum`、Go 构建配置、`//go:embed` 资源、离线评测代码和题目 | Go core |
+| GUI 前端、Go 绑定、GUI 实现和构建入口 | GUI frontend |
 | `official` 下非 Markdown 文件 | Website |
 | `.github`、`scripts` | Repository quality |
 | 任意 Markdown | Documentation |
@@ -69,7 +69,7 @@ CI 包含五类独立检查。日常提交只运行受改动影响的类别；�
 | Job | 检查内容 |
 | --- | --- |
 | `go` | `gofmt`、`go build`、`go test`、`go vet`、race detector、`govulncheck` |
-| `frontend` | GUI 的依赖安装、Vitest 测试、TypeScript/Vite 构建 |
+| `frontend` | Vitest、TypeScript/Vite、内嵌资源比对、Linux 桌面构建与虚拟显示器启动 |
 | `website` | 官网的依赖安装、ESLint、Next.js 构建 |
 | `repository-quality` | Actionlint、ShellCheck、安装器校验测试 |
 | `documentation` | 离线文档链接和 fragment 检查 |
@@ -85,7 +85,7 @@ race detector 覆盖并发密集的 `bot/...` 和 `runtime/...`。`govulncheck` 
 
 ### GUI、官网与仓库质量
 
-GUI 和官网使用各自的 lockfile 执行 `npm ci`，避免 CI 隐式更新依赖。GUI 当前只做测试和构建，不生成桌面安装包；官网只验证生产构建，不负责部署。
+GUI 和官网使用各自的 lockfile 执行 `npm ci`，避免 CI 隐式更新依赖。GUI 使用 Makefile 构建 Linux 桌面程序，在虚拟显示器上确认窗口已打开，并检查前端构建结果与仓库资源一致。官网执行 lint 和生产构建。
 
 仓库质量检查覆盖 GitHub Actions 语法、`scripts/` 下的 Shell 脚本和安装器的校验失败路径。文档工作流独立检查 Markdown 内的本地链接、HTML 链接和标题锚点；新增发布入口或改名文档时，不需要运行完整产品构建，也能阻止失效链接进入 `master`。
 
@@ -125,7 +125,7 @@ tag 校验通过后，Release workflow 会通过 `workflow_call` 再次调用 Go
 
 手动运行时，workflow 以该 tag 为 checkout 目标，`validate-tag` 仍按上面的规则校验 tag 对象、peeled commit、CHANGELOG 章节和日期，随后 `validation` 和构建矩阵也都基于 tag 指向的提交运行。因此入参不会放宽门禁；它只把「tag push 触发」换成「对已存在的 tag 显式触发」。修复提交本身不在 tag 内，所以重跑通过说明 tag 内容可以被发布，但 tag 之后的 `master` 提交仍需单独通过日常 CI。
 
-只有 tag push 触发时才等于 tag；手动触发时 `github.ref` 指向触发所用分支。workflow 里的 checkout、构建版本注入、Release 查找和 `softprops/action-gh-release` 的 `tag_name` 都使用输入的版本号，而不是 `github.ref`，否则创建 Release 的一步会因为没有 tag 而失败。
+手动触发时，`github.ref` 指向触发所用分支。`validate-tag` 根据输入的版本号解析并校验 tag，将确认过的提交 SHA 传给测试、构建和发布任务用于 checkout。构建版本、Release 查找和 `softprops/action-gh-release` 的 `tag_name` 仍使用输入的版本号。
 
 ## 构建矩阵与版本注入
 

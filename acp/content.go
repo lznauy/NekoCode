@@ -46,6 +46,9 @@ func promptContent(blocks []contentBlock, sessionID string) (text string, attach
 			if err != nil {
 				return "", nil, rpcError(-32602, "image block data is not valid base64: %v", err)
 			}
+			if len(data) > attachment.MaxImageBytes {
+				return "", nil, rpcError(-32602, "image exceeds the %d-byte attachment limit", attachment.MaxImageBytes)
+			}
 			stored, err := attachment.SaveImage(sessionID, data)
 			if err != nil {
 				return "", nil, rpcError(-32000, "store image attachment: %v", err)

@@ -7,7 +7,7 @@ import (
 	"nekocode/bot/calllog"
 	"nekocode/bot/contextmgr/token"
 	"nekocode/bot/extension/tool/runtime/refbridge"
-	"nekocode/bot/provider"
+	"nekocode/bot/provider/llm"
 	"nekocode/bot/provider/types"
 	"nekocode/logger"
 	"nekocode/protocol"
@@ -69,10 +69,7 @@ func (m *Manager) projectRequest(request ModelRequest, observe bool) ([]types.Me
 	out, systemEnd, historyEnd := m.buildLocked(request)
 	out = append(out, request.ExtraMessages...)
 	out = types.ProjectReasoning(out, m.state.reasoning)
-	shape := buildPrefixShape(out[:systemEnd], out[systemEnd:historyEnd], request.Tools)
-	// Skill diagnostics cover volatile workflow and reference messages too,
-	// even though those messages do not participate in append-only history.
-	shape.skills, shape.skillMessages = skillDeliveryDigest(out[systemEnd:])
+	shape := buildPrefixShape(out, systemEnd, historyEnd, request.Tools)
 	if observe {
 		m.state.prefix.Observe(shape)
 	}
@@ -266,7 +263,7 @@ func (m *Manager) SetRuntimePolicy(policy string) {
 type ModelContext struct {
 	Window             int
 	AutoCompactPercent int
-	CompactionModel    provider.LLM
+	CompactionModel    llm.Client
 	Reasoning          types.ReasoningSettings
 	// Vision reports whether the active model receives native image input.
 	// Token estimation only charges image tokens when the request will

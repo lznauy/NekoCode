@@ -161,6 +161,15 @@ type DisplayMessage struct {
 	Images    []ImageRef     `json:"images,omitempty"`
 }
 
+// RetainsToolOutput identifies tools whose results remain visible after the turn.
+func RetainsToolOutput(name string) bool {
+	switch name {
+	case "edit", "diff", "write", "bash", "shell", "process", "task_batch":
+		return true
+	}
+	return false
+}
+
 type DisplayBlock struct {
 	ToolName string `json:"toolName"`
 	Args     string `json:"args,omitempty"`
@@ -263,6 +272,7 @@ type ImageUnderstandConfig struct {
 
 type MCPServerConfig struct {
 	URL                    string            `json:"url,omitempty"`
+	AllowInsecureHTTP      bool              `json:"allow_insecure_http,omitempty"`
 	Headers                map[string]string `json:"headers,omitempty"`
 	OAuthClientID          string            `json:"oauth_client_id,omitempty"`
 	OAuthClientSecret      string            `json:"oauth_client_secret,omitempty"`

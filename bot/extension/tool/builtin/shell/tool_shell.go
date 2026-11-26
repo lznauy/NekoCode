@@ -226,16 +226,8 @@ func optionalDurationArg(args map[string]any, key string) (time.Duration, error)
 	if !ok || raw == nil {
 		return 0, nil
 	}
-	var ms float64
-	switch value := raw.(type) {
-	case float64:
-		ms = value
-	case int:
-		ms = float64(value)
-	default:
-		return 0, fmt.Errorf("%s must be a positive number", key)
-	}
-	if ms <= 0 || math.IsNaN(ms) || math.IsInf(ms, 0) {
+	ms, numeric := toolutil.FloatArgValue(raw)
+	if !numeric || ms <= 0 || math.IsNaN(ms) || math.IsInf(ms, 0) {
 		return 0, fmt.Errorf("%s must be a positive number", key)
 	}
 	if ms > float64(maxDuration/time.Millisecond) {

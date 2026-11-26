@@ -22,13 +22,18 @@ A2A 适配器的会话恢复、前后台交接、Task Store 保留与失败清�
 
 - `Runner` 是 Runtime 唯一必选依赖。组合根通过 `New(runner, ServiceGroups)` 按领域显式装配能力，服务定义和构造入口各保留一套。
 - `protocol.ExecutionIdentity` 只通过 context 传递观测身份，不参与权限判断。Runtime 入口绑定自己的 run ID；直接 Bot/Agent 入口缺少身份时创建独立 run ID。任务装配层通过 `subagent.RunConfig` 显式提供 task/attempt 身份，引擎只继承父 run ID，未提供的持久化 attempt 不得猜测或继承。
-- 模型调用日志的通用字段由 `calllog.NewRecord`/`SetOutcome` 统一组装；主模型、合成与压缩保持各自执行/用量生命周期。共享 provider 不保存 run/attempt 身份；每次物理调用有独立 call ID，steer 替换取消上下文不改变本次 run 身份，尾部 housekeeping 压缩保留身份但不继承取消。
+- 模型调用日志的通用字段由 `calllog.NewRecord`/`SetOutcome` 统一组装；主模型、合成与压缩保持各自执行/用量生命周期。共享 provider 不保存 run/attempt 身份；每次物理调用有独立 call ID，steer 替换取消上下文不改变本次 run 身份，尾部自动压缩继承运行身份、截止时间和取消信号，取消后仍保存当前会话。
 - Context 不依赖 Agent、Policy 或 Session；文件工具不依赖 Policy。跨层数据由现有组合根/执行边界传入，不为观测功能增加全局注册表或第二份权威状态。这些方向由架构依赖测试覆盖。
 - 消费方通过 `RunControl`、`RunEvents`、`HumanInteraction`、`SessionManagement`、`ModelReader`、`ObservationReader` 组合所需能力，不为各适配器重复维护同一协议。
 - 一个应用使用一个 Runtime，交互表面共享该实例。Bot 和 Agent 拒绝并发运行；这种保护不意味着支持多个 Runtime 同时管理同一 Bot 的配置、关闭和通知生命周期。
-- Agent 的运行锁覆盖回调绑定及恢复。调用方取消在 run 初始化后绑定，避免 Reset 清除取消信号。手工 `BindOutput`/`BindInteraction` 仅用于实例闲置时的配置，不可在其他 run 中调用。
+- Agent 的运行锁覆盖回调绑定及恢复。启动时绑定 Agent 构造方和本次调用方的上下文，模型与工具继承两者中较早的截止时间。steer 只替换当前尝试。任一方取消或显式 Abort 后，本次运行内的后续尝试均保持取消。手工 `BindOutput`/`BindInteraction` 仅用于实例闲置时的配置，不可在其他 run 中调用。
+- 主 Agent、子 Agent 和上下文压缩共用 `llm.ReadStream` 读取模型响应。token 和终止错误可按任意顺序到达；截断或拒答一经报告，后续正常结束标记不能覆盖。Agent 管理输出预览和重试，Context 管理摘要提交及用量。压缩取消后最多额外等待 250 毫秒接收尾部用量。
+- 架构测试检查直接包依赖，并沿本地导入链检查模型后端隔离。循环内核不导入项目包；Agent 通过注入使用工具和持久化能力；Agent 和 Context 依赖 `bot/provider/llm` 的模型契约及 `bot/provider/types` 的消息类型。产品组装层通过 `provider.New` 选择具体客户端。Runtime 核心与领域实现通过组合根连接。
+- 后台协调器区分前台运行的接纳结果与回执保存结果。只有接纳返回忙或冲突时才自动重排；已经启动的运行缺少成功回执时保留供核查。领取任务后的写回只处理原条目，已停止或已被替换的任务保留其状态。
 - Provider 默认设置在客户端创建时确定。内置 OpenAI/Anthropic 客户端支持 `RequestOptions` 覆盖单次请求的 token 上限和 thinking；新的共享客户端应采用单次请求配置，不修改共享实例状态。旧的自定义 `LLM` 接口保持兼容，但未实现可选 `RequestClient` 时不能使用单次覆盖。
 - `session.Manager.Current` 返回深拷贝；`Activate` 和 `Save` 也复制传入快照。调用方修改快照不会隐式提交，需显式调用 `Save` 或 `Activate`。
+
+四个 IM 渠道共用 `connect.FileStore` 的配置版本校验。每次写入在文件锁内比较该渠道上次读取的内容，同时更新该节的 `_revision` 字段。其他渠道的更新可以独立提交，同一渠道即使重置为相同配置也会使旧快照失效。旧格式无需迁移，首次保存会生成版本。并发编辑同一渠道时，应将所有写入进程升级到支持版本校验的版本。
 
 ## 会话设置
 
@@ -39,6 +44,8 @@ ACP 保存连接内的会话偏好；模型、推理深度和权限的组合应�
 延迟结果恢复按整批替换后的净 token 增量检查预算，先验证全部结果，再统一替换并更新计数；缩短占位内容的负增量也必须计入。技能结果携带本地 `SkillName` 元数据，只有内容实际进入上下文后才更新加载标记，延迟结果在恢复时更新；交付回调在上下文锁外执行，该元数据不进入 provider 请求。
 
 ## 会话变更与用量恢复
+
+主会话在同一把跨进程文件锁内校验快照的 `revision`、追加 transcript 并提交 manifest。其他客户端已保存或删除会话时，旧快照的保存会返回 `session.ErrSessionConflict`，调用方须重新加载后处理本地更改。`session.commit.json` 单独保存已写入的版本和消息槽引用，主 manifest 暂时缺失时可核对写入方并安全恢复未提交的 transcript。改名保留内容版本，后续保存继承最新名称。缺少版本字段的已有会话会在下一次内容提交时取得版本。所有并发写入进程均须使用支持该锁的版本。升级期间请先退出仍在写入该会话的旧客户端。
 
 恢复会话的 completion 总量是替换值，不是一次新的模型消耗。`Agent.RestoreSessionUsage` 在上下文恢复后替换总量并重置上一轮的用量基线；新建或删除当前会话时清零。模型切换引起的 Agent 重建保留会话总量，不把历史用量计入新一轮。
 
@@ -67,7 +74,7 @@ Executor 通过 context 注入 `workspace.Manager`。Bot 在组装时固定主�
 
 ## 工具结果与请求预算
 
-Memory/Archive 只保存原文，在 Context 的请求边界统一投影为带内部来源的 JSON user 数据，静态 system 层只解释其历史数据语义。投影不回写 transcript，不成为新用户回合或操作授权；回合识别与报告共用 `Message.IsConversationUser`，不解析正文标记。缓存指纹取自同一次实际请求投影，固定规则与编码开销计入预算。OpenAI/Anthropic 仅编码消息，不能将历史正文提升进 system。
+Memory/Archive 只保存原文，在 Context 的请求边界统一投影为带内部来源的 JSON user 数据，静态 system 层只解释其历史数据语义。投影不回写 transcript，不成为新用户回合或操作授权；回合识别与报告共用 `Message.IsConversationUser`，不解析正文标记。缓存指纹取自同一次请求投影。历史指纹只选取可参与模型输入的字段。技能交付另算摘要，任务回执序号、本地产物路径和待恢复预览留在本地。固定规则与编码开销计入预算。OpenAI/Anthropic 仅编码消息，不能将历史正文提升进 system。
 
 工具普通执行和提权重试返回 `core.ToolOutput`，文本预览与原始文件引用分离；文件引用通过结构化字段传递，不解析展示提示。执行器只授予当前 actor 输出目录内普通文件的只读访问，二次限流复用原始文件。
 

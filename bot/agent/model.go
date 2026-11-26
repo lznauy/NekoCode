@@ -14,7 +14,7 @@ import (
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/execution"
 	"nekocode/bot/policy"
-	"nekocode/bot/provider"
+	"nekocode/bot/provider/llm"
 	"nekocode/bot/provider/types"
 	"nekocode/logger"
 	"nekocode/protocol"
@@ -112,7 +112,7 @@ func (r *modelRunner) callLLMForTool(ctx context.Context, input string) (*llmstr
 			reminder = append(reminder, types.Message{Role: "user", Source: types.MessageSourceHint, Content: fmt.Sprintf("User-supplied path: %q. If inspecting this file, call read with this exact path first. Locate it with glob only if read reports it missing.", path)})
 		}
 	}
-	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{TaskReferences: r.taskReferences(ctx), Tools: toolDefs, PolicyHints: policyHints, ExtraMessages: reminder, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient)})
+	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{TaskReferences: r.taskReferences(ctx), Tools: toolDefs, PolicyHints: policyHints, ExtraMessages: reminder, OutputTokens: llm.MaxOutputTokensFor(a.deps.llmClient)})
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +237,7 @@ func (r *modelRunner) streamSynthesize(ctx context.Context) (string, error) {
 	ctx = protocol.WithPolicyConfiguration(ctx, a.deps.gov.Configuration())
 	ctx = protocol.WithProfileConfiguration(ctx, "")
 	ctx = protocol.WithAccessObservation(ctx, a.deps.toolExecutor.AccessObservation())
-	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{TaskReferences: r.taskReferences(ctx), PolicyHints: policyHints, OutputTokens: provider.MaxOutputTokensFor(a.deps.llmClient), ExtraMessages: []types.Message{{Role: "user", Content: synthesizePrompt}}})
+	messages, err := a.deps.ctxMgr.PrepareRequest(ctx, contextmgr.ModelRequest{TaskReferences: r.taskReferences(ctx), PolicyHints: policyHints, OutputTokens: llm.MaxOutputTokensFor(a.deps.llmClient), ExtraMessages: []types.Message{{Role: "user", Content: synthesizePrompt}}})
 	if err != nil {
 		return "", err
 	}

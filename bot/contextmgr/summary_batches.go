@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"nekocode/bot/contextmgr/token"
-	"nekocode/bot/provider"
+	"nekocode/bot/provider/llm"
 	"nekocode/bot/provider/types"
 )
 
@@ -26,7 +26,7 @@ func (s *replacementCompactor) summaryWindow() int {
 }
 
 func (s *replacementCompactor) summaryOutput() int {
-	if output := provider.MaxOutputTokensFor(s.model); output > 0 {
+	if output := llm.MaxOutputTokensFor(s.model); output > 0 {
 		return output
 	}
 	return min(4096, max(1, s.summaryWindow()/4))
@@ -69,7 +69,7 @@ func (s *replacementCompactor) planSummaryBatches(messages []types.Message, arch
 	}
 	fits := func(batch []types.Message) bool {
 		request := buildSummaryMessages(batch, "")
-		budget, _ := estimateRequestBudget(request, nil, s.summaryWindow(), s.summaryOutput(), provider.ReasoningSettingsFor(s.model), false, 0)
+		budget, _ := estimateRequestBudget(request, nil, s.summaryWindow(), s.summaryOutput(), llm.ReasoningSettingsFor(s.model), false, 0)
 		// Previous archive heading and JSON/framing slack are separate from body.
 		return budget.Total()+s.summaryOutput()+32 <= budget.Window
 	}

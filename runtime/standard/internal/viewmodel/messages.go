@@ -55,7 +55,6 @@ func displayMessagePage(messages []types.Message, offset, limit int) ([]controlr
 }
 
 func displayMessagePageAt(messages []types.Message, offset, limit int, base *int) ([]controlruntime.DisplayMessage, int) {
-	toolNames, toolArgs := toolMetaByID(messages)
 	var out []controlruntime.DisplayMessage
 	total := 0
 	for i := 0; i < len(messages); {
@@ -71,7 +70,7 @@ func displayMessagePageAt(messages []types.Message, offset, limit int, base *int
 			}
 			i++
 		case "assistant":
-			msg, i, visible = displayAssistantTurn(messages, i, toolNames, toolArgs, materialize)
+			msg, i, visible = displayAssistantTurn(messages, i, materialize)
 		case "system":
 			visible = !isInternalMessage(m)
 			if materialize && visible {
@@ -94,29 +93,16 @@ func displayMessagePageAt(messages []types.Message, offset, limit int, base *int
 	return out, total
 }
 
-func toolMetaByID(msgs []types.Message) (names map[string]string, args map[string]string) {
-	names = make(map[string]string, len(msgs))
-	args = make(map[string]string, len(msgs))
-	for _, m := range msgs {
-		if m.Role != "assistant" {
-			continue
-		}
-		for _, tc := range m.ToolCalls {
-			if tc.ID != "" {
-				names[tc.ID] = tc.Function.Name
-				args[tc.ID] = tc.Function.Arguments
-			}
-		}
-	}
-	return names, args
-}
-
-func displayAssistantTurn(msgs []types.Message, idx int, toolNames, toolArgs map[string]string, materialize bool) (controlruntime.DisplayMessage, int, bool) {
+func displayAssistantTurn(msgs []types.Message, idx int, materialize bool) (controlruntime.DisplayMessage, int, bool) {
 	visible := false
 	var contentParts []string
 	var blocks []controlruntime.DisplayBlock
 	var images []controlruntime.ImageRef
-	tasks := make(map[string]types.Message)
+	type taskIdentity struct {
+		childID     string
+		resultIndex int // distinct attempts that never acquired a child ID
+	}
+	tasks := make(map[taskIdentity]types.Message)
 
 	next := idx
 	for next < len(msgs) && msgs[next].Role == "assistant" {
@@ -133,25 +119,33 @@ func displayAssistantTurn(msgs []types.Message, idx int, toolNames, toolArgs map
 			continue
 		}
 
+		// Call IDs belong to this assistant batch. A later model turn can reuse them.
+		calls := make(map[string]types.FunctionCall, len(m.ToolCalls))
+		for _, call := range m.ToolCalls {
+			if call.ID != "" {
+				calls[call.ID] = call.Function
+			}
+		}
 		for next < len(msgs) && msgs[next].Role == "tool" {
-			name := toolNames[msgs[next].ToolCallID]
+			call := calls[msgs[next].ToolCallID]
+			name := call.Name
 			if name == "task" {
 				visible = true
 				if materialize {
 					result := msgs[next]
-					identity := result.ToolCallID
 					var args struct {
 						ResumeID string `json:"resume_id"`
 					}
-					_ = json.Unmarshal([]byte(toolArgs[identity]), &args)
-					if args.ResumeID != "" {
-						identity = args.ResumeID
-					}
+					_ = json.Unmarshal([]byte(call.Arguments), &args)
+					identity := taskIdentity{childID: args.ResumeID}
 					text := strings.TrimPrefix(result.Content, "[Subagent returned a partial result]\n")
 					if strings.HasPrefix(text, "[Subagent ID: ") {
 						if id, _, ok := strings.Cut(strings.TrimPrefix(text, "[Subagent ID: "), "]"); ok {
-							identity = id
+							identity.childID = id
 						}
+					}
+					if identity.childID == "" {
+						identity.resultIndex = next
 					}
 					tasks[identity] = result
 					partial := strings.HasPrefix(result.Content, "[Subagent returned a partial result]")
@@ -163,8 +157,8 @@ func displayAssistantTurn(msgs []types.Message, idx int, toolNames, toolArgs map
 				}
 			}
 			if materialize {
-				blocks, images = appendDisplayToolResult(blocks, images, name, toolArgs[msgs[next].ToolCallID], msgs[next])
-			} else if isPersistentTool(name) {
+				blocks, images = appendDisplayToolResult(blocks, images, name, call.Arguments, msgs[next])
+			} else if controlruntime.RetainsToolOutput(name) {
 				visible = true
 			} else if isImageTool(name) && len(imageRefs(msgs[next].Content, false)) > 0 {
 				visible = true
@@ -204,7 +198,7 @@ func displayAssistantTurn(msgs []types.Message, idx int, toolNames, toolArgs map
 }
 
 func appendDisplayToolResult(blocks []controlruntime.DisplayBlock, images []controlruntime.ImageRef, name, args string, msg types.Message) ([]controlruntime.DisplayBlock, []controlruntime.ImageRef) {
-	if isPersistentTool(name) {
+	if controlruntime.RetainsToolOutput(name) {
 		text := msg.Content
 		if name == "task_batch" && msg.ToolOutput.Path != "" {
 			header := core.ArtifactHeader(msg.ToolOutput)
@@ -223,10 +217,6 @@ func appendDisplayToolResult(blocks []controlruntime.DisplayBlock, images []cont
 		images = append(images, extractImageRefs(msg.Content)...)
 	}
 	return blocks, images
-}
-
-func isPersistentTool(name string) bool {
-	return name == "task_batch" || name == "edit" || name == "diff" || name == "write" || name == "shell" || name == "bash" || name == "process"
 }
 
 func isImageTool(name string) bool {
@@ -265,15 +255,30 @@ func imageRefs(output string, dimensions bool) []controlruntime.ImageRef {
 }
 
 func isInternalMessage(msg types.Message) bool {
-	return msg.Source == types.MessageSourceHint || msg.Source == types.MessageSourceRuntimeContext ||
-		msg.Source == types.MessageSourceRuntimeEvent ||
-		strings.Contains(msg.Content, "<hints>") ||
-		strings.Contains(msg.Content, "<skill") ||
-		strings.Contains(msg.Content, "<project-context>") ||
-		strings.Contains(msg.Content, "<project>") ||
-		strings.Contains(msg.Content, "Current working directory") ||
-		strings.Contains(msg.Content, "<system-reminder>") ||
-		strings.HasPrefix(msg.Content, "[Hook:")
+	if msg.Role == "user" && !msg.IsConversationUser() {
+		return true
+	}
+	switch msg.Source {
+	case types.MessageSourceHint, types.MessageSourceRuntimeEvent, types.MessageSourceRuntimeContext,
+		types.MessageSourceContextData, types.MessageSourceSkillWorkflow, types.MessageSourceVolatileTail:
+		return true
+	case "", "system":
+		// Older transcripts did not tag injected user/system records. Only
+		// recognize the entire envelope; quoted snippets are conversation.
+	default:
+		return false
+	}
+	if msg.Role != "system" && msg.Role != "user" {
+		return false
+	}
+	content := strings.TrimSpace(msg.Content)
+	for _, tag := range []string{"hints", "skill", "skill_content", "project-context", "project", "system-reminder"} {
+		if (strings.HasPrefix(content, "<"+tag+">") || strings.HasPrefix(content, "<"+tag+" ")) && strings.HasSuffix(content, "</"+tag+">") {
+			return true
+		}
+	}
+	return msg.Role == "system" && (strings.HasPrefix(content, "Current working directory: ") ||
+		strings.HasPrefix(content, "[Hook: ") && strings.Contains(content, "] "))
 }
 
 func readImageDims(path string) []int {

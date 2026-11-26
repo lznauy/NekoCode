@@ -336,6 +336,7 @@ class EvalTests(unittest.TestCase):
         c=compare(base,candidate,self.root/'comparison')
         self.assertEqual(c['counts'],{'both_success':1})
         self.assertEqual(c['successful_pair_cost']['total_tokens']['median_candidate_minus_baseline'],-20)
+        self.assertEqual(c['successful_pair_cost']['input_tokens']['median_candidate_minus_baseline'],-20)
         self.assertEqual(c['successful_pair_cost']['fresh_tokens']['paired_success_samples'],0)
         self.assertEqual(c['successful_pair_cost']['tool_requests']['paired_success_samples'],0)
         for run, requests in [(base,5),(candidate,3)]:
@@ -366,6 +367,30 @@ class EvalTests(unittest.TestCase):
             write_json(path, receipt)
             result = compare(base, candidate, self.root / f"compare-{enabled}")
             self.assertEqual(result["counts"], {expected: 1})
+
+    def test_comparison_excludes_only_metrics_from_unreadable_logs(self):
+        base = self.make_run('baseline')
+        candidate = self.make_run('candidate', tokens=60)
+        path = candidate / 'trials/one/outcome.json'
+        outcome = read_json(path)
+        for name, log, unknown, known in [
+            ('calls', 'logs/llm-calls.jsonl.1', 'total_tokens', 'tool_calls'),
+            ('events', 'sessions/s/runs/r/events.jsonl', 'tool_calls', 'total_tokens'),
+        ]:
+            with self.subTest(source=name):
+                outcome['integrity']['telemetry_read_errors'] = {log: 'PermissionError'}
+                write_json(path, outcome)
+                result = compare(base, candidate, self.root / name)
+                self.assertEqual(result['counts'], {'both_success': 1})
+                reported = result['pairs'][0]['candidate']['cost']
+                self.assertIsNone(reported[unknown])
+                self.assertEqual(reported[known], outcome['cost'][known])
+                costs = result['successful_pair_cost']
+                self.assertEqual(costs[unknown]['paired_success_samples'], 0)
+                self.assertEqual(costs[known]['paired_success_samples'], 1)
+                self.assertEqual(costs['elapsed_s']['paired_success_samples'], 1)
+                delivery = result['cost_per_delivery']['snake']['candidate']
+                self.assertEqual(delivery['total_tokens_per_delivery'], None if name == 'calls' else 60)
 
     def test_delivery_cost_counts_failed_attempts_without_imputing_unknown_cost(self):
         from agent_eval.compare import delivery_cost

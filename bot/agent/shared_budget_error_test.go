@@ -26,7 +26,7 @@ func TestSharedBudgetExhaustionDuringFinalSummary(t *testing.T) {
 	if err := modelbudget.Admit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	a.life.SetValues(ctx)
+	a.life.SetRunContext(ctx)
 	a.loopRunner.stepLimitHit = true
 	result := a.loopRunner.finishRun(nil)
 	a.loopRunner.publishSummary(result, nil)

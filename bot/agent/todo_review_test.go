@@ -48,7 +48,7 @@ func TestFinishedWorkerDoesNotPermitUnfinishedChecklistToClose(t *testing.T) {
 	a.run.todoDispatched = true
 	a.run.todoDispatchPlan = "A"
 	host := &todoActivityHost{pending: 0}
-	a.life.SetValues(protocol.WithBackgroundSubmitter(t.Context(), host))
+	a.life.SetRunContext(protocol.WithBackgroundSubmitter(t.Context(), host))
 	if !a.turnRunner.continueUnfinishedPlan() {
 		t.Fatal("stale dispatch flag bypassed live idle status")
 	}
@@ -61,7 +61,7 @@ func TestGoalHandoffWithOpenTodosReachesGoalReview(t *testing.T) {
 			a.deps.ctxMgr.SetTodos([]protocol.TodoItem{{Content: "Next stage", Status: "pending"}})
 			a.run.todoTouched = true
 			reviewed := false
-			a.life.SetValues(WithGoalReview(t.Context(), func(string) string { reviewed = true; return "" }))
+			a.life.SetRunContext(WithGoalReview(t.Context(), func(string) string { reviewed = true; return "" }))
 			a.turnRunner.handleText(&reasoningResult{Action: actionChat, ActionInput: "Phase result\n" + marker}, nil)
 			if reviewed != (marker != "GOAL DONE") {
 				t.Fatalf("goal reviewed=%v", reviewed)

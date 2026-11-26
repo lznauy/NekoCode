@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"math"
 	"mime"
 	"net"
 	"net/http"
@@ -27,23 +26,11 @@ const maxFetchRunes = 12000
 const maxWebURLBytes = 16 << 10
 
 func webContentLimit(args map[string]any) (int, error) {
-	raw, present := args["maxChars"]
-	if !present {
-		return maxFetchRunes, nil
-	}
-	var value float64
-	switch v := raw.(type) {
-	case int:
-		value = float64(v)
-	case float64:
-		value = v
-	default:
+	n, err := toolutil.OptIntArg(args, "maxChars", maxFetchRunes)
+	if err != nil || n < 256 || n > 30000 {
 		return 0, fmt.Errorf("maxChars must be an integer between 256 and 30000")
 	}
-	if math.IsNaN(value) || math.IsInf(value, 0) || value < 256 || value > 30000 || math.Trunc(value) != value {
-		return 0, fmt.Errorf("maxChars must be an integer between 256 and 30000")
-	}
-	return int(value), nil
+	return n, nil
 }
 
 func webContentLimitParameter() core.Parameter {

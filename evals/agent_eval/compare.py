@@ -25,14 +25,39 @@ def trials(run):
     return manifest, result
 
 
+MODEL_METRICS = {"model_calls", "tool_model_calls", "usage_unknown_calls", "total_tokens", "input_tokens",
+                 "output_tokens", "fresh_tokens", "cached_tokens"}
+EVENT_METRICS = {"tool_started", "tool_calls", "tool_blocked"}
+
+
+# These metrics appear in both per-trial deltas and the aggregate report.
+PAIRED_COST_METRICS = (
+    "model_calls", "total_tokens", "input_tokens", "output_tokens", "fresh_tokens", "cached_tokens",
+    "tool_calls", "tool_requests", "repeated_tool_requests", "tool_rounds", "tool_rounds_before_first_read",
+    "tool_started", "tool_blocked", "tool_result_errors", "context_snapshot_polls", "same_image_rechecks",
+    "image_rate_limits",
+)
+
+
+def comparable_cost(outcome):
+    cost = outcome["cost"].copy()
+    errors = outcome.get("integrity", {}).get("telemetry_read_errors", {})
+    if any(path.startswith("logs/llm-calls.jsonl") for path in errors):
+        cost.update(dict.fromkeys(MODEL_METRICS.intersection(cost)))
+    if any(path.endswith("/events.jsonl") for path in errors):
+        cost.update(dict.fromkeys(EVENT_METRICS.intersection(cost)))
+    return cost
+
+
 def delivery_cost(outcomes):
     """Amortize all comparable attempts, including failures, over accepted deliveries."""
     successes = sum(o["success"] for o in outcomes)
     result = {"attempts": len(outcomes), "deliveries": successes}
     complete = all(o.get("integrity", {}).get("calls_observed") and
                    o["integrity"].get("all_call_ids_present") for o in outcomes)
+    costs = [comparable_cost(o) for o in outcomes]
     for metric in ("model_calls", "total_tokens"):
-        values = [o["cost"].get(metric) for o in outcomes]
+        values = [cost.get(metric) for cost in costs]
         known = complete and all(v is not None for v in values)
         result[metric + "_per_delivery"] = sum(values) / successes if successes and known else None
     return result
@@ -70,15 +95,15 @@ def compare(baseline, candidate, output):
         other_version = cr.get('evaluation_contract_version')
         if type(version) is not int or version < 1 or type(other_version) is not int or version != other_version:
             row['reasons'].append('evaluation_contract_version missing, invalid or differs')
-        for field in ["telemetry_adapter"]:
-            if not br.get(field) or not cr.get(field):
-                row["reasons"].append(f"{field} missing")
+        if not br.get("telemetry_adapter") or not cr.get("telemetry_adapter"):
+            row["reasons"].append("telemetry_adapter missing")
         if not br.get("observed_model_fingerprint") or not cr.get("observed_model_fingerprint"):
             row["reasons"].append("actual model configuration was not observed")
         if not br.get("external_config_fingerprint") or not cr.get("external_config_fingerprint"):
             row["reasons"].append("external configuration was not fingerprinted")
         if bo.get("verification", {}).get("error") or co.get("verification", {}).get("error"):
             row["reasons"].append("verifier failed; product outcome unscored")
+        baseline_cost, candidate_cost = comparable_cost(bo), comparable_cost(co)
         if row["reasons"]:
             row["classification"] = "incomparable"
         else:
@@ -88,17 +113,17 @@ def compare(baseline, candidate, output):
             row["classification"] = {(False, True): "new_success", (True, False): "regression", (True, True): "both_success", (False, False): "both_failure"}[(bs, cs)]
             if bs and cs and all(o.get("integrity", {}).get("calls_observed") and o.get("integrity", {}).get("all_call_ids_present") for o in [bo, co]):
                 row["cost_delta"] = {}
-                for metric in ["model_calls", "total_tokens", "input_tokens", "output_tokens", "fresh_tokens", "cached_tokens", "tool_calls", "tool_requests", "repeated_tool_requests", "tool_rounds", "tool_rounds_before_first_read", "tool_started", "tool_blocked", "tool_result_errors", "context_snapshot_polls", "same_image_rechecks", "image_rate_limits"]:
-                    bv, cv = bo["cost"].get(metric), co["cost"].get(metric)
+                for metric in PAIRED_COST_METRICS:
+                    bv, cv = baseline_cost.get(metric), candidate_cost.get(metric)
                     row["cost_delta"][metric] = cv - bv if bv is not None and cv is not None else None
                 row["cost_delta"]["elapsed_s"] = co["elapsed_s"] - bo["elapsed_s"]
-        row["baseline"] = {"success": bo["success"], "stop": bo["stop_reason"], "required_passed": bo["verification"]["required_passed"], "cost": bo["cost"]}
-        row["candidate"] = {"success": co["success"], "stop": co["stop_reason"], "required_passed": co["verification"]["required_passed"], "cost": co["cost"]}
+        row["baseline"] = {"success": bo["success"], "stop": bo["stop_reason"], "required_passed": bo["verification"]["required_passed"], "cost": baseline_cost}
+        row["candidate"] = {"success": co["success"], "stop": co["stop_reason"], "required_passed": co["verification"]["required_passed"], "cost": candidate_cost}
         rows.append(row)
     deltas = [r["cost_delta"] for r in rows if r["cost_delta"] is not None]
     # Every aggregate carries its own denominator: missing metrics are not zeros.
     aggregate = {}
-    for metric in ["model_calls", "total_tokens", "fresh_tokens", "output_tokens", "tool_calls", "tool_requests", "repeated_tool_requests", "tool_rounds", "tool_rounds_before_first_read", "tool_started", "tool_blocked", "tool_result_errors", "context_snapshot_polls", "same_image_rechecks", "image_rate_limits", "elapsed_s"]:
+    for metric in (*PAIRED_COST_METRICS, "elapsed_s"):
         values = [d[metric] for d in deltas if d.get(metric) is not None]
         aggregate[metric] = {"paired_success_samples": len(values), "median_candidate_minus_baseline": statistics.median(values) if values else None}
     result = {"schema_version": 1, "baseline_run": base_run["run_id"], "candidate_run": cand_run["run_id"],
@@ -109,7 +134,7 @@ def compare(baseline, candidate, output):
               "limitations": ["A small number of repeats does not establish statistical significance.",
                               "External config fingerprints are operator assertions; requested model names do not pin provider deployments.",
                               "Only successful matched trials contribute cost deltas; timeouts remain delivery failures.",
-                              "Unknown/rotated telemetry can undercount; inspect integrity before interpreting cost."]}
+                              "Metrics from unreadable logs are excluded. Missing or rotated logs can still undercount."]}
     write_json(output / "comparison.json", result)
     lines = ["# Harness comparison", "", f"Baseline: {base_run['run_id']}; candidate: {cand_run['run_id']}", "", "| Case | Repeat | Outcome | Reasons |", "|---|---:|---|---|"]
     lines += [f"| {r['case_id']} | {r['repeat']} | {r['classification']} | {'; '.join(r['reasons'])} |" for r in rows]

@@ -1,11 +1,13 @@
 package session
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 
 	"nekocode/bot/provider/types"
@@ -13,26 +15,43 @@ import (
 )
 
 func writeAtomic(path string, data []byte, perm os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".session-*.tmp")
+	root, err := os.OpenRoot(filepath.Dir(path))
 	if err != nil {
 		return err
 	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
+	defer root.Close()
+	_, err = replaceRootFile(root, filepath.Base(path), data, perm)
+	return err
+}
+
+// A directory sync can fail after the rename committed; retain that outcome
+// so the owner can retry without treating its own manifest as another writer.
+func replaceRootFile(root *os.Root, name string, data []byte, perm os.FileMode) (bool, error) {
+	temp := ".session-" + rand.Text() + ".tmp"
+	tmp, err := root.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return false, err
+	}
+	defer root.Remove(temp)
 	if err := tmp.Chmod(perm); err != nil {
 		_ = tmp.Close()
-		return err
+		return false, err
 	}
 	if err := writeAndSync(tmp, data); err != nil {
-		return err
+		return false, err
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return err
+	if err := root.Rename(temp, name); err != nil {
+		return false, err
 	}
-	return syncDir(filepath.Dir(path))
+	folder, err := root.Open(".")
+	if err != nil {
+		return true, err
+	}
+	defer folder.Close()
+	return true, syncDirectoryHandle(folder)
 }
 
 func writeAndSync(tmp *os.File, data []byte) error {
@@ -55,11 +74,21 @@ func syncDir(path string) error {
 	if err != nil {
 		return err
 	}
-	err = dir.Sync()
+	err = syncDirectoryHandle(dir)
 	if closeErr := dir.Close(); err == nil {
 		err = closeErr
 	}
 	return err
+}
+
+func syncDirectoryHandle(dir *os.File) error {
+	// Windows FlushFileBuffers requires a writable handle and does not
+	// support syncing an opened directory. File contents are synced before
+	// publishing them by rename.
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	return dir.Sync()
 }
 
 // Manager owns only the current session identity and persistence lifecycle.
@@ -159,7 +188,7 @@ func (m *Manager) save(sess *Snapshot, keepDraft bool) error {
 		return fmt.Errorf("session: cannot save nil snapshot")
 	}
 	if sess.IsDraft() {
-		if err := deleteSnapshot(sess.ID); err != nil {
+		if err := sess.discardDraft(); err != nil {
 			return err
 		}
 		if keepDraft {
@@ -169,7 +198,9 @@ func (m *Manager) save(sess *Snapshot, keepDraft bool) error {
 		}
 		return nil
 	}
-	if err := sess.save(); err != nil {
+	base := sess.revision
+	err := sess.save()
+	if err != nil && base == sess.revision {
 		return err
 	}
 	if sess.TranscriptLazy {
@@ -179,6 +210,32 @@ func (m *Manager) save(sess *Snapshot, keepDraft bool) error {
 		sess = &saved
 	}
 	m.set(sess)
+	return err
+}
+
+func (s *Snapshot) discardDraft() error {
+	unlock, err := lockSession(s.ID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	d := filepath.Join(dir(), s.ID)
+	if _, _, err := s.readBase(filepath.Join(d, "session.json")); err != nil {
+		return err
+	}
+	// A goal-only session may have a journal append awaiting its first
+	// manifest commit. A detached empty draft cannot discard that turn.
+	info, err := os.Stat(filepath.Join(d, transcriptFileName))
+	if err == nil && info.Size() > 0 {
+		return fmt.Errorf("%w: session has pending history", ErrSessionConflict)
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.RemoveAll(d); err != nil {
+		return err
+	}
+	s.revision = nil
 	return nil
 }
 

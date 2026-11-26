@@ -1,13 +1,14 @@
 package toolutil
 
 import (
+	"encoding/json"
 	"math"
 	"strconv"
 	"testing"
 )
 
 func TestRequireIntArgRejectsInvalidNumbers(t *testing.T) {
-	for _, value := range []any{1.9, -1.9, math.NaN(), math.Inf(1), math.Inf(-1), math.Ldexp(1, strconv.IntSize-1), -math.Ldexp(1, strconv.IntSize), "2", nil} {
+	for _, value := range []any{1.9, json.Number("1.00000000000000001"), json.Number("9223372036854775808"), -1.9, math.NaN(), math.Inf(1), math.Inf(-1), math.Ldexp(1, strconv.IntSize-1), -math.Ldexp(1, strconv.IntSize), "2", nil} {
 		if got, err := RequireIntArg(map[string]any{"line": value}, "line"); err == nil {
 			t.Errorf("accepted %v (%T) as %d", value, value, got)
 		}
@@ -15,7 +16,7 @@ func TestRequireIntArgRejectsInvalidNumbers(t *testing.T) {
 }
 
 func TestRequireIntArgAcceptsWireAndNativeIntegers(t *testing.T) {
-	for _, value := range []any{float64(2), int(2)} {
+	for _, value := range []any{float64(2), int(2), json.Number("2"), json.Number("2.0"), json.Number("20e-1")} {
 		if got, err := RequireIntArg(map[string]any{"line": value}, "line"); err != nil || got != 2 {
 			t.Errorf("value=%v: got %d, %v", value, got, err)
 		}

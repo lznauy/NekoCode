@@ -373,7 +373,7 @@ func (s *HistoryStore) Append(base int, messages []types.Message) (int, error) {
 		return base, err
 	}
 	if m.count < int64(base) || m.count > int64(base+len(messages)) {
-		return base, errors.New("history changed outside pending append")
+		return base, fmt.Errorf("%w: history changed outside pending append", ErrSessionConflict)
 	}
 	if int(m.count) > base {
 		source, err := os.Open(filepath.Join(s.dir, transcriptFileName))
@@ -398,7 +398,7 @@ func (s *HistoryStore) Append(base int, messages []types.Message) (int, error) {
 			a, _ := json.Marshal(old)
 			b, _ := json.Marshal(messages[seq-base-1])
 			if string(a) != string(b) {
-				return base, errors.New("uncommitted history differs from pending append")
+				return base, fmt.Errorf("%w: uncommitted history differs from pending append", ErrSessionConflict)
 			}
 		}
 	}
@@ -416,18 +416,32 @@ func (m *Manager) historyStore() *HistoryStore {
 	}
 	return m.sess.history
 }
-func (m *Manager) HistoryPage(before, limit, maxBytes, through int) (HistoryPage, error) {
-	s := m.historyStore()
-	if s == nil {
-		return HistoryPage{}, nil
+
+// Index reads may rebuild transcript.idx. Serialize them with the writer
+// which can append the journal, replace the manifest, or delete the session.
+func (m *Manager) lockedHistory(ctx context.Context) (*HistoryStore, func(), error) {
+	store := m.historyStore()
+	if store == nil {
+		return nil, nil, nil
 	}
+	unlock, err := lockSessionContext(ctx, filepath.Base(store.dir))
+	return store, unlock, err
+}
+
+func (m *Manager) HistoryPage(before, limit, maxBytes, through int) (HistoryPage, error) {
+	s, unlock, err := m.lockedHistory(context.Background())
+	if s == nil || err != nil {
+		return HistoryPage{}, err
+	}
+	defer unlock()
 	return s.Page(before, limit, maxBytes, through)
 }
 func (m *Manager) HistoryRange(first, last int) ([]types.Message, error) {
-	s := m.historyStore()
-	if s == nil {
-		return nil, nil
+	s, unlock, err := m.lockedHistory(context.Background())
+	if s == nil || err != nil {
+		return nil, err
 	}
+	defer unlock()
 	return s.ReadRange(first, last)
 }
 
@@ -436,16 +450,7 @@ func (m *Manager) WalkHistory(through int, visit func(types.Message) error) erro
 	if through < 1 {
 		return nil
 	}
-	store := m.historyStore()
-	if store == nil {
-		return errors.New("no session history")
-	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	if _, err := store.ensure(through, false); err != nil {
-		return err
-	}
-	f, err := os.Open(filepath.Join(store.dir, transcriptFileName))
+	f, err := m.openHistoryPrefix(through)
 	if err != nil {
 		return err
 	}
@@ -470,6 +475,25 @@ func (m *Manager) WalkHistory(through int, visit func(types.Message) error) erro
 		}
 	}
 	return nil
+}
+
+// An open descriptor pins the immutable prefix across later appends or
+// deletion. Release the locks before invoking the supplied visitor.
+func (m *Manager) openHistoryPrefix(through int) (*os.File, error) {
+	store, unlock, err := m.lockedHistory(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	if store == nil {
+		return nil, errors.New("no session history")
+	}
+	defer unlock()
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if _, err := store.ensure(through, false); err != nil {
+		return nil, err
+	}
+	return os.Open(filepath.Join(store.dir, transcriptFileName))
 }
 
 func (m *Manager) ExportHistory(through int, tail []types.Message, path string) (string, int, error) {

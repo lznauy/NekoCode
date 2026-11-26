@@ -184,7 +184,7 @@ JS 是内联代码，因此不需要额外脚本文件。复杂逻辑可以移�
 | `warning` | 有字段会被忽略、旧 commands 需要迁移，或依赖宿主配置 |
 | `error` | 文件缺失/越界、配置不兼容，或扫描不完整，需要先处理 |
 
-检查复用实际 Skill、Agent 和 Hook 解析器；MCP URL 使用与连接阶段相同的 HTTPS/回环 HTTP 校验，并拒绝同时配置 command 和 URL。报告会提示未知 manifest 字段、不支持的 Skill 执行字段、Agent 未知字段、重复名称及失效的声明路径。旧 `commands` 不会注册，工作流应迁移到 Skill；`install.sh` 仍需自行审查后运行。
+检查复用实际 Skill、Agent 和 Hook 解析器；MCP URL 使用与连接阶段相同的 URL 校验，支持按服务设置 `allow_insecure_http`，并拒绝同时配置 command 和 URL。报告会提示未知 manifest 字段、不支持的 Skill 执行字段、Agent 未知字段、重复名称及失效的声明路径。旧 `commands` 不会注册，工作流应迁移到 Skill；`install.sh` 仍需自行审查后运行。
 
 这是静态检查：模型名称、外部技能、MCP 命令依赖、认证和服务连接仍需按报告提示验证。跨插件或项目/用户技能覆盖也应以 `/skills` 的当前可见结果为准。检查不打印 MCP URL、环境变量、请求头或密钥值。
 

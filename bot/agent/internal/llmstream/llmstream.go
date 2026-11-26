@@ -4,14 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"nekocode/protocol"
 	"regexp"
 	"strings"
 	"time"
 
 	"nekocode/bot/calllog"
 	"nekocode/bot/extension/tool/runtime/core"
-	"nekocode/bot/provider"
+	"nekocode/bot/internal/modelretry"
+	"nekocode/bot/provider/llm"
 	"nekocode/bot/provider/types"
 	"nekocode/logger"
 	"nekocode/util/modelbudget"
@@ -30,8 +30,6 @@ type StreamCallbacks struct {
 
 // StreamResult accumulates the output of consuming a ChatStream.
 type StreamResult struct {
-	finishReason       string
-	refused            bool
 	TextBuf            strings.Builder
 	ReasoningBuf       strings.Builder
 	ReasoningSignature string
@@ -76,7 +74,7 @@ var ansiRegex = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")
 // CallLLM executes a single LLM stream call and returns the result. Every
 // call — success or failure — leaves one structured record in the evidence
 // log (calllog.Write).
-func CallLLM(client provider.LLM, opts LLMCallOptions) (*LLMCallResult, error) {
+func CallLLM(client llm.Client, opts LLMCallOptions) (*LLMCallResult, error) {
 	if err := modelbudget.Admit(opts.Ctx); err != nil {
 		return nil, err
 	}
@@ -84,7 +82,7 @@ func CallLLM(client provider.LLM, opts LLMCallOptions) (*LLMCallResult, error) {
 	start := time.Now()
 	requestCtx, cancel := context.WithCancel(opts.Ctx)
 	defer cancel()
-	tokenCh, errCh := provider.ChatStream(client, requestCtx, opts.Messages, opts.ToolDefs, opts.Request)
+	tokenCh, errCh := llm.ChatStream(client, requestCtx, opts.Messages, opts.ToolDefs, opts.Request)
 	if tokenCh == nil {
 		err := fmt.Errorf("chat stream failed")
 		select {
@@ -100,34 +98,12 @@ func CallLLM(client provider.LLM, opts LLMCallOptions) (*LLMCallResult, error) {
 
 	stream := StreamResult{}
 	failureStage := "completion"
-	err := func() error {
-		if err := ConsumeStream(tokenCh, &stream, opts.Callbacks, opts.CheckDone); err != nil {
-			failureStage = "stream"
-			if errors.Is(err, context.Canceled) {
-				failureStage = "cancelled"
-			}
-			return err
-		}
-
-		if opts.CheckDone != nil && opts.CheckDone() {
-			failureStage = "cancelled"
-			return context.Canceled
-		}
-
-		if err := <-errCh; err != nil {
-			return err
-		}
-		if stream.refused {
-			return fmt.Errorf("%w: provider returned a refusal", protocol.ErrIncompleteResponse)
-		}
-		switch stream.finishReason {
-		case "length", "max_tokens", "model_context_window_exceeded":
-			return fmt.Errorf("%w: provider output token limit reached", protocol.ErrIncompleteResponse)
-		case "content_filter", "refusal":
-			return fmt.Errorf("%w: provider stopped generation (%s)", protocol.ErrIncompleteResponse, stream.finishReason)
-		}
-		return nil
-	}()
+	err := ConsumeStream(requestCtx, tokenCh, errCh, &stream, opts.Callbacks, opts.CheckDone)
+	if errors.Is(err, llm.ErrStreamIdle) {
+		failureStage = "stream"
+	} else if err != nil && (requestCtx.Err() != nil || errors.Is(err, errAttemptStopped)) {
+		failureStage = "cancelled"
+	}
 	// Preserve partial output so a replacement attempt can retract its preview.
 	result := &LLMCallResult{
 		Text:               ansiRegex.ReplaceAllString(stream.TextBuf.String(), ""),
@@ -168,7 +144,7 @@ func writeCallRecord(opts LLMCallOptions, stream *StreamResult, start time.Time,
 
 // CallLLMWithRetry calls CallLLM, rebuilding the call options on every
 // retryable failure via buildOptions.
-func CallLLMWithRetry(ctx context.Context, client provider.LLM, buildOptions func() LLMCallOptions) (*LLMCallResult, error) {
+func CallLLMWithRetry(ctx context.Context, client llm.Client, buildOptions func() LLMCallOptions) (*LLMCallResult, error) {
 	var result *LLMCallResult
 	var lastOptions LLMCallOptions
 	err := WithRetry(ctx, func() error {
@@ -210,11 +186,11 @@ func CallLLMWithRetry(ctx context.Context, client provider.LLM, buildOptions fun
 
 // retryEmptyContent reports whether result is a completed reasoning-only
 // response worth one thinking-disabled retry.
-func retryEmptyContent(client provider.LLM, result *LLMCallResult) bool {
-	if result == nil || client == nil || !provider.SupportsRequestOptions(client) {
+func retryEmptyContent(client llm.Client, result *LLMCallResult) bool {
+	if result == nil || client == nil || !llm.SupportsRequestOptions(client) {
 		return false
 	}
-	settings := provider.ReasoningSettingsFor(client)
+	settings := llm.ReasoningSettingsFor(client)
 	if settings.ThinkingMode == "" || settings.Disabled {
 		return false
 	}
@@ -227,9 +203,9 @@ func retryEmptyContent(client provider.LLM, result *LLMCallResult) bool {
 // retryable attempt.
 func WithRetry(ctx context.Context, fn func() error) error {
 	var attempt int
-	return provider.Retry(ctx, provider.DefaultRetryConfig, func() error {
+	return modelretry.Retry(ctx, modelretry.Default(), func() error {
 		err := fn()
-		if err != nil && provider.IsRetryable(err) {
+		if err != nil && modelretry.IsRetryable(err) {
 			attempt++
 			logger.Log("retry %d: %v", attempt, err)
 		}

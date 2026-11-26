@@ -44,11 +44,11 @@ bin/nekocode-tui --acp
 | --- | --- | --- |
 | `loadSession` | ✅ | 支持 `session/load` |
 | `session.list` / `session.delete` | ✅ | `sessionCapabilities.list/delete` 已声明 |
-| `promptCapabilities` | 全部 false | 不声明 image / audio / embeddedContext |
+| `promptCapabilities` | image 为 true | 支持 base64 图片，audio 与 embeddedContext 为 false |
 | `mcpCapabilities` | 全部 false | 仅 ACP v1 基线的 stdio MCP，不声明 http / sse |
 | 会话配置项 | ✅ | `session/new` / `session/load` 响应携带 `configOptions`，支持 `session/set_config_option` |
 
-提示内容（prompt content）只接受 `text` 与 `resource_link` 两种类型，
+提示内容（prompt content）接受 `text`、`resource_link` 和 `image` 三种类型，
 其他类型会以 `-32602` 拒绝（见 [`content.go`](content.go)）。
 
 ## 协议方法
@@ -128,7 +128,7 @@ ACP v1 中其余方法（`session/resume`、`session/close`、`session/set_mode`
   会话会返回 `-32000`。
 - **图片重放上限**：`session/load` 重放历史图片时，单个文件超过
   `maxReplayImageBytes`（8 MiB）会被跳过，避免大图淹没客户端流（见 [`sessions.go`](sessions.go)）。
-- **消息上限**：单条消息最大 1 MiB（`maxMessageSize`）；最多 64 个并发请求
+- **消息上限**：普通消息最大 1 MiB。`session/prompt` 的整帧预算为一张 20 MiB 图片的 base64 长度加 1 MiB，多张图共用该预算。并发请求共享 64 MiB 输入预算，取消请求有独立入口。最多 64 个并发请求
   （`maxConcurrentRequests`），超限立即返回错误，reader 会继续处理审批响应和
   独立槽中的 `session/cancel`。
   请求 ID 以 `json.Number` 透传，超过 2^53 的大整数 ID 不会失真（见 [`codec.go`](codec.go)）。

@@ -14,7 +14,7 @@ import (
 	"nekocode/bot/extension/tool/runtime/runner"
 	"nekocode/bot/policy"
 	"nekocode/bot/prompt"
-	"nekocode/bot/provider"
+	"nekocode/bot/provider/llm"
 	"nekocode/bot/provider/types"
 	"nekocode/protocol"
 )
@@ -25,7 +25,7 @@ func (e *Engine) newContextManager(cfg RunConfig) *ctxmgr.Manager {
 		ContextWindow:      cfg.ContextWindow,
 		AutoCompactPercent: cfg.AutoCompactPercent,
 		CompactionModel:    e.compactionModel,
-		Reasoning:          provider.ReasoningSettingsFor(e.llmClient),
+		Reasoning:          llm.ReasoningSettingsFor(e.llmClient),
 		RuntimePrompt: func() string {
 			if cfg.Environment == nil {
 				return ""
@@ -36,7 +36,7 @@ func (e *Engine) newContextManager(cfg RunConfig) *ctxmgr.Manager {
 	mgr.ConfigureModel(ctxmgr.ModelContext{
 		Window: cfg.ContextWindow, AutoCompactPercent: cfg.AutoCompactPercent,
 		CompactionModel: e.compactionModel, CompactionWindow: cfg.CompactionWindow,
-		Reasoning: provider.ReasoningSettingsFor(e.llmClient),
+		Reasoning: llm.ReasoningSettingsFor(e.llmClient),
 	})
 	return mgr
 }
@@ -283,7 +283,7 @@ func profileAllowsCall(allowed map[string]struct{}, call core.ToolCallItem) bool
 func (e *Engine) reason(ctx context.Context, mgr *ctxmgr.Manager, allowed []string, workflow string, addTokens func(int, int), recordCall func(types.StreamUsage), sessionID string, phase func(string), output RunConfig) ([]core.ToolCallItem, string, error) {
 	ctx = protocol.WithPolicyConfiguration(ctx, output.guard.Configuration())
 	toolDefs := e.filteredToolDefs(allowed)
-	request := ctxmgr.ModelRequest{HandoffOnly: output.finalizing, Tools: toolDefs, OutputTokens: provider.MaxOutputTokensFor(e.llmClient)}
+	request := ctxmgr.ModelRequest{HandoffOnly: output.finalizing, Tools: toolDefs, OutputTokens: llm.MaxOutputTokensFor(e.llmClient)}
 	if workflow != "" {
 		request.ExtraMessages = []types.Message{{Role: "user", Content: workflow, Source: types.MessageSourceSkillWorkflow}}
 	}

@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -222,7 +223,7 @@ func TestLifecycleConcurrentTiming(t *testing.T) {
 func TestRunValuesSurviveContextReplacementAndClear(t *testing.T) {
 	type key struct{}
 	lifecycle := NewLifecycle(context.Background(), 1)
-	lifecycle.SetValues(context.WithValue(context.Background(), key{}, "run-authority"))
+	lifecycle.SetRunContext(context.WithValue(context.Background(), key{}, "run-authority"))
 	if lifecycle.Context().Value(key{}) != "run-authority" {
 		t.Fatal("run values lost")
 	}
@@ -231,7 +232,7 @@ func TestRunValuesSurviveContextReplacementAndClear(t *testing.T) {
 	if old.Err() == nil || lifecycle.Context().Err() != nil || lifecycle.Context().Value(key{}) != "run-authority" {
 		t.Fatal("steering replaced run values or lost cancellation")
 	}
-	lifecycle.SetValues(nil)
+	lifecycle.SetRunContext(nil)
 	if lifecycle.Context().Value(key{}) != nil {
 		t.Fatal("run metadata leaked after cleanup")
 	}
@@ -249,5 +250,65 @@ func TestAbortCancelsBeforePublishingFinished(t *testing.T) {
 	l.Abort()
 	if !l.Finished().Load() || l.Context().Err() == nil {
 		t.Fatal("abort must both cancel the context and stop the loop")
+	}
+}
+
+func TestRunContextDeadlineCauseAndSteer(t *testing.T) {
+	type key string
+	owner := context.WithValue(t.Context(), key("owner"), 1)
+	l := NewLifecycle(owner, 1)
+	ctx, cancel := context.WithTimeout(context.WithValue(t.Context(), key("run"), 2), time.Minute)
+	defer cancel()
+	l.SetRunContext(ctx)
+	defer l.SetRunContext(nil)
+	first := l.Context()
+	want, _ := ctx.Deadline()
+	if d, ok := first.Deadline(); !ok || !d.Equal(want) {
+		t.Errorf("attempt deadline = %v, want %v", d, want)
+	}
+	l.ReplaceContext()
+	if first.Err() == nil || context.Cause(first) == nil || l.Context().Err() != nil {
+		t.Errorf("steering: old err=%v cause=%v, new err=%v", first.Err(), context.Cause(first), l.Context().Err())
+	}
+	if l.Context().Value(key("owner")) != 1 || l.Context().Value(key("run")) != 2 {
+		t.Fatal("lost construction or caller metadata")
+	}
+	cancel()
+	l.ReplaceContext()
+	if l.Context().Err() == nil {
+		t.Error("steering resurrected a cancelled run")
+	}
+}
+
+func TestEarlierOwnerDeadlineAndTerminalCancellation(t *testing.T) {
+	for _, abort := range []bool{false, true} {
+		owner, release := context.WithTimeout(t.Context(), time.Hour)
+		caller, cancel := context.WithCancelCause(t.Context())
+		l := NewLifecycle(owner, 1)
+		l.SetRunContext(caller)
+		want, _ := owner.Deadline()
+		if got, ok := l.Context().Deadline(); !ok || !got.Equal(want) {
+			t.Fatalf("got deadline %v, want %v", got, want)
+		}
+		cause := errors.New("caller stopped")
+		if abort {
+			l.Abort()
+			cause = context.Canceled
+		} else {
+			cancel(cause)
+		}
+		l.ReplaceContext()
+		l.ResetContextIfCanceled()
+		if !errors.Is(context.Cause(l.Context()), cause) {
+			t.Fatalf("abort=%v: replacement lost cause: %v", abort, context.Cause(l.Context()))
+		}
+		l.SetRunContext(nil)
+		l.SetRunContext(t.Context())
+		if l.Context().Err() != nil {
+			t.Fatal("subsequent run inherited previous cancellation")
+		}
+		l.SetRunContext(nil)
+		cancel(nil)
+		release()
 	}
 }

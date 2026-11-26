@@ -32,3 +32,20 @@ func TestCollectToolCallsRejectsMalformedBatch(t *testing.T) {
 		t.Fatalf("expected malformed batch error, got %+v, %v", calls, err)
 	}
 }
+
+func TestCollectToolCallsPreservesWireNumbers(t *testing.T) {
+	const arguments = `{"args":{"ids":[9007199254740993,9223372036854775807],"value":1.23e5}}`
+	stream := StreamResult{TcAccum: map[int]*ToolAccum{0: {ID: "call", Name: "capability"}}}
+	stream.TcAccum[0].Args.WriteString(arguments)
+	calls, err := stream.CollectToolCalls()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ToLLMToolCalls(calls)[0].Function.Arguments; got != arguments {
+		t.Fatalf("arguments changed: %s", got)
+	}
+	stream.TcAccum[0].Args.WriteString(" true")
+	if _, err := stream.CollectToolCalls(); err == nil {
+		t.Fatal("accepted trailing JSON")
+	}
+}

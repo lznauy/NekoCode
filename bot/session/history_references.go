@@ -89,10 +89,11 @@ func (s *HistoryStore) ReferencePage(ctx context.Context, before, limit, maxByte
 }
 
 func (m *Manager) ReferencePage(ctx context.Context, before, limit, maxBytes, through int) (refbridge.SourcePage, error) {
-	store := m.historyStore()
-	if store == nil {
-		return refbridge.SourcePage{}, nil
+	store, unlock, err := m.lockedHistory(ctx)
+	if store == nil || err != nil {
+		return refbridge.SourcePage{}, err
 	}
+	defer unlock()
 	return store.ReferencePage(ctx, before, limit, maxBytes, through)
 }
 
@@ -133,10 +134,11 @@ func (s *HistoryStore) ReferenceRecord(ctx context.Context, sequence, through in
 }
 
 func (m *Manager) ReferenceRecord(ctx context.Context, sequence, through int) (types.Message, bool, error) {
-	store := m.historyStore()
-	if store == nil {
-		return types.Message{}, false, nil
+	store, unlock, err := m.lockedHistory(ctx)
+	if store == nil || err != nil {
+		return types.Message{}, false, err
 	}
+	defer unlock()
 	return store.ReferenceRecord(ctx, sequence, through)
 }
 

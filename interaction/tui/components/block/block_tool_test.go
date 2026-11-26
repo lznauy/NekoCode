@@ -238,3 +238,10 @@ func TestRenderProcessListUsesActionWording(t *testing.T) {
 		t.Fatalf("empty process list should be user-facing:\n%s", clean)
 	}
 }
+
+func TestFilterFinalBlocksRetainsBashAndBatchResults(t *testing.T) {
+	got := FilterFinalBlocks([]ContentBlock{{Type: BlockTool, ToolName: "bash"}, {Type: BlockTool, ToolName: "task_batch"}, {Type: BlockTool, ToolName: "read"}})
+	if len(got) != 2 || got[0].ToolName != "bash" || got[1].ToolName != "task_batch" {
+		t.Fatalf("final blocks: %+v", got)
+	}
+}

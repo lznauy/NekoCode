@@ -428,11 +428,14 @@ func (m *Manager) ReplaceSessionMCPServers(ctx context.Context, source string, c
 	defer m.ops.Unlock()
 	m.mu.Lock()
 
-	names := make([]string, 0, len(configs))
-	for name := range configs {
-		names = append(names, name)
+	stored := make(map[string]mcp.ServerConfig, len(configs))
+	for name, cfg := range configs {
+		cfg.Args = slices.Clone(cfg.Args)
+		cfg.Env = maps.Clone(cfg.Env)
+		cfg.Headers = maps.Clone(cfg.Headers)
+		stored[name] = cfg
 	}
-	sort.Strings(names)
+	names := slices.Sorted(maps.Keys(stored))
 	registrations := make([]mcp.Registration, 0, len(names))
 	ids := make([]string, 0, len(names))
 	for _, name := range names {
@@ -441,7 +444,7 @@ func (m *Manager) ReplaceSessionMCPServers(ctx context.Context, source string, c
 			continue
 		}
 		id := "session:" + source + ":" + name
-		registrations = append(registrations, mcp.Registration{ID: id, Name: name, Config: configs[name]})
+		registrations = append(registrations, mcp.Registration{ID: id, Name: name, Config: stored[name]})
 		ids = append(ids, id)
 	}
 	oldIDs := append([]string(nil), m.sessionMCP[source]...)
@@ -458,12 +461,6 @@ func (m *Manager) ReplaceSessionMCPServers(ctx context.Context, source string, c
 	if len(configs) == 0 {
 		delete(m.sessionConfigs, source)
 	} else {
-		stored := make(map[string]mcp.ServerConfig, len(configs))
-		for name, cfg := range configs {
-			cfg.Args = append([]string(nil), cfg.Args...)
-			cfg.Env = maps.Clone(cfg.Env)
-			stored[name] = cfg
-		}
 		m.sessionConfigs[source] = stored
 	}
 	if len(ids) == 0 {

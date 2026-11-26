@@ -13,6 +13,7 @@ import (
 
 	"nekocode/bot/provider/types"
 	"nekocode/protocol"
+	"nekocode/util/filelock"
 )
 
 // SubagentInfo is a bounded read model. It never carries active model context.
@@ -136,7 +137,7 @@ func observeOwnership(d string, info SubagentInfo) (SubagentInfo, error) {
 	acquired := f == nil
 	if f != nil {
 		defer f.Close()
-		acquired, err = trySubagentLock(f)
+		acquired, err = filelock.TryLock(f)
 		if err != nil {
 			return info, err
 		}

@@ -88,6 +88,7 @@ wecom/qqbot 的出站降级是平台限制而非未实现：降级策略是结�
 
 - base64 解码后直接 `attachment.SaveImage` 进**会话附件目录**（session root 已授权，
   image_understand 立即可读）——这就是解析必须在会话激活之后执行的原因
+- 编辑器可通过握手的 `promptCapabilities.image` 发现图片支持。单个 `session/prompt` 的整帧上限约为 27.67 MiB，多图、文本和 JSON 字段共用这份预算。
 - 每个图片 block 生成 `[Image #N]` marker 拼进 prompt 文本
 - 坏 base64 / 缺 data 以 JSON-RPC 参数错误（-32602）拒绝；存储失败报服务器错误（-32000）
 

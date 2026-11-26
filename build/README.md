@@ -11,7 +11,7 @@ make -f build/makefile help
 - Go 1.26.10 或更高版本
 - GNU Make
 - Zig，构建 daemon 或静态发布产物时需要
-- Node.js 和 npm，只有构建 GUI 时需要
+- GUI 构建需要 Node.js 和 npm；Linux 还需要 GTK 3、WebKitGTK 4.1 开发包以及 pkg-config，可使用仓库的 `build/shell.nix` 环境
 
 ## 本机编译
 

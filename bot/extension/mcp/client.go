@@ -36,7 +36,6 @@ type client struct {
 
 	mu             sync.Mutex // serializes requests; guards the fields above
 	reqID          atomic.Int64
-	tools          []toolDef
 	requestTimeout time.Duration
 	killTree       func(*os.Process) error
 	stopping       bool
@@ -157,20 +156,34 @@ func (c *client) ListTools(ctx context.Context) ([]toolDef, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	result, err := c.sendRequest(ctx, "tools/list", nil)
-	if err != nil {
-		return nil, fmt.Errorf("tools/list: %w", err)
+	// Keep the existing discovery deadline across all cursor requests.
+	ctx, cancel := context.WithTimeout(ctx, c.timeout())
+	defer cancel()
+	var params any
+	var tools []toolDef
+	seen := make(map[string]bool)
+	for {
+		result, err := c.sendRequest(ctx, "tools/list", params)
+		if err != nil {
+			return nil, fmt.Errorf("tools/list: %w", err)
+		}
+		var page struct {
+			Tools      []toolDef `json:"tools"`
+			NextCursor string    `json:"nextCursor"`
+		}
+		if err := json.Unmarshal(result, &page); err != nil {
+			return nil, fmt.Errorf("parse tools/list: %w", err)
+		}
+		tools = append(tools, page.Tools...)
+		if page.NextCursor == "" {
+			return tools, nil
+		}
+		if seen[page.NextCursor] {
+			return nil, fmt.Errorf("tools/list returned a repeated cursor")
+		}
+		seen[page.NextCursor] = true
+		params = map[string]string{"cursor": page.NextCursor}
 	}
-
-	var resp struct {
-		Tools []toolDef `json:"tools"`
-	}
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, fmt.Errorf("parse tools/list: %w", err)
-	}
-
-	c.tools = resp.Tools
-	return c.tools, nil
 }
 
 // CallTool invokes a tool on the server, starting it if necessary.

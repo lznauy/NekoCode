@@ -11,7 +11,7 @@ import (
 
 	"nekocode/bot/contextmgr/token"
 	"nekocode/bot/extension/tool/runtime/core"
-	"nekocode/bot/provider"
+	"nekocode/bot/provider/llm"
 	"nekocode/bot/provider/types"
 	"nekocode/protocol"
 	"nekocode/util/modelbudget"
@@ -172,12 +172,12 @@ func estimateRequestBudget(messages []types.Message, tools []types.ToolDef, wind
 }
 
 // prepareSummaryRequest validates the formatted summary input without recursively compacting it.
-func prepareSummaryRequest(messages []types.Message, archive string, window int, client provider.LLM) ([]types.Message, error) {
+func prepareSummaryRequest(messages []types.Message, archive string, window int, client llm.Client) ([]types.Message, error) {
 	request := buildSummaryMessages(messages, archive)
 	if window <= 0 {
 		return request, nil
 	}
-	budget, err := estimateRequestBudget(request, nil, window, provider.MaxOutputTokensFor(client), provider.ReasoningSettingsFor(client), false, 0)
+	budget, err := estimateRequestBudget(request, nil, window, llm.MaxOutputTokensFor(client), llm.ReasoningSettingsFor(client), false, 0)
 	if err != nil {
 		return nil, err
 	}

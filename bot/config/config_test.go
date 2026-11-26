@@ -209,7 +209,7 @@ func TestConfigCloneDoesNotShareMutableState(t *testing.T) {
 		Providers:             []ProviderConfig{{Name: "test", Models: []ModelDefinition{{Name: "model"}}}},
 		ImageUnderstandModels: []ImageUnderstandConfig{{Name: "vision"}},
 		MCPServers: map[string]MCPServerConfig{
-			"server": {Args: []string{"first"}, Env: map[string]string{"KEY": "value"}},
+			"server": {Args: []string{"first"}, Env: map[string]string{"KEY": "value"}, Headers: map[string]string{"X-Tenant": "tenant"}},
 		},
 		Permissions: &PermissionsConfig{
 			Allow: []string{"read"},
@@ -225,6 +225,7 @@ func TestConfigCloneDoesNotShareMutableState(t *testing.T) {
 	server := clone.MCPServers["server"]
 	server.Args[0] = "changed"
 	server.Env["KEY"] = "changed"
+	server.Headers["X-Tenant"] = "changed"
 	clone.MCPServers["server"] = server
 	clone.Permissions.Allow[0] = "changed"
 	sandbox := clone.Permissions.Sandbox["shell"]
@@ -235,6 +236,7 @@ func TestConfigCloneDoesNotShareMutableState(t *testing.T) {
 		original.ImageUnderstandModels[0].Name != "vision" ||
 		original.MCPServers["server"].Args[0] != "first" ||
 		original.MCPServers["server"].Env["KEY"] != "value" ||
+		original.MCPServers["server"].Headers["X-Tenant"] != "tenant" ||
 		original.Permissions.Allow[0] != "read" ||
 		original.Permissions.Sandbox["shell"].WritableRoots[0] != "/work" {
 		t.Fatalf("clone mutated original: %+v", original)

@@ -49,7 +49,7 @@ func TestHistoricalDataProjectionSeparatesAuthorityAndPreservesSources(t *testin
 	}
 	_, shape := m.projectRequest(ModelRequest{}, false)
 	head := len(m.state.ctx.BuildLayer0())
-	want := buildPrefixShape(first[:head], first[head:], nil)
+	want := buildPrefixShape(first, head, len(first), nil)
 	if !reflect.DeepEqual(shape, want) {
 		t.Fatal("cache fingerprint diverged from the actual projected request")
 	}

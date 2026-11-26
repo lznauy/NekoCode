@@ -1,6 +1,9 @@
 package session
 
 import (
+	"bytes"
+	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -17,6 +20,7 @@ import (
 	"nekocode/bot/policy/ledger"
 	"nekocode/bot/provider/types"
 	"nekocode/protocol"
+	"nekocode/util/filelock"
 	"nekocode/util/fs"
 )
 
@@ -37,6 +41,10 @@ type Goal struct {
 }
 
 type Snapshot struct {
+	// The last manifest commit observed by this snapshot. A nil revision
+	// identifies a new draft; an empty revision belongs to a legacy manifest.
+	revision *string
+
 	Goal               *Goal               `json:"goal,omitempty"`
 	Name               string              `json:"name,omitempty"`
 	TodoGroup          string              `json:"todo_group,omitempty"`
@@ -136,6 +144,7 @@ type messageRef struct {
 }
 
 type snapshotHeader struct {
+	Revision      string          `json:"revision,omitempty"`
 	Name          string          `json:"name"`
 	FormatVersion int             `json:"format_version"`
 	UpdatedAt     int64           `json:"updated_at"`
@@ -145,16 +154,17 @@ type snapshotHeader struct {
 type snapshotAlias Snapshot
 
 type diskSnapshot struct {
+	Revision string `json:"revision,omitempty"`
 	*snapshotAlias
 	Messages json.RawMessage `json:"messages"`
 }
 
-func marshalSnapshot(s *Snapshot, ref messageRef) ([]byte, error) {
+func marshalSnapshot(s *Snapshot, ref messageRef, revision string) ([]byte, error) {
 	messages, err := json.Marshal(ref)
 	if err != nil {
 		return nil, err
 	}
-	return json.MarshalIndent(diskSnapshot{snapshotAlias: (*snapshotAlias)(s), Messages: messages}, "", "  ")
+	return json.MarshalIndent(diskSnapshot{Revision: revision, snapshotAlias: (*snapshotAlias)(s), Messages: messages}, "", "  ")
 }
 
 func decodeMessageRef(header snapshotHeader) (messageRef, error) {
@@ -205,20 +215,43 @@ func readMessages(dir string, header snapshotHeader) ([]types.Message, error) {
 	return messages, nil
 }
 
+// Both manifests have already been validated. Files from our encoder normally
+// match byte for byte; a rename or external reformat may reorder object keys.
 func sameJSON(a, b []byte) (bool, error) {
+	if bytes.Equal(a, b) {
+		return true, nil
+	}
 	var av, bv any
-	if err := json.Unmarshal(a, &av); err != nil {
+	if err := decodeSessionJSON(a, &av); err != nil {
 		return false, err
 	}
-	if err := json.Unmarshal(b, &bv); err != nil {
+	if err := decodeSessionJSON(b, &bv); err != nil {
 		return false, err
 	}
 	return reflect.DeepEqual(av, bv), nil
 }
 
+// Decode one complete JSON document while keeping numeric tool arguments exact.
+func decodeSessionJSON(data []byte, dst any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(dst); err != nil {
+		return err
+	}
+	if len(bytes.Trim(data[decoder.InputOffset():], " \t\r\n")) != 0 {
+		return errors.New("unexpected data after session manifest")
+	}
+	return nil
+}
+
 func load(id string) (*Snapshot, error) { return loadMode(id, false) }
 
 func loadMode(id string, lazy bool) (*Snapshot, error) {
+	unlock, err := lockSession(id)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	return loadModeAt(dir(), id, lazy)
 }
 
@@ -232,18 +265,17 @@ func loadModeAt(root, id string, lazy bool) (*Snapshot, error) {
 		return nil, err
 	}
 	_ = os.Chmod(path, 0o600)
-	var header snapshotHeader
-	if err := json.Unmarshal(data, &header); err != nil {
-		return nil, err
-	}
 	var snapshot Snapshot
-	if err := json.Unmarshal(data, &snapshot); err != nil {
+	stored := diskSnapshot{snapshotAlias: (*snapshotAlias)(&snapshot)}
+	if err := decodeSessionJSON(data, &stored); err != nil {
 		return nil, err
 	}
-	if header.FormatVersion > currentSnapshotVersion {
-		return nil, fmt.Errorf("unsupported session format v%d", header.FormatVersion)
+	if snapshot.FormatVersion > currentSnapshotVersion {
+		return nil, fmt.Errorf("unsupported session format v%d", snapshot.FormatVersion)
 	}
-	snapshot.Messages, err = readMessages(filepath.Dir(path), header)
+	revision := stored.Revision
+	snapshot.revision = &revision
+	snapshot.Messages, err = readMessages(filepath.Dir(path), snapshotHeader{FormatVersion: snapshot.FormatVersion, Messages: stored.Messages})
 	if err != nil {
 		return nil, err
 	}
@@ -300,9 +332,11 @@ func loadModeAt(root, id string, lazy bool) (*Snapshot, error) {
 
 // Delete removes a session directory and all its contents.
 func deleteSnapshot(id string) error {
-	if err := validateID(id); err != nil {
+	unlock, err := lockSession(id)
+	if err != nil {
 		return err
 	}
+	defer unlock()
 	return os.RemoveAll(filepath.Join(dir(), id))
 }
 
@@ -314,47 +348,114 @@ func validateID(id string) error {
 	return nil
 }
 
-func (s *Snapshot) save() error {
-	return s.saveAt(dir())
+// Keep the lock outside the disposable session directory. Fixed buckets bound
+// lock-file growth as sessions are created, probed and deleted.
+func lockSession(id string) (func(), error) {
+	return lockSessionContext(context.Background(), id)
 }
 
-func (s *Snapshot) saveAt(root string) error {
+func lockSessionContext(ctx context.Context, id string) (func(), error) {
+	if err := validateID(id); err != nil {
+		return nil, err
+	}
+	key := sha256.Sum256([]byte(strings.ToLower(id)))
+	return filelock.AcquireContext(ctx, filepath.Join(fs.NekocodeDataDir("locks"), fmt.Sprintf("session-%02x.lock", key[0])))
+}
+
+// ErrSessionConflict means another writer changed or deleted the session
+// since this snapshot was obtained. Reload before attempting another save.
+var ErrSessionConflict = errors.New("session changed since it was loaded")
+
+// readBase checks identity before either transcript or active messages change.
+// The caller holds the session lock (the task execution lock for subagents).
+func (s *Snapshot) readBase(path string) ([]byte, snapshotHeader, error) {
+	var header snapshotHeader
+	data, err := os.ReadFile(path)
+	exists := err == nil
+	if err != nil {
+		// The journal can still be appended while the manifest is temporarily
+		// missing or blocked. Only its last writer can use the durable header.
+		if !errors.Is(err, os.ErrNotExist) {
+			if info, statErr := os.Lstat(path); statErr != nil || !info.IsDir() {
+				return nil, header, err
+			}
+		}
+		fence, fenceErr := os.ReadFile(filepath.Join(filepath.Dir(path), commitHeaderName))
+		switch {
+		case fenceErr == nil:
+			if err := json.Unmarshal(fence, &header); err != nil {
+				return nil, header, err
+			}
+			if header.Revision == "" || header.FormatVersion != currentSnapshotVersion {
+				return nil, header, errors.New("invalid session commit header")
+			}
+			exists = true
+		case !errors.Is(fenceErr, os.ErrNotExist):
+			return nil, header, fenceErr
+		case !errors.Is(err, os.ErrNotExist):
+			return nil, header, err
+		}
+	} else if err := json.Unmarshal(data, &header); err != nil {
+		return nil, header, fmt.Errorf("decode saved session: %w", err)
+	}
+	if header.FormatVersion > currentSnapshotVersion {
+		return nil, header, fmt.Errorf("unsupported session format v%d", header.FormatVersion)
+	}
+	if exists != (s.revision != nil) || exists && header.Revision != *s.revision {
+		return nil, header, fmt.Errorf("%w: %s; reload before saving", ErrSessionConflict, s.ID)
+	}
+	return data, header, nil
+}
+
+func (s *Snapshot) save() error {
 	if s == nil {
 		return fmt.Errorf("cannot save nil session")
 	}
+	unlock, err := lockSession(s.ID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return s.saveAt(dir())
+}
+
+func (owner *Snapshot) saveAt(root string) error {
+	if owner == nil {
+		return fmt.Errorf("cannot save nil session")
+	}
+	// Publish the new watermark to the caller only once the manifest commits.
+	// Failed writes must revalidate any records already appended on retry.
+	candidate := *owner
+	s := &candidate
 	if err := validateID(s.ID); err != nil {
 		return err
 	}
 	d := filepath.Join(root, s.ID)
-	var watermark int
-	var err error
-	if s.TranscriptLazy {
-		if s.history == nil {
-			s.history = newHistoryStore(d)
-		}
-		watermark, err = s.history.Append(s.TranscriptBase, s.Transcript)
-	} else {
-		watermark, err = appendTranscript(d, s.TranscriptSeq, s.Transcript)
+	manifestPath := filepath.Join(d, "session.json")
+	oldData, oldHeader, err := s.readBase(manifestPath)
+	if err != nil {
+		return err
 	}
+	hasOld := s.revision != nil
+	if s.history == nil {
+		s.history = newHistoryStore(d)
+	}
+	base, tail := s.TranscriptBase, s.Transcript
+	if !s.TranscriptLazy {
+		base = s.TranscriptSeq
+		if base < 0 || base > len(tail) {
+			return fmt.Errorf("invalid transcript watermark %d for %d messages", base, len(tail))
+		}
+		tail = tail[base:]
+	}
+	watermark, err := s.history.Append(base, tail)
 	s.TranscriptSeq = watermark
+	s.CommittedTranscriptSeq = watermark
 	if err != nil {
 		return fmt.Errorf("persist transcript: %w", err)
 	}
 
-	manifestPath := filepath.Join(d, "session.json")
-	oldData, err := os.ReadFile(manifestPath)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	hasOld := err == nil
-	var oldHeader snapshotHeader
 	if hasOld {
-		if err := json.Unmarshal(oldData, &oldHeader); err != nil {
-			return fmt.Errorf("decode saved session: %w", err)
-		}
-		if oldHeader.FormatVersion > currentSnapshotVersion {
-			return fmt.Errorf("unsupported session format v%d", oldHeader.FormatVersion)
-		}
 		// Rename owns the name of an existing session. Detached snapshots may predate it.
 		s.Name = oldHeader.Name
 	}
@@ -372,7 +473,9 @@ func (s *Snapshot) saveAt(root string) error {
 			return err
 		}
 		ref.Slot = 1 - oldRef.Slot
-		if oldRef.Digest == ref.Digest {
+		// During manifest recovery the header identifies the writer, but does
+		// not prove its message slot survived. Rebuild it from the snapshot.
+		if oldData != nil && oldRef.Digest == ref.Digest {
 			ref = oldRef
 			writeMessages = false
 		}
@@ -380,9 +483,9 @@ func (s *Snapshot) saveAt(root string) error {
 
 	s.FormatVersion = currentSnapshotVersion
 	updatedAt := time.Now().Unix()
-	if hasOld {
+	if oldData != nil {
 		s.UpdatedAt = oldHeader.UpdatedAt
-		candidate, marshalErr := marshalSnapshot(s, ref)
+		candidate, marshalErr := marshalSnapshot(s, ref, oldHeader.Revision)
 		if marshalErr != nil {
 			return fmt.Errorf("marshal session: %w", marshalErr)
 		}
@@ -391,11 +494,13 @@ func (s *Snapshot) saveAt(root string) error {
 			return compareErr
 		}
 		if same {
+			*owner = *s
 			return nil
 		}
 	}
 	s.UpdatedAt = updatedAt
-	data, err := marshalSnapshot(s, ref)
+	revision := rand.Text()
+	data, err := marshalSnapshot(s, ref, revision)
 	if err != nil {
 		return fmt.Errorf("marshal session: %w", err)
 	}
@@ -404,7 +509,17 @@ func (s *Snapshot) saveAt(root string) error {
 			return fmt.Errorf("persist session messages: %w", err)
 		}
 	}
-	if err := writeAtomic(manifestPath, data, 0o600); err != nil {
+	folder, err := os.OpenRoot(d)
+	if err != nil {
+		return err
+	}
+	defer folder.Close()
+	committed, err := commitManifest(folder, oldHeader, data)
+	if committed {
+		s.revision = &revision
+		*owner = *s
+	}
+	if err != nil {
 		return err
 	}
 	// Subagents use their own observation index. Only top-level sessions

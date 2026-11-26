@@ -117,3 +117,21 @@ func TestWindowProjectionTracksRawGroupEnds(t *testing.T) {
 		}
 	}
 }
+
+func TestHistoryBindsReusedToolIDsToTheirBatch(t *testing.T) {
+	history := []types.Message{
+		{Role: "assistant", ToolCalls: []types.ToolCall{{ID: "1", Function: types.FunctionCall{Name: "read"}}}},
+		{Role: "tool", ToolCallID: "1", Content: "read result"},
+		{Role: "user", Content: "next"},
+		{Role: "assistant", ToolCalls: []types.ToolCall{{ID: "1", Function: types.FunctionCall{Name: "shell", Arguments: "{}"}}}},
+		{Role: "tool", ToolCallID: "1", Content: "shell result"},
+	}
+	got := DisplayMessages(history)
+	if len(got) != 2 || got[0].Role != "user" || len(got[1].Blocks) != 1 || got[1].Blocks[0].Content != "shell result" {
+		t.Fatalf("history attributed output to the wrong call: %+v", got)
+	}
+	page, err := DisplayMessagesPage(history, 0, 1)
+	if err != nil || page.Total != len(got) || !reflect.DeepEqual(page.Messages, got[:1]) {
+		t.Fatalf("paged history = %+v, %v", page, err)
+	}
+}

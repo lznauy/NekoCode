@@ -314,3 +314,32 @@ func TestBatchTranscriptRendersArtifactReferenceOnce(t *testing.T) {
 		t.Fatalf("restored batch = %+v", history)
 	}
 }
+
+func TestDisplayMessagesUsesProvenanceBeforeLegacyEnvelopes(t *testing.T) {
+	msgs := []types.Message{
+		{Role: "user", Content: "What does Current working directory mean?"},
+		{Role: "assistant", Content: "Use <skill_content> for the workflow."},
+		{Role: "user", Source: "user", Content: "<hints>user-authored example</hints>"},
+		{Role: "user", Content: "<skill_content name=\"review\">legacy workflow</skill_content>"},
+		{Role: "user", Source: types.MessageSourceSkillWorkflow, Content: "workflow with no wrapper"},
+		{Role: "system", Content: "[Hook: legacy] injected"},
+	}
+	page, err := DisplayMessagesPage(msgs, 0, 10)
+	if err != nil || page.Total != 3 {
+		t.Fatalf("visible messages = %+v, err = %v", page, err)
+	}
+	for i, item := range page.Messages {
+		if item.Content != msgs[i].Content {
+			t.Fatalf("message %d = %q", i, item.Content)
+		}
+	}
+}
+
+func TestIndependentTaskFailuresWithReusedCallID(t *testing.T) {
+	call := types.Message{Role: "assistant", ToolCalls: []types.ToolCall{{ID: "again", Function: types.FunctionCall{Name: "task"}}}}
+	failure := types.Message{Role: "tool", ToolCallID: "again", IsError: true, Content: "could not start"}
+	got := DisplayMessages([]types.Message{call, failure, call, failure})
+	if len(got) != 1 || len(got[0].Blocks) != 3 || got[0].Blocks[2].Content != "失败 2" {
+		t.Fatalf("independent task attempts collapsed: %+v", got)
+	}
+}

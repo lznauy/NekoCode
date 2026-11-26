@@ -100,6 +100,8 @@ go run ./.tool-demo
 
 `SafeReadOnlyTool` 在这里仅提供并行执行方法，不会检查代码是否只读，也不自动授予权限。示例是无副作用的纯转换，所以显式设置 `PlanAllowed: true`；其他工具应按实际行为决定是否允许在 Plan Mode 使用。
 
+模型调用传给 `Execute` 的 JSON 数字使用 `json.Number`，可完整保留 64 位整数 ID。自定义工具读取整型参数时可使用 `toolutil.RequireIntArg` 或 `OptIntArg`，读取小数时可使用 `toolutil.FloatArgValue`。这些函数也接受 Go 调用方传入的 `int` 和 `float64`。
+
 ## 三、交给 Agent 使用
 
 自定义组装应用时，把上面的 `registry` 传入 `agent.Config.Tools`。创建模型、上下文和 Runtime 的完整步骤见 [Runtime 应用开发指南](RUNTIME_APP_GUIDE.md#4-组装-nekocode-agent)。

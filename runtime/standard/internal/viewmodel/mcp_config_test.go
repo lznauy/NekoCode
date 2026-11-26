@@ -7,9 +7,15 @@ import (
 )
 
 func TestRemoteMCPConfigRoundTrip(t *testing.T) {
-	input := map[string]config.MCPServerConfig{"docs": {URL: "https://example.com/mcp", OAuthClientID: "public", OAuthClientSecret: "secret", OAuthClientMetadataURL: "https://example.com/client.json", OAuthCallbackPort: 18765, Enabled: true}}
-	if got := mcpServerConfigsFromView(mcpServerConfigsToView(input)); !reflect.DeepEqual(got, input) {
-		t.Fatalf("OAuth fields lost: %#v", got)
+	input := map[string]config.MCPServerConfig{"docs": {URL: "https://example.com/mcp", Headers: map[string]string{"X-Tenant": "tenant"}, OAuthClientID: "public", OAuthClientSecret: "secret", OAuthClientMetadataURL: "https://example.com/client.json", OAuthCallbackPort: 18765, Enabled: true}}
+	view := mcpServerConfigsToView(input)
+	got := mcpServerConfigsFromView(view)
+	if !reflect.DeepEqual(got, input) {
+		t.Fatal("remote configuration changed after round trip")
+	}
+	view["docs"].Headers["X-Tenant"] = "changed"
+	if input["docs"].Headers["X-Tenant"] != "tenant" || got["docs"].Headers["X-Tenant"] != "tenant" {
+		t.Fatal("editable configuration view shares headers with runtime configuration")
 	}
 }
 

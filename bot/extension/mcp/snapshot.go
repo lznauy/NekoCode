@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -37,11 +38,8 @@ func (m *Manager) CaptureTools() *ToolSnapshot {
 			continue
 		}
 		for _, def := range s.tools {
-			// Detach nested schemas from any future discovery refresh.
-			data, _ := json.Marshal(def)
-			var copy toolDef
-			_ = json.Unmarshal(data, &copy)
-			out.tools = append(out.tools, capturedTool{identity: ToolIdentity{s.name, def.Name}, server: s, definition: copy})
+			def.InputSchema = bytes.Clone(def.InputSchema)
+			out.tools = append(out.tools, capturedTool{identity: ToolIdentity{s.name, def.Name}, server: s, definition: def})
 		}
 	}
 	sort.Slice(out.tools, func(i, j int) bool {

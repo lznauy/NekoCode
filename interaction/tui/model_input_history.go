@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	controlruntime "nekocode/runtime"
+	"nekocode/util/filelock"
 	"nekocode/util/fs"
 )
 
@@ -21,33 +23,39 @@ func inputHistoryPath() string {
 }
 
 func loadInputHistory() []string {
-	data, err := os.ReadFile(inputHistoryPath())
-	if err != nil {
-		return nil
-	}
-	var f inputHistoryFile
-	if err := json.Unmarshal(data, &f); err != nil {
-		return nil
-	}
-	return normalizeInputHistory(f.Entries)
+	entries, _ := readInputHistory(inputHistoryPath())
+	return normalizeInputHistory(entries)
 }
 
-func saveInputHistory(entries []string) error {
-	f := inputHistoryFile{Entries: normalizeInputHistory(entries)}
-	data, err := json.MarshalIndent(f, "", "  ")
-	if err != nil {
-		return err
+func readInputHistory(path string) ([]string, error) {
+	f, err := fs.ReadJSONFile[inputHistoryFile](path)
+	if os.IsNotExist(err) {
+		return nil, nil
 	}
-	return fs.WriteFileWithDir(inputHistoryPath(), data, 0o600)
+	return f.Entries, err
+}
+
+func persistInputs(entries []string) ([]string, error) {
+	path := inputHistoryPath()
+	unlock, err := filelock.Acquire(path + ".lock")
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	history, err := readInputHistory(path)
+	if err != nil {
+		return nil, err
+	}
+	history = normalizeInputHistory(append(history, entries...))
+	data, err := json.MarshalIndent(inputHistoryFile{Entries: history}, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return history, fs.WritePrivateAtomic(path, data)
 }
 
 func appendInputHistory(entries []string, entry string) []string {
-	entry = strings.TrimSpace(controlruntime.RedactInputText(entry))
-	if entry == "" {
-		return normalizeInputHistory(entries)
-	}
-	entries = append(normalizeInputHistory(entries), entry)
-	return normalizeInputHistory(entries)
+	return normalizeInputHistory(append(slices.Clip(entries), controlruntime.RedactInputText(entry)))
 }
 
 func normalizeInputHistory(entries []string) []string {
@@ -69,7 +77,12 @@ func normalizeInputHistory(entries []string) []string {
 }
 
 func (m *Model) rememberInput(entry string) {
-	history := appendInputHistory(m.Input.History(), entry)
+	m.pendingInputHistory = appendInputHistory(m.pendingInputHistory, entry)
+	history, err := persistInputs(m.pendingInputHistory)
+	if err != nil {
+		history = appendInputHistory(m.Input.History(), entry)
+	} else {
+		m.pendingInputHistory = nil
+	}
 	m.Input.SetHistory(history)
-	_ = saveInputHistory(history)
 }

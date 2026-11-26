@@ -16,6 +16,8 @@ permissions:
 
 jobs:
   validate-tag:
+    outputs:
+      commit: ${{ steps.validate.outputs.commit }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -57,7 +59,7 @@ jobs:
             echo "Invalid changelog date for $RELEASE_TAG: $release_date" >&2
             exit 1
           }
-          printf 'tag=%s\n' "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          printf 'commit=%s\n' "$tag_target" >> "$GITHUB_OUTPUT"
         id: validate
 
   validation:
@@ -65,9 +67,10 @@ jobs:
     uses: ./.github/workflows/ci.yml
     with:
       force_all: true
+      checkout_ref: ${{ needs.validate-tag.outputs.commit }}
 
   build-linux:
-    needs: validation
+    needs: [validate-tag, validation]
     strategy:
       matrix:
         include:
@@ -80,7 +83,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.validate-tag.outputs.commit }}
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
@@ -145,7 +148,7 @@ jobs:
           retention-days: 7
 
   build-darwin:
-    needs: validation
+    needs: [validate-tag, validation]
     strategy:
       matrix:
         include:
@@ -156,7 +159,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.validate-tag.outputs.commit }}
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
@@ -179,7 +182,7 @@ jobs:
           retention-days: 7
 
   release:
-    needs: [build-linux, build-darwin]
+    needs: [validate-tag, build-linux, build-darwin]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -187,6 +190,8 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate-tag.outputs.commit }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4

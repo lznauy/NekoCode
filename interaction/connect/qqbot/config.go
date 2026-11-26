@@ -11,6 +11,7 @@ const section = "qqbot"
 
 // Config 是 connect.json 中 "qqbot" 节的持久化配置。
 type Config struct {
+	snapshot  *connect.SectionVersion
 	AppID     string `json:"app_id,omitempty"`
 	AppSecret string `json:"app_secret,omitempty"`
 	Sandbox   bool   `json:"sandbox,omitempty"`
@@ -24,16 +25,18 @@ func configPath() string { return connect.DefaultFileStore().Path() }
 
 func loadConfig() (Config, error) {
 	var cfg Config
-	if err := connect.DefaultFileStore().Load(section, &cfg); err != nil {
+	version, err := connect.DefaultFileStore().LoadVersioned(section, &cfg)
+	if err != nil {
 		return Config{}, err
 	}
+	cfg.snapshot = version
 	cfg.AppID = strings.TrimSpace(cfg.AppID)
 	cfg.AppSecret = strings.TrimSpace(cfg.AppSecret)
 	return cfg, nil
 }
 
 func saveConfig(cfg Config) error {
-	return connect.DefaultFileStore().Save(section, cfg)
+	return connect.DefaultFileStore().SaveVersioned(section, cfg, cfg.snapshot)
 }
 
 func setupInstructions() string {

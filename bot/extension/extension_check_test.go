@@ -182,14 +182,14 @@ func TestPluginCheckMatchesRuntimeSkillDiscovery(t *testing.T) {
 	}
 }
 func TestPluginCheckUsesRuntimeMCPURLRules(t *testing.T) {
-	p := checkFixture(t, `{"name":"demo","mcpServers":{"both":{"command":"server","url":"https://example.invalid"},"plain":{"url":"http://example.invalid"},"credentials":{"url":"https://user:secret@example.invalid"},"fragment":{"url":"https://example.invalid/#secret"},"local":{"url":"http://127.0.0.1:1234"}}}`, map[string]string{})
+	p := checkFixture(t, `{"name":"demo","mcpServers":{"both":{"command":"server","url":"https://example.invalid"},"plain":{"url":"http://example.invalid"},"opted":{"url":"http://mcp.lan","allow_insecure_http":true},"credentials":{"url":"https://user:secret@example.invalid"},"fragment":{"url":"https://example.invalid/#secret"},"local":{"url":"http://127.0.0.1:1234"}}}`, map[string]string{})
 	text := checkText(checkPlugin(t.Context(), p, nil))
 	for _, name := range []string{"both", "plain", "credentials", "fragment"} {
 		if !strings.Contains(text, "error mcpServers."+name) || strings.Contains(text, "ok mcpServers."+name) {
 			t.Errorf("invalid config accepted %s: %s", name, text)
 		}
 	}
-	if !strings.Contains(text, "ok mcpServers.local") || strings.Contains(text, "secret") {
+	if !strings.Contains(text, "ok mcpServers.local") || !strings.Contains(text, "ok mcpServers.opted") || strings.Contains(text, "secret") {
 		t.Fatal(text)
 	}
 }

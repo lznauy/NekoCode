@@ -124,10 +124,6 @@ func appendNewline(path string) error {
 	return err
 }
 
-func appendTranscript(sessionDir string, persisted int, messages []types.Message) (int, error) {
-	return appendTranscriptFrom(sessionDir, persisted, 0, messages)
-}
-
 func appendTranscriptFrom(sessionDir string, persisted, base int, messages []types.Message) (int, error) {
 	if base < 0 || persisted < base || persisted > base+len(messages) {
 		return persisted, fmt.Errorf("invalid transcript watermark %d for %d messages", persisted, len(messages))

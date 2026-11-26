@@ -128,15 +128,15 @@ func TestRemoteMCPProjectNormalizesAndValidatesOAuthMetadataURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeProjectFile(t, p.MCPPath(), `{"mcpServers":{"docs":{"url":" https://example.com/mcp ","oauth_client_id":" public ","oauth_client_metadata_url":" https://example.com/client.json "}}}`)
+	writeProjectFile(t, p.MCPPath(), `{"mcpServers":{"docs":{"url":" http://mcp.lan/mcp ","allow_insecure_http":true,"oauth_client_id":" public ","oauth_client_metadata_url":" https://example.com/client.json "}}}`)
 	if errs := p.Refresh(); len(errs) != 0 {
 		t.Fatal(errs)
 	}
 	server := p.Servers["docs"]
-	if server.URL != "https://example.com/mcp" || server.OAuthClientID != "public" || server.OAuthClientMetadataURL != "https://example.com/client.json" {
+	if !server.AllowInsecureHTTP || server.URL != "http://mcp.lan/mcp" || server.OAuthClientID != "public" || server.OAuthClientMetadataURL != "https://example.com/client.json" {
 		t.Fatalf("remote fields were not normalized: %+v", server)
 	}
-	writeProjectFile(t, p.MCPPath(), `{"mcpServers":{"docs":{"url":"https://example.com/mcp","oauth_client_metadata_url":"http://metadata.example.com/client.json"}}}`)
+	writeProjectFile(t, p.MCPPath(), `{"mcpServers":{"docs":{"url":"http://mcp.lan/mcp","allow_insecure_http":true,"oauth_client_metadata_url":"http://metadata.example.com/client.json"}}}`)
 	if errs := p.Refresh(); len(errs) != 1 || !strings.Contains(errs[0].Error(), "OAuth metadata URL") {
 		t.Fatalf("insecure metadata URL accepted: %v", errs)
 	}

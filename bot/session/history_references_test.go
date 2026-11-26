@@ -11,10 +11,36 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"nekocode/bot/provider/types"
 	"nekocode/protocol"
 )
+
+func TestReferenceReadCancelsWhileAnotherWriterHoldsLock(t *testing.T) {
+	isolateSaveTestHome(t)
+	manager := New(t.TempDir())
+	unlock, err := lockSession(manager.CurrentID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := manager.ReferenceRecord(ctx, 1, 1)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("reference read: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("reference read ignored cancellation while waiting for the session lock")
+	}
+}
 
 func seedSparseReferences(tb testing.TB, count int) *HistoryStore {
 	tb.Helper()

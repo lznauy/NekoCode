@@ -1,7 +1,6 @@
 package session
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -22,6 +21,11 @@ func (m *Manager) Rename(id, name string) error {
 	}
 	m.persistMu.Lock()
 	defer m.persistMu.Unlock()
+	unlock, err := lockSession(id)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	sessions, err := os.OpenRoot(dir())
 	if err != nil {
 		return err
@@ -52,6 +56,10 @@ func (m *Manager) Rename(id, name string) error {
 	if err != nil {
 		return err
 	}
+	var oldHeader snapshotHeader
+	if err := json.Unmarshal(data, &oldHeader); err != nil {
+		return err
+	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
@@ -69,24 +77,7 @@ func (m *Manager) Rename(id, name string) error {
 	if err != nil {
 		return err
 	}
-	tempName := ".session-" + rand.Text() + ".tmp"
-	tmp, err := root.OpenFile(tempName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	defer root.Remove(tempName)
-	if err := writeAndSync(tmp, data); err != nil {
-		return err
-	}
-	if err := root.Rename(tempName, manifest); err != nil {
-		return err
-	}
-	folder, err := root.Open(".")
-	if err != nil {
-		return err
-	}
-	defer folder.Close()
-	if err := folder.Sync(); err != nil {
+	if _, err := commitManifest(root, oldHeader, data); err != nil {
 		return err
 	}
 	m.mu.Lock()

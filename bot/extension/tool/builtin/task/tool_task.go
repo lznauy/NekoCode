@@ -21,22 +21,14 @@ type TaskTool struct {
 // Parse the wire representation only. The owner resolves ceilings and defaults
 // against the actual profile, so direct callers and model tools share one rule.
 func taskStepArg(args map[string]any, name string) (int, error) {
-	raw, supplied := args[name]
-	if !supplied {
+	if _, supplied := args[name]; !supplied {
 		return 0, nil
 	}
-	switch value := raw.(type) {
-	case int:
-		if value > 0 {
-			return value, nil
-		}
-	case float64:
-		converted := int(value)
-		if converted > 0 && float64(converted) == value {
-			return converted, nil
-		}
+	n, err := toolutil.RequireIntArg(args, name)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer", name)
 	}
-	return 0, fmt.Errorf("%s must be a positive integer", name)
+	return n, nil
 }
 
 func NewTaskTool() *TaskTool { return &TaskTool{} }

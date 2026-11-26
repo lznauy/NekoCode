@@ -572,7 +572,9 @@ OAuth 使用授权服务器发现、Authorization Code + PKCE（S256）和一次
 
 凭据保存在 `~/.nekocode/credentials/mcp/`，按服务名、工作目录、服务 URL 和客户端配置隔离，不写入项目配置或发送给模型。凭据文件以 `0600` 权限写入私有目录（普通文件存储，并非系统钥匙串加密）。应用重启后会恢复凭据，在请求需要时自动刷新并保存轮换后的 refresh token。服务未签发 refresh token、撤销授权或刷新凭据失效时，需要重新授权；临时网络错误可重试。后台连接不会自行打开浏览器。
 
-远程服务必须使用 HTTPS；本机测试允许使用回环 IP 的 HTTP URL。退出登录清除本机凭据，即使服务离线也会执行；这不等同于撤销服务商账号中的应用授权。旧式 HTTP+SSE transport 和服务端 URL Elicitation 不属于本版支持范围；ACP 客户端注入的 HTTP/SSE MCP 仍按现有能力声明拒绝。
+远程 MCP 默认使用 HTTPS，本机回环 IP（如 `127.0.0.1`）也可使用 HTTP。连接 `http://mcp.lan:3000/mcp` 等地址时，在该服务的 `url` 旁添加 `"allow_insecure_http": true`，或在 GUI 勾选「允许此服务使用明文 HTTP」。此设置也适用于公网地址。工具参数、结果和自定义请求头会以明文传输。OAuth 仍要求 HTTPS 或本机回环 IP。
+
+退出登录清除本机凭据，即使服务离线也会执行；这不等同于撤销服务商账号中的应用授权。旧式 HTTP+SSE transport 和服务端 URL Elicitation 不属于本版支持范围；ACP 客户端注入的 HTTP/SSE MCP 仍按现有能力声明拒绝。
 
 ## 八、配置文件一览
 

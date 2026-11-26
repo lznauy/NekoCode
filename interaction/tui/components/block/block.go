@@ -6,6 +6,7 @@ import (
 
 	"nekocode/interaction"
 	"nekocode/protocol"
+	controlruntime "nekocode/runtime"
 )
 
 type BlockType int
@@ -42,15 +43,16 @@ func NewTool(name, callID, arguments string) ContentBlock {
 func FilterFinalBlocks(blocks []ContentBlock) []ContentBlock {
 	out := make([]ContentBlock, 0, len(blocks))
 	for _, b := range blocks {
-		if b.Type == BlockTool && (IsPersistent(b.ToolName) || b.ToolName == "task_batch" || b.JevNote != "") {
+		if b.Type == BlockTool && (controlruntime.RetainsToolOutput(b.ToolName) || b.JevNote != "") {
 			out = append(out, b)
 		}
 	}
 	return out
 }
 
+// IsPersistent identifies the tools shown in the live changes section. Batch tasks appear under activity.
 func IsPersistent(toolName string) bool {
-	return toolName == "edit" || toolName == "diff" || toolName == "shell" || toolName == "process" || toolName == "write"
+	return toolName != "task_batch" && controlruntime.RetainsToolOutput(toolName)
 }
 
 // ParseReadOutput extracts the displayable content from read tool output.

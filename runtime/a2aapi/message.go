@@ -1,6 +1,8 @@
 package a2aapi
 
 import (
+	"bytes"
+	"encoding/gob"
 	"encoding/json"
 	"strings"
 
@@ -121,15 +123,24 @@ func decodeDataPart(message *a2a.Message, target any) bool {
 	return false
 }
 
+// The SDK's in-memory task store clones interface-valued data parts through gob.
+func init() {
+	gob.Register(json.Number(""))
+}
+
 func statusMessage(execCtx *a2asrv.ExecutorContext, text string, data map[string]any) *a2a.Message {
 	parts := []*a2a.Part{a2a.NewTextPart(text)}
 	if data != nil {
 		// SDK storage deep-copies parts through gob. Keep structured wire data
 		// JSON-native rather than embedding runtime-specific Go slice types.
 		encoded, err := json.Marshal(data)
-		var normalized map[string]any
-		if err == nil && json.Unmarshal(encoded, &normalized) == nil {
-			parts = append(parts, a2a.NewDataPart(normalized))
+		if err == nil {
+			var normalized map[string]any
+			decoder := json.NewDecoder(bytes.NewReader(encoded))
+			decoder.UseNumber()
+			if decoder.Decode(&normalized) == nil {
+				parts = append(parts, a2a.NewDataPart(normalized))
+			}
 		}
 	}
 	return a2a.NewMessageForTask(a2a.MessageRoleAgent, execCtx, parts...)

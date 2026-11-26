@@ -19,6 +19,14 @@ assert_paths true false false false true bot/prompt/system_zh.md
 assert_paths true false false false true bot/agent/subagent/prompts/subagent.md
 assert_paths true false false false true bot/extension/skill/bundled/meta/SKILL.md
 assert_paths true false false false true bot/extension/tool/builtin/filesystem/edit/edit_description.md
+assert_paths true false false false true mode/plan.md
+assert_paths true false false false false bot/modelcatalog/snapshot.json
+assert_paths true false false false false bot/extension/tool/runtime/sandbox/impl/browser-check.mjs
+assert_paths true false false false false evals/agent_eval/runner.py
+assert_paths true false false false true evals/cases/review-clean/prompt.md
+assert_paths true false false false false evals/go.mod
+assert_paths true true false false false build/makefile
+assert_paths true true false false false main_runtime.go
 assert_paths true true false false false interaction/gui/web/dist/index.html
 assert_paths false true false false false interaction/gui/web/src/main.tsx
 assert_paths false false false false true interaction/gui/web/README.md

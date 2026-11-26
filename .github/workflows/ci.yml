@@ -3,6 +3,10 @@ name: CI
 on:
   workflow_call:
     inputs:
+      checkout_ref:
+        description: Commit validated for release, or the event default
+        type: string
+        required: false
       force_all:
         description: Run every validation workflow regardless of changed paths
         type: boolean
@@ -31,6 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.checkout_ref }}
           fetch-depth: 0
       - id: classify
         name: Classify changed paths
@@ -74,26 +79,36 @@ jobs:
     needs: changes
     if: needs.changes.outputs.go == 'true'
     uses: ./.github/workflows/go.yml
+    with:
+      checkout_ref: ${{ inputs.checkout_ref }}
 
   frontend:
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     uses: ./.github/workflows/frontend.yml
+    with:
+      checkout_ref: ${{ inputs.checkout_ref }}
 
   website:
     needs: changes
     if: needs.changes.outputs.website == 'true'
     uses: ./.github/workflows/website.yml
+    with:
+      checkout_ref: ${{ inputs.checkout_ref }}
 
   repository:
     needs: changes
     if: needs.changes.outputs.repository == 'true'
     uses: ./.github/workflows/repository-quality.yml
+    with:
+      checkout_ref: ${{ inputs.checkout_ref }}
 
   docs:
     needs: changes
     if: needs.changes.outputs.docs == 'true'
     uses: ./.github/workflows/docs.yml
+    with:
+      checkout_ref: ${{ inputs.checkout_ref }}
 
   gate:
     if: always()

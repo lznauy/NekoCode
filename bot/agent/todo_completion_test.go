@@ -13,13 +13,18 @@ import (
 	"nekocode/protocol"
 )
 
+func coordinatorContext(ctx context.Context, pendingWorkers int) context.Context {
+	definition, _ := mode.Resolve(mode.SuperAgent)
+	return protocol.WithCoordination(mode.WithSnapshot(ctx, definition.Snapshot), protocol.Coordination{
+		GroupID: "demand", Notification: true, PendingTasks: pendingWorkers,
+	})
+}
+
 func coordinatorWithTodos(t *testing.T, pendingWorkers int) *Agent {
 	t.Helper()
 	a := newTestAgent()
-	definition, _ := mode.Resolve(mode.SuperAgent)
-	ctx := mode.WithSnapshot(context.Background(), definition.Snapshot)
-	ctx = protocol.WithCoordination(ctx, protocol.Coordination{GroupID: "demand", Notification: true, PendingTasks: pendingWorkers})
-	a.life.SetValues(ctx)
+	a.life.SetRunContext(coordinatorContext(t.Context(), pendingWorkers))
+	t.Cleanup(func() { a.life.SetRunContext(nil) })
 	a.deps.ctxMgr.SelectTodoGroup("demand")
 	a.deps.ctxMgr.SetTodos([]protocol.TodoItem{
 		{Content: "inspect", Status: "completed"},
@@ -54,10 +59,10 @@ func TestCoordinatorMayYieldForWorkersOrFinishCompletedPlan(t *testing.T) {
 			case "complete":
 				a.deps.ctxMgr.SetTodos([]protocol.TodoItem{{Content: "done", Status: "completed"}})
 			case "standard":
-				a.life.SetValues(context.Background())
+				a.life.SetRunContext(context.Background())
 			case "unrelated":
 				definition, _ := mode.Resolve(mode.SuperAgent)
-				a.life.SetValues(mode.WithSnapshot(context.Background(), definition.Snapshot))
+				a.life.SetRunContext(mode.WithSnapshot(context.Background(), definition.Snapshot))
 			}
 			if !a.turnRunner.handleText(&reasoningResult{Action: actionChat, ActionInput: "Progress or answer."}, nil) || a.run.err != nil {
 				t.Fatal("legitimate yield/answer blocked")
@@ -100,8 +105,7 @@ func TestCoordinatorLoopContinuesAfterPrematureSummary(t *testing.T) {
 	todoTool := &todo.TodoWriteTool{}
 	todoTool.SetApplyFn(a.updateTodos)
 	a.deps.toolRegistry.Register(todoTool)
-	ctx := a.getCtx()
-	result := a.RunContext(ctx, "Review the completed worker evidence and continue the plan.", nil, nil)
+	result := a.RunContext(coordinatorContext(t.Context(), 0), "Review the completed worker evidence and continue the plan.", nil, nil)
 	if result.Error != nil || model.calls != 3 || result.FinalOutput != "All planned work and validation are complete." || !a.deps.ctxMgr.Status().TasksDone {
 		t.Fatalf("coordinator stopped before reconciling plan: calls=%d result=%+v", model.calls, result)
 	}
@@ -118,7 +122,7 @@ func TestCoordinatorNotificationSelectsOwnPlanAtRealRunEntry(t *testing.T) {
 		{{Content: "Stopping prematurely."}},
 	}}
 	a.deps.llmClient = model
-	result := a.RunContext(a.getCtx(), "Review demand completion.", nil, nil)
+	result := a.RunContext(coordinatorContext(t.Context(), 0), "Review demand completion.", nil, nil)
 	if result.Error != nil || result.StopReason != "incomplete" || !strings.Contains(result.FinalOutput, "verify") || model.calls != 4 || strings.Contains(result.FinalOutput, "unrelated") {
 		t.Fatalf("notification used another demand plan: calls=%d result=%+v", model.calls, result)
 	}
@@ -207,7 +211,7 @@ func TestResumedPlanUsesCurrentBackgroundActivity(t *testing.T) {
 	a.deps.ctxMgr.SelectTodoGroup("saved")
 	a.deps.ctxMgr.SetTodos([]protocol.TodoItem{{Content: "work", Status: "pending"}})
 	host := &todoActivityHost{pending: 1}
-	a.life.SetValues(protocol.WithBackgroundSubmitter(t.Context(), host))
+	a.life.SetRunContext(protocol.WithBackgroundSubmitter(t.Context(), host))
 	a.run.todoTouched = true
 	if a.turnRunner.continueUnfinishedPlan() || host.group != "saved" {
 		t.Fatal("active saved workers were ignored")

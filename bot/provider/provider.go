@@ -1,68 +1,40 @@
+// Package provider constructs the built-in model clients.
 package provider
 
 import (
 	"context"
-	"fmt"
 
 	"nekocode/bot/provider/anthropic"
+	"nekocode/bot/provider/llm"
 	"nekocode/bot/provider/openai"
 	"nekocode/bot/provider/types"
 )
 
-// LLM is the contract every concrete provider must satisfy. Both
-// anthropic.Client and openai.Client implement this interface (verified by
-// the compile-time checks below).
-type LLM interface {
-	Chat(ctx context.Context, messages []types.Message, tools []types.ToolDef) (*types.Response, error)
-	ChatStream(ctx context.Context, messages []types.Message, tools []types.ToolDef) (<-chan types.StreamToken, <-chan error)
-}
+// LLM is the streaming model contract accepted by the harness.
+type LLM = llm.Client
 
-// RequestClient accepts per-request overrides without mutating client defaults.
-// Existing third-party implementations of LLM need no new methods.
-type RequestClient interface {
-	LLM
-	ChatWithOptions(context.Context, []types.Message, []types.ToolDef, types.RequestOptions) (*types.Response, error)
-	ChatStreamWithOptions(context.Context, []types.Message, []types.ToolDef, types.RequestOptions) (<-chan types.StreamToken, <-chan error)
-}
+// RequestClient supports per-request overrides on a shared model client.
+type RequestClient = llm.RequestClient
 
-func SupportsRequestOptions(client LLM) bool {
-	_, ok := client.(RequestClient)
-	return ok
-}
+func SupportsRequestOptions(client LLM) bool { return llm.SupportsRequestOptions(client) }
 
-// ChatStream applies overrides only when supported. Never silently ignore a
-// requested override or temporarily mutate a legacy provider's global state.
+// ChatStream applies per-request overrides when the client supports them.
 func ChatStream(client LLM, ctx context.Context, messages []types.Message, tools []types.ToolDef, options types.RequestOptions) (<-chan types.StreamToken, <-chan error) {
-	if scoped, ok := client.(RequestClient); ok {
-		return scoped.ChatStreamWithOptions(ctx, messages, tools, options)
-	}
-	if options == (types.RequestOptions{}) {
-		return client.ChatStream(ctx, messages, tools)
-	}
-	tokens, errs := make(chan types.StreamToken), make(chan error, 1)
-	close(tokens)
-	errs <- fmt.Errorf("provider does not support per-request options")
-	close(errs)
-	return tokens, errs
+	return llm.ChatStream(client, ctx, messages, tools, options)
 }
 
-// ReasoningSettingsFor returns an optional provider's model contract. Test and
-// third-party providers that do not expose one retain the safe no-replay
-// default.
-func ReasoningSettingsFor(llm LLM) types.ReasoningSettings {
-	configured, ok := llm.(interface {
-		ReasoningSettings() types.ReasoningSettings
-	})
-	if !ok {
-		return types.ReasoningSettings{}
-	}
-	return configured.ReasoningSettings()
+// ReasoningSettingsFor returns the optional reasoning configuration of a client.
+func ReasoningSettingsFor(client LLM) types.ReasoningSettings {
+	return llm.ReasoningSettingsFor(client)
 }
 
-// Compile-time checks: both concrete clients must satisfy LLM.
+// MaxOutputTokensFor returns the configured output limit, or zero if unavailable.
+func MaxOutputTokensFor(client LLM) int { return llm.MaxOutputTokensFor(client) }
+
+// The built-in clients support the full per-request contract.
 var (
-	_ LLM = (*anthropic.Client)(nil)
-	_ LLM = (*openai.Client)(nil)
+	_ RequestClient = (*anthropic.Client)(nil)
+	_ RequestClient = (*openai.Client)(nil)
 )
 
 // Config identifies one model endpoint.
@@ -101,12 +73,4 @@ func New(config Config) LLM {
 		}
 		return client
 	}
-}
-
-// MaxOutputTokensFor reads optional model metadata without changing the client.
-func MaxOutputTokensFor(llm LLM) int {
-	if configured, ok := llm.(interface{ GetMaxTokens() int }); ok {
-		return max(0, configured.GetMaxTokens())
-	}
-	return 0
 }

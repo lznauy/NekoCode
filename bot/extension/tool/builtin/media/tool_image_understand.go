@@ -258,23 +258,8 @@ func defaultImagePrompt(mode imageUnderstandMode) string {
 }
 
 func imageUnderstandOutputTokens(args map[string]any) (int, error) {
-	v, ok := args["max_tokens"]
-	if !ok {
-		return fastImageMaxTokens, nil
-	}
-	var n int
-	switch value := v.(type) {
-	case int:
-		n = value
-	case float64:
-		if value < 1 || value > 4096 || value != float64(int(value)) {
-			return 0, fmt.Errorf("max_tokens must be an integer between 1 and 4096")
-		}
-		n = int(value)
-	default:
-		return 0, fmt.Errorf("max_tokens must be an integer between 1 and 4096")
-	}
-	if n < 1 || n > 4096 {
+	n, err := toolutil.OptIntArg(args, "max_tokens", fastImageMaxTokens)
+	if err != nil || n < 1 || n > 4096 {
 		return 0, fmt.Errorf("max_tokens must be an integer between 1 and 4096")
 	}
 	return n, nil

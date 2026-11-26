@@ -16,7 +16,8 @@ GUI_BIN    := nekocode-gui
 
 TUI_SRC    := ./cmd/tui
 DAEMON_SRC := ./cmd/daemon
-GUI_SRC    := ./main.go
+GUI_SRC    := .
+GUI_TAGS   := desktop,production,webkit2_41
 GUI_DIR    := interaction/gui/web
 
 LDFLAGS        := -s -w -X nekocode/util/version.Version=$(VERSION)
@@ -67,7 +68,7 @@ vet:
 # GUI requires Node/npm and Wails-compatible host dependencies.
 gui:
 	cd $(GUI_DIR) && npm run build
-	$(GO) build $(BUILD_FLAGS) -ldflags='$(LDFLAGS)' -o $(GUI_BIN) $(GUI_SRC)
+	$(GO) build $(BUILD_FLAGS) -tags='$(GUI_TAGS)' -ldflags='$(LDFLAGS)' -o $(GUI_BIN) $(GUI_SRC)
 
 check-zig:
 	@command -v $(ZIG) >/dev/null 2>&1 || { \

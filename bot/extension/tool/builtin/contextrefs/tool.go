@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 
 	"nekocode/bot/extension/tool/runtime/core"
 	"nekocode/bot/extension/tool/runtime/refbridge"
@@ -53,15 +52,11 @@ func (t *Tool) Parameters() []core.Parameter {
 }
 
 func integer(args map[string]any, key string, fallback int) (int, error) {
-	raw, exists := args[key]
-	if !exists {
-		return fallback, nil
-	}
-	n, ok := raw.(float64)
-	if !ok || math.IsNaN(n) || math.IsInf(n, 0) || n < 0 || n >= float64(int(^uint(0)>>1)) || float64(int(n)) != n {
+	n, err := toolutil.OptIntArg(args, key, fallback)
+	if err != nil || n < 0 {
 		return 0, fmt.Errorf("%s must be a non-negative integer", key)
 	}
-	return int(n), nil
+	return n, nil
 }
 
 func (t *Tool) Execute(ctx context.Context, args map[string]any) (core.ToolOutput, error) {

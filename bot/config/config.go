@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"nekocode/bot/modelcatalog"
 	"os"
 	"path/filepath"
@@ -67,6 +68,7 @@ type ImageUnderstandConfig struct {
 
 type MCPServerConfig struct {
 	URL                    string            `json:"url,omitempty"`
+	AllowInsecureHTTP      bool              `json:"allow_insecure_http,omitempty"`
 	Headers                map[string]string `json:"headers,omitempty"`
 	OAuthClientID          string            `json:"oauth_client_id,omitempty"`
 	OAuthClientSecret      string            `json:"oauth_client_secret,omitempty"`
@@ -223,7 +225,8 @@ func (c Config) Clone() Config {
 		out.MCPServers = make(map[string]MCPServerConfig, len(c.MCPServers))
 		for name, server := range c.MCPServers {
 			server.Args = append([]string(nil), server.Args...)
-			server.Env = cloneStrings(server.Env)
+			server.Env = maps.Clone(server.Env)
+			server.Headers = maps.Clone(server.Headers)
 			out.MCPServers[name] = server
 		}
 	}
@@ -255,17 +258,6 @@ func (c Config) Clone() Config {
 		out.Jev = &jev
 	}
 	return out
-}
-
-func cloneStrings(input map[string]string) map[string]string {
-	if input == nil {
-		return nil
-	}
-	output := make(map[string]string, len(input))
-	for key, value := range input {
-		output[key] = value
-	}
-	return output
 }
 
 // Save validates an independent copy and atomically replaces the configuration.
@@ -478,7 +470,7 @@ func Validate(cfg *Config) error {
 				srv.Env = env
 			}
 			var err error
-			srv.URL, err = utilhttp.NormalizeSecureURL(srv.URL)
+			srv.URL, err = utilhttp.NormalizeServiceURL(srv.URL, srv.AllowInsecureHTTP)
 			if err != nil {
 				return fmt.Errorf("mcp server %q URL: %w", name, err)
 			}

@@ -16,7 +16,10 @@ import (
 // Only explicitly configured local/private MCP addresses opt into local access.
 func oauthHTTPClient(mcpURL string) *http.Client {
 	policy := newOAuthNetworkPolicy(mcpURL)
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport := &http.Transport{}
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = base.Clone()
+	}
 	// A proxy can resolve the destination independently, defeating IP validation.
 	// OAuth uses direct connections; the MCP transport keeps its proxy behavior.
 	transport.Proxy = nil

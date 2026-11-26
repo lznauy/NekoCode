@@ -2,6 +2,7 @@ package types
 
 import (
 	"context"
+	"fmt"
 	nethttp "net/http"
 	"slices"
 	"sync"
@@ -196,6 +197,21 @@ type StreamToken struct {
 	// Request is emitted once, as the first token of a stream: wire-level
 	// facts about the request for the per-call evidence log.
 	Request *RequestMeta
+}
+
+// StreamCompletionError classifies provider terminal signals shared by ordinary
+// model calls and compaction. A refusal may arrive before the finish reason.
+func StreamCompletionError(finishReason string, refused bool) error {
+	if refused {
+		return fmt.Errorf("%w: provider returned a refusal", protocol.ErrIncompleteResponse)
+	}
+	switch finishReason {
+	case "length", "max_tokens", "model_context_window_exceeded":
+		return fmt.Errorf("%w: provider output token limit reached", protocol.ErrIncompleteResponse)
+	case "content_filter", "refusal":
+		return fmt.Errorf("%w: provider stopped generation (%s)", protocol.ErrIncompleteResponse, finishReason)
+	}
+	return nil
 }
 
 // RequestMeta describes the provider request a stream belongs to without

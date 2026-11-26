@@ -56,6 +56,8 @@ export interface ImageUnderstandConfig {
 
 export interface MCPServerConfig {
   url?: string
+  allow_insecure_http?: boolean
+  headers?: Record<string, string>
   oauth_client_id?: string
   oauth_client_secret?: string
   oauth_client_metadata_url?: string

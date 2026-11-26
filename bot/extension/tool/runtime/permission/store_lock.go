@@ -2,9 +2,11 @@ package permission
 
 import (
 	"fmt"
-	"nekocode/bot/extension/tool/runtime/authority"
 	"os"
 	"path/filepath"
+
+	"nekocode/bot/extension/tool/runtime/authority"
+	"nekocode/util/filelock"
 )
 
 // The sidecar is never renamed or removed: locking the JSON itself would leave
@@ -21,13 +23,9 @@ func lockStore(path string) (func(), error) {
 	if resolved != lockPath {
 		return nil, fmt.Errorf("permission store lock must not be a symbolic link")
 	}
-	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	unlock, err := filelock.Acquire(lockPath)
 	if err != nil {
-		return nil, err
-	}
-	if err := lockStoreFile(file); err != nil {
-		_ = file.Close()
 		return nil, fmt.Errorf("lock permission store: %w", err)
 	}
-	return func() { _ = file.Close() }, nil
+	return unlock, nil
 }

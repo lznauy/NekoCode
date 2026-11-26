@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"nekocode/util/filelock"
 )
 
 var validBase = regexp.MustCompile(`^[0-9a-f]{40,64}$`)
@@ -56,7 +58,7 @@ func Acquire(parent, id string) (*Lease, error) {
 	if err != nil {
 		return nil, err
 	}
-	ok, err := tryLock(f)
+	ok, err := filelock.TryLock(f)
 	if err != nil || !ok {
 		f.Close()
 		if err == nil {
@@ -370,7 +372,7 @@ func (l *Lease) Apply(ctx context.Context, checkpoints ...ApplyCheckpoint) (chan
 	}
 	defer lock.Close()
 	for {
-		ok, err := tryLock(lock)
+		ok, err := filelock.TryLock(lock)
 		if err != nil {
 			return false, err
 		}

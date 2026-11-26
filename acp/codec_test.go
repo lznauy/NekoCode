@@ -1,9 +1,12 @@
 package acp
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -287,5 +290,56 @@ func TestExpiredPermissionQueuedBehindBlockedWriterIsDiscarded(t *testing.T) {
 	}
 	if wire.Len() != 0 {
 		t.Fatalf("sent stale request: %s", wire.Bytes())
+	}
+}
+
+func TestLargeImagePromptThroughCodec(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	png := append([]byte{0x89, 'P', 'N', 'G', 13, 10, 26, 10}, make([]byte, 1<<20)...)
+	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "session/prompt", "params": promptRequest{SessionID: "image-test", Prompt: []contentBlock{{Type: "image", Data: base64.StdEncoding.EncodeToString(png)}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	received := false
+	err = newConnection(io.Discard).serve(t.Context(), bytes.NewReader(body), func(_ context.Context, method string, params json.RawMessage) (any, *wireError) {
+		var req promptRequest
+		if method != "session/prompt" || json.Unmarshal(params, &req) != nil {
+			t.Errorf("bad image request")
+			return nil, nil
+		}
+		_, imgs, failure := promptContent(req.Prompt, req.SessionID)
+		received = failure == nil && len(imgs) == 1
+		return nil, failure
+	})
+	if err != nil || !received {
+		t.Fatalf("received=%v err=%v", received, err)
+	}
+}
+
+func TestReadFrameDrainsOversizeAndAcceptsFollowingFrame(t *testing.T) {
+	r := bufio.NewReaderSize(strings.NewReader(strings.Repeat("x", 65)+"\n"+strings.Repeat("y", 64)+"\nok"), 16)
+	if _, err := readFrame(r, 64); !errors.Is(err, errFrameTooLarge) {
+		t.Fatalf("oversize = %v", err)
+	}
+	for _, want := range []string{strings.Repeat("y", 64), "ok"} {
+		line, err := readFrame(r, 64)
+		if err != nil || string(line) != want {
+			t.Fatalf("line=%q err=%v", line, err)
+		}
+	}
+	if _, err := readFrame(r, 64); !errors.Is(err, io.EOF) {
+		t.Fatal(err)
+	}
+}
+
+func TestCodecOversizeNotificationDoesNotEmitResponse(t *testing.T) {
+	notification := `{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"` + strings.Repeat("x", maxMessageSize) + `"}}`
+	var out bytes.Buffer
+	err := newConnection(&out).serve(t.Context(), strings.NewReader(notification), func(context.Context, string, json.RawMessage) (any, *wireError) {
+		t.Error("oversized notification was dispatched")
+		return nil, nil
+	})
+	if err != nil || out.Len() != 0 {
+		t.Fatalf("notification response=%s err=%v", out.Bytes(), err)
 	}
 }

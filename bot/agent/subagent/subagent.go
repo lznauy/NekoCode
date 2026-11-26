@@ -20,7 +20,7 @@ import (
 	"nekocode/bot/extension/tool/runtime/runner"
 	"nekocode/bot/policy"
 	"nekocode/bot/policy/builtin"
-	"nekocode/bot/provider"
+	"nekocode/bot/provider/llm"
 	providertypes "nekocode/bot/provider/types"
 	"nekocode/logger"
 	"nekocode/protocol"
@@ -37,16 +37,16 @@ const (
 )
 
 type Engine struct {
-	llmClient       provider.LLM
+	llmClient       llm.Client
 	toolRegistry    *tools.Registry
-	compactionModel provider.LLM
+	compactionModel llm.Client
 }
 
 // Config contains the services shared by subagent runs.
 type Config struct {
-	LLM             provider.LLM
+	LLM             llm.Client
 	Tools           *tools.Registry
-	CompactionModel provider.LLM
+	CompactionModel llm.Client
 }
 
 type runState struct {

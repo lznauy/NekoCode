@@ -536,6 +536,7 @@ export namespace runtime {
 	}
 	export class MCPServerConfig {
 	    url?: string;
+	    allow_insecure_http?: boolean;
 	    headers?: Record<string, string>;
 	    oauth_client_id?: string;
 	    oauth_client_secret?: string;
@@ -553,6 +554,7 @@ export namespace runtime {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.url = source["url"];
+	        this.allow_insecure_http = source["allow_insecure_http"];
 	        this.headers = source["headers"];
 	        this.oauth_client_id = source["oauth_client_id"];
 	        this.oauth_client_secret = source["oauth_client_secret"];

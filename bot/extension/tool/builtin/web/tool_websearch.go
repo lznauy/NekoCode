@@ -63,16 +63,8 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) (core.
 	}
 	n := 8
 	if raw, present := args["numResults"]; present {
-		var value float64
-		switch v := raw.(type) {
-		case float64:
-			value = v
-		case int:
-			value = float64(v)
-		default:
-			return core.ToolOutput{}, fmt.Errorf("numResults must be a positive integer")
-		}
-		if math.IsNaN(value) || math.IsInf(value, 0) || value < 1 || math.Trunc(value) != value {
+		value, ok := toolutil.FloatArgValue(raw)
+		if !ok || math.IsNaN(value) || math.IsInf(value, 0) || value < 1 || math.Trunc(value) != value {
 			return core.ToolOutput{}, fmt.Errorf("numResults must be a positive integer")
 		}
 		// Clamp before conversion so enormous JSON numbers cannot overflow int.

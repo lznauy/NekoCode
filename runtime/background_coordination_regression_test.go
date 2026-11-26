@@ -140,3 +140,61 @@ func TestCoordinatorRetriesTransientClaimWrite(t *testing.T) {
 		})
 	}
 }
+
+func TestReviewSettlementHonorsClaimOwnershipAndReceiptWrite(t *testing.T) {
+	for _, failWrite := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fail-write-%t", failWrite), func(t *testing.T) {
+			root := t.TempDir()
+			if failWrite {
+				root = filepath.Join(root, "blocked")
+				if err := os.WriteFile(root, nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			b := &backgroundTasks{runtime: &Runtime{services: backgroundServices(root)},
+				order: []string{"current", "replaced", "stopped"}, entries: make(map[string]*backgroundEntry)}
+			claimed := make(map[string]*backgroundEntry)
+			for _, id := range b.order {
+				e := &backgroundEntry{BackgroundTask: BackgroundTask{ID: id, SessionID: "session", Delivery: "claimed"}}
+				b.entries[id], claimed[id] = e, e
+			}
+			replacement := *b.entries["replaced"]
+			b.entries["replaced"] = &replacement
+			b.entries["stopped"].Delivery = "stopped"
+
+			b.lockMutation()
+			err := b.settleReviewsLocked("session", claimed, coordinatorDone, nil)
+			b.unlockMutation()
+			current := b.entries["current"]
+			if failWrite {
+				if err == nil || current.Notified || current.Delivery != "failed" {
+					t.Fatalf("failed receipt write: task=%+v error=%v", current, err)
+				}
+			} else if err != nil || !current.Notified || current.Delivery != "delivered" {
+				t.Fatalf("completion: task=%+v error=%v", current, err)
+			}
+			if replacement.Delivery != "claimed" || replacement.Notified || b.entries["stopped"].Delivery != "stopped" || b.entries["stopped"].Notified {
+				t.Fatal("settlement modified a replaced or stopped claim")
+			}
+		})
+	}
+}
+
+func TestDemandReceiptFailureReleasesClaim(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "blocked")
+	if err := os.WriteFile(root, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	demand := &BackgroundDemand{ID: "queued_test", SessionID: "session", Status: "claimed"}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	input := &backgroundInput{id: demand.ID, ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	b := &backgroundTasks{runtime: &Runtime{services: backgroundServices(root)}, demandOrder: []RunID{demand.ID},
+		demands: map[RunID]*BackgroundDemand{demand.ID: demand}, pending: map[RunID]*backgroundInput{demand.ID: input}}
+	b.lockMutation()
+	err := b.settleDemandLocked(input, coordinatorDone, nil)
+	b.unlockMutation()
+	if err == nil || demand.Status != "interrupted" || demand.Error == "" || b.pending[demand.ID] != nil {
+		t.Fatalf("receipt could not be inspected or discarded after the write failure: %+v, err=%v", demand, err)
+	}
+}

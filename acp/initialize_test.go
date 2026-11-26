@@ -12,7 +12,7 @@ func TestInitialize(t *testing.T) {
 		t.Fatal(rpcErr)
 	}
 	response := result.(initializeResponse)
-	if response.ProtocolVersion != 1 || !response.AgentCapabilities.LoadSession {
+	if response.ProtocolVersion != 1 || !response.AgentCapabilities.LoadSession || !response.AgentCapabilities.PromptCapabilities.Image {
 		t.Fatalf("initialize response = %#v", response)
 	}
 	if _, rpcErr := s.initialize(json.RawMessage(`{"protocolVersion":1}`)); rpcErr == nil {

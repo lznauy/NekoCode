@@ -9,6 +9,18 @@ import (
 	"testing"
 )
 
+func TestOAuthClientWithCustomDefaultTransport(t *testing.T) {
+	previous := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = previous })
+	http.DefaultTransport = struct{ http.RoundTripper }{previous}
+
+	client := newRemoteClient("custom", ServerConfig{URL: "https://remote.example/mcp"})
+	defer client.Close()
+	if client.auth.oauthClient == nil {
+		t.Fatal("missing OAuth client")
+	}
+}
+
 func TestOAuthPublicMCPRejectsLocalDiscovery(t *testing.T) {
 	var requests atomic.Int32
 	local := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

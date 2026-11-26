@@ -53,9 +53,8 @@ func TestRandomPagesMatchLegacyProjection(t *testing.T) {
 	}
 }
 
-// Frozen reference from the implementation before pagination optimization.
+// Reference for the unpaged projection, with call IDs resolved in their issuing batch.
 func legacyDisplayMessages(messages []types.Message) []controlruntime.DisplayMessage {
-	toolNames, toolArgs := toolMetaByID(messages)
 	var out []controlruntime.DisplayMessage
 	i := 0
 	for i < len(messages) {
@@ -67,7 +66,7 @@ func legacyDisplayMessages(messages []types.Message) []controlruntime.DisplayMes
 			}
 			i++
 		case "assistant":
-			msg, next := legacyDisplayAssistantTurn(messages, i, toolNames, toolArgs)
+			msg, next := legacyDisplayAssistantTurn(messages, i)
 			if msg.Content != "" || len(msg.Blocks) > 0 || len(msg.Images) > 0 {
 				out = append(out, msg)
 			}
@@ -84,7 +83,7 @@ func legacyDisplayMessages(messages []types.Message) []controlruntime.DisplayMes
 	return out
 }
 
-func legacyDisplayAssistantTurn(msgs []types.Message, idx int, toolNames, toolArgs map[string]string) (controlruntime.DisplayMessage, int) {
+func legacyDisplayAssistantTurn(msgs []types.Message, idx int) (controlruntime.DisplayMessage, int) {
 	var contentParts []string
 	var blocks []controlruntime.DisplayBlock
 	var images []controlruntime.ImageRef
@@ -102,8 +101,13 @@ func legacyDisplayAssistantTurn(msgs []types.Message, idx int, toolNames, toolAr
 		}
 
 		for next < len(msgs) && msgs[next].Role == "tool" {
-			name := toolNames[msgs[next].ToolCallID]
-			blocks, images = appendDisplayToolResult(blocks, images, name, toolArgs[msgs[next].ToolCallID], msgs[next])
+			var call types.FunctionCall
+			for _, candidate := range m.ToolCalls {
+				if candidate.ID != "" && candidate.ID == msgs[next].ToolCallID {
+					call = candidate.Function
+				}
+			}
+			blocks, images = appendDisplayToolResult(blocks, images, call.Name, call.Arguments, msgs[next])
 			next++
 		}
 	}

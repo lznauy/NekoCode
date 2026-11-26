@@ -1,8 +1,6 @@
 package telegram
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -18,17 +16,10 @@ const section = "telegram"
 // Serialize Telegram read/check/write transactions, including command writes.
 // Snapshots reject stale commands instead of overwriting concurrent revocations.
 var configMu sync.Mutex
-var configRevision uint64
-
-type configSnapshot struct {
-	value    string
-	revision uint64
-}
-
-var errConfigChanged = errors.New("telegram configuration changed; retry the command")
+var errConfigChanged = connect.ErrConfigChanged
 
 type Config struct {
-	snapshot      *configSnapshot
+	snapshot      *connect.SectionVersion
 	ActiveProfile string       `json:"active_profile,omitempty"`
 	Profiles      []BotProfile `json:"profiles,omitempty"`
 
@@ -68,40 +59,24 @@ func loadConfig() (Config, error) {
 
 func loadConfigLocked() (Config, error) {
 	var cfg Config
-	if err := connect.DefaultFileStore().Load(section, &cfg); err != nil {
-		return Config{}, err
-	}
-	cfg.normalize()
-	raw, err := json.Marshal(cfg)
+	version, err := connect.DefaultFileStore().LoadVersioned(section, &cfg)
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.snapshot = &configSnapshot{value: string(raw), revision: configRevision}
+	cfg.normalize()
+	cfg.snapshot = version
 	return cfg, nil
 }
 
 func saveConfig(cfg Config) error {
 	configMu.Lock()
 	defer configMu.Unlock()
-	if cfg.snapshot != nil {
-		current, err := loadConfigLocked()
-		if err != nil {
-			return err
-		}
-		if *current.snapshot != *cfg.snapshot {
-			return errConfigChanged
-		}
-	}
 	return saveConfigLocked(cfg)
 }
 
 func saveConfigLocked(cfg Config) error {
 	cfg.normalize() // includes clearLegacy
-	if err := connect.DefaultFileStore().Save(section, cfg); err != nil {
-		return err
-	}
-	configRevision++
-	return nil
+	return connect.DefaultFileStore().SaveVersioned(section, cfg, cfg.snapshot)
 }
 
 func (c *Config) normalize() {

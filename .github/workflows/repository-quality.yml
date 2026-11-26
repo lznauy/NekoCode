@@ -2,6 +2,11 @@ name: Repository quality
 
 on:
   workflow_call:
+    inputs:
+      checkout_ref:
+        description: Commit validated for release, or the event default
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -15,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.checkout_ref }}
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod

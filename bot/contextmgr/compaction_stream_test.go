@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"nekocode/bot/provider/types"
@@ -226,4 +227,50 @@ func TestSummaryStreamMergesSplitUsage(t *testing.T) {
 	if usage.PromptTokens != 100 || usage.CompletionTokens != 20 || usage.CacheHitTokens != 80 || usage.TotalTokens != 120 {
 		t.Fatalf("split usage lost: %+v", usage)
 	}
+}
+
+func TestCompactionRejectsIncompleteProviderStream(t *testing.T) {
+	for _, token := range []types.StreamToken{{FinishReason: "length"}, {FinishReason: "content_filter"}, {Refused: true}} {
+		client := &controlledSummaryClient{tokens: make(chan types.StreamToken, 2), errs: make(chan error)}
+		client.tokens <- types.StreamToken{Content: "<summary>Part of the previous conversation.</summary>"}
+		client.tokens <- token
+		close(client.tokens)
+		close(client.errs)
+		m := New(Config{CompactionModel: client, ContextWindow: 2000})
+		for range 8 {
+			m.Add("user", "old question")
+			m.Add("assistant", "old answer")
+		}
+		applied, err := m.Summarize(t.Context())
+		if applied || !errors.Is(err, protocol.ErrIncompleteResponse) || m.Status().Messages != 16 {
+			t.Fatalf("token = %+v, applied = %v, messages = %d, err = %v", token, applied, m.Status().Messages, err)
+		}
+	}
+}
+
+func TestCancelledCompactionKeepsUsageWhenProviderLeavesStreamOpen(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client := &controlledSummaryClient{tokens: make(chan types.StreamToken), errs: make(chan error)}
+		m := New(Config{CompactionModel: client, ContextWindow: 2000})
+		for range 8 {
+			m.Add("user", "old question")
+			m.Add("assistant", "old answer")
+		}
+		var usage types.StreamUsage
+		m.SetLLMUsageRecorder(func(u types.StreamUsage) { usage = u })
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		go func() {
+			<-ctx.Done()
+			client.tokens <- types.StreamToken{Usage: &types.StreamUsage{CompletionTokens: 7}}
+		}()
+		start := time.Now()
+		applied, err := m.Summarize(ctx)
+		if applied || !errors.Is(err, context.DeadlineExceeded) || m.Status().Messages != 16 || usage.CompletionTokens != 7 {
+			t.Fatalf("applied=%t, messages=%d, usage=%+v, err=%v", applied, m.Status().Messages, usage, err)
+		}
+		if elapsed := time.Since(start); elapsed > time.Second+summaryDrainTimeout {
+			t.Fatalf("compaction exceeded cancellation grace period: %v", elapsed)
+		}
+	})
 }

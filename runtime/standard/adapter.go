@@ -306,10 +306,16 @@ func sessionMCPConfigs(servers []controlruntime.MCPServerSpec) map[string]mcp.Se
 	configs := make(map[string]mcp.ServerConfig, len(servers))
 	for _, server := range servers {
 		configs[server.Name] = mcp.ServerConfig{
-			Command: server.Config.Command,
-			URL:     server.Config.URL, OAuthClientID: server.Config.OAuthClientID, OAuthClientSecret: server.Config.OAuthClientSecret, OAuthClientMetadataURL: server.Config.OAuthClientMetadataURL, OAuthCallbackPort: server.Config.OAuthCallbackPort,
-			Args: append([]string(nil), server.Config.Args...),
-			Env:  maps.Clone(server.Config.Env),
+			Command:                server.Config.Command,
+			URL:                    server.Config.URL,
+			AllowInsecureHTTP:      server.Config.AllowInsecureHTTP,
+			Headers:                maps.Clone(server.Config.Headers),
+			OAuthClientID:          server.Config.OAuthClientID,
+			OAuthClientSecret:      server.Config.OAuthClientSecret,
+			OAuthClientMetadataURL: server.Config.OAuthClientMetadataURL,
+			OAuthCallbackPort:      server.Config.OAuthCallbackPort,
+			Args:                   append([]string(nil), server.Config.Args...),
+			Env:                    maps.Clone(server.Config.Env),
 		}
 	}
 	return configs

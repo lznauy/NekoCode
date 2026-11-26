@@ -2,7 +2,7 @@ package contextmgr
 
 import (
 	"nekocode/bot/contextmgr/token"
-	"nekocode/bot/provider"
+	"nekocode/bot/provider/llm"
 	"nekocode/bot/provider/types"
 	"nekocode/logger"
 )
@@ -11,7 +11,7 @@ import (
 // It summarizes the old visible prefix, then replaces active history with
 // the archive plus recent messages in active history.
 type replacementCompactor struct {
-	model provider.LLM
+	model llm.Client
 	// modelWindow is the summarizer model's context window (0 = unknown,
 	// skip the pre-flight check). It gates the summary request: sending
 	// more tokens than the summarizer can read turns into a guaranteed

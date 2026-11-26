@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	ctxmgr "nekocode/bot/contextmgr"
 	"nekocode/protocol"
+	"nekocode/util/filelock"
 )
 
 type SubagentAttemptUsage struct {
@@ -124,10 +125,10 @@ func OpenSubagent(parentID, id, cwd string, resume bool) (*SubagentSession, erro
 	// Observation probes briefly acquire this lock to detect orphaned tasks.
 	// Give those probes time to release without admitting a second executor.
 	deadline := time.Now().Add(100 * time.Millisecond)
-	ok, err := trySubagentLock(f)
+	ok, err := filelock.TryLock(f)
 	for err == nil && !ok && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
-		ok, err = trySubagentLock(f)
+		ok, err = filelock.TryLock(f)
 	}
 	if err != nil || !ok {
 		_ = f.Close()

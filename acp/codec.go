@@ -5,14 +5,25 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"nekocode/util/attachment"
 )
 
 const maxMessageSize = 1 << 20
+
+// Include one full-size image in base64 plus the normal message envelope.
+// Multiple image blocks share the same frame budget.
+const maxPromptFrameSize = (attachment.MaxImageBytes+2)/3*4 + maxMessageSize
+const maxInflightRequestBytes = 64 << 20
+
+var errFrameTooLarge = errors.New("ACP prompt frame exceeds size limit")
+
 const maxConcurrentRequests = 64
 const maxQueuedWrites = 128
 
@@ -65,18 +76,30 @@ func (c *connection) serve(ctx context.Context, in io.Reader, handle handler) er
 	go c.writeLoop()
 	defer close(c.stopQ)
 
-	scanner := bufio.NewScanner(in)
-	scanner.Buffer(make([]byte, 64*1024), maxMessageSize)
+	reader := bufio.NewReaderSize(in, 64*1024)
+	var readErr error
+	var inflightBytes atomic.Int64
 	var workers sync.WaitGroup
 	slots := make(chan struct{}, maxConcurrentRequests)
 	cancelSlot := make(chan struct{}, 1)
 readLoop:
-	for scanner.Scan() {
+	for ctx.Err() == nil {
+		line, err := readFrame(reader, maxPromptFrameSize)
+		if errors.Is(err, errFrameTooLarge) {
+			if !c.tryWrite(map[string]any{"jsonrpc": "2.0", "id": nil, "error": rpcError(-32600, "%s", err)}) {
+				break
+			}
+			continue
+		}
+		if err != nil {
+			readErr = err
+			break
+		}
 		if ctx.Err() != nil {
 			break
 		}
 		var msg message
-		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+		if err := json.Unmarshal(line, &msg); err != nil {
 			if !c.tryWrite(map[string]any{"jsonrpc": "2.0", "id": nil, "error": rpcError(-32700, "parse error")}) {
 				break
 			}
@@ -84,6 +107,17 @@ readLoop:
 		}
 		if msg.JSONRPC != "2.0" {
 			if !c.tryWrite(map[string]any{"jsonrpc": "2.0", "id": rawID(msg.ID), "error": rpcError(-32600, "invalid request")}) {
+				break
+			}
+			continue
+		}
+		if len(line) > maxMessageSize && msg.Method != "session/prompt" {
+			failure := rpcError(-32600, "message exceeds 1 MiB")
+			if msg.Method == "" {
+				c.resolve(message{ID: msg.ID, Error: failure})
+				continue
+			}
+			if len(msg.ID) != 0 && string(msg.ID) != "null" && !c.tryWrite(map[string]any{"jsonrpc": "2.0", "id": rawID(msg.ID), "error": failure}) {
 				break
 			}
 			continue
@@ -112,9 +146,21 @@ readLoop:
 			}
 			continue
 		}
+		size := int64(len(line))
+		if msg.Method != "session/cancel" && inflightBytes.Load()+size > maxInflightRequestBytes {
+			<-slot
+			if len(msg.ID) != 0 && string(msg.ID) != "null" && !c.tryWrite(map[string]any{
+				"jsonrpc": "2.0", "id": rawID(msg.ID), "error": rpcError(-32000, "in-flight request byte limit reached"),
+			}) {
+				break
+			}
+			continue
+		}
+		inflightBytes.Add(size)
 		workers.Add(1)
 		go func(msg message, slot chan struct{}) {
 			defer workers.Done()
+			defer inflightBytes.Add(-size)
 			defer func() { <-slot }()
 			result, rpcErr := handle(ctx, msg.Method, msg.Params)
 			if len(msg.ID) == 0 || string(msg.ID) == "null" {
@@ -141,10 +187,44 @@ readLoop:
 	if err := parent.Err(); err != nil {
 		return err
 	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("acp: read message: %w", err)
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		return fmt.Errorf("acp: read message: %w", readErr)
 	}
 	return nil
+}
+
+// readFrame consumes an oversized line through its delimiter, so the next
+// JSON-RPC message (including cancellation) starts at a clean boundary.
+func readFrame(r *bufio.Reader, limit int) ([]byte, error) {
+	var data []byte
+	oversized := false
+	for {
+		part, err := r.ReadSlice('\n')
+		part = bytes.TrimSuffix(part, []byte{'\n'})
+		if !oversized {
+			if len(data)+len(part) > limit {
+				oversized = true
+				data = nil
+			} else if err == nil && len(data) == 0 {
+				return part, nil
+			} else {
+				data = append(data, part...)
+			}
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, err
+		}
+		if oversized {
+			return nil, errFrameTooLarge
+		}
+		if len(data) == 0 && errors.Is(err, io.EOF) {
+			return nil, io.EOF
+		}
+		return data, nil
+	}
 }
 
 func (c *connection) flushWrites(timeout time.Duration) {

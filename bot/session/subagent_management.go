@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"nekocode/util/filelock"
 )
 
 // The parent lock serializes opening and deleting task directories. Active
@@ -84,7 +86,7 @@ func lockSubagentManagement(root string) (*os.File, error) {
 	}
 	deadline := time.Now().Add(time.Second)
 	for {
-		ok, err := trySubagentLock(f)
+		ok, err := filelock.TryLock(f)
 		if err != nil {
 			f.Close()
 			return nil, err
@@ -159,7 +161,7 @@ func DeleteSubagent(parentID, id string) error {
 	}
 	if f != nil {
 		defer f.Close()
-		ok, err := trySubagentLock(f)
+		ok, err := filelock.TryLock(f)
 		if err != nil {
 			return err
 		}

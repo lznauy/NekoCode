@@ -160,7 +160,7 @@ func TestConsumeStreamPreservesContentBeforeToolCall(t *testing.T) {
 	preamble <- types.StreamToken{ToolCallDelta: &types.ToolCallDelta{Index: 0, ID: "call-1", Name: "read", Arguments: `{}`}}
 	close(preamble)
 	stream := &StreamResult{}
-	if err := ConsumeStream(preamble, stream, cb, nil); err != nil {
+	if err := ConsumeStream(t.Context(), preamble, nil, stream, cb, nil); err != nil {
 		t.Fatal(err)
 	}
 	if stream.TextBuf.String() != "Let me check. " || resets != 0 {
@@ -173,7 +173,7 @@ func TestConsumeStreamPreservesContentBeforeToolCall(t *testing.T) {
 	retry <- types.StreamToken{ToolCallDelta: &types.ToolCallDelta{Index: 0, ID: "call-2", Name: "edit", Arguments: `{"path":"a.go"}`}}
 	close(retry)
 	stream = &StreamResult{}
-	if err := ConsumeStream(retry, stream, cb, nil); err != nil {
+	if err := ConsumeStream(t.Context(), retry, nil, stream, cb, nil); err != nil {
 		t.Fatal(err)
 	}
 	if stream.TextBuf.String() != `<｜｜DSML｜｜ calls>` {

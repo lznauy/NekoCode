@@ -67,6 +67,30 @@ describe('ConfigPanel', () => {
     delete (window as unknown as { go?: unknown }).go
   })
 
+  it('saves the HTTP opt-in for an internal MCP hostname', async () => {
+    const user = userEvent.setup()
+    render(<ConfigPanel open initialTab="mcp" onClose={vi.fn()} onSaved={vi.fn()} />)
+    await user.click(await screen.findByRole('button', { name: '添加 MCP 服务' }))
+    await user.selectOptions(screen.getByLabelText('连接方式'), 'http')
+    const checkbox = screen.getByRole('checkbox', { name: '允许此服务使用明文 HTTP' })
+    expect(checkbox).not.toBeChecked()
+    await user.type(screen.getByLabelText('MCP URL'), 'http://mcp.lan:3000/mcp')
+    await user.click(checkbox)
+    await user.click(screen.getByRole('button', { name: '保存配置' }))
+    const saved = vi.mocked(SaveConfig).mock.calls[0][0] as unknown as ConfigView
+    expect(saved.mcp_servers?.['mcp-1']).toMatchObject({ url: 'http://mcp.lan:3000/mcp', allow_insecure_http: true })
+  })
+
+  it('preserves configured request headers when saving an existing MCP server', async () => {
+    const server = { command: '', enabled: true, url: 'https://docs.example/mcp', headers: { 'X-Tenant': 'tenant' } }
+    vi.mocked(GetConfig).mockResolvedValueOnce({ ...config, mcp_servers: { docs: server } } as never)
+    render(<ConfigPanel open initialTab="mcp" onClose={vi.fn()} onSaved={vi.fn()} />)
+    await screen.findByDisplayValue(server.url)
+    fireEvent.click(screen.getByRole('button', { name: '保存配置' }))
+    await waitFor(() => expect(SaveConfig).toHaveBeenCalled())
+    expect(vi.mocked(SaveConfig).mock.calls[0][0].mcp_servers?.docs.headers).toEqual(server.headers)
+  })
+
   it('saves a remote MCP before starting OAuth and preserves advanced settings', async () => {
     const user = userEvent.setup()
     render(<ConfigPanel open initialTab="mcp" onClose={vi.fn()} onSaved={vi.fn()} />)

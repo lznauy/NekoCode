@@ -579,3 +579,25 @@ func TestCaptureSessionDraftDoesNotShadowPersistedGoal(t *testing.T) {
 		t.Fatal("goal-only session would be restored from a stale draft instead of its durable record")
 	}
 }
+
+func TestCancelledRunPersistsWithoutStartingTailCompaction(t *testing.T) {
+	b := newPersistTestBot(t)
+	b.ctxMgr.ConfigureModel(ctxmgr.ModelContext{Window: 2000, AutoCompactPercent: 1})
+	b.ctxMgr.SetBeforeCompaction(func(string) error {
+		t.Error("cancelled run entered compaction")
+		return errors.New("unexpected compaction")
+	})
+	for range 8 {
+		b.ctxMgr.Add("user", "old question")
+		b.ctxMgr.Add("assistant", "old answer")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := b.Run(ctx, "inspect", nil, &subagentDemoHost{}); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	saved, err := b.sess.Load(b.CurrentSessionID())
+	if err != nil || len(saved.Transcript) < 16 {
+		t.Fatalf("history after cancellation: %v, %v", saved, err)
+	}
+}

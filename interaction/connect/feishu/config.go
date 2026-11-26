@@ -1,8 +1,6 @@
 package feishu
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -17,20 +15,14 @@ const (
 )
 
 var configMu sync.Mutex
-var configRevision uint64
-var errConfigChanged = errors.New("configuration changed; retry the command")
-
-type configSnapshot struct {
-	value    string
-	revision uint64
-}
+var errConfigChanged = connect.ErrConfigChanged
 
 // Config is the feishu connector configuration: a single app (app_id +
 // app_secret) paired with one owner (DM-only MVP, no multi-profile).
 // The pairing state machine and owner lifecycle come from the shared
 // connector connect.
 type Config struct {
-	snapshot  *configSnapshot
+	snapshot  *connect.SectionVersion
 	AppID     string                 `json:"app_id,omitempty"`
 	AppSecret string                 `json:"app_secret,omitempty"`
 	Owner     *connect.Owner[string] `json:"owner,omitempty"`
@@ -45,14 +37,11 @@ func loadConfig() (Config, error) {
 
 func loadConfigLocked() (Config, error) {
 	var cfg Config
-	if err := connect.DefaultFileStore().Load(section, &cfg); err != nil {
-		return Config{}, err
-	}
-	raw, err := json.Marshal(cfg)
+	version, err := connect.DefaultFileStore().LoadVersioned(section, &cfg)
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.snapshot = &configSnapshot{value: string(raw), revision: configRevision}
+	cfg.snapshot = version
 	return cfg, nil
 }
 
@@ -65,20 +54,7 @@ func saveConfig(cfg Config) error {
 }
 
 func saveConfigLocked(cfg Config) error {
-	if cfg.snapshot != nil {
-		current, err := loadConfigLocked()
-		if err != nil {
-			return err
-		}
-		if *current.snapshot != *cfg.snapshot {
-			return errConfigChanged
-		}
-	}
-	if err := connect.DefaultFileStore().Save(section, cfg); err != nil {
-		return err
-	}
-	configRevision++
-	return nil
+	return connect.DefaultFileStore().SaveVersioned(section, cfg, cfg.snapshot)
 }
 
 func (c Config) configured() bool {

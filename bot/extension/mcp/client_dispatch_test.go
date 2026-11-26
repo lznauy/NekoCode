@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -55,5 +57,35 @@ func TestClientDispatchInterleavedMessages(t *testing.T) {
 	}
 	if responses != 3 {
 		t.Fatalf("unsupported responses = %d, want 3", responses)
+	}
+}
+
+func TestStdioToolDiscoveryReadsAllPagesAndPreservesSchema(t *testing.T) {
+	const schema = `{"type":"object","properties":{"state":{"type":["integer","null"],"enum":[1,2,null]}},"additionalProperties":false}`
+	wire := `{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"first"}],"nextCursor":"page-two"}}
+{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"second","inputSchema":` + schema + `}]}}
+`
+	writer := &dispatchWriter{}
+	c := &client{cmd: &exec.Cmd{}, stdin: writer, stdout: bufio.NewReader(strings.NewReader(wire))}
+	got, err := c.ListTools(t.Context())
+	if err != nil || len(got) != 2 || got[1].Name != "second" {
+		t.Fatalf("tools = %v, err = %v", got, err)
+	}
+	data, err := json.Marshal(got[1].InputSchema)
+	if err != nil || string(data) != schema {
+		t.Fatalf("schema = %s, err = %v", data, err)
+	}
+	if !strings.Contains(writer.String(), `"cursor":"page-two"`) {
+		t.Fatalf("requests: %s", writer.String())
+	}
+}
+
+func TestStdioToolDiscoveryRejectsRepeatedCursorWithoutPublishing(t *testing.T) {
+	wire := `{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"new"}],"nextCursor":"same"}}
+{"jsonrpc":"2.0","id":2,"result":{"tools":[],"nextCursor":"same"}}
+`
+	c := &client{cmd: &exec.Cmd{}, stdin: &dispatchWriter{}, stdout: bufio.NewReader(strings.NewReader(wire))}
+	if got, err := c.ListTools(t.Context()); err == nil || len(got) != 0 {
+		t.Fatalf("tools = %v, err = %v", got, err)
 	}
 }

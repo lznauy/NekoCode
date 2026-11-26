@@ -263,10 +263,15 @@ func TestSessionMCPServerNameCollision(t *testing.T) {
 
 	// A session-supplied server with the same name must be skipped instead
 	// of failing session setup.
+	headers := map[string]string{"X-Tenant": "original"}
 	if err := manager.ReplaceSessionMCPServers(context.Background(), "acp", map[string]mcp.ServerConfig{
-		"github": {Command: "/nonexistent"},
+		"github": {URL: "https://example.invalid/mcp", Headers: headers},
 	}); err != nil {
 		t.Fatalf("session setup failed on name collision: %v", err)
+	}
+	headers["X-Tenant"] = "changed"
+	if manager.sessionConfigs["acp"]["github"].Headers["X-Tenant"] != "original" {
+		t.Fatal("stored session override shares headers with caller")
 	}
 	if ids := manager.sessionMCP["acp"]; len(ids) != 0 {
 		t.Fatalf("colliding server was registered: %v", ids)

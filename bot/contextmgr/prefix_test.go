@@ -9,6 +9,11 @@ import (
 	"nekocode/protocol"
 )
 
+func prefixWithHistory(system, history []types.Message, tools []types.ToolDef) prefixShape {
+	messages := append(append([]types.Message(nil), system...), history...)
+	return buildPrefixShape(messages, len(system), len(messages), tools)
+}
+
 func TestPrefixShapeTreatsHistoryAppendAndMapOrderAsStable(t *testing.T) {
 	system := []types.Message{{Role: "system", Content: "stable"}}
 	history := []types.Message{{Role: "user", Content: "first"}}
@@ -19,20 +24,20 @@ func TestPrefixShapeTreatsHistoryAppendAndMapOrderAsStable(t *testing.T) {
 		"a": {Type: "number"}, "b": {Type: "string"},
 	}}}}}
 
-	first := buildPrefixShape(system, history, toolsA)
-	second := buildPrefixShape(system, append(history, types.Message{Role: "assistant", Content: "second"}), toolsB)
+	first := prefixWithHistory(system, history, toolsA)
+	second := prefixWithHistory(system, append(history, types.Message{Role: "assistant", Content: "second"}), toolsB)
 	if parts := changedPrefixParts(first, second); len(parts) != 0 {
 		t.Fatalf("append-only request changed stable prefix: %v", parts)
 	}
 }
 
 func TestPrefixShapeAttributesSystemToolsAndHistory(t *testing.T) {
-	first := buildPrefixShape(
+	first := prefixWithHistory(
 		[]types.Message{{Role: "system", Content: "one"}},
 		[]types.Message{{Role: "user", Content: "one"}},
 		[]types.ToolDef{{Function: types.FunctionDef{Name: "one"}}},
 	)
-	second := buildPrefixShape(
+	second := prefixWithHistory(
 		[]types.Message{{Role: "system", Content: "two"}},
 		[]types.Message{{Role: "user", Content: "rewritten"}},
 		[]types.ToolDef{{Function: types.FunctionDef{Name: "two"}}},
@@ -154,14 +159,14 @@ func TestPlainBuildStripsProviderRoutingMetadata(t *testing.T) {
 func TestPrefixTrackerReportsColdStartAndRewrittenHistory(t *testing.T) {
 	var tracker prefixTracker
 	tracker.BeginTurn()
-	first := buildPrefixShape(nil, []types.Message{{Role: "user", Content: "one"}}, nil)
+	first := prefixWithHistory(nil, []types.Message{{Role: "user", Content: "one"}}, nil)
 	tracker.Observe(first)
 	tracker.RecordCache(0, 20)
 	if got := tracker.TurnStats().PeakMiss; !reflect.DeepEqual(got.Parts, []string{"cold-start"}) {
 		t.Fatalf("cold start = %+v", got)
 	}
 
-	rewritten := buildPrefixShape(nil, []types.Message{{Role: "user", Content: "two"}}, nil)
+	rewritten := prefixWithHistory(nil, []types.Message{{Role: "user", Content: "two"}}, nil)
 	tracker.Observe(rewritten)
 	tracker.RecordCache(100, 15)
 	stats := tracker.TurnStats()
@@ -178,12 +183,12 @@ func TestPrefixTrackerReportsColdStartAndRewrittenHistory(t *testing.T) {
 
 func TestPrefixTrackerBeginsTurnWithoutLosingShapeBaseline(t *testing.T) {
 	var tracker prefixTracker
-	first := buildPrefixShape(nil, []types.Message{{Role: "user", Content: "one"}}, nil)
+	first := prefixWithHistory(nil, []types.Message{{Role: "user", Content: "one"}}, nil)
 	tracker.Observe(first)
 	tracker.RecordCache(0, 50)
 
 	tracker.BeginTurn()
-	second := buildPrefixShape(nil, []types.Message{
+	second := prefixWithHistory(nil, []types.Message{
 		{Role: "user", Content: "one"},
 		{Role: "assistant", Content: "answer"},
 	}, nil)
@@ -202,7 +207,7 @@ func TestPrefixTrackerBeginsTurnWithoutLosingShapeBaseline(t *testing.T) {
 func TestPrefixTrackerKeepsPeakMissAndLowestHitSeparately(t *testing.T) {
 	var tracker prefixTracker
 	tracker.BeginTurn()
-	shape := buildPrefixShape(nil, nil, nil)
+	shape := prefixWithHistory(nil, nil, nil)
 	tracker.Observe(shape)
 	tracker.RecordCache(900, 100) // 90% hit, largest miss.
 	tracker.Observe(shape)
@@ -219,7 +224,7 @@ func TestPrefixTrackerKeepsPeakMissAndLowestHitSeparately(t *testing.T) {
 
 func TestPrefixTrackerDiagnosticsFingerprint(t *testing.T) {
 	var tracker prefixTracker
-	tracker.Observe(buildPrefixShape(nil, []types.Message{{Role: "user", Content: "one"}}, nil))
+	tracker.Observe(prefixWithHistory(nil, []types.Message{{Role: "user", Content: "one"}}, nil))
 	first := tracker.Diagnostics()
 	if !reflect.DeepEqual(first.ChangedParts, []string{"cold-start"}) {
 		t.Fatalf("cold-start parts = %v", first.ChangedParts)
@@ -230,7 +235,7 @@ func TestPrefixTrackerDiagnosticsFingerprint(t *testing.T) {
 
 	// Append-only history: same prefix fingerprint tail, parts fall back to
 	// tail/provider (stable shape — any miss is provider-side).
-	tracker.Observe(buildPrefixShape(nil, []types.Message{
+	tracker.Observe(prefixWithHistory(nil, []types.Message{
 		{Role: "user", Content: "one"},
 		{Role: "assistant", Content: "two"},
 	}, nil))
@@ -244,12 +249,33 @@ func TestPrefixTrackerDiagnosticsFingerprint(t *testing.T) {
 
 	// Same shape observed again: identical fingerprints — the log-level proof
 	// of a stable prefix.
-	tracker.Observe(buildPrefixShape(nil, []types.Message{
+	tracker.Observe(prefixWithHistory(nil, []types.Message{
 		{Role: "user", Content: "one"},
 		{Role: "assistant", Content: "two"},
 	}, nil))
 	again := tracker.Diagnostics()
 	if !reflect.DeepEqual(again, appended) {
 		t.Fatalf("identical shape must produce identical diag:\n%+v\n%+v", again, appended)
+	}
+}
+
+func TestPrefixHistoryIgnoresLocalDeliveryAndRecoveryFields(t *testing.T) {
+	msg := types.Message{Role: "tool", ToolCallID: "c", Content: "visible result"}
+	before := prefixWithHistory(nil, []types.Message{msg}, nil)
+	msg.TaskUpdateSequence = 4
+	msg.DeferredContent = "local preview"
+	msg.ToolOutput.Path = "/local/artifact"
+	msg.SkillName = "review"
+	after := prefixWithHistory(nil, []types.Message{msg}, nil)
+	if before.history[0] != after.history[0] {
+		t.Error("local delivery and recovery fields changed the model-history fingerprint")
+	}
+	if after.skillMessages != 1 || before.skills == after.skills {
+		t.Error("skill delivery lost its separate diagnostic")
+	}
+	msg.Content = "new visible result"
+	changed := prefixWithHistory(nil, []types.Message{msg}, nil)
+	if after.history[0] == changed.history[0] {
+		t.Error("actual model-visible change was ignored")
 	}
 }

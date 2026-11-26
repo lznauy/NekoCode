@@ -11,6 +11,12 @@ func TestValidateRemoteMCP(t *testing.T) {
 		{"remote", MCPServerConfig{URL: "https://example.com/mcp", Enabled: true}, true},
 		{"loopback", MCPServerConfig{URL: "http://127.0.0.1:1234/mcp", Enabled: true}, true},
 		{"plaintext", MCPServerConfig{URL: "http://example.com/mcp", Enabled: true}, false},
+		{"internal HTTP enabled", MCPServerConfig{URL: "http://mcp.lan:3000/mcp", AllowInsecureHTTP: true}, true},
+		{"public HTTP enabled", MCPServerConfig{URL: "http://example.com/mcp", AllowInsecureHTTP: true}, true},
+		{"invalid scheme", MCPServerConfig{URL: "ftp://mcp.lan/mcp", AllowInsecureHTTP: true}, false},
+		{"userinfo", MCPServerConfig{URL: "http://user@mcp.lan/mcp", AllowInsecureHTTP: true}, false},
+		{"fragment", MCPServerConfig{URL: "http://mcp.lan/mcp#part", AllowInsecureHTTP: true}, false},
+		{"insecure OAuth metadata", MCPServerConfig{URL: "http://mcp.lan/mcp", OAuthClientMetadataURL: "http://example.com/client", AllowInsecureHTTP: true}, false},
 		{"ambiguous", MCPServerConfig{URL: "https://example.com/mcp", Command: "npx", Enabled: true}, false},
 		{"bad callback", MCPServerConfig{URL: "https://example.com/mcp", OAuthCallbackPort: -1, Enabled: true}, false},
 	} {

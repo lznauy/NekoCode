@@ -127,7 +127,7 @@ NekoCode 以 `nekocode-tui --acp` 启动即为 ACP v1 Agent（`acp.RunStdio`）�
 | --- | --- |
 | `loadSession` | ✅ |
 | `sessionCapabilities.list` / `delete` | ✅ |
-| `promptCapabilities`（image / audio / embeddedContext） | 全部 false |
+| `promptCapabilities`（image / audio / embeddedContext） | true / false / false |
 | `mcpCapabilities`（http / sse） | 全部 false（stdio 为基线，无需声明） |
 
 ### 已实现
@@ -162,7 +162,6 @@ NekoCode 以 `nekocode-tui --acp` 启动即为 ACP v1 Agent（`acp.RunStdio`）�
 | 项 | 依赖 | 备注 |
 | --- | --- | --- |
 | `session/resume` / `session/close` | `sessionCapabilities` | 轻量恢复 / 显式关闭 |
-| `promptCapabilities.image` | — | 粘贴图片对话；后端已具备图片处理，建议优先实现 |
 | `fs/read_text_file` / `fs/write_text_file` | 客户端声明 `fs.*` | Agent 借用客户端文件系统（远程开发场景） |
 | `elicitation/create` | 客户端声明 `elicitation` | 结构化用户输入；可替代当前"直接拒绝 Question 事件"的策略 |
 | `terminal/*` | 客户端声明 `terminal` | Agent 借用客户端终端 |

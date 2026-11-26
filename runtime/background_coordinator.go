@@ -135,91 +135,132 @@ func (b *backgroundTasks) coordinate() error {
 	go func() {
 		defer b.wg.Done()
 		defer cancel()
-		runID, err := r.StartRun(ctx, input)
-		started := err == nil
-		var protocolErr *ProtocolError
-		retryStart := errors.As(err, &protocolErr) && (protocolErr.Code == ErrorBusy || protocolErr.Code == ErrorConflict)
-		if started {
-			err = r.waitActiveRun(b.ctx, runID)
-		}
-		success := false
-		if err == nil {
-			if view, ok := r.LookupRun(runID); ok {
-				success = view.Status == RunDone
-			}
-		}
+		outcome, runErr := b.runCoordinator(ctx, input)
 		b.lockMutation()
+		var saveErr error
 		if in != nil {
-			if d := b.demands[in.id]; d != nil && d.Status != "cancelled" {
-				next := *d
-				if !started && retryStart && in.ctx.Err() == nil {
-					next.Status = "queued"
-				} else if success {
-					next.Status = "done"
-				} else {
-					next.Status = "interrupted"
-					if err != nil {
-						next.Error = boundedBackgroundText(err.Error())
-					}
-				}
-				if saveErr := b.saveDemandLocked(d, next); saveErr != nil {
-					err = fmt.Errorf("save demand receipt: %w", saveErr)
-				}
-			}
-			if !started && retryStart && !b.closed && in.ctx.Err() == nil {
-				b.inputs = append([]*backgroundInput{in}, b.inputs...)
-			} else {
-				delete(b.pending, in.id)
-				in.cancel()
-				in.finish()
-			}
+			saveErr = b.settleDemandLocked(in, outcome, runErr)
 		} else {
-			state := b.snapshotLocked(sessionID)
-			changed := map[string]bool{}
-			for i := range state.Tasks {
-				next := &state.Tasks[i]
-				if e := b.entries[next.ID]; e != nil && e == claimed[next.ID] && e.Delivery != "stopped" {
-					changed[next.ID] = true
-					if !started {
-						if retryStart {
-							next.Delivery = ""
-						} else {
-							next.Delivery = "failed"
-							next.DeliveryError = "coordinator admission failed"
-						}
-					} else if success {
-						next.Delivery = "delivered"
-						next.Notified = true
-					} else {
-						next.Delivery = "failed"
-						next.DeliveryError = "coordinator did not complete; inspect conversation before retry"
-						if err != nil {
-							next.DeliveryError = boundedBackgroundText(err.Error())
-						}
-					}
-				}
-			}
-			if saveErr := b.saveStateLocked(sessionID, state); saveErr != nil {
-				err = fmt.Errorf("save task notification: %w", saveErr)
-				for id := range changed {
-					b.entries[id].Delivery = "failed"
-					b.entries[id].DeliveryError = boundedBackgroundText(err.Error())
-				}
-			} else {
-				for _, task := range state.Tasks {
-					if changed[task.ID] {
-						e := b.entries[task.ID]
-						e.Delivery, e.DeliveryError, e.Notified = task.Delivery, task.DeliveryError, task.Notified
-					}
-				}
-			}
+			saveErr = b.settleReviewsLocked(sessionID, claimed, outcome, runErr)
 		}
 		b.unlockMutation()
 		b.releaseCoordinator()
-		if err != nil && !retryStart && b.ctx.Err() == nil {
+		// Busy/conflict is a normal retry; a failed receipt write still
+		// needs to be visible even if admission itself can be retried.
+		if outcome == coordinatorRetry {
+			runErr = nil
+		}
+		if err := errors.Join(runErr, saveErr); err != nil && b.ctx.Err() == nil {
 			r.Notify("Task result review interrupted; inspect task history before explicitly continuing: " + err.Error())
 		}
 	}()
+	return nil
+}
+
+type coordinatorOutcome uint8
+
+const (
+	coordinatorRejected coordinatorOutcome = iota
+	coordinatorRetry
+	coordinatorInterrupted
+	coordinatorDone
+)
+
+// Only a failed admission can be retried automatically. Once a run started,
+// a missing completion receipt requires inspection to avoid replaying work.
+func (b *backgroundTasks) runCoordinator(ctx context.Context, input Input) (coordinatorOutcome, error) {
+	r := b.runtime
+	runID, err := r.StartRun(ctx, input)
+	if err != nil {
+		var failure *ProtocolError
+		if errors.As(err, &failure) && (failure.Code == ErrorBusy || failure.Code == ErrorConflict) {
+			return coordinatorRetry, err
+		}
+		return coordinatorRejected, err
+	}
+	if err := r.waitActiveRun(b.ctx, runID); err != nil {
+		return coordinatorInterrupted, err
+	}
+	if view, ok := r.LookupRun(runID); ok && view.Status == RunDone {
+		return coordinatorDone, nil
+	}
+	return coordinatorInterrupted, nil
+}
+
+func (b *backgroundTasks) settleDemandLocked(in *backgroundInput, outcome coordinatorOutcome, runErr error) error {
+	retry := outcome == coordinatorRetry && !b.closed && in.ctx.Err() == nil
+	var saveErr error
+	if d := b.demands[in.id]; d != nil && d.Status != "cancelled" {
+		next := *d
+		switch {
+		case retry:
+			next.Status = "queued"
+		case outcome == coordinatorDone:
+			next.Status = "done"
+		default:
+			next.Status = "interrupted"
+			if runErr != nil {
+				next.Error = boundedBackgroundText(runErr.Error())
+			}
+		}
+		if err := b.saveDemandLocked(d, next); err != nil {
+			saveErr = fmt.Errorf("save demand receipt: %w", err)
+			if !retry {
+				// The run is over. Keep the unconfirmed receipt inspectable
+				// and discardable, as it would be after recovering a claim.
+				d.Status, d.Error = "interrupted", boundedBackgroundText(saveErr.Error())
+			}
+		}
+	}
+	if retry {
+		b.inputs = append([]*backgroundInput{in}, b.inputs...)
+	} else {
+		delete(b.pending, in.id)
+		in.cancel()
+		in.finish()
+	}
+	return saveErr
+}
+
+func (b *backgroundTasks) settleReviewsLocked(sessionID string, claimed map[string]*backgroundEntry, outcome coordinatorOutcome, runErr error) error {
+	state := b.snapshotLocked(sessionID)
+	var changed []*BackgroundTask
+	for i := range state.Tasks {
+		next := &state.Tasks[i]
+		entry := b.entries[next.ID]
+		if entry == nil || entry != claimed[next.ID] || entry.Delivery == "stopped" {
+			continue
+		}
+		changed = append(changed, next)
+		switch outcome {
+		case coordinatorRetry:
+			next.Delivery = ""
+		case coordinatorRejected:
+			next.Delivery = "failed"
+			next.DeliveryError = "coordinator admission failed"
+		case coordinatorDone:
+			next.Delivery = "delivered"
+			next.Notified = true
+		case coordinatorInterrupted:
+			next.Delivery = "failed"
+			next.DeliveryError = "coordinator did not complete; inspect conversation before retry"
+			if runErr != nil {
+				next.DeliveryError = boundedBackgroundText(runErr.Error())
+			}
+		}
+	}
+	if err := b.saveStateLocked(sessionID, state); err != nil {
+		err = fmt.Errorf("save task notification: %w", err)
+		for _, task := range changed {
+			entry := claimed[task.ID]
+			entry.Delivery, entry.DeliveryError = "failed", boundedBackgroundText(err.Error())
+		}
+		return err
+	}
+	for _, task := range changed {
+		entry := claimed[task.ID]
+		entry.Delivery, entry.DeliveryError, entry.Notified = task.Delivery, task.DeliveryError, task.Notified
+	}
 	return nil
 }
 
